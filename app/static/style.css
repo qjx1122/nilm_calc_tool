@@ -76,3 +76,7 @@ th{color:var(--mut);font-weight:600;background:#141b2b;position:sticky;top:0}
 .badge{display:inline-block;padding:1px 6px;border-radius:6px;font-size:11px;background:#22304d;color:#b9c9ea}
 .badge.ok{background:#123a2c;color:var(--ok)}
 .badge.bad{background:#3a1414;color:var(--bad)}
+
+/* 数据源表单：与当前源无关的字段置灰禁用，避免填了却静默不生效 */
+label.off { opacity: .45; }
+input:disabled, select:disabled { cursor: not-allowed; }

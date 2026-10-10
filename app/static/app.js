@@ -13,6 +13,18 @@ const COLORS = { A: '#4ea1ff', B: '#3ddc97', C: '#ffb648', P: '#ff7ac6', Q: '#9d
 const S = {
   state: null, result: null, view: 'overview',
   ws: null, wsOk: false, poll: null, histCache: {}, histAt: {},
+  // 表单脏标记：用户一旦动手编辑，就暂停自动回填。
+  // 不做这层保护时，快量 0.2s 一次的 result 推送会触发 render()→renderSource()，
+  // 把用户刚选的下拉框、刚输入一半的路径**改回服务端配置**（实测可复现）。
+  formDirty: false, srcDirty: false, cfgDirty: false,
+};
+
+/* 数据源表单：每种源的填写说明与「哪些字段该启用」的单一事实来源 */
+const SRC_HINT = {
+  csv_file: '离线文件：填 CSV 路径（相对仓库根或绝对路径）。文件读完自动结束；建议先点「探查数据」核对编码/表头/推算采样率。',
+  csv_tail: '实时·文件追加：路径可填单个文件，也可填目录（目录模式自动跟 mtime 最新的 CSV，采集器分片轮转时用）。「从文件末尾开始」＝只算启动之后新写入的数据，不补算历史。',
+  tcp: '实时·TCP 流：本工具作客户端连接采集装置。text_csv＝每行一条 CSV（可带中文表头，自动识别）；binary＝定长帧，需填 struct 格式与字段顺序（默认 <7d＝7 个 double 小端，56 字节/帧）。连不上/帧格式不匹配都会在下方「运行状态与告警」里给出排查项。',
+  simulator: '实时·内置模拟器：无需任何硬件，用于联调与算法自证（与 cli.py selftest 同一信号模型，可与解析解对账）。速率倍数 >1 加速产出。',
 };
 
 /* ------------------------------------------------------------------ 工具 */
@@ -655,8 +667,7 @@ function renderWindows() {
       num(cfg.windows[k].step_s === null ? cfg.windows[k].length_s : cfg.windows[k].step_s, 3), emits[k] || 0]));
 }
 
-function renderSource() {
-  const st = S.state || {}, cfg = st.config || {};
+function fillSourceForm(cfg) {
   if (cfg.source) {
     $('#src-kind').value = cfg.source.kind;
     $('#src-path').value = cfg.source.path || '';
@@ -686,6 +697,52 @@ function renderSource() {
     $('#cfg-apparent').value = cfg.power.apparent;
     $('#cfg-reactive').value = cfg.power.reactive;
   }
+}
+
+function setFormNote(text, bad) {
+  const el = $('#src-formnote');
+  if (!el) return;
+  el.textContent = text || '';
+  el.style.color = bad ? 'var(--bad)' : '';
+}
+
+function syncSourceForm() {
+  // 下拉框联动：只启用与当前源相关的字段，其余置灰禁用（填了也不生效＝最坏的用户体验）
+  const kind = $('#src-kind').value, frame = $('#src-frame').value;
+  const bin = kind === 'tcp' && frame === 'binary';
+  const on = {
+    'src-path': kind === 'csv_file' || kind === 'csv_tail',
+    'src-host': kind === 'tcp',
+    'src-port': kind === 'tcp',
+    'src-frame': kind === 'tcp',
+    'src-fmt': bin,
+    'src-fields': bin,
+    'src-tailend': kind === 'csv_tail',
+    'src-newest': kind === 'csv_tail',
+    'src-speed': kind === 'simulator',
+    'src-block': true,
+  };
+  Object.keys(on).forEach((id) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.disabled = !on[id];
+    const lab = el.closest('label');
+    if (lab) lab.classList.toggle('off', !on[id]);
+  });
+  const hint = $('#src-hint');
+  if (hint) hint.textContent = SRC_HINT[kind] || '';
+}
+
+function renderSource() {
+  const st = S.state || {}, cfg = st.config || {};
+  if (S.formDirty) {
+    setFormNote('⚠ 界面有未保存的修改：已暂停自动回填（实时推送不会覆盖你正在输入的内容）。' +
+      '点「刷新」可丢弃修改并重新载入服务端配置。', true);
+  } else {
+    fillSourceForm(cfg);
+    setFormNote('');
+  }
+  syncSourceForm();
   const e = st.engine || {}, src = st.source || {};
   const emits = e.emits || {};
   const summary = [
@@ -748,32 +805,72 @@ function render() {
 /* ------------------------------------------------------------------ 交互 */
 
 function collectSourcePayload() {
-  const payload = {
-    kind: $('#src-kind').value,
-    path: $('#src-path').value.trim(),
-    host: $('#src-host').value.trim(),
-    port: +$('#src-port').value,
-    frame: $('#src-frame').value,
-    block_samples: +$('#src-block').value,
-    sim_speed: +$('#src-speed').value,
-    tail_from_end: !!$('#src-tailend').checked,
-    watch_dir_newest: !!$('#src-newest').checked,
-    struct_fmt: ($('#src-fmt').value || '').trim(),
-    struct_fields: ($('#src-fields').value || '').trim(),
+  // 只送**与当前源相关**且**用户确实填了**的字段：
+  // 空字符串/空数字会覆盖服务端已保存的配置（例如把 host 抹成 ''、path 抹成 ''），
+  // 而 /api/engine/start 是深合并语义，不送＝保留原值，这才是期望行为。
+  const kind = $('#src-kind').value;
+  const p = { kind };
+  const txt = (id) => ($('#' + id).value || '').trim();
+  const numOr = (id, dflt) => {
+    const v = parseFloat($('#' + id).value);
+    return Number.isFinite(v) ? v : dflt;
   };
-  // 空字符串会覆盖掉配置里的默认帧格式，必须删掉未填项
-  if (!payload.struct_fmt) delete payload.struct_fmt;
-  if (!payload.struct_fields) delete payload.struct_fields;
-  return payload;
+  if (kind === 'csv_file' || kind === 'csv_tail') {
+    const path = txt('src-path');
+    if (path) p.path = path;                 // 留空则不送：由服务端校验并给出「需要 source.path」
+  }
+  if (kind === 'csv_tail') {
+    p.tail_from_end = !!$('#src-tailend').checked;
+    p.watch_dir_newest = !!$('#src-newest').checked;
+  }
+  if (kind === 'tcp') {
+    const host = txt('src-host');
+    if (host) p.host = host;
+    p.port = numOr('src-port', 0);           // 0 会被服务端拒（port 非法），比静默用默认更好排查
+    p.frame = $('#src-frame').value;
+    if (p.frame === 'binary') {
+      const fmt = txt('src-fmt'), flds = txt('src-fields');
+      if (fmt) p.struct_fmt = fmt;
+      if (flds) p.struct_fields = flds;
+    }
+  }
+  if (kind === 'simulator') {
+    const sp = numOr('src-speed', null);
+    if (sp !== null && sp > 0) p.sim_speed = sp;
+  }
+  const bs = numOr('src-block', null);
+  if (bs !== null && bs > 0) p.block_samples = bs;
+  return p;
 }
 
 function collectConfigPayload() {
+  // PUT /api/config 是**深合并**：不送的键保留服务端现值。
+  // 所以空输入框必须**跳过**而不是送 0——否则 +'' === 0 会让 fs/PT/CT 变成 0，
+  // 服务端校验直接 400「sampling.fs 必须 > 0（当前 0）」（实测可复现）。
+  const skipped = [];
+  const pos = (id, label) => {
+    const v = parseFloat($('#' + id).value);
+    if (Number.isFinite(v) && v > 0) return v;
+    skipped.push(label);
+    return null;
+  };
+  const transform = { enabled: $('#cfg-scale').checked, voltage_input: $('#cfg-uin').value };
+  const pt = pos('cfg-pt', 'PT 变比'), ct = pos('cfg-ct', 'CT 变比');
+  if (pt !== null) transform.pt_ratio = pt;
+  if (ct !== null) transform.ct_ratio = ct;
+  const sampling = { adaptive_freq: $('#cfg-adaptive').checked };
+  const fs = pos('cfg-fs', '采样率 fs'), fnom = pos('cfg-fnom', '额定频率');
+  if (fs !== null) sampling.fs = fs;
+  if (fnom !== null) sampling.f_nom = fnom;
+  const harmonic = {};
+  const hmax = pos('cfg-hmax', '最高谐波次数');
+  if (hmax !== null) harmonic.order_max = Math.max(2, Math.round(hmax));
   return {
-    transform: { pt_ratio: +$('#cfg-pt').value, ct_ratio: +$('#cfg-ct').value,
-                 enabled: $('#cfg-scale').checked, voltage_input: $('#cfg-uin').value },
-    sampling: { fs: +$('#cfg-fs').value, f_nom: +$('#cfg-fnom').value, adaptive_freq: $('#cfg-adaptive').checked },
-    harmonic: { order_max: +$('#cfg-hmax').value },
-    power: { apparent: $('#cfg-apparent').value, reactive: $('#cfg-reactive').value },
+    payload: {
+      transform, sampling, harmonic,
+      power: { apparent: $('#cfg-apparent').value, reactive: $('#cfg-reactive').value },
+    },
+    skipped,
   };
 }
 
@@ -791,11 +888,17 @@ function collectWindowPayload() {
 
 async function startEngine(payloadExtra = {}) {
   try {
-    const payload = Object.assign(collectSourcePayload(), collectConfigPayload(), payloadExtra);
+    // 只送 source（+ 可选 windows）：/api/engine/start 的白名单只有 source 键与 windows，
+    // 夹带 transform/sampling/harmonic/power 会被服务端**静默忽略**——用户改了 PT/CT 再点
+    // 「启动数据源」以为生效了，其实没有。口径/变比一律走「保存配置（热更新）」。
+    const payload = Object.assign(collectSourcePayload(), payloadExtra);
     const r = await api('/api/engine/start', {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
     });
-    toast(`已启动数据源：${r.config.source.kind}`, 'ok');
+    S.formDirty = false; S.srcDirty = false;
+    toast(`已启动数据源：${r.config.source.kind}` +
+      (S.cfgDirty ? '（提示：口径/变比的修改请点「保存配置（热更新）」）' : ''), 'ok');
+    S.cfgDirty = false;
     S.state = await api('/api/state');
     renderTop(); render();
     setTimeout(refreshHistory, 800);
@@ -810,9 +913,13 @@ async function stopEngine() {
 
 async function saveConfig() {
   try {
+    const { payload, skipped } = collectConfigPayload();
     const r = await api('/api/config', { method: 'PUT', headers: { 'Content-Type': 'application/json' },
-                                         body: JSON.stringify(collectConfigPayload()) });
-    toast('配置已保存并热更新', 'ok');
+                                         body: JSON.stringify(payload) });
+    S.formDirty = false; S.cfgDirty = false; S.srcDirty = false;
+    if (skipped.length) {
+      toast(`配置已保存并热更新；${skipped.join('、')} 为空 → 保留服务端原值`, 'ok');
+    } else { toast('配置已保存并热更新', 'ok'); }
     S.state = await api('/api/state'); renderTop(); render();
   } catch (e) { toast('保存失败：' + e.message, 'err'); }
 }
@@ -898,6 +1005,7 @@ function bind() {
   $('#btn-stop').addEventListener('click', stopEngine);
   $('#btn-refresh').addEventListener('click', async () => {
     try {
+      S.formDirty = false; S.srcDirty = false; S.cfgDirty = false;   // 刷新＝丢弃未保存修改并重新回填
       S.result = await api('/api/result?full=true');
       S.state = await api('/api/state');
       renderTop(); render(); toast('已刷新快照', 'ok');
@@ -915,6 +1023,15 @@ function bind() {
   $('#btn-selftest').addEventListener('click', runSelftest);
   $('#btn-save-cfgfile').addEventListener('click', saveCfgFile);
   ['sp-chan', 'sp-scale', 'sp-limit'].forEach(id => $('#' + id).addEventListener('change', renderSpectrum));
+  // 数据源下拉框联动：选 kind 切换可用字段与填写说明；选 frame=binary 才放开 struct 两项
+  $('#src-kind').addEventListener('change', () => { S.srcDirty = true; S.formDirty = true; syncSourceForm(); });
+  $('#src-frame').addEventListener('change', () => { S.srcDirty = true; S.formDirty = true; syncSourceForm(); });
+  // 任何用户输入都置脏：否则 0.2s 一次的推送会把正在编辑的字段改回服务端配置
+  $$('#view-source input, #view-source select').forEach((el) => {
+    const mark = () => { S.formDirty = true; if (el.id.startsWith('cfg-')) S.cfgDirty = true; else S.srcDirty = true; };
+    el.addEventListener('input', mark);
+    el.addEventListener('change', mark);
+  });
   $$('input[name=hmode-u],input[name=hmode-i]').forEach(el => el.addEventListener('change', renderHarmonic));
   window.addEventListener('resize', () => { clearTimeout(window._rz); window._rz = setTimeout(render, 180); });
   setInterval(() => { if (S.view === 'overview' || S.view === 'power_factor' || S.view === 'fundamental') refreshHistory(); }, 3000);
