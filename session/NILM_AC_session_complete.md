@@ -79,3 +79,45 @@
   4. 是否需要 IEC 61000-4-7 分组口径、是否需要 Qt 桌面壳、是否需要多用户/历史入库/报警推送
   5. T-001 的 B6/C6/D1~D7 仍未回报；`TUNING_GUIDE.md` 仍未创建（待真实数据后写窗长/口径选择教学才有依据）
 - **相关文件/分支**：`README.md`(v0.2，本地部署与运行说明)、`REPORT.md`(v0.2)、`REPORT_TEST.md`(v0.2，T-002 执行包在此)、`NILM_DATA_DICT.md`(v0.2)、`STATUS.md`、`cli.py`、`elec_tool/`、`app/`、`configs/`、`tests/`｜分支 `arena/82e34fb8-nilm-calc-tool`（已 push）｜基点 `main`=`27b28ea`｜live preview：`uvicorn app.server:app --host 0.0.0.0 --port 8000`（`ELEC_TOOL_AUTOSTART=1` + 模拟器源）
+
+---
+
+## [2026-10-10] 会话纪要（第 3 条：四种数据源的配置·运行·验证 + tools/ 联调工具链）
+
+- **任务**：用户要求「分别详细说明 4 种输入方式的数据源如何配置及运行，并进行验证测试」——4 种源＝`csv_file`（离线文件）/`csv_tail`（实时·文件追加，文件或目录）/`tcp`（实时·TCP 客户端，`text_csv` 与 `binary` 两种帧）/`simulator`（内置合成源）；交付须含每源完整配置字段（默认值与约束）、CLI/Web/库三种运行入口的具体操作、**真实验证测试（实跑取证，不是纸面说明）**，并按台账纪律落 `REPORT_TEST.md` 与 `README.md`
+- **角色 / 模式**：工程实现工程师（延续上一任务）／**混合模式**——沙盒侧（模式 A）四源 × 三入口全部实跑取证 ✅；用户侧（模式 B）真实采集装置与真实 TCP 协议只出执行包，未获实录不下结论 🔶
+- **本轮产物**：
+  1. `README.md` **v0.3**：§4 由 2.2 KB 扩为 15 KB 的「四种数据源详解」——每源给出配置字段表（含默认值/约束/在哪设）、三入口操作步骤、沙盒实测输出、注意事项、可复现的验证方法；新增 §4.0 四源一览、§4.6 四源横向对账表、§4.8 一键复现；§3.2 的 `live` 段补 TCP 两帧实测与新增开关；§2.6 目录树补 `tools/`；§11 验证状态与已知缺口更新
+  2. `REPORT_TEST.md` **v0.3**：追加专题 **T-003**（沙盒侧 S1~S13 三件套实录、四源对账表、F-01~F-05 缺陷记录、能力补齐、用户侧 **S 组**（无硬件可复现）与 **D 组**（真实装置/协议）执行包、J-S/J-D 判读要点、结果回收格式）
+  3. `REPORT.md` **v0.3**：第 2 节新增稳定结论 **C-09~C-12**；第 5 节新增 2 条实录教训；第 6 节记录第 4 次收尾触发判定
+  4. **`tools/` 三件套（新增，交付物）**：`tcp_feeder.py`（TCP 服务端扮演采集装置，`--mode text_csv|binary`、`--struct-fmt`、中文表头、单客户端串行、断开后继续服务）、`csv_appender.py`（按用户列格式持续追加写文件，`--rotate-every` 分片轮转、`--no-header`）、`verify_sources.py`（库级四源自动对账：自动拉起前两者、跑完即清理、输出 PASS/SKIP/FAIL 与解析解偏差；退出码 0/1/2 区分通过/验证失败/参数错误）
+  5. **代码修复 5 处（F-01~F-05）**＋**测试 141→147**：`csv_tail._drain_current()`（切换前补读旧文件）、`parsing._flag_degenerate_clock()` 与合理性闸门、`base.note_key()` 告警去重（tcp/csv_tail 共用）、`cli.py::_print_diagnostics()`/`_fmt_clock()`、`cli.py live --frame/--struct-fmt/--struct-fields`、界面 TCP 面板两字段 + `/api/engine/start` 白名单、`app.js::collectSourcePayload` 死代码；新增 `tests/test_tools.py`（5 项防腐）与 `test_csv_tail_dir_switch_drains_old_file`（1 项回归）
+  6. `STATUS.md` 第 4 次收尾滚动更新
+- **验证三件套（沙盒侧实录，Linux 6.1.158+ / CPython 3.11.2 / numpy 2.4.6）**：
+  - **库层**：`python tools/verify_sources.py` → **PASS 5 / SKIP 0 / FAIL 0**；`csv_file` U1均=5773.60 V（偏差 0.17‱，解析解 5773.503 V）、P=1140.644 kW、THDu 偏差 0.003 百分点、缺口 0；`csv_tail` U1均偏差 0.70‱、P=1127.747 kW；`tcp binary <7d` U1均偏差 0.42‱、P=1127.751 kW；`simulator` P=1127.727 kW；P 比基波解析解 P₁=1125.000 kW 高 0.24%＝谐波功率贡献（预期）
+  - **CLI**：`csv_tail --from-end` 6 s → 输出 78 次、样本 100480、15.70 s、**16749 样本/s**、U=5805.9/5921.8/5689.5 V、P=1127.76 kW、缺口 0；`csv_tail` 目录 + `--watch-newest` 10 s（喂数器每 20 块轮转）→ 输出 125 次、样本 160640、**93 个分片**、缺口 0、告警自证「旧文件补读 640 行」；`tcp text_csv` 6 s → 输出 42 次、样本 54400、18134 样本/s、中文表头映射正确；`tcp binary >7f`（28 字节/帧）→ 输出 3 次、样本 60800、10201 样本/s，数值与文本帧一致 ⇒ 字节序/类型可配且解析无损
+  - **Web/REST**（第二实例 8002，`ELEC_TOOL_AUTOSTART=0 ELEC_TOOL_PERSIST_CONFIG=0`，不动 8000 预览、不污染入库配置）：`/api/probe` 判对 `encoding=utf-8-sig`、7 列中文表头、`fs_est=6399.99`；五种配置逐个 `POST /api/engine/start` → `GET /api/state`+`/api/result`，P 落在 1127.73~1140.63 kW、PF=0.8584（csv_file 0.8637）、缺口全 0
+  - **横向对账结论**：同源四路（csv_tail / tcp text / tcp binary / simulator）在三条入口下 **P 极差 0.013%**、U1 偏差 ≤0.70‱、THDu 偏差 ≤0.005 百分点 ⇒ **源类型与入口都不影响算法结果**
+  - **异常路径**：帧格式不匹配（`<7d` 解 `>7f` 流）修复前崩 `OverflowError`，修复后为可诊断 `ParseError` + 自动退回合成时间轴 + 打印三条排查项；float32 存 epoch 秒 → 显式告警「时间戳整块无递增…步长约 128 s」；端口未监听 → `ParseError: TCP 连接失败 …[Errno 111] Connection refused。排查：①②③`；无喂数器时 `verify_sources.py` 是 SKIP + 提示且退出码 0
+  - **回归**：`pytest tests/ -q` → **147 passed, 1 skipped**（59 s；唯一 skip＝`test_cli.py:43`，60 Hz×50 次逼近 Nyquist）；`cli.py selftest` → **44/44**，`worst_rel_err=1.508e-05`；F-01 的回归测试经「撤销修复→断言 1280≠1920 失败」验证过**确实能抓住 bug**
+- **关键决策**：
+  1. **无硬件验证路径进交付物**：用户没有采集装置，所以把「扮演采集侧」的喂数器/追加器与「一键四源对账」的验证工具做成 `tools/` 正式交付物，并加 5 项防腐测试——否则 README/T-003 里的验证步骤只是空头承诺
+  2. **判定口径写进工具**：U1 用三相均值对账（合成信号含 2% 不平衡，单相值本就偏离）、容差 5‱；P 对 P₁ 容差 0.5%；THDu 容差 0.05 百分点；**出现数据缺口直接 FAIL**（正是这条硬判定让 F-01 无法蒙混过关）
+  3. **编号命名空间分离**：`REPORT.md` 稳定结论用 C-0x、T-003 缺陷用 **F-0x**、T-001 用户命令用 A~D 组、T-002 缺陷用 B1/B2——本轮曾把缺陷编成 C-09~C-13 与结论撞车、又发现 B3~B5 与 T-001 命令编号撞车，最终改为 F-01~F-05
+  4. **告警治理**：同类告警按「中文骨架」去重（去数字与 ASCII），CLI 收尾统一打印「缺口 + 引擎告警 + 源告警」并截断——不打印源告警等于「看着正常、其实时间轴是合成的」
+  5. Web 侧验证跑**第二实例**（8002）而非复用 8000 预览，避免打断用户可见的实时演示
+- **踩坑（本轮实录）**：
+  1. **F-01 假缺口**：目录分片切换直接 `_reopen()` → 旧分片未读走的尾部被静默丢弃，每切换丢一整块（640 点/100.2 ms），形成与轮转周期同频的「疑似丢点」告警（8 s 内 8 处、间隔恰 2.000 s）。教训：**告警本身也可能是 bug 的产物**，先证伪告警再怀疑现场数据
+  2. **F-02 显示层崩溃**：坏时标（1e308 量级）能穿过 `np.isfinite` 检查，崩在 `time.localtime`；必须在**解析层**设合理性闸门（|t|>1e11 秒即拒），显示层再兜一道
+  3. **F-04 float32 存 epoch 秒**：量化步长 ~128 s，显示时刻偏早约 2 分钟且原先无任何告警
+  4. **F-05 工具链三连**：① `node --check` **只验语法不验逻辑**（`return {…}` 后接死代码照样通过）→ 另做「`return` 之后残留语句数＝0」静态检查；② 给已有方法**中间**插入新方法会把原方法劈成两半（`TcpStreamSource.__init__` 尾部两行被吞进 `_note` → `NameError: cfg`）；③ 全量 `str.replace("self._notes.append(", "self._note(")` 把 `_note` 自身也改了 → **无限递归**（`RecursionError`）
+  5. **heredoc 补丁纪律**：本轮 3 次 `assert old in s` 失败（类名写成 `TCPStreamSource` 实为 `TcpStreamSource`；`old` 未含原缩进导致 `lstrip()` 吃掉缩进 → `IndentationError`；文件里有两个 `return TimestampInfo` 分支）→ 教训：**patch 前先 grep 出精确原文与全部匹配点**，改完必须 `ast.parse` + 跑测试，不能只看语法
+  6. `tools/tcp_feeder.py` 的 `--duration` 在阻塞于 `srv.accept()` 时不生效（无客户端就一直挂着）→ 遗留进程必须显式 `stop_process`；本轮 900 s 到期的喂数器曾让一次 Web 验证拿到 0 样本，重启后复测正常
+- **未决问题**：
+  1. **（阻塞，用户侧）** T-003 的 **S 组**（无硬件复现四源验证，约 10 分钟）与 **D 组**（真实 CSV 体检/对账、真实 TCP 协议要点、分片规则）未回报；T-002 的 W/R/P 组仍未回报
+  2. 真实 TCP 协议 🔶：帧头帧尾/长度字段/缩放系数/字节序/时标类型/心跳；若含帧头+长度+校验，`struct_fmt` 不足以描述，需在 `sources/tcp_stream.py::_flush_block` 加拆帧（属新工作项，需先拿协议文档评估）
+  3. TCP 的 `timeout_s` / `reconnect_s`（各默认 2.0 s）只是构造参数，未暴露到配置文件与界面
+  4. `csv_tail` 目录模式按 **mtime** 选最新文件；若现场补写旧分片或命名与 mtime 不一致，需改成按文件名排序（待 D-5 回报）
+  5. 四个口径问题仍未答：电压是相/线、实际编码与时间戳写法、PT/CT 是否恒为 100/15、实时落地是文件还是 TCP
+  6. Windows 侧 S 组未实测（子进程/路径分隔符/编码可能有差异）；`TUNING_GUIDE.md` 仍未创建；IEC 61000-4-7 分组与 Qt 壳仍延后
+- **相关文件/分支**：`README.md`(v0.3，§4 四源详解)、`REPORT_TEST.md`(v0.3，**T-003 执行包在此**)、`REPORT.md`(v0.3，C-09~C-12)、`NILM_DATA_DICT.md`(v0.2)、`STATUS.md`(第 4 次收尾)、`tools/{tcp_feeder,csv_appender,verify_sources}.py`、`elec_tool/sources/{base,parsing,csv_tail,tcp_stream}.py`、`cli.py`、`app/server.py`、`app/static/{index.html,app.js}`、`tests/{test_sources,test_tools}.py`｜分支 `arena/82e34fb8-nilm-calc-tool`（本轮提交见下）｜基点 `main`=`27b28ea`｜live preview：8000 端口（`ELEC_TOOL_AUTOSTART=1` + 模拟器源）

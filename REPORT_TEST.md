@@ -23,6 +23,7 @@
 | --- | --- | --- | --- | --- | --- | --- |
 | T-001 | 2026-10-10 | 环境与数据基线核对（台账回填前置采集） | 验证专题 | B（用户本地执行） | 🔶待用户回报 | 待定 |
 | T-002 | 2026-10-10 | 电气量计算工具实现自验证 + 本地部署与真实数据验收执行包 | 验证专题 | 混合（沙盒 A 已实录 / 用户侧 B 待回报） | 🔶待用户回报（沙盒侧已✅实录） | 部分已升格 |
+| T-003 | 2026-10-10 | 四种数据源的配置·运行·验证（csv_file/csv_tail/tcp/simulator × CLI/Web/库） | 验证专题 | 混合（沙盒 A 已实录 / 用户侧 S·D 组待回报） | 🔶待用户回报（沙盒侧已✅实录，含 F-01~F-05 修复） | 是（四源等价性等 4 条） |
 
 ---
 
@@ -352,6 +353,148 @@ P1~P3：做法 + 现象
 
 ---
 
+## [2026-10-10] 专题 T-003：四种数据源的配置 · 运行 · 验证（csv_file / csv_tail / tcp / simulator）
+
+- **类型**：验证专题（含实现记录与缺陷修复）
+- **执行模式**：**混合**——① 沙盒侧（模式 A）四种源 × 三条入口（CLI / Web+REST / Python 库）全部实跑取证，**已有实录**；② 用户侧（模式 B）真实采集装置与真实 TCP 协议，**只产出执行包，未获实录前不下结论**。
+- **目标与假设**：
+  - 目标：把验收④「输入支持实时采集与离线文件」拆成 4 种源，逐源交付「完整配置字段（含默认值与约束）＋ 三种运行方式 ＋ **真实验证测试**」，并让用户在**没有采集硬件**的条件下也能自行复现全部验证。
+  - 假设：用户实时落地＝采集器写 CSV（✅已确认，见 `NILM_DATA_DICT.md` v0.2）或 TCP 推送（协议未定 🔶）；列格式 `时间戳,A相电压,A相电流,B相电压,B相电流,C相电压,C相电流`、fs=6400 Hz、PT=100、CT=15。
+- **方法 / 数据 / 参数**：
+  - **采集侧扮演工具（本轮新增，`tools/`）**：`tcp_feeder.py`（TCP 服务端，`text_csv`/`binary` 两种帧，可指定 `--struct-fmt`）、`csv_appender.py`（按用户列格式持续追加写文件，可 `--rotate-every` 分片轮转）。两者与内置 `simulator` **共用同一信号模型**，因此四源结果可互相对账，也可与 `cli.py selftest` 的解析解对账。
+  - 信号模型：二次侧 U1=100/√3 V、I1=5 A、φ=30°、谐波 3/5/7/11/13 次＝8%/6%/3%/1.5%/1%、噪声 0.2%、不平衡 2%、fs=6400 Hz、f=50 Hz。
+  - **解析解**（一次侧，PT=100/CT=15）：U1=5773.503 V、I1=75.0 A、P₁=3·U1·I1·cos30°=**1125.000 kW**、THDu=**10.595%**。
+  - 判定容差（写在 `tools/verify_sources.py::judge`）：U1 用**三相均值**对账（合成信号含 2% 不平衡，单相值本就偏离）容差 5‱；P 对 P₁ 容差 0.5%（谐波功率应使其略高）；THDu 容差 0.05 百分点；**出现数据缺口直接 FAIL**。
+  - 环境：Linux 6.1.158+ / CPython 3.11.2 / numpy 2.4.6 / 2 核 3 GB，2026-10-10。Web/REST 用例跑在**第二个实例**（端口 8002，`ELEC_TOOL_AUTOSTART=0 ELEC_TOOL_PERSIST_CONFIG=0`），不动 8000 的预览实例、不污染入库配置。
+
+### 沙盒侧实录（三件套：命令 + 输出 + 判读）✅
+
+| # | 命令（沙盒实录） | 输出关键片段 | 判读 |
+| --- | --- | --- | --- |
+| S1 | `python tools/verify_sources.py` | `✓ 结果：PASS 5 / SKIP 0 / FAIL 0（共 5 例）` | 五种配置（4 源，tcp 含文本/二进制两帧）在**库层**全部通过解析解对账；工具会自动拉起喂数器/追加器并在结束时清理 |
+| S2 | 同上 → `csv_file` 例 | `[PASS] U1均=5773.60V 偏差 0.17‱；P=1140.644kW；THDu 偏差 0.003 百分点`；`U(A/B/C)=[5805.9,5805.9,5806.0]V I1=[75.005,74.999,74.998]A PF=0.8637 不平衡=0.0016% 缺口 0`；`窗长(实际s,周期数)：{'voltage': (1.0, 50), 'harmonic': (0.2, 10)}` | 离线链路正确；样例文件由 `gen-sample`（三相平衡、谐波电流相角 40°）生成，故 P 比实时源高 1.1%＝**数据差异不是算法误差**；窗长「请求＝实际」（1s→50 周期、0.2s→10 周期） |
+| S3 | `cli.py live --source csv_tail --path data/tail_live.csv --from-end --duration 6` | `✓ 结束：输出 78 次，样本 100480，数据时长 15.70s，实时速率 16749 样本/s`；`U=5805.9/5921.8/5689.5V P=1127.76kW Q=660.31kvar THDu=10.60%`；`· tail_from_end=True：只读打开之后的新增内容`；`· 源：采样率校验通过：时间戳推算 6399.998Hz ≈ 配置 6400.0Hz（偏差 0.0000%）` | 追加读取正常；4 倍速下 16749 样本/s（≈4×6400×0.7 有效摄入）；追加器时间戳写 `%.6f`（µs 级）仍能推出 fs 偏差 0.0000% ⇒ 最长连续段线性拟合生效 |
+| S4 | `cli.py live --source csv_tail --path data/tail_dir --watch-newest --duration 10`（追加器 `--rotate-every 20`） | 修复前：`⚠ 检测到 8 处数据时间跳变`，示例 `gap_s=0.10015606880187988, missing_samples=639.9988`，时刻间隔恰 2.000s；修复后：`✓ 结束：输出 125 次，样本 160640，数据时长 25.10s`、**无缺口告警**、`· 源：目录中出现更新的文件，切换监视对象：part_092.csv（旧文件补读 640 行）`；期间产生 93 个分片 | 目录分片模式可用；修复前每次切换丢**正好一整块**（640 点＝100.2ms），形成与轮转周期同频的假缺口；修复后缺口 0 且告警自证补读行数（见 F-01） |
+| S5 | `cli.py live --source tcp --host 127.0.0.1 --port 9000 --duration 6`（喂数器 `--mode text_csv --header`） | `✓ 结束：输出 42 次，样本 54400，数据时长 8.50s，实时速率 18134 样本/s`；`U=5805.8/5921.7/5689.5V P=1127.72kW Q=660.38kvar f=50.000Hz THDu=10.60%`；喂数器日志：`识别到表头 → 映射 {'timestamp':0,'ua':1,'ia':2,'ub':3,'ib':4,'uc':5,'ic':6}`、3 次客户端连接、`BrokenPipeError`/`ConnectionResetError` 后继续服务 | 文本帧链路正确；中文表头自动识别；客户端断开不影响服务端（可反复启停引擎） |
+| S6 | `cli.py live --source tcp --port 9001 --frame binary --struct-fmt ">7f" --duration 6`（喂数器同格式，28 字节/帧） | `✓ 结束：输出 3 次，样本 60800，数据时长 9.50s，实时速率 10201 样本/s`；`U=5805.9/5922.0/5689.6V P=1127.80kW Q=660.30kvar THDu=10.60%` | 大端 float32 二进制帧数值与文本帧一致 ⇒ **字节序/类型可配且解析无损**（但时标量化见 F-04） |
+| S7 | Web/REST 五例：`POST /api/engine/start`（8002 实例）＋`GET /api/state`＋`GET /api/result`；`GET /api/probe?path=data/sample_6400hz.csv` | probe：`{"ok":true,"encoding":"utf-8-sig","header":[7 列中文],"fs_est":6399.99,"ts_mode":"s"}`；csv_file `U=[5805.8,5805.7,5805.7] P=1140.63kW PF=0.8637 THDu=10.589% 缺口0`；csv_tail `U=[5806.3,5922.1,5690.1] P=1127.87kW 不平衡=3.997% 缺口0`；tcp text `P=1127.81kW THDu=10.607%`；tcp binary `<7d` `U=[5805.7,5922.2,5689.6] P=1127.74kW THDu=10.596% 缺口0`；simulator `P=1127.73kW THDu=10.594% 缺口0` | **Web 入口与 CLI/库入口数值一致**（同源四路 P 极差 0.013%）；`/api/probe` 能在启动前把编码/表头/fs 判对，是现场排错第一站 |
+| S8 | 帧格式不匹配：喂数器 `>7f`，客户端用默认 `<7d` | 修复前：`✗ 执行失败：OverflowError: timestamp out of range for platform time_t`；修复后：不再崩，收尾打印一条去重后的源告警 `时间戳解析失败（时间戳换算后不合理（模式=s，最大绝对值 1.37806e+308 秒…）。排查：① TCP 二进制帧请核对 source.struct_fmt（字节序/类型…）与 struct_fields 字段顺序…② CSV 请核对 columns 列映射与 timestamp_unit…③ 若协议用 float32 存 epoch 秒…），改用 fs 合成时间轴` | 坏帧格式从「崩在显示层」变成「可诊断降级」：电气量仍按样本序＋配置 fs 计算，时间轴退回合成并显式告警（F-02、F-03） |
+| S9 | 帧格式匹配但用 float32 存 epoch（`>7f`） | `· 源：时间戳整块无递增（全部相同）：时标精度远粗于采样间隔，或用 float32 存 epoch 秒导致量化（float32 在 1.7e9 秒处步长约 128s）。电气量仍按样本序与配置 fs 计算，但时间轴与缺口检测不可信；建议协议改用 double 或整数毫秒时标`；同期显示时刻比真实早约 2 分钟 | 精度陷阱被显式暴露，不会静默产出错误时间轴（F-04）；协议侧应改用 double 或整数毫秒 |
+| S10 | 端口未监听：`cli.py live --source tcp --port 9001`（喂数器已退出） | `✗ 执行失败：ParseError: TCP 连接失败 127.0.0.1:9001 —— [Errno 111] Connection refused。排查：① 采集服务是否已启动并监听该端口 ② 防火墙/网段 ③ 配置 source.host/port 是否正确` | 连接失败给出可操作排查清单，不是裸 socket 异常 |
+| S11 | `python -m pytest tests/ -q` | `147 passed, 1 skipped in 59.35s`（唯一 skip＝`tests/test_cli.py:43`，60Hz×50 次逼近 Nyquist） | 全量回归通过；本轮新增 6 项（1 项 csv_tail 丢块回归 + 5 项工具防腐） |
+| S12 | `python cli.py selftest` | `44/44`，`worst_rel_err=1.508e-05` | 算法层解析解自证未受本轮改动影响 |
+| S13 | `python tools/verify_sources.py --kinds tcp_text --external-feeders --tcp-port-text 9999` | `[SKIP] tcp_text　没有可连的喂数器；先跑 python tools/tcp_feeder.py --port <端口> 或去掉 --external-feeders 让本工具自动拉起`，退出码 0 | 无采集侧时是 SKIP＋提示（退出码 0），参数错误 2、验证失败 1 ⇒ 可编入脚本/CI |
+
+### 四源横向对账（同一信号模型，三条入口）
+
+| 源 / 入口 | U(A/B/C) V | U1均偏差 | P kW | Q kvar | PF | THDu % | 缺口 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `csv_file`（库） | 5805.9 / 5805.9 / 5806.0 | 0.17‱ | 1140.644 | 662.658 | 0.8637 | 10.589 | 0 |
+| `csv_tail`（CLI `--from-end`） | 5805.9 / 5921.8 / 5689.5 | — | 1127.76 | 660.31 | — | 10.60 | 0 |
+| `csv_tail`（Web/REST） | 5806.3 / 5922.1 / 5690.1 | — | 1127.87 | 660.32 | 0.8584 | 10.580 | 0 |
+| `csv_tail`（库） | — | 0.70‱ | 1127.747 | 660.362 | 0.8584 | 10.589 | 0 |
+| `tcp text_csv`（CLI） | 5805.8 / 5921.7 / 5689.5 | — | 1127.72 | 660.38 | — | 10.60 | 0 |
+| `tcp text_csv`（Web/REST） | 5806.2 / 5921.7 / 5689.8 | — | 1127.81 | 660.30 | 0.8584 | 10.607 | 0 |
+| `tcp binary >7f`（CLI） | 5805.9 / 5922.0 / 5689.6 | — | 1127.80 | 660.30 | — | 10.60 | 0 |
+| `tcp binary <7d`（Web/REST） | 5805.7 / 5922.2 / 5689.6 | — | 1127.74 | 660.38 | 0.8584 | 10.596 | 0 |
+| `tcp binary <7d`（库） | — | 0.42‱ | 1127.751 | 660.384 | 0.8584 | 10.593 | 0 |
+| `simulator`（Web/REST） | 5805.6 / 5922.4 / 5689.5 | — | 1127.73 | 660.38 | 0.8584 | 10.594 | 0 |
+| `simulator`（库） | — | 0.42‱ | 1127.727 | 660.376 | 0.8584 | 10.593 | 0 |
+| **解析解** | U1=5773.503 V | 0 | **P₁=1125.000** | — | cos30°=0.8660 | **10.595** | — |
+
+**判读**：四种实时源在三条入口下 P 落在 1127.727～1127.87 kW（极差 **0.013%**）、U1 偏差 ≤0.70‱、THDu 偏差 ≤0.005 百分点、缺口全 0 ⇒ **源类型与入口都不影响算法结果**；P 比 P₁ 高 0.24%＝谐波功率贡献（预期）。`csv_file` 的 P 高 1.1% 属数据实现差异（平衡＋谐波电流相角 40°），其 U1/THDu 仍吻合解析解。
+
+### 本轮修复的缺陷（全部由实测发现，均已加回归测试或实录）
+
+| 编号（F＝本轮修复；与 T-001 的 B 组命令编号、REPORT.md 的 C-0x 结论编号各自独立） | 现象（实测） | 根因 | 修法 | 回归证据 | 状态 |
+| --- | --- | --- | --- | --- | --- |
+| F-01 | `csv_tail` 目录模式每切换分片丢 640 点（100.2ms），8s 内 8 处「疑似丢点」假缺口，间隔恰 2.000s | `_rotate_if_needed()` 检测到更新文件就直接 `_reopen()`，旧分片在上次轮询后新写入的数据未读走即被关闭 | 切换前 `_drain_current()` 补读旧文件（inode 变化分支同样处理；截断分支不 drain，因数据已被覆盖），告警写明「旧文件补读 N 行」 | `tests/test_sources.py::test_csv_tail_dir_switch_drains_old_file`；撤销修复则断言 `1280 != 1920` 失败；实录 S4 修复后缺口 0 | ✅已修 |
+| F-02 | 帧格式不匹配时 CLI 崩 `OverflowError: timestamp out of range for platform time_t` | 坏时标一路传到显示层 `time.localtime`；`np.isfinite` 挡不住「超大但有限」的值 | ① `parse_timestamps` 加合理性闸门（非有限或 max\|t\|>1e11 秒 → 可诊断 `ParseError`，文案指向 struct_fmt/struct_fields/列映射/timestamp_unit/float32 精度）② `cli.py::_fmt_clock()` 兜住 OverflowError/OSError/ValueError ③ 源捕获后退回 fs 合成时间轴 | 实录 S8（修复前/后对比） | ✅已修 |
+| F-03 | 实时源告警刷屏：3s 内 8 条只差小数位的「采样率校验通过」、6 条几乎相同的解析告警，关键信息被淹没；且 `cli.py live` 收尾**完全不打印**源告警 | 同类告警每块重发且文本含变化数值/模式名，按原文去重无效；live 收尾只打引擎状态 | `sources/base.py::note_key()` 按中文骨架（去数字与 ASCII）去重，tcp/csv_tail 共用；`cli.py::_print_diagnostics()` 让 compute/live 收尾统一打印「缺口 + 引擎告警 + 源告警」并截断 170 字 | 实录 S8/S9（同一问题只剩 1 条）、S3/S4（源告警可见） | ✅已修 |
+| F-04 | float32 存 epoch 秒 → 时标量化步长 ~128s，显示时刻比真实早约 2 分钟，却无任何告警 | 协议侧精度问题，解析层未检测「整块无递增/存在回退」 | `_flag_degenerate_clock()`：整块无递增或出现回退时显式告警，并说明电气量仍按样本序＋配置 fs 计算、时间轴与缺口检测不可信 | 实录 S9 | ✅已修 |
+| F-05 | `app/static/app.js::collectSourcePayload` 存在死代码：`return` 在前、后续「删空值」语句引用未定义的 `payload` | 上一轮 patch 时把 `return {…}` 直接后接新逻辑 | 改为 `const payload = {…}` → 删空值 → `return payload` | `node --check` 通过 ＋ 另做「`return` 之后残留语句数＝0」静态检查（**教训：`node --check` 只验语法不验逻辑**） | ✅已修 |
+
+### 能力补齐（本轮新增，均由实测驱动）
+
+- `cli.py live` 增加 `--frame {text_csv,binary}` / `--struct-fmt` / `--struct-fields`：此前二进制帧格式只能改配置文件，现场无法快速试帧。
+- Web「数据源与控制」TCP 面板增加 `struct_fmt` / `struct_fields` 两个输入框；`POST /api/engine/start` 的 source 覆盖白名单同步加这两键（否则界面填了也不生效）。
+- `tools/tcp_feeder.py`、`tools/csv_appender.py`、`tools/verify_sources.py` ＋ `tests/test_tools.py`（5 项防腐测试）：**没有采集硬件也能完整验证四种源**，这是本专题可交付给用户复现的关键。
+- `parse_timestamps` 的退化时标检测与 TCP 解析告警冒泡（原先 `info.notes` 被源丢弃，用户看不到时间轴已退化）。
+
+### 用户执行命令（模式 B 执行包，🔶待回报）
+
+**S 组：无硬件即可复现四源验证（Windows / Linux 通用，路径用仓库根）**
+
+```bash
+S-W1  python tools/verify_sources.py                                  # 期望：PASS 5 / SKIP 0 / FAIL 0
+S-W2  python -m pytest tests/ -q                                      # 期望：147 passed, 1 skipped
+S-W3  python cli.py selftest                                          # 期望：44/44，worst_rel_err≈1.5e-05
+S-W4  # 终端1：python tools/tcp_feeder.py --port 9000 --mode text_csv --header --rate 4
+      # 终端2：python cli.py live --source tcp --port 9000 --duration 10
+      #                                              期望：U≈5806/5922/5690V、P≈1127.7kW、缺口 0
+S-W5  # 终端1：python tools/csv_appender.py --out data/tail_dir --rotate-every 20 --rate 4
+      # 终端2：python cli.py live --source csv_tail --path data/tail_dir --watch-newest --duration 20
+      #                                              期望：缺口 0，且源告警含「旧文件补读 N 行」
+S-W6  python tools/csv_appender.py --out data/tail_live.csv --rate 4 --duration 20   # 然后按 S-W5 终端2 换成该文件
+```
+
+**D 组：接真实采集装置（需现场数据/协议，🔶）**
+
+```bash
+D-1  python cli.py sources --file <你的真实CSV>        # 回报 encoding / header / fs_est / ts_mode / notes
+D-2  python cli.py compute --file <你的真实CSV> --format table
+     #  回报 U/I/P/Q/PF/THDu 与现场表计或既有系统的读数对照（差多少、什么口径）
+D-3  python cli.py live --source csv_tail --path <采集器正在写的文件> --from-end --duration 30
+     #  回报 实时速率 / 缺口数 / 源告警原文
+D-4  TCP 联调前先回报协议：帧头帧尾、长度字段、字段顺序、字节序、每字段类型（float32/float64/int）、
+     时标类型（epoch 秒/毫秒/相对秒）、是否已乘变比、有无心跳/确认帧 → 据此定 struct_fmt/struct_fields
+D-5  若采集器按时间分片写多个文件：回报分片命名规则、单文件时长、是否保留旧文件
+     （用于确认 watch_dir_newest 是否够用，或需要改成按文件名排序）
+```
+
+### 判读要点（回报后 Agent 按此对账）
+
+- **J-S1**：S-W1 若出现 FAIL，先看 `why` 字段——「未取到 U1_abc/P_kW」＝跑得太短（加大 `--duration`）；「U1 偏差 >5‱」＝变比或列映射不对；「缺口 ≠0」＝采集侧丢数或时标退化。
+- **J-S2**：S-W2 在 Windows 上若有失败，重点看是否 `tests/test_tools.py`（子进程路径/编码差异）与 `tests/test_web.py`（端口占用）；沙盒侧 Linux 全绿。
+- **J-S3**：S-W4/S-W5 的数值应与本专题 S5/S4 一致到小数点后 1 位（同一信号模型、同一 seed）；不一致先查是否有人改过 `configs/runtime.json`。
+- **J-D1**：`fs_est` 与配置 fs 偏差应 <0.01%；偏差大说明时间戳精度不足（ms 级）或存在丢点，按 §4.2 注意事项处理。
+- **J-D2**：与现场表计对账时注意三点口径——① 本工具默认输出**一次值**（`transform.enabled=true`）② 电压默认按**相电压**解释（若现场给线电压需改 `transform.voltage_input=line`）③ 谐波口径为 50Hz 整周期矩形窗 FFT，未做 IEC 61000-4-7 分组，与电能表的谐波子组读数会有差异。
+- **J-D3**：`缺口 >0` 时先看告警里的 `gap_s` 是否等于整数个块（＝采集侧或分片切换丢数），还是随机值（＝传输丢包）。
+- **J-D4**：真实协议若是「帧头＋长度＋校验」结构，`struct_fmt` 不足以描述，需要在 `elec_tool/sources/tcp_stream.py::_flush_block` 加拆帧（`DataSource` 接口不变，上层零改动）——这属于**新工作项**，需先拿到协议文档再评估工作量。
+
+### 结果回收格式（复制到回报里即可）
+
+```
+S-W1 verify_sources：PASS __ / SKIP __ / FAIL __；FAIL 的 why 原文：______
+S-W2 pytest：__ passed, __ skipped, __ failed；失败用例名：______
+S-W3 selftest：__/44，worst_rel_err=______
+S-W4 tcp text_csv：U=__/__/__V  P=____kW  缺口=__  源告警：______
+S-W5 csv_tail 目录：输出__次  样本__  缺口=__  是否出现「旧文件补读」：是/否
+S-W6 csv_tail 单文件：输出__次  样本__  缺口=__
+D-1 sources 体检：encoding=__ header=__ fs_est=__ ts_mode=__ notes=______
+D-2 compute 与表计对照：U=______ I=______ P=______ 表计读数=______ 差=______
+D-3 live 真实追加文件：速率=__样本/s 缺口=__ 告警原文=______
+D-4 TCP 协议要点：帧头=__ 长度字段=__ 字段顺序=__ 字节序=__ 类型=__ 时标=__ 是否已乘变比=__
+D-5 分片规则：命名=__ 单文件时长=__ 是否保留旧文件=__
+环境：OS=__ Python=__ numpy=__  CPU/内存=__
+```
+
+### 结果 / 结论
+
+- **沙盒侧（✅已复现）**：四种数据源在 CLI、Web/REST、Python 库三条入口下**全部实跑通过**，同源四路 P 极差 0.013%、U1 偏差 ≤0.70‱、THDu 偏差 ≤0.005 百分点、缺口 0 ⇒ 输入方式与入口不影响算法结果；`tools/verify_sources.py` 实测 PASS 5 / FAIL 0，`pytest` 147 passed / 1 skipped，`selftest` 44/44。
+- **实测发现并修复 5 个问题**（F-01~F-05），其中 **F-01（目录分片切换丢一整块）属现场必踩**：采集器按段换文件时会出现与轮转周期同频的假缺口，容易被误判成「现场丢点」。
+- **用户侧（🔶未获实录，不下结论）**：真实采集 CSV 的编码/时标/相线口径、真实 TCP 协议帧格式、Windows 环境下的 S 组结果，均待回报。
+- **是否进入 REPORT.md（稳定结论）**：**是**——① 四源等价性（同源四路 P 极差 0.013%）② F-01 教训（切换监视对象前必须 drain 旧文件）③ 「float32 不可存 epoch 秒」的协议约束 ④ 无硬件验证路径（`tools/` 三件套）。
+- **遗留问题**：
+  1. TCP 的 `timeout_s` / `reconnect_s`（各默认 2.0 s）只是构造参数，未暴露到配置文件与界面；
+  2. 真实协议若含帧头/长度/校验，需要在 `_flush_block` 加拆帧逻辑（待协议文档）；
+  3. 喂数器/追加器是**联调工具**，不替代真实装置的背压、断连、乱序行为验证；
+  4. Windows 侧 S 组未实测（子进程与路径分隔符可能有差异）；
+  5. `csv_tail` 目录模式按 mtime 选最新文件，若现场分片命名与 mtime 不一致（如补写旧分片），需要改成按文件名排序——待 D-5 回报后决定。
+
+---
+
 ## 🗒 变更记录
+- v0.3（2026-10-10）：追加专题 **T-003**（四种数据源的配置·运行·验证）：沙盒侧 S1~S13 实录三件套、四源横向对账表（同源四路 P 极差 0.013%、U1 偏差 ≤0.70‱、THDu 偏差 ≤0.005 百分点、缺口 0）、本轮实测发现并修复的 **F-01~F-05**（目录分片切换丢一整块／坏帧格式崩 OverflowError／告警刷屏且 live 收尾不打印源告警／float32 存 epoch 秒无告警／前端 collectSourcePayload 死代码）、能力补齐（`cli.py live --frame/--struct-fmt/--struct-fields`、界面 TCP 两字段、`tools/` 三件套＋5 项防腐测试）、用户侧 **S 组（无硬件可复现）与 D 组（真实装置/协议）** 执行包＋J-* 判读＋回收格式。测试 141→**147 passed, 1 skipped**。T-001/T-002 状态不变（仍待回报）
 - v0.2（2026-10-10）：追加专题 **T-002**（电气量计算工具实现自验证 + 本地部署与真实数据验收执行包）：沙盒侧 A1~A10 实录三件套、本轮修复的两个真 bug（B1 引擎线程换代竞争导致双重摄入、B2 整周期窗少算一个周期）、用户侧 W/R/P 三组模式 B 执行包与 J-* 判读要点、结果回收格式；专题索引与 T-001 状态保持不变（仍待回报）
 - v0.1（2026-10-10）：创建台账骨架 + 条目模板 + 专题索引；登记待归档专题 T-001（模式 B 执行包：E-0 环境说明 / A~D 四组只读命令 / 预期输出样例 / J-* 判读要点 / 结果回收格式）。⚠️ 本条**尚无结果**，等用户实录回报后追加三件套，不新建文件

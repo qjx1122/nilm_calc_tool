@@ -1,7 +1,7 @@
 # STATUS.md
 
 > 续接文件（BOOTSTRAP.md v2.2 台账）。每次收尾必更新；只改本文件，不另建同类文件。
-> 最后更新：2026-10-10（第 3 次收尾：电气量计算工具实现 + 本地部署文档）
+> 最后更新：2026-10-10（第 4 次收尾：四种数据源的配置·运行·验证 + `tools/` 联调工具链）
 
 ## 当前角色
 - 角色：**资深电力算法专家**（`ROLE.md` v1.4 指定的默认当前角色）
@@ -11,7 +11,12 @@
   - 说明：上一任务用户显式指定过模式 B（仅对「补齐台账骨架」生效）；本任务用户跳过模式澄清，故按上述混合模式执行并在此声明
 
 ## 当前目标
-- **本任务（2026-10-10 立项，代码已交付、待用户本地验收）**：实现「电力系统各类电气量计算工具」软件代码
+- **本任务（2026-10-10，已交付、沙盒侧✅实录）**：「分别详细说明 4 种输入方式的数据源如何配置及运行，并进行验证测试」
+  - 交付＝`README.md` §4 重写为「四种数据源详解」（每源：完整配置字段含默认值与约束 / CLI·Web·库三种运行方式 / 沙盒实测输出 / 注意事项 / 可复现的验证方法）＋ §4.6 四源横向对账表 ＋ §4.8 一键复现
+  - 验证＝四种源 × 三条入口全部**实跑取证**（`REPORT_TEST.md` T-003 的 S1~S13 三件套）；新增 `tools/`（`tcp_feeder.py` / `csv_appender.py` / `verify_sources.py`）使**无采集硬件也能复现全部验证**
+  - 实测发现并修复 5 个问题（F-01~F-05，见「决策记录 / 踩坑」）；测试 141 → **147 passed, 1 skipped**
+  - 验收状态：沙盒侧 ✅ 已复现；**用户侧 🔶 待回报**（T-003 的 S 组＝无硬件复现、D 组＝真实装置/协议）
+- **上一任务（2026-10-10 立项，代码已交付、待用户本地验收）**：实现「电力系统各类电气量计算工具」软件代码
   - 需求（用户 2026-10-10 原文）：① 总体为电力系统各类电气量计算工具 ② 各电气量分子界面 ③ 导航条切换子界面 ④ 输入支持实时采集 + 离线文件两种方式 ⑤ 电气量＝三相电压、电流、功率因数、有功、无功、基波、谐波（2–50 次）、频谱 ⑥ 各电气量可分别配置计算时间段（如电压有效值 1s 或 5s）
   - 数据事实（用户确认，2026-10-10）：二次侧三相电压电流实时采集；fs=6400 Hz；CSV 列＝`时间戳,A相电压,A相电流,B相电压,B相电流,C相电压,C相电流`；PT=100、CT=15，**均可配置**
   - 交付形态：算法核心包 `elec_tool/` + 4 类数据源 + 计算引擎 + CLI（7 子命令）+ Web 界面（FastAPI + WebSocket + 12 个导航子界面）+ 142 项测试
@@ -35,15 +40,17 @@
 - [x] 2026-10-10 **沙盒回收事故恢复**：venv 重建、样例数据重生成、git 历史按原结构重提交并 push（远端 `d2337ab`）
 
 ## 进行中
-- 收尾仪式：`NILM_DATA_DICT.md` 用户已确认项翻 ✅、`REPORT.md` 升格电气量计算口径、`session/` 纪要追加（本轮）
+- 等用户执行 **T-003 的 S 组**（无硬件复现四源验证，约 10 分钟）与 **D 组**（真实采集 CSV / 真实 TCP 协议）并回报实录
 - 等用户执行 T-002 的 W/R/P 组（Windows 部署 / 真实数据对账 / 生产常驻）并回报实录
 
 ## 下一步（TODO）
-1. **用户侧（阻塞项，模式 B）**：跑 `REPORT_TEST.md` T-002 的 W 组（Windows 部署，预计 10 分钟）与 R 组（真实数据对账，核心验收），按「结果回收格式」贴回；P 组（生产常驻）可选
+1. **用户侧（阻塞项，模式 B）**：先跑 T-003 的 **S 组**（`python tools/verify_sources.py` 期望 PASS 5 / FAIL 0；`pytest tests/ -q` 期望 147 passed；两个终端跑 tcp_feeder / csv_appender + `cli.py live` 期望缺口 0），再跑 T-002 的 W 组（Windows 部署，预计 10 分钟）与 R 组（真实数据对账，核心验收），按「结果回收格式」贴回；P 组（生产常驻）可选
 2. Agent 侧（收到实录后）：把三件套写入 T-002「结果 / 结论」，按 J-\* 逐条对账，回填 `README.md` §2/§3/§4 与 `NILM_DATA_DICT.md` 的 🔶 项（注明来源＋日期）
 3. **待确认口径**：电压列是相电压还是线电压（`transform.voltage_input`）、真实编码与时间戳格式、PT/CT 实际值、实时落地方式（文件 or TCP 协议文档）
 4. 若验收方要求 IEC 口径：另立专题实现 IEC 61000-4-7 谐波分组（10/15 分钟评估、分组平方和）——当前为整周期矩形窗口径
-5. TCP 实时源联调：取得帧格式（字节序/字段顺序/缩放/帧头尾）后填 `source.frame`/`struct_fmt` 并加测试
+5. TCP 实时源联调：`--frame/--struct-fmt/--struct-fields` 三处已可配（CLI/界面/REST 白名单），文本帧与二进制帧均已用喂数器验证；**仍需现场协议文档**确认帧头帧尾/长度字段/缩放系数/时标类型；若协议含帧头+长度+校验，需在 `sources/tcp_stream.py::_flush_block` 加拆帧（`DataSource` 接口不变，上层零改动）
+5b. TCP 的 `timeout_s` / `reconnect_s`（各默认 2.0 s）目前只是构造参数，未暴露到配置文件与界面——待现场联调时按需提升为配置项
+5c. `csv_tail` 目录模式按 mtime 选最新文件；若现场分片命名与 mtime 不一致（如补写旧分片），需改成按文件名排序——待 T-003 的 D-5 回报后决定
 6. 是否需要 Qt 桌面壳（本轮决策 Web 优先）——等用户表态
 7. `TUNING_GUIDE.md` 仍未创建：待用户真实数据回报后，把「窗长/口径/变比怎么选」写成调参教学（BOOTSTRAP 规定该文件整篇重写、不追加流水，空骨架无意义）
 8. T-001 的 B6 / C6 / D1~D7 仍未回报（其中 fs、列格式、PT/CT 已由本轮需求描述实质回答）
@@ -63,17 +70,22 @@
 - 2026-10-10｜**踩坑（部署）**：`uvicorn[standard]` 的 extra 拉 uvloop，而 uvloop 无 Windows wheel → 跨平台 `pip download --platform win_amd64 -r requirements.txt` 直接 `ResolutionImpossible`（补 `--implementation/--abi` 也无效）；解法＝显式列包不带 extra，并在 `requirements.txt` 用 PEP 508 平台标记分流
 - 2026-10-10｜**事故：沙盒回收致本地未推送提交灭失**：环境中断后 `.venv`、`data/`、后台进程全部消失，仓库被重新克隆到基线 `27b28ea`，本地 `d07476d`/`3126e4c` 等提交丢失（远端只到 `2b7d3c3`）；靠工作树文件尚存 + `git fetch` + `git reset --mixed FETCH_HEAD` 接回远端 tip，再按原结构重提交 4 个 commit 并 push（`d2337ab`）。教训：**每个逻辑单元完成即刻 commit + push**（与 `ROLE.md` v1.3 记载的「快照回退致未推送工作灭失」同类，已第二次发生）；venv 与样例数据必须可一键重建（`requirements.txt` + `cli.py gen-sample`）
 - 2026-10-10｜**文档纪律（本轮强化）**：`README.md` 里每条命令都先在沙盒实跑取证再写（实测发现 `--every` 只有 `compute` 有、`live` 没有；`watch_dir_newest` 默认已是 true），所有数字改为代码级/实测值（缓冲容量公式 `ceil(最长窗×fs×1.5)+max(块,64)`、内存、退出码 0/1），Windows 与真实数据相关一律标 🔶未实测
+- 2026-10-10｜**踩坑 F-01（实时源·本轮实测发现）**：`csv_tail` 目录模式检测到更新分片就直接 `_reopen()`，旧分片在上次轮询之后新写入的数据被静默丢弃 → 每切换一次丢**正好一整块**（640 点＝100.2 ms），结果里表现为与轮转周期同频的「疑似丢点」**假缺口**（实测 8 s 内 8 处、间隔恰 2.000 s）。修法＝切换前 `_drain_current()` 补读旧文件并在告警里写明补读行数；回归测试 `test_csv_tail_dir_switch_drains_old_file`（撤销修复则 1280≠1920 失败）。教训：**告警本身也可能是 bug 的产物**，先证伪告警再怀疑现场数据；「缺口＝0」应写进验证工具的硬判定
+- 2026-10-10｜**踩坑 F-02/F-03（可诊断性）**：① 二进制帧格式不匹配时坏时标一路传到显示层 `time.localtime` → CLI 崩 `OverflowError: timestamp out of range for platform time_t`（`np.isfinite` 挡不住「超大但有限」）；修法＝解析层合理性闸门（非有限或 max|t|>1e11 秒 → 可诊断 `ParseError`）+ 显示层 `_fmt_clock()` 兜底 + 源退回合成时间轴。② 同类告警每块重发且文本含变化数值 → 3 s 刷 8 条，且 `cli.py live` 收尾**根本不打印源告警**＝「看着正常、其实时间轴是合成的」；修法＝`sources/base.py::note_key()` 按中文骨架去重（tcp/csv_tail 共用）+ `_print_diagnostics()` 让 compute/live 收尾统一打印「缺口 + 引擎告警 + 源告警」
+- 2026-10-10｜**协议约束 F-04（实测）**：**不得用 float32 存 epoch 秒**——float32 在 1.7e9 秒处量化步长约 128 s，一整块 0.1 s 样本时标全同（实测显示时刻偏早约 2 分钟）；电气量不受影响（只用样本序＋配置 fs），但时间轴与缺口检测失真。已加 `_flag_degenerate_clock()` 显式告警（整块无递增 / 存在回退两种退化）
+- 2026-10-10｜**踩坑 F-05（工具链）**：`node --check` **只验语法不验逻辑**——patch `app.js` 时把 `return {…}` 后直接接「删空值 + return payload」形成死代码且 `payload` 未定义，语法检查照样通过；修法＝改 `const payload = {…}` 并另做「`return` 之后残留语句数＝0」静态检查。同类：给已有方法**中间**插入新方法会把原方法劈成两半（本轮把 `TcpStreamSource.__init__` 尾部两行吞进 `_note`），以及全量 `str.replace("self._notes.append(", "self._note(")` 会把 `_note` 自身也改成无限递归——插入/替换后必须跑测试，不能只看语法
+- 2026-10-10｜**决策：无硬件验证路径进交付物**：`tools/tcp_feeder.py`（TCP 服务端，text_csv/binary，可指定 `--struct-fmt`）、`tools/csv_appender.py`（按用户列格式追加、可 `--rotate-every` 分片轮转）、`tools/verify_sources.py`（库级四源自动对账，实测 PASS 5/FAIL 0；退出码 0＝通过含 SKIP、1＝验证失败、2＝参数错误），三者与内置 `simulator` 共用信号模型，故可与 `selftest` 解析解对账；另加 `tests/test_tools.py` 5 项防腐测试，避免「文档承诺的验证步骤悄悄坏掉」
 - 2026-10-10｜历史决策（上一任务，仍有效）：分支策略用平台固定 session 分支；不编造项目事实（`ROLE.md` 背景只作推断引用）；KPI 通用数学定义属数学事实可写死；✅ 必须同行带来源、经验阈值必须显式标「经验推测」
 
 ## 关键文件路径
 - `BOOTSTRAP.md` / `ROLE.md` — 协议 v2.2 与角色库 v1.4（默认角色：资深电力算法专家）
 - `STATUS.md` — 本文件，续接现场唯一入口
-- `README.md` — **v0.2**：§0 快速开始、§1 验收对照、**§2 本地部署（详细）**、**§3 运行说明（Web/CLI/库/REST 四种）**、§4 接真实数据、§5 数据目录、§6 配置结构、§7 输出产物、§8 三层验证、§9 生产推荐流程、§10 台账索引、§11 交付说明
-- `REPORT.md` — 稳定结论（KPI 通用定义已落；电气量计算口径待本轮升格）
-- `REPORT_TEST.md` — **v0.2**：T-001（待回报）+ **T-002（沙盒侧 A1~A10 实录、B1/B2 缺陷、用户侧 W/R/P 执行包）**
+- `README.md` — **v0.3**：§0 快速开始、§1 验收对照、**§2 本地部署（详细）**、**§3 运行说明（Web/CLI/库/REST 四种）**、**§4 四种数据源详解（配置·三入口·实测·注意事项·验证，含 §4.6 四源对账表与 §4.8 一键复现）**、§5 数据目录、§6 配置结构、§7 输出产物、§8 三层验证、§9 生产推荐流程、§10 台账索引、§11 交付说明
+- `REPORT.md` — **v0.3**：稳定结论 C-01~C-08（电气量计算）+ **C-09~C-12（四源等价性 / 切换前 drain / float32 禁存 epoch 秒与可诊断降级 / 无硬件验证路径）**；§3.3 十五类量口径；§5 五条实录教训
+- `REPORT_TEST.md` — **v0.3**：T-001（待回报）+ T-002（沙盒 A1~A10、B1/B2、用户侧 W/R/P）+ **T-003（沙盒 S1~S13 实录、四源对账表、F-01~F-05 修复、用户侧 S/D 组执行包 + J-\* 判读 + 回收格式）**
 - `NILM_DATA_DICT.md` — v0.1 模板（🔶=116 处；用户已确认的 fs/列格式/PT/CT 待本轮翻 ✅）
 - `session/NILM_AC_session_complete.md` — 会话纪要（只追加）
-- 代码：`cli.py`（7 子命令入口）、`elec_tool/`（算法核心 + `sources/` + `analysis/`）、`app/server.py` + `app/static/`（Web）、`configs/default.json`（出厂模板）、`tests/`（142 项）
+- 代码：`cli.py`（7 子命令入口）、`elec_tool/`（算法核心 + `sources/` + `analysis/`）、`app/server.py` + `app/static/`（Web）、`configs/default.json`（出厂模板）、**`tools/`（tcp_feeder / csv_appender / verify_sources）**、`tests/`（**147 项**）
 - 数据与产物（均 gitignore）：`data/`（输入 CSV，`cli.py gen-sample` 可重建样例）、`output/`（导出结果）、`configs/runtime.json`（界面保存的配置）
 - 运行环境：`.venv/`（gitignore，沙盒回收后需重建：`python3 -m venv .venv && .venv/bin/pip install -r requirements.txt`）
 - 分支：`arena/82e34fb8-nilm-calc-tool`（远端同名，已 push 至 `d2337ab`）｜基点 `main`=`27b28ea`

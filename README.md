@@ -200,9 +200,13 @@ nilm_calc_tool/
 ├── app/
 │   ├── server.py              # FastAPI + WebSocket + 引擎后台线程
 │   └── static/                # index.html / style.css / app.js（原生 canvas，无外链）
+├── tools/                     # 联调与验证工具（无真实硬件时扮演采集侧）
+│   ├── tcp_feeder.py          #   TCP 喂数器：text_csv / binary 两种帧，可指定 struct_fmt
+│   ├── csv_appender.py        #   CSV 追加喂数器：按用户列格式边写边追加，可分片轮转
+│   └── verify_sources.py      #   库级四源验证：自动拉起上面两个，输出与解析解的对账表
 ├── data/                      # 输入 CSV（gitignore，不入库）
 ├── output/                    # 导出结果（gitignore）
-├── tests/                     # 142 项测试（单元 + 端到端 + Web 层）
+├── tests/                     # 147 项测试（单元 + 端到端 + Web 层 + 工具防腐）
 └── 台账：BOOTSTRAP/ROLE/STATUS/README/REPORT/REPORT_TEST/NILM_DATA_DICT/session/
 ```
 
@@ -396,14 +400,28 @@ nohup .venv/bin/python cli.py serve --port 8000 > logs/serve.log 2>&1 &
 .venv/bin/python cli.py live --source csv_tail --path data/sample_6400hz.csv --duration 2
 # ✓ 结束：输出 25 次，样本 32000，数据时长 5.00s，实时速率 16140 样本/s
 
-# TCP 流（真实协议帧格式待确认 🔶）
-.venv/bin/python cli.py live --source tcp --host 192.168.1.50 --port 9000
-# csv_tail 专用开关（本轮新增，实测）：
+# TCP 文本帧——先用 tools/tcp_feeder.py 扮演采集装置，无需真实硬件            ✅沙盒实录
+.venv/bin/python tools/tcp_feeder.py --port 9000 --mode text_csv --header --rate 4   # 另开一个终端
+.venv/bin/python cli.py live --source tcp --host 127.0.0.1 --port 9000 --duration 6
+# [07:44:12] U=5805.8/5921.7/5689.5V  P=1127.72kW Q=660.38kvar  f=50.000Hz  THDu=10.60%
+# ✓ 结束：输出 42 次，样本 54400，数据时长 8.50s，实时速率 18134 样本/s
+#   · 源：识别到表头：['时间戳','A相电压',…] → 映射 {'timestamp':0,'ua':1,'ia':2,…}
+
+# TCP 二进制帧：帧格式三处可配（--frame/--struct-fmt/--struct-fields 本轮新增）  ✅沙盒实录
+.venv/bin/python tools/tcp_feeder.py --port 9001 --mode binary --struct-fmt ">7f" --rate 4
+.venv/bin/python cli.py live --source tcp --port 9001 --frame binary --struct-fmt ">7f" --duration 6
+# ✓ 结束：输出 3 次，样本 60800，数据时长 9.50s，实时速率 10201 样本/s   ← 大端 float32（28 字节/帧）
+# 真实协议帧格式仍待现场文档 🔶（拆帧改造点与三条实测注意事项见 §4.4）
+# 收尾会打印数据缺口、引擎告警与**源告警**（本轮新增）：帧格式不匹配、时标退化、文件轮转等
+# 只在这里可见，不打印就会「看着正常、其实时间轴是合成的」
+# csv_tail 专用开关（实测）：
 .venv/bin/python cli.py live --source csv_tail --path data/live.csv --from-end --duration 1
 # ✓ 结束：输出 0 次，样本 0   ← 从文件末尾起只算新写入数据；静态文件没有新增故为 0，不报错
 .venv/bin/python cli.py live --source csv_tail --path data/ --watch-newest --duration 1
 # ✓ 结束：输出 13 次，样本 16640   ← 路径给目录时自动跟目录内 mtime 最新的 CSV
-# 参数：--source {simulator,csv_tail,tcp} --path --host --port --block --pace(速率倍数,0.001≈全速)
+# 参数：--source {simulator,csv_tail,tcp} --path --host --port --frame {text_csv,binary}
+#       --struct-fmt(如 "<7d" / ">7f") --struct-fields(默认 t,ua,ia,ub,ib,uc,ic)
+#       --block --pace(速率倍数,0.001≈全速)
 #       --from-end --watch-newest --duration --format {table,json,csv} --out --quantities --max-ticks
 #       + 与 compute 相同的口径覆盖参数                                                ✅实录
 ```
@@ -489,7 +507,42 @@ curl -s "http://127.0.0.1:8000/api/export?fmt=csv" -o output/result.csv
 
 ---
 
-## 4. 接你的真实数据（现场部署关键）
+## 4. 四种数据源详解（配置 · 运行 · 验证）
+
+验收④「输入支持实时采集与离线文件」在本工具里落成 **4 种数据源**：`csv_file`（离线文件）、`csv_tail`（实时·文件追加）、`tcp`（实时·TCP 客户端）、`simulator`（内置合成源）。本章逐源给出：**① 完整配置字段（含默认值与约束）② CLI / Web / Python 库三种运行方式 ③ 沙盒实测输出 ④ 注意事项 ⑤ 你自己能复现的验证方法**。
+
+> **实测条件**（本章所有数字均为沙盒实录，2026-10-10，Linux 6.1.158+ / CPython 3.11.2 / numpy 2.4.6 / 2 核 3 GB）。
+> 实时数据由 `tools/csv_appender.py`（写文件）与 `tools/tcp_feeder.py`（TCP 推送）扮演采集装置，两者与内置 `simulator` **共用同一信号模型**：二次侧 U1=100/√3 V、I1=5 A、φ=30°、谐波 3/5/7/11/13 次＝8%/6%/3%/1.5%/1%、噪声 0.2%、不平衡 2%、fs=6400 Hz。
+> 经 PT=100 / CT=15 变换后的**一次侧解析解**：U1=5773.503 V、I1=75.0 A、P₁=3·U1·I1·cos30°=**1125.000 kW**、THDu=√(0.08²+0.06²+0.03²+0.015²+0.01²)=**10.595%**。实测 P 略高于 P₁（+0.24%）＝谐波功率贡献，属预期。
+
+### 4.0 四种源一览
+
+| `source.kind` | 定位 | 必填字段 | 实时 | 读完即止 | 验证状态 |
+| --- | --- | --- | --- | --- | --- |
+| `csv_file` | 离线历史文件，一次读完、按窗滚动计算 | `path` | 否 | 是（`exhausted=True`） | ✅沙盒实录（CLI/Web/库三入口）＋单测 |
+| `csv_tail` | 采集器边写 CSV 边算（单文件或目录分片） | `path` | 是 | 否 | ✅沙盒实录（4 种组合）＋单测（含本轮新增回归） |
+| `tcp` | 采集装置 TCP 推送（文本行 / 二进制定长帧） | `host`,`port` | 是 | 否 | ✅沙盒实录（`text_csv`＋`binary` 两种帧、两种字节序）；**真实协议帧格式 🔶待现场文档** |
+| `simulator` | 内置合成源：无硬件联调、算法自证、演示 | —（默认源） | 是 | 否 | ✅沙盒实录＋解析解对账 |
+
+**四种源共用的字段**（`configs/default.json` → `source` / `sampling` / `transform`）：
+
+| 字段 | 默认 | 含义与约束 |
+| --- | --- | --- |
+| `source.kind` | `simulator` | 必须是上表 4 值之一，否则启动即 `ConfigError` |
+| `source.block_samples` | `640` | 每块样本数（6400 Hz 下＝0.1 s）；必须 >0。块越小越跟手、越大越省 CPU |
+| `source.poll_interval_s` | `0.2` | 实时源无新数据时的轮询间隔（`csv_tail`/`tcp`） |
+| `sampling.fs` | `6400.0` | 采样率。时间戳可推算时会做校验并告警（实测偏差 ≤0.003%） |
+| `sampling.f_nom` / `f_min` / `f_max` | `50.0` / `45.0` / `65.0` | 额定频率与自适应估频搜索范围 |
+| `transform.pt_ratio` / `ct_ratio` | `100.0` / `15.0` | 一次值＝二次值×变比；`transform.enabled=false`（CLI `--no-scale`）输出二次值 |
+| `columns.*` | 见 §6 | 列映射/编码/表头/时间戳单位，`csv_file` 与 `csv_tail` 共用 |
+
+**三种运行入口对照**（详细操作见 §3）：
+
+| 入口 | 离线（`csv_file`） | 实时（`csv_tail`/`tcp`/`simulator`） |
+| --- | --- | --- |
+| CLI | `cli.py compute --file <路径>` | `cli.py live --source <kind> …` |
+| Web | 「数据源与控制」选 `离线文件(csv_file)` → 填路径 → 探测 → 启动 | 同界面选对应源 → 填字段 → 启动（REST：`POST /api/engine/start`） |
+| 库 | `create_source(cfg)` → `LiveEngine(cfg).run()`（§3.3） | 同左 |
 
 ### 4.1 数据格式（用户已确认的事实）
 
@@ -503,41 +556,243 @@ curl -s "http://127.0.0.1:8000/api/export?fmt=csv" -o output/result.csv
 | 电压是相电压还是线电压 | 默认按**相电压**处理（`transform.voltage_input=phase`） | 🔶待确认（若现场给的是线电压，改成 `line`） |
 | 时间戳格式 | epoch 秒 / `YYYY-MM-DD HH:MM:SS.ffffff` / epoch 毫秒 三种都能自动识别 | ✅解析器实录；**你的采集器实际用哪种** 🔶待确认 |
 | 文件编码 | utf-8-sig/utf-8/gb18030/gbk/big5/latin-1 自动探测 | ✅解析器实录；**你的实际编码** 🔶待确认 |
-| 实时传输方式 | 目前是「采集器写 CSV → 本工具 tail 追加读取」或 TCP 流；TCP 帧格式未定 | 🔶待确认（TCP `frame`/`struct_fmt` 需按真实协议填） |
+| 实时传输方式 | 「采集器写 CSV → 本工具 tail 追加读取」已完整验证；TCP 两种帧格式已验证，**真实协议帧格式未定** | 🔶待确认（TCP `frame`/`struct_fmt`/`struct_fields` 需按现场协议文档填） |
 
-### 4.2 离线文件（拿一段历史数据算）
+### 4.2 源一：`csv_file`（离线文件）
 
-1. 把 CSV 放进 `data/`（该目录已 gitignore，不会误传）；
-2. 体检：`cli.py sources --file data/你的.csv`（看编码/列映射/推算采样率是否符合预期）；
-3. 算：`cli.py compute --file data/你的.csv --format table`，或界面上「数据源与控制」→ 源选 `离线文件(csv_file)` → 填路径 → 启动；
-4. 需要 5s 电压有效值：界面「窗口配置」把 voltage 改 5s（或 `--set-window voltage=5`），其余量不受影响。
+**配置字段**
 
-### 4.3 实时采集（采集器边写边算）
+| 字段 | 默认 | 说明 |
+| --- | --- | --- |
+| `source.path` | `""` | **必填**。CSV 文件路径；相对路径按仓库根解析（Web 里传相对路径也可以） |
+| `source.block_samples` | `640` | 分块读入，内存占用与文件大小无关（2.5 MB/32000 行实测分 50 块） |
+| `columns.encoding` | `"auto"` | auto 时按 utf-8-sig→utf-8→gb18030→gbk→big5→latin-1 探测 |
+| `columns.has_header` | `true` | 有表头按表头名映射（中文表头实测可识别）；无表头按 `t,ua,ia,ub,ib,uc,ic` 顺序取列 |
+| `columns.timestamp_unit` | `"auto"` | auto 按数量级判 epoch s/ms/us/ns 或相对秒；也可强制指定 |
+| `columns.timestamp_col` 等 | 见 §6 | 列名映射（现场列名不同只需改这里，不用动代码） |
+
+**运行方式（三入口）**
 
 ```bash
-cli.py live --source csv_tail --path data/live.csv              # 给文件：监视追加，默认从文件头补算历史
-cli.py live --source csv_tail --path data/live.csv --from-end   # 只算启动之后新写入的数据
-cli.py live --source csv_tail --path data/                      # 给目录：自动跟 mtime 最新的 CSV
+# ① 先体检：编码/表头/列映射/由时间戳推算的采样率
+python cli.py sources --file data/sample_6400hz.csv
+# ② 算：表格或 CSV 导出
+python cli.py compute --file data/sample_6400hz.csv --format table
+python cli.py compute --file data/sample_6400hz.csv --format csv --out output/demo_result.csv
+# ③ 只把电压的有效值窗改成 5 s，其余量不受影响（验收⑥）
+python cli.py compute --file data/你的.csv --set-window voltage=5
 ```
 
-| 开关 | 默认 | 含义 | 在哪设 |
-| --- | --- | --- | --- |
-| `tail_from_end` | `false` | false=从文件头补算历史；true=只算新增 | CLI `--from-end`；界面「数据源与控制」勾选框；配置 `source.tail_from_end` |
-| `watch_dir_newest` | **`true`** | path 为目录时自动跟最新 CSV（采集器按天/按段换文件时有用） | CLI `--watch-newest`；界面勾选框；配置 `source.watch_dir_newest` |
+Web：「数据源与控制」→ 源选 `离线文件(csv_file)` → 填路径 → 点「探测」（走 `GET /api/probe`，实测返回 `encoding=utf-8-sig`、7 列中文表头、`fs_est=6399.99 Hz`）→「启动引擎」。
+库：`tools/verify_sources.py --kinds csv_file`（§4.8）或 §3.3 的嵌入示例。
 
-界面等价操作：源选 `实时·文件追加（csv_tail）` → 填路径 → 按需勾选上面两项 → 启动。
-时间跳变（>1.5 个采样间隔）会被记为**数据缺口**并在界面「导出与日志」中告警。✅沙盒实录
+**实测输出**（5 s / 32000 行样例，CLI）
 
-### 4.4 TCP 实时流 🔶
+```
+✓ 完成：输出 26 次；读入样本 32000（5.00s 数据），块 50
+  各量输出次数：{'fundamental': 26, 'harmonic': 26, 'voltage': 6, 'current': 6,
+                 'power': 6, 'power_factor': 6, 'spectrum': 6}
+```
 
-`source.kind="tcp"` + `host/port` + `frame`（`text_csv` 文本行 / `struct` 二进制）+ `struct_fmt`/`struct_fields`。
-**真实协议帧格式（字节序、字段顺序、缩放系数、帧头帧尾）尚未取得**，需按现场协议文档填写后联调；在此之前建议走「采集器落 CSV + csv_tail」路线。
+**实测数值**（`tools/verify_sources.py --kinds csv_file --duration 2`，与解析解对账）
 
-### 4.5 PT/CT 与一次/二次值口径
+```
+[PASS] csv_file  U1均=5773.60V 偏差 0.17‱（解析解 5773.503V）；P=1140.644kW；THDu 偏差 0.003 百分点
+    U(A/B/C)=[5805.9, 5805.9, 5806.0]V  U1=[5773.87, 5773.45, 5773.48]V  I1=[75.005, 74.999, 74.998]A
+    P=1140.644kW  Q=662.658kvar  PF=0.8637  f=50.0Hz(nominal)  THDu=[10.589,10.592,10.594]%
+    不平衡=0.0016%  输出 9 次  样本 12160  缺口 0
+    · 源：采样率校验通过：时间戳推算 6399.855Hz ≈ 配置 6400.0Hz（偏差 0.0023%）
+```
+
+样例文件由 `cli.py gen-sample`（`build_signal`：三相**平衡**、谐波电流相角 40°）生成，与实时源的 `SimulatorSource`（2% 不平衡、谐波相角跟随 φ=30°）不是同一次信号实现，所以它的 P（1140.6 kW）比实时源（1127.7 kW）高约 1.1%——**这是数据差异不是算法误差**（U1 与 THDu 仍与解析解吻合到 0.17‱ / 0.003 百分点）。
+
+**注意事项**
+
+- 文件读完 → `exhausted=True`，引擎自动 `flush_all()` 收尾，不需要手工停；
+- 时间戳只写到 ms 时（6400 Hz 间隔 156.25 µs），逐点差分会有 ~0.2% 量化假偏差 → 解析器改用**最长连续段线性拟合**推 fs，实测偏差降到 0.002% 量级；`gen-sample` 因此用 `%.9f` 写时间戳；
+- 缺测（NaN/空单元格）按配置插值并在结果 `notes` 里告警，不会静默算错。
+
+### 4.3 源二：`csv_tail`（实时·文件追加）
+
+对应用户的实时落地方式：**采集器持续把二次侧三相 U/I 写进 CSV，本工具边写边算**。
+
+**配置字段**
+
+| 字段 | 默认 | 说明 |
+| --- | --- | --- |
+| `source.path` | `""` | **必填**。可以是**单个文件**，也可以是**目录**（目录模式需 `watch_dir_newest=true`，且目录内有 `*.csv`） |
+| `source.tail_from_end` | `false` | `false`＝从文件头补算历史；`true`＝只算启动之后新写入的数据 |
+| `source.watch_dir_newest` | **`true`** | 目录模式自动跟 mtime 最新的 CSV（采集器按段/按天换文件时有用） |
+| `source.poll_interval_s` | `0.2` | 无新数据时的轮询间隔 |
+| `source.block_samples` | `640` | 凑满一块才计算；不足一块时行留在 `pending_rows` |
+| `columns.*` | 同 `csv_file` | 编码/表头/列映射/时间戳单位一致 |
+
+**运行方式（三入口）**
+
+```bash
+# 四种组合（实测全部通过）
+python cli.py live --source csv_tail --path data/tail_live.csv                 # 文件·含历史
+python cli.py live --source csv_tail --path data/tail_live.csv --from-end      # 文件·只算新增
+python cli.py live --source csv_tail --path data/tail_dir --watch-newest       # 目录·跟最新分片
+python cli.py live --source csv_tail --path data/tail_dir                      # 目录·默认已跟最新
+```
+
+Web：源选 `实时·文件追加(csv_tail)` → 填路径 → 勾选 `tail_from_end` / `watch_dir_newest` → 启动（两个勾选框与 REST 白名单字段一一对应）。
+库：`create_source(cfg)` 返回 `CsvTailSource`；或 `tools/verify_sources.py --kinds csv_tail`。
+
+**没有采集装置怎么验证**（本轮新增工具，扮演采集器按用户列格式追加写文件）：
+
+```bash
+python tools/csv_appender.py --out data/tail_live.csv --rate 4              # 单文件，4 倍速追加
+python tools/csv_appender.py --out data/tail_dir --rotate-every 20 --rate 4 # 目录分片，每 20 块换文件
+python tools/csv_appender.py --out data/x.csv --no-header                   # 验证无表头解析路径
+```
+
+**实测输出**
+
+| 组合 | 命令要点 | 实测结果 |
+| --- | --- | --- |
+| 文件·含历史 | `--path data/tail_live.csv` | 输出 14 次（历史＋新增） |
+| 文件·只算新增 | `--from-end`，6 s | 输出 **78** 次、样本 100480、数据时长 15.70 s、**16749 样本/s**；U=5805.9/5921.8/5689.5 V，P=1127.76 kW，Q=660.31 kvar，THDu=10.60%，缺口 0 |
+| 目录·跟最新＋轮转 | `--path data/tail_dir --watch-newest`，10 s | 输出 **125** 次、样本 160640、25.10 s、16103 样本/s；期间产生 **93 个分片**；U=5806.0/5922.0/5689.5 V，P=1127.74 kW，**缺口 0** |
+| 库入口 | `verify_sources.py --kinds csv_tail` | U1均=5773.91 V（偏差 **0.70‱**）、P=1127.747 kW、THDu 偏差 0.005 百分点、缺口 0 |
+| Web/REST | `POST /api/engine/start` | U=[5806.3, 5922.1, 5690.1] V、P=1127.87 kW、Q=660.32 kvar、PF=0.8584、不平衡=3.997%、缺口 0 |
+
+`--from-end` 且启动后没有新增数据时，输出 0 次且**不报错**（这是正确行为，不是故障）。
+
+**已修缺陷（本轮实测发现，务必知道）**：目录模式下切换分片时，旧分片在上次轮询之后新写入的数据被静默丢弃——每切换一次丢**正好一整块**（640 点＝100.2 ms），在结果里表现为与轮转周期同频的「疑似丢点」**假缺口**（实测 8 s 内 8 处、间隔恰好 2.000 s）。修法＝切换前先 drain 旧文件（`csv_tail._drain_current()`），回归测试 `tests/test_sources.py::test_csv_tail_dir_switch_drains_old_file`（撤销修复则断言 1280≠1920 失败）。修复后复测：**缺口 0**，且日志明写「旧文件补读 640 行」。
+
+**注意事项**
+
+- 文件轮转（inode 变化）与截断（长度变小）都会自动重开；文件消失会等待重建并告警；
+- 半行数据（采集器正在写的那一行）**不会被消费**，留到下次凑齐（单测 `test_csv_tail_partial_line_not_consumed`）；
+- 时间跳变 >1.5 个采样间隔 → 记为**数据缺口**并在界面「导出与日志」告警，跨该点的窗结果需复核；
+- 告警按「中文骨架」去重（`sources/base.py::note_key`）：否则同一条告警每块重发一次，实测 3 s 就能刷出 8 条只差小数位的「采样率校验通过」，把关键信息淹没。
+
+### 4.4 源三：`tcp`（实时·TCP 客户端）
+
+本工具作**客户端**主动连接采集装置/网关并持续收数；支持两种帧格式。
+
+**配置字段**
+
+| 字段 | 默认 | 说明 |
+| --- | --- | --- |
+| `source.host` | `127.0.0.1` | 采集装置地址 |
+| `source.port` | `9000` | 必须 0<port<65536，否则 `ConfigError` |
+| `source.frame` | `text_csv` | `text_csv`＝每行一条 CSV（可带中文表头，自动识别）；`binary`＝定长二进制帧 |
+| `source.struct_fmt` | `<7d` | `binary` 帧格式（Python `struct` 语法）：`<`小端/`>`大端/`!`网络序＋类型码。默认 7 个 double＝**56 字节/帧**；`>7f`＝大端 float32＝**28 字节/帧** |
+| `source.struct_fields` | `t,ua,ia,ub,ib,uc,ic` | 帧内字段顺序，必须与 `struct_fmt` 的元素个数一致 |
+| `source.struct_has_header` | `false` | 二进制流是否以一段表头开头 |
+| `source.block_samples` | `640` | 凑满一块才计算；不足一帧的余数字节留待下次 |
+| `timeout_s` / `reconnect_s` | `2.0` / `2.0` | 连接/接收超时与断线重连间隔。**目前是构造参数、未暴露到配置文件**（库调用可传，CLI/Web 用默认值）——已记为缺口，见 §11 |
+
+**运行方式（三入口）**
+
+```bash
+# 文本帧（采集装置按行推 CSV，可带中文表头）
+python cli.py live --source tcp --host 127.0.0.1 --port 9000 --frame text_csv
+# 二进制帧：帧格式三处可配（CLI 开关为本轮新增）
+python cli.py live --source tcp --port 9001 --frame binary --struct-fmt ">7f" \
+                   --struct-fields t,ua,ia,ub,ib,uc,ic
+```
+
+Web：源选 `实时·TCP流(tcp)` → 填 host/port → 选帧格式 → 二进制时填 `struct_fmt` / `struct_fields`（两个输入框为本轮新增）→ 启动。
+REST：`POST /api/engine/start`，载荷白名单含 `kind,host,port,frame,struct_fmt,struct_fields,block_samples,…`（§3.4）。
+库：`create_source(cfg)` 返回 `TcpStreamSource`；`tools/verify_sources.py --kinds tcp_text,tcp_binary`。
+
+**没有采集装置怎么验证**（本轮新增工具，扮演采集装置；单客户端串行，断开后接受下一个）：
+
+```bash
+python tools/tcp_feeder.py --port 9000 --mode text_csv --header --rate 4   # 文本帧＋中文表头
+python tools/tcp_feeder.py --port 9001 --mode binary --rate 4              # 二进制 <7d（56 字节/帧）
+python tools/tcp_feeder.py --port 9001 --mode binary --struct-fmt ">7f"    # 大端 float32（28 字节/帧）
+```
+
+**实测输出**
+
+| 帧格式 | 入口 | 实测结果 |
+| --- | --- | --- |
+| `text_csv`（中文表头） | CLI，6 s | U=5805.8/5921.7/5689.5 V，P=1127.72 kW，Q=660.38 kvar，f=50.000 Hz，THDu=10.60%；`✓ 结束：输出 42 次，样本 54400，数据时长 8.50s，实时速率 18134 样本/s`；喂数器日志证实表头被识别为 `{'timestamp':0,'ua':1,'ia':2,'ub':3,'ib':4,'uc':5,'ic':6}`，3 次客户端连接、断开后继续服务 |
+| `binary` `>7f`（28 字节） | CLI，6 s | U=5805.9/5922.0/5689.6 V，P=1127.80 kW，Q=660.30 kvar，THDu=10.60%；`输出 3 次，样本 60800，9.50s，10201 样本/s` |
+| `binary` `<7d`（56 字节） | Web/REST | U=[5805.7, 5922.2, 5689.6] V，U1=5773.2 V，P=1127.74 kW，Q=660.38 kvar，PF=0.8584，THDu=10.596%，缺口 0 |
+| `binary` `<7d` | 库 | U1均=5773.75 V（偏差 **0.42‱**），P=1127.751 kW（较 P₁ +0.245%＝谐波功率），THDu 偏差 0.002 百分点，缺口 0 |
+
+**注意事项（三条都是实测踩到的）**
+
+1. **不要用 float32 存 epoch 秒**：float32 在 1.7e9 秒处量化步长约 **128 s**，一整块 0.1 s 的样本时标会完全相同。电气量本身不受影响（只用样本序＋配置 fs），但时间轴显示与缺口检测会失真——实测 `>7f` 帧的显示时刻比真实早约 2 分钟。解析器现在会显式告警：`时间戳整块无递增（全部相同）…建议协议改用 double 或整数毫秒时标`。
+2. **帧格式不匹配不再崩，且能自证**：实测用默认 `<7d` 去解 `>7f` 流，修复前 CLI 直接崩 `OverflowError: timestamp out of range for platform time_t`；现在解析层加了合理性闸门（换算后非有限或 |t|>1e11 秒即抛可诊断 `ParseError`），源自动退回「按 fs 合成时间轴」，并在 CLI 收尾/Web 源面板打出排查清单：① `struct_fmt` 字节序与类型 ② `struct_fields` 字段顺序 ③ CSV 列映射与 `timestamp_unit`。
+3. **连不上/断线都有明确诊断**：端口未监听实测报 `ParseError: TCP 连接失败 127.0.0.1:9001 —— [Errno 111] Connection refused。排查：① 采集服务是否已启动并监听该端口 ② 防火墙/网段 ③ 配置 source.host/port 是否正确`；运行中断线按 `reconnect_s` 自动重连并计数（`info().reconnects`）。
+
+**🔶 真实协议待定项**：帧头/帧尾、长度字段、缩放系数（是否已乘变比）、字节序、时标类型（epoch 秒/毫秒/相对秒）、是否有心跳或确认帧。拿到现场协议文档后，多数情况只需改 `struct_fmt`/`struct_fields`；若是「帧头＋长度＋校验」的复杂协议，则在 `elec_tool/sources/tcp_stream.py` 的 `_flush_block` 里加拆帧逻辑（`DataSource` 接口不变，上层零改动）。在此之前建议走「采集器落 CSV ＋ `csv_tail`」路线（已完整验证）。
+
+### 4.5 源四：`simulator`（内置合成源）
+
+**配置字段**
+
+| 字段 | 默认 | 说明 |
+| --- | --- | --- |
+| `source.sim_f` | `50.0` | 基波频率（改 49.8/60 可验证自适应估频与抗泄漏） |
+| `source.sim_harmonics` | `{3:0.08, 5:0.06, 7:0.03, 11:0.015, 13:0.01}` | 各次谐波相对基波幅值比（对应 THDu=10.595%） |
+| `source.sim_noise_ratio` | `0.002` | 高斯噪声占比 |
+| `source.sim_unbalance` | `0.02` | 三相幅值不平衡度（2%） |
+| `source.sim_speed` | `1.0` | 1.0＝按真实时间速率产出；>1 加速（联调用，实测 4 倍速下 16000～18000 样本/s） |
+
+**运行方式（三入口）**：`python cli.py live`（默认源就是 simulator）；Web 源选 `合成数据(simulator)` → 启动；库 `SimulatorSource(cfg, realtime_pace=True, speed=…)`。
+
+**实测数值**（`verify_sources.py --kinds simulator`，Web/REST 同口径）
+
+```
+[PASS] simulator  U1均=5773.75V 偏差 0.42‱  P=1127.727kW 偏差 0.242%  THDu 偏差 0.002 百分点
+    U(A/B/C)=[5805.6, 5922.4, 5689.5]V  I1=[74.99, 75.745, 74.247]A  PF=0.8584
+    f=50.0Hz(nominal)  THDu=[10.593,10.594,10.604]%  不平衡=4.0123%  输出 14 次  缺口 0
+```
+
+**注意事项**
+
+- `info()` 里恒有告警「合成数据：用于联调与算法自验证，**不代表真实电网**」——界面上看到它是正常的；
+- `sim_unbalance=2%` 是**相电压幅值**不平衡，换算到线电压约 4%（实测 4.01%），别把它当成算法误差；
+- 与 `cli.py selftest`（44/44，`worst_rel_err=1.508e-05`）同源，所以 simulator 的结果可直接和解析解对账。
+
+### 4.6 四源横向对账（同一信号模型）
+
+| 源 / 入口 | U(A/B/C) V | U1均 偏差 | P kW | Q kvar | PF | THDu % | 缺口 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `csv_file`（库，样例文件） | 5805.9 / 5805.9 / 5806.0 | 0.17‱ | 1140.644 | 662.658 | 0.8637 | 10.589 | 0 |
+| `csv_tail`（CLI `--from-end`） | 5805.9 / 5921.8 / 5689.5 | — | 1127.76 | 660.31 | — | 10.60 | 0 |
+| `csv_tail`（Web/REST） | 5806.3 / 5922.1 / 5690.1 | — | 1127.87 | 660.32 | 0.8584 | 10.580 | 0 |
+| `csv_tail`（库） | — | 0.70‱ | 1127.747 | 660.362 | 0.8584 | 10.589 | 0 |
+| `tcp text_csv`（CLI） | 5805.8 / 5921.7 / 5689.5 | — | 1127.72 | 660.38 | — | 10.60 | 0 |
+| `tcp text_csv`（Web/REST） | 5806.2 / 5921.7 / 5689.8 | — | 1127.81 | 660.30 | 0.8584 | 10.607 | 0 |
+| `tcp binary >7f`（CLI） | 5805.9 / 5922.0 / 5689.6 | — | 1127.80 | 660.30 | — | 10.60 | 0 |
+| `tcp binary <7d`（Web/REST） | 5805.7 / 5922.2 / 5689.6 | — | 1127.74 | 660.38 | 0.8584 | 10.596 | 0 |
+| `tcp binary <7d`（库） | — | 0.42‱ | 1127.751 | 660.384 | 0.8584 | 10.593 | 0 |
+| `simulator`（Web/REST） | 5805.6 / 5922.4 / 5689.5 | — | 1127.73 | 660.38 | 0.8584 | 10.594 | 0 |
+| `simulator`（库） | — | 0.42‱ | 1127.727 | 660.376 | 0.8584 | 10.593 | 0 |
+| **解析解** | U1=5773.503 V | 0 | **P₁=1125.000** | — | cos30°=0.8660 | **10.595** | — |
+
+**结论**：`csv_tail` / `tcp(text_csv)` / `tcp(binary)` / `simulator` 四种实时源在 **CLI、Web/REST、库**三条入口下的 P 落在 1127.727～1127.87 kW（极差 **0.013%**），U1 偏差 ≤0.70‱，THDu 偏差 ≤0.005 百分点，缺口全为 0 ⇒ **四种输入方式在算法层等价，入口不影响结果**；P 比基波解析解 P₁ 高 0.24% ＝谐波功率贡献（预期）。`csv_file` 的 P 高 1.1% 是因为样例文件是另一次信号实现（三相平衡＋谐波电流相角 40°），其 U1/THDu 仍与解析解吻合。
+
+### 4.7 PT/CT 与一次/二次值口径
 
 - `一次值 = 二次值 × 变比`；`功率变比 = PT × CT`（默认 PT=100、CT=15 → 功率乘 1500）。
 - `transform.enabled=false`（或 `--no-scale`）→ 直接输出二次值，便于与现场表计对账。
 - 界面上所有卡片默认显示**一次值**，单位随之为 V/A/W/var。✅（`scaling.py` + 测试 `test_engine_applies_pt_ct` / `test_no_scale_option_uses_secondary`）
+
+### 4.8 一键复现本章全部验证
+
+```bash
+# ① 库级四源验证：自动拉起 csv_appender / tcp_feeder 扮演采集侧，跑完即清理（无需真实硬件）
+python tools/verify_sources.py                    # 实测：PASS 5 / SKIP 0 / FAIL 0
+python tools/verify_sources.py --json             # 机器可读（便于入库比对）
+python tools/verify_sources.py --kinds csv_file,simulator      # 只跑不依赖外部进程的两例
+# ② 单元测试（含数据源 13 项、工具防腐 5 项）
+python -m pytest tests/ -q                        # 实测：147 passed, 1 skipped
+# ③ 算法自检（44 项解析解对账）
+python cli.py selftest                            # 实测：44/44，worst_rel_err=1.508e-05
+```
+
+`verify_sources.py` 的判定口径写在工具 docstring 里：U1 用三相均值对账（合成信号含 2% 不平衡，单相值本就偏离）、容差 5‱；P 对 P₁ 容差 0.5%；THDu 容差 0.05 百分点；出现数据缺口直接 FAIL；没有采集侧时是 **SKIP＋可操作提示**（退出码 0），参数错误退出码 2，验证失败退出码 1。
+逐条取证（含命令、原始输出、判读）见 **`REPORT_TEST.md` → T-003**。
 
 ---
 
@@ -666,26 +921,31 @@ cli.py live --source csv_tail --path data/                      # 给目录：�
 
 - **沙盒已验证（Linux / CPython 3.11.2，2026-10-10 实录）**
   - 安装：venv + `pip install -r requirements.txt`；离线安装（Linux 29 包 / Windows 目标 24 包下载）；最小安装报错提示
-  - 算法：`selftest` 44/44（最差 1.508e-05）；`pytest tests/ -q` 141 passed, 1 skipped
+  - 算法：`selftest` 44/44（最差 1.508e-05）；`pytest tests/ -q` **147 passed, 1 skipped**
   - CLI：7 个子命令逐条实跑（含 `--set-window`、`--format csv/json/table`、`--pace`、`--ts-format`）
   - Web：页面与静态资源 200、12 个子界面、REST 12 组端点、WebSocket 推送与降级、配置热更新与持久化分离、导出 34.6 万行 CSV
   - 实时：模拟器 6400 点/s 稳定摄入（实测 6398–6400 点/s），各量按独立窗长输出（0.2s 量 5 次/s、1s 量 1 次/s）
+  - **四种数据源 × 三条入口**（§4，`REPORT_TEST.md` T-003）：`csv_file`/`csv_tail`/`tcp(text_csv)`/`tcp(binary)`/`simulator` 在 CLI、Web/REST、库三条入口下实跑，同源四路 P 极差 **0.013%**、U1 偏差 ≤0.70‱、THDu 偏差 ≤0.005 百分点、缺口 0；`tools/verify_sources.py` 实测 **PASS 5 / FAIL 0**
+  - 本轮实测发现并修复：① `csv_tail` 目录分片切换丢一整块（640 点/100.2 ms 假缺口）→ 切换前 drain 旧文件＋回归测试；② 二进制帧格式不匹配时 CLI 崩 `OverflowError` → 解析层合理性闸门＋显示层兜底＋自动退回合成时间轴并给排查清单；③ 实时源告警未去重（3 s 刷 8 条）→ 按中文骨架去重；④ float32 存 epoch 秒造成时标量化（~128 s）→ 显式告警
 - **用户环境未验证（🔶，需按 `REPORT_TEST.md` T-002 执行包回填）**
   - Windows 安装与运行（含离线 wheel 安装侧、NSSM/任务计划常驻、防火墙放行）
   - 真实采集数据：编码、时间戳格式、电压是相/线、PT/CT 实际值、数据完整性
   - 与现场表计/其它系统的对账误差
-  - TCP 实时协议帧格式
+  - TCP 实时协议帧格式（帧头/长度字段/缩放系数/字节序/时标类型；两种帧格式已用喂数器验证，真实协议未验证）
   - 生产部署形态（systemd/NSSM/nginx 反代）
 - **已知缺口**
   - IEC 61000-4-7 谐波分组（10/15 分钟评估、分组平方和）未实现，当前为整周期矩形窗口径（已在代码与文档标注）
   - Qt 桌面壳未实现（本轮决策：Web 优先，见 `STATUS.md` 决策记录）
   - 用户/权限、历史数据库落盘、报警推送未实现（当前为单机工具形态）
   - `TUNING_GUIDE.md` 未建
+  - TCP 的 `timeout_s` / `reconnect_s`（各默认 2.0 s）只是构造参数，未暴露到配置文件与界面
+  - 喂数器/追加器是**联调工具**，不是采集侧替代品：真实装置的帧头、校验、背压与断连行为仍需现场联调
 
 ---
 
 ## 🗒 变更记录
 
+- **v0.3（2026-10-10）**：§4 重写为「四种数据源详解」——每源给出完整配置字段（含默认值与约束）、CLI/Web/库三种运行方式、沙盒实测输出、注意事项与可复现的验证方法，并新增 §4.6 四源横向对账表与 §4.8 一键复现。新增 `tools/`（`tcp_feeder.py` TCP 喂数器、`csv_appender.py` CSV 追加喂数器、`verify_sources.py` 库级四源验证，实测 PASS 5/FAIL 0）。修复本轮实测发现的 4 个问题：`csv_tail` 目录分片切换丢一整块（含回归测试）、二进制帧格式不匹配导致 CLI 崩 `OverflowError`（解析层闸门＋显示层兜底＋可诊断降级）、实时源告警未去重、float32 存 epoch 秒的时标量化无告警；补齐 `cli.py live` 的 `--frame/--struct-fmt/--struct-fields` 与界面 TCP 面板两个输入框。测试 141→**147 passed, 1 skipped**。取证见 `REPORT_TEST.md` T-003。
 - **v0.2.1（2026-10-10）**：补齐 csv_tail 的两个现场关键开关（`--from-end` / `--watch-newest` + 界面勾选框），此前只能改配置文件；README 中缓冲容量、内存占用、退出码、目录模式默认值等数字全部改为代码级/实测值（原先为估算）。
 - **v0.2（2026-10-10）**：代码落地后全面回填。**新增「本地详细部署与运行说明」**（§2 部署：环境要求/取码/venv/在线与内网离线安装/最小安装/5 条验证命令/目录结构/安装故障表；§3 运行：Web 界面（启动、参数与环境变量、访问与反代、12 个子界面导览、常驻与开机自启）、CLI 7 子命令逐条实测命令与输出、Python 库嵌入示例、REST/WS 接口清单、运行故障表；§4 接真实数据；§9 生产推荐流程）。§1/§5/§6/§7/§8 由占位改为沙盒实录事实，原 🔶 项按「沙盒已验证 ✅ / 用户环境待确认 🔶」重新标注。同步记录本轮修复的两个真 bug（引擎线程换代竞争导致双重摄入；`plan_window` 绝对容差导致 1s 窗实际只算 0.98s），并要求 Windows 命令一律标 🔶未实测。
 - v0.1（2026-10-10）：按 BOOTSTRAP v2.2 台账要求初始化骨架，项目环境/数据/命令/配置/产物/流程 6 类内容全部标 🔶待确认。
