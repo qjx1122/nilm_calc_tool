@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>电力系统电气量计算工具</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header id="topbar">
+  <div class="brand">
+    <span class="logo">⚡</span>
+    <div>
+      <h1>电力系统电气量计算工具</h1>
+      <div class="sub" id="subtitle">nilm_calc_tool · elec_tool</div>
+    </div>
+  </div>
+  <div class="topstats">
+    <div class="stat"><label>状态</label><span id="st-running" class="pill">未启动</span></div>
+    <div class="stat"><label>数据源</label><span id="st-source">—</span></div>
+    <div class="stat"><label>数据时刻</label><span id="st-time">—</span></div>
+    <div class="stat"><label>频率</label><span id="st-freq">—</span></div>
+    <div class="stat"><label>fs</label><span id="st-fs">—</span></div>
+    <div class="stat"><label>PT / CT</label><span id="st-ptct">—</span></div>
+    <div class="stat"><label>样本</label><span id="st-samples">—</span></div>
+  </div>
+  <div class="actions">
+    <button id="btn-start" class="primary">启动</button>
+    <button id="btn-stop" class="danger">停止</button>
+    <button id="btn-refresh">刷新快照</button>
+  </div>
+</header>
+
+<div id="layout">
+  <nav id="navbar">
+    <div class="navgroup">总览</div>
+    <button class="navitem active" data-view="overview">📊 总览面板</button>
+    <button class="navitem" data-view="source">🔌 数据源与控制</button>
+    <div class="navgroup">电气量（各分子界面）</div>
+    <button class="navitem" data-view="voltage">🔆 三相电压</button>
+    <button class="navitem" data-view="current">🔌 三相电流</button>
+    <button class="navitem" data-view="power">⚙️ 有功 / 无功 / 视在</button>
+    <button class="navitem" data-view="power_factor">📐 功率因数</button>
+    <button class="navitem" data-view="fundamental">〰️ 基波</button>
+    <button class="navitem" data-view="harmonic">📶 谐波 (2–50 次)</button>
+    <button class="navitem" data-view="spectrum">🌈 频谱</button>
+    <div class="navgroup">配置与运维</div>
+    <button class="navitem" data-view="windows">⏱ 窗口配置（需求⑥）</button>
+    <button class="navitem" data-view="export">💾 导出与日志</button>
+    <button class="navitem" data-view="selftest">✅ 算法自检</button>
+    <div class="navfoot" id="nav-foot">—</div>
+  </nav>
+
+  <main id="content">
+    <!-- 总览 -->
+    <section class="view active" id="view-overview">
+      <h2>总览面板</h2>
+      <div class="cards" id="ov-cards"></div>
+      <div class="grid2">
+        <div class="panel"><h3>三相电压趋势</h3><canvas id="ov-u" height="200"></canvas></div>
+        <div class="panel"><h3>三相电流趋势</h3><canvas id="ov-i" height="200"></canvas></div>
+        <div class="panel"><h3>P / Q / S 趋势</h3><canvas id="ov-p" height="200"></canvas></div>
+        <div class="panel"><h3>THD 趋势</h3><canvas id="ov-thd" height="200"></canvas></div>
+      </div>
+      <div class="panel"><h3>告警与提示</h3><div id="ov-notes" class="notes"></div></div>
+    </section>
+
+    <!-- 数据源与控制 -->
+    <section class="view" id="view-source">
+      <h2>数据源与控制（需求④：实时采集 + 离线文件）</h2>
+      <div class="grid2">
+        <div class="panel">
+          <h3>数据源</h3>
+          <div class="form">
+            <label>输入方式
+              <select id="src-kind">
+                <option value="csv_file">离线文件（csv_file）</option>
+                <option value="csv_tail">实时·文件追加（csv_tail）</option>
+                <option value="tcp">实时·TCP 流（tcp）</option>
+                <option value="simulator">实时·内置模拟器（simulator）</option>
+              </select>
+            </label>
+            <label>CSV 路径 / 目录 <input id="src-path" placeholder="data/xxx.csv"></label>
+            <div class="row"><button id="btn-probe">探查数据</button><button id="btn-listfiles">列出 data 目录</button></div>
+            <div id="probe-out" class="notes"></div>
+            <div id="files-out" class="notes"></div>
+            <label>TCP 主机 <input id="src-host" placeholder="127.0.0.1"></label>
+            <label>TCP 端口 <input id="src-port" type="number" value="9000"></label>
+            <label>TCP 帧格式
+              <select id="src-frame"><option value="text_csv">text_csv（每行一条 CSV）</option><option value="binary">binary（struct_fmt）</option></select>
+            </label>
+            <label>每块样本数 <input id="src-block" type="number" value="640"></label>
+            <label>模拟器速率倍数 <input id="src-speed" type="number" step="0.1" value="1"></label>
+            <div class="row">
+              <button id="btn-start2" class="primary">启动数据源</button>
+              <button id="btn-stop2" class="danger">停止</button>
+            </div>
+          </div>
+        </div>
+        <div class="panel">
+          <h3>量纲与口径</h3>
+          <div class="form">
+            <div class="row2">
+              <label>PT 电压变比 <input id="cfg-pt" type="number" step="0.1"></label>
+              <label>CT 电流变比 <input id="cfg-ct" type="number" step="0.1"></label>
+            </div>
+            <div class="row2">
+              <label>采样率 fs (Hz) <input id="cfg-fs" type="number" step="1"></label>
+              <label>额定频率 (Hz) <input id="cfg-fnom" type="number" step="0.1"></label>
+            </div>
+            <label class="check"><input id="cfg-adaptive" type="checkbox"> 频率自适应（估频后整周期截断，抗泄漏）</label>
+            <label class="check"><input id="cfg-scale" type="checkbox"> 启用 PT/CT 变换（取消勾选＝直接看二次值）</label>
+            <div class="row2">
+              <label>电压列含义
+                <select id="cfg-uin"><option value="phase">相电压</option><option value="line">线电压</option></select>
+              </label>
+              <label>最高谐波次数 <input id="cfg-hmax" type="number" min="2" max="63"></label>
+            </div>
+            <div class="row2">
+              <label>视在功率口径
+                <select id="cfg-apparent"><option value="arithmetic">算术 S=ΣU·I</option><option value="vector">几何 S=√(P²+Q²)</option></select>
+              </label>
+              <label>无功口径
+                <select id="cfg-reactive"><option value="harmonic_sum">Σ UₕIₕsinφₕ（严格）</option><option value="quadrature">√(S²−P²)（等效）</option></select>
+              </label>
+            </div>
+            <button id="btn-savecfg" class="primary">保存配置（热更新）</button>
+            <div id="cfg-out" class="notes"></div>
+          </div>
+        </div>
+      </div>
+      <div class="panel"><h3>数据源状态</h3>
+        <div id="src-summary" class="notes"></div>
+        <details><summary>原始状态 JSON</summary><pre id="src-state" class="pre"></pre></details>
+      </div>
+    </section>
+
+    <!-- 三相电压 -->
+    <section class="view" id="view-voltage">
+      <h2>三相电压</h2>
+      <div class="cards" id="v-cards"></div>
+      <div class="panel"><h3>电压波形（一次侧，抽稀显示）</h3><canvas id="v-wave" height="240"></canvas></div>
+      <div class="grid2">
+        <div class="panel"><h3>逐周期有效值统计</h3><div id="v-percycle" class="tablewrap"></div></div>
+        <div class="panel"><h3>序分量与不平衡</h3><div id="v-seq" class="tablewrap"></div></div>
+      </div>
+      <div class="panel"><h3>窗口与口径</h3><div id="v-win" class="notes"></div></div>
+    </section>
+
+    <!-- 三相电流 -->
+    <section class="view" id="view-current">
+      <h2>三相电流</h2>
+      <div class="cards" id="i-cards"></div>
+      <div class="panel"><h3>电流波形（一次侧，抽稀显示）</h3><canvas id="i-wave" height="240"></canvas></div>
+      <div class="grid2">
+        <div class="panel"><h3>逐周期有效值统计</h3><div id="i-percycle" class="tablewrap"></div></div>
+        <div class="panel"><h3>序分量 / 波峰系数</h3><div id="i-seq" class="tablewrap"></div></div>
+      </div>
+      <div class="panel"><h3>窗口与口径</h3><div id="i-win" class="notes"></div></div>
+    </section>
+
+    <!-- 功率 -->
+    <section class="view" id="view-power">
+      <h2>有功 / 无功 / 视在功率</h2>
+      <div class="cards" id="p-cards"></div>
+      <div class="panel"><h3>瞬时功率波形 p(t)=Σu·i</h3><canvas id="p-wave" height="220"></canvas></div>
+      <div class="grid2">
+        <div class="panel"><h3>分相功率</h3><div id="p-phase" class="tablewrap"></div></div>
+        <div class="panel"><h3>基波功率 / 口径说明</h3><div id="p-fund" class="tablewrap"></div></div>
+      </div>
+      <div class="panel"><h3>窗口与口径</h3><div id="p-win" class="notes"></div></div>
+    </section>
+
+    <!-- 功率因数 -->
+    <section class="view" id="view-power_factor">
+      <h2>功率因数</h2>
+      <div class="cards" id="pf-cards"></div>
+      <div class="grid2">
+        <div class="panel"><h3>PF / DPF 趋势</h3><canvas id="pf-trend" height="220"></canvas></div>
+        <div class="panel"><h3>四象限位置</h3><canvas id="pf-quad" height="220"></canvas><div id="pf-quadtxt" class="notes"></div></div>
+      </div>
+      <div class="panel"><h3>分相功率因数</h3><div id="pf-phase" class="tablewrap"></div></div>
+    </section>
+
+    <!-- 基波 -->
+    <section class="view" id="view-fundamental">
+      <h2>基波（幅值 / 相位 / 频率 / 相序）</h2>
+      <div class="cards" id="f-cards"></div>
+      <div class="grid2">
+        <div class="panel"><h3>基波相量（RMS，cos 参考）</h3><div id="f-phasor" class="tablewrap"></div></div>
+        <div class="panel"><h3>序分量（正/负/零）</h3><div id="f-seq" class="tablewrap"></div></div>
+      </div>
+      <div class="panel"><h3>频率趋势</h3><canvas id="f-trend" height="200"></canvas></div>
+      <div class="panel"><h3>窗口与口径</h3><div id="f-win" class="notes"></div></div>
+    </section>
+
+    <!-- 谐波 -->
+    <section class="view" id="view-harmonic">
+      <h2>谐波（2–50 次）</h2>
+      <div class="cards" id="h-cards"></div>
+      <div class="panel">
+        <h3>电压谐波
+          <span class="toggle">
+            <label><input type="radio" name="hmode-u" value="hr" checked> 含有率 %</label>
+            <label><input type="radio" name="hmode-u" value="rms"> 幅值 V</label>
+          </span>
+        </h3>
+        <canvas id="h-bar-u" height="230"></canvas>
+      </div>
+      <div class="panel">
+        <h3>电流谐波
+          <span class="toggle">
+            <label><input type="radio" name="hmode-i" value="hr" checked> 含有率 %</label>
+            <label><input type="radio" name="hmode-i" value="rms"> 幅值 A</label>
+          </span>
+        </h3>
+        <canvas id="h-bar-i" height="230"></canvas>
+      </div>
+      <div class="grid2">
+        <div class="panel"><h3>电压谐波明细</h3><div id="h-table-u" class="tablewrap scroll"></div></div>
+        <div class="panel"><h3>电流谐波明细</h3><div id="h-table-i" class="tablewrap scroll"></div></div>
+      </div>
+      <div class="panel"><h3>窗口与口径</h3><div id="h-win" class="notes"></div></div>
+    </section>
+
+    <!-- 频谱 -->
+    <section class="view" id="view-spectrum">
+      <h2>频谱（0 ~ Nyquist）</h2>
+      <div class="row pad">
+        <label>通道
+          <select id="sp-chan"><option>Ua</option><option>Ub</option><option>Uc</option><option>Ia</option><option>Ib</option><option>Ic</option></select>
+        </label>
+        <label>纵轴
+          <select id="sp-scale"><option value="lin">线性 (V/A)</option><option value="db">对数 (dB)</option></select>
+        </label>
+        <label>显示上限
+          <select id="sp-limit"><option value="0">全频段</option><option value="500">500 Hz</option><option value="1000" selected>1000 Hz</option><option value="2600">2600 Hz (50次)</option></select>
+        </label>
+      </div>
+      <div class="panel"><h3>幅值谱</h3><canvas id="sp-chart" height="300"></canvas></div>
+      <div class="panel"><h3>峰值与口径</h3><div id="sp-info" class="tablewrap"></div><div id="sp-notes" class="notes"></div></div>
+    </section>
+
+    <!-- 窗口配置 -->
+    <section class="view" id="view-windows">
+      <h2>窗口配置（需求⑥：各电气量分别配置计算时间段）</h2>
+      <p class="hint">每个电气量独立配置「计算时间段（窗长）」与「输出步长」：例如电压有效值可设 1s，也可设 5s；谐波可设 0.2s 快速刷新。FFT 类量（基波/谐波/频谱）强制整周期截断以避免频谱泄漏。</p>
+      <div class="panel"><div id="w-table" class="tablewrap"></div>
+        <div class="row pad">
+          <button id="btn-save-win" class="primary">保存窗口配置</button>
+          <button id="btn-preset-fast">预设：快速（0.2s）</button>
+          <button id="btn-preset-std">预设：标准（1s）</button>
+          <button id="btn-preset-slow">预设：慢速（5s）</button>
+        </div>
+        <div id="w-out" class="notes"></div>
+      </div>
+      <div class="panel"><h3>各量实际输出次数（本次运行）</h3><div id="w-emits" class="tablewrap"></div></div>
+    </section>
+
+    <!-- 导出与日志 -->
+    <section class="view" id="view-export">
+      <h2>导出与日志</h2>
+      <div class="panel">
+        <h3>导出</h3>
+        <div class="row">
+          <a class="btnlink" href="/api/export?fmt=csv" download>下载 CSV（扁平表）</a>
+          <a class="btnlink" href="/api/export?fmt=json" download>下载 JSON（全量结果）</a>
+          <button id="btn-save-cfgfile">把当前配置写入 configs/default.json</button>
+        </div>
+        <div id="exp-out" class="notes"></div>
+      </div>
+      <div class="grid2">
+        <div class="panel"><h3>运行状态</h3><pre id="ex-state" class="pre"></pre></div>
+        <div class="panel"><h3>告警 / 数据缺口 / 错误</h3><div id="ex-notes" class="notes"></div></div>
+      </div>
+      <div class="panel"><h3>最近一次结果 JSON（前 200 行）</h3><pre id="ex-json" class="pre small"></pre></div>
+    </section>
+
+    <!-- 自检 -->
+    <section class="view" id="view-selftest">
+      <h2>算法自检（解析解对账）</h2>
+      <p class="hint">在<b>当前运行环境</b>构造已知幅值/相位的三相谐波信号，用公式算出理论期望值，与工具计算结果逐项比对。不需要任何真实数据，是验收算法实现正确性的第一道关。</p>
+      <div class="panel">
+        <div class="form">
+          <div class="row2">
+            <label>fs (Hz) <input id="self-fs" type="number" value="6400"></label>
+            <label>额定频率 (Hz) <input id="self-f" type="number" value="50" step="0.1"></label>
+          </div>
+          <div class="row2">
+            <label>PT <input id="self-pt" type="number" value="100" step="0.1"></label>
+            <label>CT <input id="self-ct" type="number" value="15" step="0.1"></label>
+          </div>
+          <label>窗长 (s) <input id="self-win" type="number" value="1" step="0.1"></label>
+          <button id="btn-selftest" class="primary">运行自检</button>
+        </div>
+        <div id="self-summary" class="notes"></div>
+        <div id="self-table" class="tablewrap scroll"></div>
+      </div>
+    </section>
+  </main>
+</div>
+
+<div id="toast"></div>
+<script src="/static/app.js"></script>
+</body>
+</html>
