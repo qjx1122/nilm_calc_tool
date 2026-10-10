@@ -16,11 +16,15 @@ import asyncio
 import json
 import os
 import threading
+import platform
+import sys
 import time
 from collections import deque
 from typing import Any, Deque, Dict, List, Optional, Set, Tuple
 
 from contextlib import asynccontextmanager
+
+import numpy as np
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse, Response
@@ -436,10 +440,13 @@ async def selftest(fs: float = 6400.0, freq: float = 50.0, pt: float = 100.0, ct
     checks = run_selftest(fs=fs, f=freq, pt=pt, ct=ct, duration_s=window)
     s = summarize(checks)
     s["duration_s"] = round(time.time() - t0, 3)
+    # 运行环境必须如实显示：本地部署排障（Python 版本 / 操作系统）第一眼看这里。
+    # 旧写法靠 os.popen("python -V") 且需要 PY_CMD，未设时留空；os.uname() 在 Windows 不存在。
     s["conditions"] = {"fs": fs, "f_nom": freq, "pt": pt, "ct": ct, "window_s": window,
-                       "python": os.popen(f'"{os.environ.get("PY_CMD", "python")}" -V 2>&1').read().strip()
-                       if os.environ.get("PY_CMD") else "",
-                       "platform": os.uname().sysname if hasattr(os, "uname") else os.name}
+                       "python": sys.version.split()[0],
+                       "python_impl": platform.python_implementation(),
+                       "platform": f"{platform.system()} {platform.release()} ({sys.platform})",
+                       "numpy": np.__version__}
     s["checks"] = [c.to_dict() for c in checks]
     return s
 

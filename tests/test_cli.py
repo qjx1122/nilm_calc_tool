@@ -210,3 +210,36 @@ def test_cli_live_tcp_no_server_reports_clearly(tmp_path):
                    "--config", str(tmp_path / "nope.json"), "--duration", "2", expect_code=None)
     assert proc.returncode != 0
     assert "TCP 连接失败" in (proc.stderr + proc.stdout)
+
+
+def test_cli_live_csv_tail_from_end_and_watch_newest(tmp_path, csv_factory):
+    """csv_tail 的两个现场开关（README §3.2/§4.3 记录的行为必须有测试兜底）。"""
+    art = csv_factory(str(tmp_path / "live.csv"), duration_s=0.5)
+
+    # 1) --from-end：静态文件启动后没有新增数据 → 输出 0 次，但必须正常结束不报错
+    p1 = run_cli("live", "--source", "csv_tail", "--path", art["path"], "--from-end",
+                 "--duration", "1", "--config", str(tmp_path / "nope.json"))
+    assert "输出 0 次" in p1.stdout and "样本 0" in p1.stdout, p1.stdout[-600:]
+
+    # 2) 默认（tail_from_end=False）：同一文件从头补算 → 必须有输出
+    p2 = run_cli("live", "--source", "csv_tail", "--path", art["path"],
+                 "--duration", "2", "--config", str(tmp_path / "nope.json"))
+    assert "输出 0 次" not in p2.stdout, p2.stdout[-600:]
+
+    # 3) 目录模式：watch_dir_newest=False 时要给**明确中文报错**（非 0 退出，不能是 traceback）
+    cfg_path = tmp_path / "cfg_nowatch.json"
+    run_cli("init-config", "--out", str(cfg_path))
+    c = json.loads(cfg_path.read_text(encoding="utf-8"))
+    c["source"]["watch_dir_newest"] = False
+    cfg_path.write_text(json.dumps(c, ensure_ascii=False), encoding="utf-8")
+    p3 = run_cli("live", "--source", "csv_tail", "--path", str(tmp_path), "--duration", "1",
+                 "--config", str(cfg_path), expect_code=None)
+    assert p3.returncode != 0
+    assert "找不到可监视的 CSV" in (p3.stdout + p3.stderr), (p3.stdout[-400:], p3.stderr[-400:])
+    assert "Traceback" not in p3.stderr
+
+    # 4) 同一份配置加上 --watch-newest → 自动跟目录内最新 CSV，跑通
+    p4 = run_cli("live", "--source", "csv_tail", "--path", str(tmp_path), "--watch-newest",
+                 "--duration", "2", "--config", str(cfg_path))
+    assert p4.returncode == 0
+    assert "输出 0 次" not in p4.stdout, p4.stdout[-600:]

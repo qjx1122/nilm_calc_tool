@@ -8,7 +8,12 @@ numpy>=1.24
 
 # --- Web 界面（子界面导航 + 实时推送，可选但推荐） ---
 fastapi>=0.110
-uvicorn[standard]>=0.27
+# uvicorn[standard] 的 extra 会拉 uvloop，而 uvloop **没有 Windows wheel**：
+# 在 Windows 上（尤其是 `pip download --platform win_amd64` 离线打包）会直接
+# ResolutionImpossible。故按平台分流：Windows 用纯 uvicorn + websockets（WebSocket 推送够用）。
+uvicorn[standard]>=0.27; sys_platform != "win32"
+uvicorn>=0.27; sys_platform == "win32"
+websockets>=12; sys_platform == "win32"
 
 # --- 开发 / 验证（可选） ---
 pytest>=8.0

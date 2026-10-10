@@ -89,6 +89,10 @@
             <label>TCP 帧格式
               <select id="src-frame"><option value="text_csv">text_csv（每行一条 CSV）</option><option value="binary">binary（struct_fmt）</option></select>
             </label>
+            <label class="chk"><input id="src-tailend" type="checkbox">
+              csv_tail：从文件末尾开始（只算新写入数据，不补算历史）</label>
+            <label class="chk"><input id="src-newest" type="checkbox">
+              csv_tail：路径给目录时自动跟最新 CSV（采集器换文件时用）</label>
             <label>每块样本数 <input id="src-block" type="number" value="640"></label>
             <label>模拟器速率倍数 <input id="src-speed" type="number" step="0.1" value="1"></label>
             <div class="row">

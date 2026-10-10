@@ -665,6 +665,8 @@ function renderSource() {
     $('#src-frame').value = cfg.source.frame || 'text_csv';
     $('#src-block').value = cfg.source.block_samples || 640;
     $('#src-speed').value = cfg.source.sim_speed !== undefined ? cfg.source.sim_speed : 1;
+    $('#src-tailend').checked = !!cfg.source.tail_from_end;
+    $('#src-newest').checked = !!cfg.source.watch_dir_newest;
   }
   if (cfg.transform) {
     $('#cfg-pt').value = cfg.transform.pt_ratio;
@@ -752,6 +754,8 @@ function collectSourcePayload() {
     frame: $('#src-frame').value,
     block_samples: +$('#src-block').value,
     sim_speed: +$('#src-speed').value,
+    tail_from_end: !!$('#src-tailend').checked,
+    watch_dir_newest: !!$('#src-newest').checked,
   };
 }
 

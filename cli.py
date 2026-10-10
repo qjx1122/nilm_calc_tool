@@ -322,6 +322,10 @@ def cmd_live(args: argparse.Namespace) -> int:
         cfg.source.block_samples = int(args.block)
     if args.pace is not None:
         cfg.source.sim_speed = float(args.pace)
+    if getattr(args, "from_end", False):
+        cfg.source.tail_from_end = True
+    if getattr(args, "watch_newest", False):
+        cfg.source.watch_dir_newest = True
     cfg.validate()
     engine = LiveEngine(cfg)
     engine.start()
@@ -516,6 +520,10 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--port", type=int)
     sp.add_argument("--block", type=int)
     sp.add_argument("--pace", type=float, help="simulator 速率倍数（>1 加速，0.001 近似全速）")
+    sp.add_argument("--from-end", action="store_true", dest="from_end",
+                    help="csv_tail：从文件末尾开始，只算新写入的数据（不补算历史）")
+    sp.add_argument("--watch-newest", action="store_true", dest="watch_newest",
+                    help="csv_tail：--path 给目录时自动跟目录内最新的 CSV（采集器按天/按段换文件时用）")
     sp.add_argument("--duration", type=float, help="运行时长（秒）")
     sp.add_argument("--format", choices=["table", "json", "csv"], default="table")
     sp.add_argument("--out")
