@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.venv/
+venv/
+
+# 数据与产物（大体量/涉密数据不入库；样例数据按需生成）
+data/
+*.csv
+!tests/fixtures/*.csv
+output/
+logs/
+*.log
+
+# 环境与编辑器
+.env
+.vscode/
+.idea/
+
+# 运行时配置（用户在界面里改的设置，出厂模板 configs/default.json 保持干净）
+configs/runtime.json

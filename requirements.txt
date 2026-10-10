@@ -1,0 +1,15 @@
+# nilm_calc_tool — 运行依赖
+# 安装：python -m venv .venv && .venv/bin/pip install -r requirements.txt
+#      （Windows：py -m venv .venv && .venv\Scripts\pip install -r requirements.txt）
+# 说明：算法核心仅依赖 numpy；Web 界面依赖 fastapi + uvicorn；两者可分开安装（CLI 模式无需 Web 依赖）
+
+# --- 算法核心（必需） ---
+numpy>=1.24
+
+# --- Web 界面（子界面导航 + 实时推送，可选但推荐） ---
+fastapi>=0.110
+uvicorn[standard]>=0.27
+
+# --- 开发 / 验证（可选） ---
+pytest>=8.0
+httpx>=0.27        # FastAPI TestClient 依赖（Web 层端到端测试 tests/test_server.py）
