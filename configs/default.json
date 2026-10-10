@@ -1,0 +1,197 @@
+{
+  "name": "电力系统电气量计算工具",
+  "sampling": {
+    "fs": 6400.0,
+    "f_nom": 50.0,
+    "f_min": 45.0,
+    "f_max": 65.0,
+    "adaptive_freq": true,
+    "fs_from_timestamps": true,
+    "fs_tolerance": 0.01
+  },
+  "transform": {
+    "pt_ratio": 100.0,
+    "ct_ratio": 15.0,
+    "voltage_input": "phase",
+    "enabled": true
+  },
+  "harmonic": {
+    "order_min": 2,
+    "order_max": 50,
+    "thd_order_max": 50,
+    "include_interharmonic": true
+  },
+  "power": {
+    "apparent": "arithmetic",
+    "reactive": "harmonic_sum",
+    "fundamental_power": true,
+    "three_phase_mode": "four_wire"
+  },
+  "columns": {
+    "timestamp": "时间戳",
+    "ua": "A相电压",
+    "ia": "A相电流",
+    "ub": "B相电压",
+    "ib": "B相电流",
+    "uc": "C相电压",
+    "ic": "C相电流",
+    "encoding": "auto",
+    "delimiter": ",",
+    "has_header": true,
+    "timestamp_unit": "auto",
+    "ALIASES": {
+      "timestamp": [
+        "时间戳",
+        "时间",
+        "时标",
+        "timestamp",
+        "time",
+        "ts",
+        "datetime",
+        "date_time"
+      ],
+      "ua": [
+        "a相电压",
+        "ua",
+        "u_a",
+        "va",
+        "v_a",
+        "电压a",
+        "phasea_voltage",
+        "u_phase_a"
+      ],
+      "ia": [
+        "a相电流",
+        "ia",
+        "i_a",
+        "电流a",
+        "phasea_current",
+        "i_phase_a"
+      ],
+      "ub": [
+        "b相电压",
+        "ub",
+        "u_b",
+        "vb",
+        "v_b",
+        "电压b",
+        "phaseb_voltage",
+        "u_phase_b"
+      ],
+      "ib": [
+        "b相电流",
+        "ib",
+        "i_b",
+        "电流b",
+        "phaseb_current",
+        "i_phase_b"
+      ],
+      "uc": [
+        "c相电压",
+        "uc",
+        "u_c",
+        "vc",
+        "v_c",
+        "电压c",
+        "phasec_voltage",
+        "u_phase_c"
+      ],
+      "ic": [
+        "c相电流",
+        "ic",
+        "i_c",
+        "电流c",
+        "phasec_current",
+        "i_phase_c"
+      ]
+    }
+  },
+  "source": {
+    "kind": "simulator",
+    "path": "",
+    "poll_interval_s": 0.05,
+    "block_samples": 640,
+    "tail_from_end": false,
+    "watch_dir_newest": true,
+    "host": "127.0.0.1",
+    "port": 9000,
+    "frame": "text_csv",
+    "struct_fmt": "<7d",
+    "struct_fields": "t,ua,ia,ub,ib,uc,ic",
+    "struct_has_header": false,
+    "sim_f": 50.0,
+    "sim_harmonics": {
+      "3": 0.08,
+      "5": 0.06,
+      "7": 0.03,
+      "11": 0.015,
+      "13": 0.01
+    },
+    "sim_noise_ratio": 0.002,
+    "sim_unbalance": 0.02,
+    "sim_speed": 1.0
+  },
+  "output": {
+    "history_len": 900,
+    "export_dir": "output",
+    "spectrum_max_points": 1200
+  },
+  "windows": {
+    "voltage": {
+      "length_s": 1.0,
+      "step_s": null,
+      "policy": "integer_cycles",
+      "window_fn": "rect",
+      "remove_dc": true,
+      "min_cycles": 1
+    },
+    "current": {
+      "length_s": 1.0,
+      "step_s": null,
+      "policy": "integer_cycles",
+      "window_fn": "rect",
+      "remove_dc": true,
+      "min_cycles": 1
+    },
+    "power": {
+      "length_s": 1.0,
+      "step_s": null,
+      "policy": "integer_cycles",
+      "window_fn": "rect",
+      "remove_dc": true,
+      "min_cycles": 1
+    },
+    "power_factor": {
+      "length_s": 1.0,
+      "step_s": null,
+      "policy": "integer_cycles",
+      "window_fn": "rect",
+      "remove_dc": true,
+      "min_cycles": 1
+    },
+    "fundamental": {
+      "length_s": 0.2,
+      "step_s": null,
+      "policy": "integer_cycles",
+      "window_fn": "rect",
+      "remove_dc": true,
+      "min_cycles": 1
+    },
+    "harmonic": {
+      "length_s": 0.2,
+      "step_s": null,
+      "policy": "integer_cycles",
+      "window_fn": "rect",
+      "remove_dc": true,
+      "min_cycles": 1
+    },
+    "spectrum": {
+      "length_s": 1.0,
+      "step_s": null,
+      "policy": "integer_cycles",
+      "window_fn": "rect",
+      "remove_dc": true,
+      "min_cycles": 1
+    }
+  }
+}
