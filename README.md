@@ -1,7 +1,7 @@
 # README.md — nilm_calc_tool（电力系统各类电气量计算工具）
 
 > 台账文件（BOOTSTRAP.md v2.2）：安装与环境 / 运行命令 / 数据目录 / 配置结构 / 输出产物 / 生产推荐流程。
-> **当前状态：v0.2（2026-10-10）**——软件已实现并在沙盒跑通（算法核心 + 4 类数据源 + 计算引擎 + CLI + Web 界面 + 142 项测试）。
+> **当前状态：v0.4（2026-10-10）**——软件已实现并在沙盒跑通（算法核心 + 4 类数据源 + 计算引擎 + CLI + Web 界面 + 162 项测试 + 4 项验证工具）。
 > 状态标注：✅已确认（有代码 / 实录 / 官方来源佐证）｜🔶待确认（占位或推断，需用户回填）｜❌已废弃（不删行，只翻状态）
 > **本文所有 ✅ 均为沙盒实录：Linux 6.1.158+ / CPython 3.11.2 / numpy 2.4.6，采集时间 2026-10-10。**
 > **Windows 命令、真实现场数据、生产部署三项尚未在用户环境验证，一律标 🔶，请按 `REPORT_TEST.md`「T-002 本地部署与验收执行包」逐条回填。**
@@ -203,10 +203,11 @@ nilm_calc_tool/
 ├── tools/                     # 联调与验证工具（无真实硬件时扮演采集侧）
 │   ├── tcp_feeder.py          #   TCP 喂数器：text_csv / binary 两种帧，可指定 struct_fmt
 │   ├── csv_appender.py        #   CSV 追加喂数器：按用户列格式边写边追加，可分片轮转
-│   └── verify_sources.py      #   库级四源验证：自动拉起上面两个，输出与解析解的对账表
+│   ├── verify_sources.py      #   库级四源验证：自动拉起上面两个，输出与解析解的对账表
+│   └── ui_dropdown_check.cjs  #   Web 下拉框端到端检查（jsdom 驱动真实页面，打真实服务端）
 ├── data/                      # 输入 CSV（gitignore，不入库）
 ├── output/                    # 导出结果（gitignore）
-├── tests/                     # 147 项测试（单元 + 端到端 + Web 层 + 工具防腐）
+├── tests/                     # 162 项测试（单元 + 端到端 + Web 层 + 前端契约 + 工具防腐）
 └── 台账：BOOTSTRAP/ROLE/STATUS/README/REPORT/REPORT_TEST/NILM_DATA_DICT/session/
 ```
 
@@ -290,6 +291,57 @@ INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
 | ⏱ 窗口配置（需求⑥） | 逐量设置窗长/步长/截断策略/窗函数/去直流，并显示本次运行各量实际输出次数 |
 | 💾 导出与日志 | 导出 CSV/JSON、告警与数据缺口日志、原始结果 JSON 预览 |
 | ✅ 算法自检 | 一键跑 44 项解析解对账，可改 fs/f/PT/CT/窗长，显示运行环境（Python/OS/numpy） |
+
+**数据源面板：4 种输入方式的联动、空值语义与两个保存入口（✅沙盒实录）**
+
+「数据源输入方式」下拉框 4 项与后端 `SOURCE_KINDS` 一一对应；选中后界面**只放开与该源相关的字段**，其余置灰禁用（填了也不生效，置灰是为了不让人白填）：
+
+| 选中 | 可编辑 | 置灰 |
+| --- | --- | --- |
+| `csv_file` 离线文件 | CSV 路径、每块点数 | 主机 / 端口 / 帧格式 / struct 两项 / 速率 / csv_tail 两开关 |
+| `csv_tail` 文件追加 | CSV 路径（**文件或目录**）、从文件末尾开始、跟目录最新文件、每块点数 | 主机 / 端口 / 帧格式 / struct 两项 / 速率 |
+| `tcp` TCP 客户端 | 主机、端口、帧格式、每块点数；帧格式选 `binary` 时才放开 struct 格式与字段顺序 | CSV 路径 / 速率 / csv_tail 两开关 |
+| `simulator` 模拟器 | 速率倍数、每块点数 | CSV 路径 / 主机 / 端口 / 帧格式 / struct 两项 / csv_tail 两开关 |
+
+下拉框下方有一行**随选择切换的填写说明**（`#src-hint`）：例如选 `tcp` 会写明 `text_csv`（每行一条 CSV，可带中文表头）与 `binary`（定长帧，默认 `<7d`＝7 个 double 小端＝56 字节/帧）的区别；选 `csv_tail` 会写明目录模式与「从文件末尾开始」的含义。
+
+**两个保存入口的服务端语义不同，别混用**：
+
+| 按钮 | 请求 | 服务端吃什么 | 用于 |
+| --- | --- | --- | --- |
+| 保存配置（热更新） | `PUT /api/config` | **深合并**：只更新送出的键，未送的键保留原值 | PT/CT、电压输入口径（相/线）、fs/f_nom、谐波上限、视在/无功口径、数据源默认值 |
+| 启动数据源 | `POST /api/engine/start` | 只吃 `source` 白名单键（`kind/path/host/port/frame/block_samples/poll_interval_s/tail_from_end/sim_speed/watch_dir_newest/struct_fmt/struct_fields`）与 `windows` | 换源、换路径、立即开跑 |
+
+> ⚠️ 改了 **PT/CT 或功率口径**后必须点「保存配置（热更新）」：这些键不在 `/api/engine/start` 的白名单内，点「启动数据源」会被服务端**静默忽略**（界面已在提示里指明该点哪个按钮）。
+
+**空输入框＝沿用服务端已保存的值，不是清空**：留空的文本框、非正数或非数字的数字框都不会进入请求体（`PUT` 深合并，省略即保留）。两个实测理由：① 空 `path` 送出去会被拒 `HTTP 400 source.kind=csv_file 需要 source.path（文件或目录路径）`；② 空数字框若按 `+'' === 0` 送出会得到 `HTTP 400 sampling.fs 必须 > 0（当前 0）`。被跳过的字段名会写进保存成功的提示，不静默。
+
+**正在编辑时不会被实时推送打断**：快量每 0.2 s 推一次结果并触发界面刷新；一旦你在本页动过任何控件，自动回填立即暂停并显示「⚠ 界面有未保存的修改…」。点「刷新」＝丢弃未保存修改、按服务端配置重新回填；保存或启动成功后自动恢复回填。
+
+**回归方式**（任选其一）：
+
+```bash
+# ① 端到端自动检查：需 node ≥18 + jsdom（npm install jsdom --prefix /tmp/uitest，或用 JSDOM_DIR 指定安装目录）
+#    脚本用 jsdom 加载真实 index.html/app.js 并打真实服务端，还会自己在 9000 端口拉起 TCP 喂数器
+JSDOM_DIR=/tmp/uitest node tools/ui_dropdown_check.cjs http://127.0.0.1:8000
+# ✅沙盒实录：PASS 74 / FAIL 0 —— 4 种源逐个选中→联动禁用→载荷裁剪→服务端真跑起来
+#    （csv_file 读完即 finished、csv_tail/tcp/simulator running=true）、binary 帧字段联动、
+#    脏值保护（推送后 kind 与半截路径不变）、3 个口径下拉框 PUT 后服务端回显、频谱 3 个下拉框触发重绘
+
+# ② 前端契约静态检查：随 pytest 一起跑，不需要 node/浏览器
+.venv/bin/python -m pytest tests/test_web_ui.py -q          # ✅沙盒实录：14 passed
+```
+
+没有 node 时的**手工点检清单**（6 步，含期望值）：
+
+| # | 操作 | 期望 |
+| --- | --- | --- |
+| 1 | 打开页面 → 点左侧「🔌 数据源与控制」 | PT=100、CT=15、fs=6400、主机=127.0.0.1 等**均已回填**（不是空框） |
+| 2 | 「数据源输入方式」依次选 4 项 | 每次切换后无关字段**置灰**，下方说明文字随之变化 |
+| 3 | 选 `tcp` → 帧格式选 `binary` | struct 格式/字段顺序两框由灰变可编辑；切回 `text_csv` 又变灰 |
+| 4 | 选 `simulator` → 速率填 4 → 点「启动数据源」 | 右上状态变运行中；顶部提示「已启动数据源：simulator」 |
+| 5 | 在路径框打半截字，**不点任何按钮**，等 2 s | 半截字**不被清掉**、下拉框不被改回，出现「⚠ 界面有未保存的修改」 |
+| 6 | 电压输入口径改「线电压」→ 点「保存配置（热更新）」 | 提示保存成功；刷新页面后仍是「线电压」（`GET /api/config` 回显 `line`） |
 
 **停止与常驻**
 
@@ -863,13 +915,15 @@ python cli.py selftest                            # 实测：44/44，worst_rel_e
 
 ---
 
-## 8. 验证与自检（三层，逐层可复现）
+## 8. 验证与自检（五层，逐层可复现）
 
 | 层 | 命令 | 期望结果（沙盒实录） | 作用 |
 | --- | --- | --- | --- |
 | 1. 算法解析解 | `cli.py selftest` | 44 项全 PASS，最差相对误差 1.508e-05，中位 1.1e-15 | 证明**计算口径正确**，不需要真实数据 |
-| 2. 回归测试 | `.venv/bin/python -m pytest tests/ -q` | 141 passed, 1 skipped（约 55 s） | 证明解析/调度/Web 接口/边界行为未回退 |
+| 2. 回归测试 | `.venv/bin/python -m pytest tests/ -q` | 161 passed, 1 skipped（约 59 s） | 证明解析/调度/Web 接口/前端契约/边界行为未回退 |
 | 3. 端到端实跑 | `cli.py compute --file data/sample_6400hz.csv` | 输出 26 次，emits 分层（快量 26 / 慢量 6） | 证明全链路（读→缩放→切窗→计算→输出）通 |
+| 4. 四源对账 | `tools/verify_sources.py` | PASS 5 / SKIP 0 / FAIL 0 | 证明 4 种数据源（含 TCP 两种帧）算出的电气量与解析解一致 |
+| 5. 界面契约 | `pytest tests/test_web_ui.py` ＋ `node tools/ui_dropdown_check.cjs` | 14 passed；PASS 74 / FAIL 0 | 证明下拉框选项与后端枚举一致、4 种源可分别配置并真的跑起来 |
 
 自检 44 项覆盖（`cli.py selftest -v` 可看逐项）：S1 相电压/相电流/线电压/零线电流；S2 P/Q/S/PF/DPF/P1/Q1；S3 U1/I1/THD_U/THD_I 与 3·5·7·11·13 次；S4 频谱主峰与分辨率(=1/窗长)；S5 1s vs 5s 窗一致性；S6 PT/CT 缩放线性；S7 f=49.85Hz 非额定频率自适应抗泄漏；S8 5% 负序；S9 直流分量。
 
@@ -921,12 +975,13 @@ python cli.py selftest                            # 实测：44/44，worst_rel_e
 
 - **沙盒已验证（Linux / CPython 3.11.2，2026-10-10 实录）**
   - 安装：venv + `pip install -r requirements.txt`；离线安装（Linux 29 包 / Windows 目标 24 包下载）；最小安装报错提示
-  - 算法：`selftest` 44/44（最差 1.508e-05）；`pytest tests/ -q` **147 passed, 1 skipped**
+  - 算法：`selftest` 44/44（最差 1.508e-05）；`pytest tests/ -q` **161 passed, 1 skipped**
   - CLI：7 个子命令逐条实跑（含 `--set-window`、`--format csv/json/table`、`--pace`、`--ts-format`）
   - Web：页面与静态资源 200、12 个子界面、REST 12 组端点、WebSocket 推送与降级、配置热更新与持久化分离、导出 34.6 万行 CSV
   - 实时：模拟器 6400 点/s 稳定摄入（实测 6398–6400 点/s），各量按独立窗长输出（0.2s 量 5 次/s、1s 量 1 次/s）
   - **四种数据源 × 三条入口**（§4，`REPORT_TEST.md` T-003）：`csv_file`/`csv_tail`/`tcp(text_csv)`/`tcp(binary)`/`simulator` 在 CLI、Web/REST、库三条入口下实跑，同源四路 P 极差 **0.013%**、U1 偏差 ≤0.70‱、THDu 偏差 ≤0.005 百分点、缺口 0；`tools/verify_sources.py` 实测 **PASS 5 / FAIL 0**
   - 本轮实测发现并修复：① `csv_tail` 目录分片切换丢一整块（640 点/100.2 ms 假缺口）→ 切换前 drain 旧文件＋回归测试；② 二进制帧格式不匹配时 CLI 崩 `OverflowError` → 解析层合理性闸门＋显示层兜底＋自动退回合成时间轴并给排查清单；③ 实时源告警未去重（3 s 刷 8 条）→ 按中文骨架去重；④ float32 存 epoch 秒造成时标量化（~128 s）→ 显式告警
+  - **Web 界面下拉框专项检查**（§3.1、`REPORT_TEST.md` T-003 S14~S16）：jsdom 驱动真实页面 + 真实服务端，实测 **PASS 74 / FAIL 0**。修复 5 个界面缺陷：⑥ `src-kind`/`src-frame` 无 change 监听（选了不联动、无关字段可编辑却静默不生效）；⑦ 启动/保存载荷无条件发送空 `path`/`host`（空 path 被服务端 400 拒、空 host 被静默存空）；⑧ 空数字框按 `+''===0` 送出 → `PUT /api/config` 必 400「sampling.fs 必须 > 0」；⑨ 快量 0.2 s 一次的推送触发无条件回填 → **把用户刚选的下拉框改回服务端值、清掉输入一半的路径**；⑩ 「启动数据源」夹带 `transform/sampling/harmonic/power`，而 `/api/engine/start` 白名单只吃 source 键 → 改完 PT/CT 点启动被静默忽略
 - **用户环境未验证（🔶，需按 `REPORT_TEST.md` T-002 执行包回填）**
   - Windows 安装与运行（含离线 wheel 安装侧、NSSM/任务计划常驻、防火墙放行）
   - 真实采集数据：编码、时间戳格式、电压是相/线、PT/CT 实际值、数据完整性
@@ -940,11 +995,14 @@ python cli.py selftest                            # 实测：44/44，worst_rel_e
   - `TUNING_GUIDE.md` 未建
   - TCP 的 `timeout_s` / `reconnect_s`（各默认 2.0 s）只是构造参数，未暴露到配置文件与界面
   - 喂数器/追加器是**联调工具**，不是采集侧替代品：真实装置的帧头、校验、背压与断连行为仍需现场联调
+  - `tools/ui_dropdown_check.cjs` 需 node ≥18 + jsdom，Python 侧环境不含 node 时只能跑静态契约测试（`tests/test_web_ui.py`）＋手工点检清单（§3.1）
+  - 界面检查在 jsdom 中进行，**无真实浏览器渲染**：canvas 绘制以调用计数代替像素比对，CSS 置灰效果以 `disabled` 属性断言代替视觉核对
 
 ---
 
 ## 🗒 变更记录
 
+- **v0.4（2026-10-10）**：§3.1 新增「数据源面板：4 种输入方式的联动、空值语义与两个保存入口」（含逐源可编辑/置灰字段表、`PUT /api/config` 深合并 vs `POST /api/engine/start` 白名单对照、6 步手工点检清单）。修复 Web 界面 5 个缺陷（F-06~F-10）：数据源两个下拉框无联动、载荷发送空值、空数字框导致保存必 400、实时推送覆盖用户正在编辑的表单、启动按钮夹带被服务端忽略的配置段；新增逐源填写说明 `#src-hint` 与未保存提示 `#src-formnote`。新增 `tools/ui_dropdown_check.cjs`（jsdom 端到端，实测 PASS 74/FAIL 0）与 `tests/test_web_ui.py`（前端契约静态检查 14 项，撤销修复必 FAIL 已验证）。测试 147→**161 passed, 1 skipped**。取证见 `REPORT_TEST.md` T-003 S14~S16。
 - **v0.3（2026-10-10）**：§4 重写为「四种数据源详解」——每源给出完整配置字段（含默认值与约束）、CLI/Web/库三种运行方式、沙盒实测输出、注意事项与可复现的验证方法，并新增 §4.6 四源横向对账表与 §4.8 一键复现。新增 `tools/`（`tcp_feeder.py` TCP 喂数器、`csv_appender.py` CSV 追加喂数器、`verify_sources.py` 库级四源验证，实测 PASS 5/FAIL 0）。修复本轮实测发现的 4 个问题：`csv_tail` 目录分片切换丢一整块（含回归测试）、二进制帧格式不匹配导致 CLI 崩 `OverflowError`（解析层闸门＋显示层兜底＋可诊断降级）、实时源告警未去重、float32 存 epoch 秒的时标量化无告警；补齐 `cli.py live` 的 `--frame/--struct-fmt/--struct-fields` 与界面 TCP 面板两个输入框。测试 141→**147 passed, 1 skipped**。取证见 `REPORT_TEST.md` T-003。
 - **v0.2.1（2026-10-10）**：补齐 csv_tail 的两个现场关键开关（`--from-end` / `--watch-newest` + 界面勾选框），此前只能改配置文件；README 中缓冲容量、内存占用、退出码、目录模式默认值等数字全部改为代码级/实测值（原先为估算）。
 - **v0.2（2026-10-10）**：代码落地后全面回填。**新增「本地详细部署与运行说明」**（§2 部署：环境要求/取码/venv/在线与内网离线安装/最小安装/5 条验证命令/目录结构/安装故障表；§3 运行：Web 界面（启动、参数与环境变量、访问与反代、12 个子界面导览、常驻与开机自启）、CLI 7 子命令逐条实测命令与输出、Python 库嵌入示例、REST/WS 接口清单、运行故障表；§4 接真实数据；§9 生产推荐流程）。§1/§5/§6/§7/§8 由占位改为沙盒实录事实，原 🔶 项按「沙盒已验证 ✅ / 用户环境待确认 🔶」重新标注。同步记录本轮修复的两个真 bug（引擎线程换代竞争导致双重摄入；`plan_window` 绝对容差导致 1s 窗实际只算 0.98s），并要求 Windows 命令一律标 🔶未实测。

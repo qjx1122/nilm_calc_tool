@@ -121,3 +121,37 @@
   5. 四个口径问题仍未答：电压是相/线、实际编码与时间戳写法、PT/CT 是否恒为 100/15、实时落地是文件还是 TCP
   6. Windows 侧 S 组未实测（子进程/路径分隔符/编码可能有差异）；`TUNING_GUIDE.md` 仍未创建；IEC 61000-4-7 分组与 Qt 壳仍延后
 - **相关文件/分支**：`README.md`(v0.3，§4 四源详解)、`REPORT_TEST.md`(v0.3，**T-003 执行包在此**)、`REPORT.md`(v0.3，C-09~C-12)、`NILM_DATA_DICT.md`(v0.2)、`STATUS.md`(第 4 次收尾)、`tools/{tcp_feeder,csv_appender,verify_sources}.py`、`elec_tool/sources/{base,parsing,csv_tail,tcp_stream}.py`、`cli.py`、`app/server.py`、`app/static/{index.html,app.js}`、`tests/{test_sources,test_tools}.py`｜分支 `arena/82e34fb8-nilm-calc-tool`（本轮提交见下）｜基点 `main`=`27b28ea`｜live preview：8000 端口（`ELEC_TOOL_AUTOSTART=1` + 模拟器源）
+
+---
+
+## [2026-10-10] 会话纪要（第 4 条：Web 界面下拉框专项检查与修复 F-06~F-10 + 界面层双层回归）
+
+- **任务**：用户要求「检查 Web 总览面板-数据源与控制界面中数据源输入方式下拉列表框是否可正常选择 4 种输入方式分别进行配置（含其它下拉列表框）」——验证＋修复类：须实跑取证，缺陷要修＋加回归，并按台账纪律落 `REPORT_TEST.md`（追加到 T-003）与 `README.md`
+- **角色 / 模式**：工程实现工程师（延续）／**混合模式**——沙盒侧（模式 A）jsdom 驱动真实页面打真实服务端 ✅已实录；用户侧（模式 B）真实浏览器手点＝T-003 新增 **U 组 7 步** 🔶待回报
+- **本轮产物**：
+  1. `tools/ui_dropdown_check.cjs`（新增）：jsdom 加载**真实** `index.html`/`app.js`，`window.fetch` 转发到真实服务端并记录请求原文，canvas/WebSocket 打桩（以绘制调用计数验证重绘），自动探测 9000 端口并拉起 `tools/tcp_feeder.py` 扮演采集装置、结束清理并把预览恢复为 simulator；覆盖 A 四种源端到端 / A2 帧格式联动 / A3 脏值保护 / B 三个口径下拉框 PUT 回显 / C 频谱三下拉框重绘
+  2. `app/static/app.js`：`renderSource()` 拆成「状态摘要（总刷新）＋`fillSourceForm()`（仅 `!S.formDirty` 时回填）」；新增 `syncSourceForm()`（按 kind/frame 决定 10 个字段的 `disabled`＋写 `#src-hint`）与 `SRC_HINT` 逐源文案；`#src-kind`/`#src-frame` 注册 change；`#view-source` 全部 input/select 绑 input/change 置脏；「刷新」＝清脏重新回填；`collectSourcePayload()` 按 kind 裁剪＋非空/有限才送；`collectConfigPayload()` 改返回 `{payload, skipped}`（只送有限且 >0，`order_max` 取整 ≥2）；`startEngine()` 不再夹带配置段
+  3. `app/static/index.html` + `style.css`：新增 `#src-hint`（逐源填写说明）与 `#src-formnote`（未保存提示）；`label.off{opacity:.45}`、`input:disabled,select:disabled{cursor:not-allowed}`
+  4. `tests/test_web_ui.py`（新增 14 项前端契约）：5 个下拉框选项 ↔ 后端枚举集合相等、频谱三下拉框自洽、app.js 引用的元素 id 全部存在、两个源下拉框已注册 change、脏值保护与联动函数在位、载荷裁剪/空值跳过/启动不夹带配置三道闸门、`SRC_HINT` 覆盖 4 源
+  5. 文档：`README.md` v0.4（§3.1 新增「数据源面板：4 种输入方式的联动、空值语义与两个保存入口」＝逐源可编辑/置灰字段表＋PUT 深合并 vs start 白名单对照＋空值语义＋6 步手工点检清单；§8 三层→五层验证；§2.6/§11/头部状态行/变更记录）、`REPORT_TEST.md` v0.4（T-003 追加 **S14~S18** 实录 + **F-06~F-10** + **U 组**执行包 + J-U1~J-U4 + 回收格式 + 结论/遗留）、`REPORT.md` v0.4（**C-13** + 第 6 条实录教训 + 第 5 次收尾判定）、`STATUS.md`（第 5 次收尾）
+- **验证三件套（沙盒侧实录，Linux 6.1.158+ / CPython 3.11.2 / node v22.22.3）**：
+  1. `JSDOM_DIR=/tmp/uitest node tools/ui_dropdown_check.cjs http://127.0.0.1:8000` → **PASS 74 / FAIL 0**（修复前同脚本 **PASS 37 / FAIL 10**）：4 种源逐个「可选中→无关字段已联动禁用→说明文案已切换→载荷只含该源相关字段→载荷无空值/0→服务端确实以该源运行」（csv_file `finished=true samples_in=32000`；csv_tail/tcp/simulator `running=true samples_in=32000/39040/44800`）；binary 才放开 struct 两项、切回 text_csv 载荷不带；脏值保护（经真实 WS `onmessage` 推入 `kind=simulator` 后 `#src-kind` 仍 csv_tail、半截路径仍在、提示出现，点「刷新」后恢复回填）；口径 6 组取值 PUT 全 200 且 `GET /api/config` 回显一致、载荷无 0 值；频谱 8 组取值均触发重绘（234~1245 次绘制调用）
+  2. `pytest tests/ -q` → **161 passed, 1 skipped（59.28 s）**；`pytest tests/test_web_ui.py -q` → 14 passed；把 `app.js` 换回修复前版本再跑同一命令 → **7 failed / 7 passed**（撤销修复必 FAIL 已验证），还原后 14 passed
+  3. 空值语义 REST 实录：`PUT {"source":{"path":""}}` → **HTTP 400**「source.kind=csv_file 需要 source.path（文件或目录路径）」；`PUT {"source":{"host":""}}` → **HTTP 200**（空 host 被静默存下）；`POST /api/engine/start {"kind":"csv_file"}`（省略 path）→ 200，沿用服务端已存路径读满 32000 样本 ⇒ **省略＝沿用、送空串＝被拒或被静默覆盖**，这是 F-07/F-08 修法的事实依据
+- **关键决策**：
+  1. **界面正确性用「真实 DOM + 真实服务端」验证**，不用「读代码 + 手点一次」下结论：jsdom 能断言请求载荷原文、服务端回显、推送后的 DOM 值——这是本轮 5 个缺陷全部现形的唯一手段（同期 `node --check` 与 `pytest` 全绿）
+  2. **双层回归**：jsdom 端到端（需 node，可选）＋前端契约静态测试（不需 node，随 pytest 跑）；后者把「选项 ↔ 后端枚举一致」「引用 id 存在」「四道闸门在位」钉死
+  3. **空值语义统一为「留空＝沿用服务端值」**，并在保存成功提示里列出被跳过的字段名（不静默）；两个保存入口的分工写进 README 与界面提示（口径/变比走 `PUT /api/config`，换源/开跑走 `POST /api/engine/start`）
+  4. 脏值保护选「暂停自动回填 + 明确提示 + 刷新丢弃」而非「三方合并」：单人单机工具，语义越简单越不容易出错
+- **踩坑（本轮实录）**：
+  1. **F-09 最隐蔽**：快量 0.2 s 一次推送 → `render()` → `renderSource()` 无条件回填 → 停在数据源页时「刚选的下拉框被改回服务端 kind、输入一半的路径被清空」；只在「页面停留 + 引擎在跑」时复现，静态读代码看不出来
+  2. **F-08 连锁**：`renderSource()` 只在源视图打开时执行 → 全新加载后表单停在 HTML 默认（PT/CT/fs 全空）→ 空框经 `+''===0` 送出 → 第一次点「保存配置」必 400，且提示不指明是哪个框
+  3. **jsdom 三个坑**：① 无布局，`el.offsetParent` 恒为 null → 用「`!disabled && offsetParent!==null`」判「无关字段已被禁用」**恒真（假 PASS）**，必须只判 `.disabled`；② `window.eval(js)` 之后 `const S` 不可见（只有函数声明进 window）→ 需在**同一次** eval 里闭包导出 `window.__S=()=>S`；③ 捕获请求只过滤 POST 会漏掉 `saveConfig` 的 **PUT**
+  4. `csv_file` 是离线源，读完即 `finished=true/running=false` → 断言必须写成 `(running||finished) && samples_in>0`，否则把正常行为判成失败
+  5. TCP 用例必须先有采集侧：脚本自动探测 9000 端口，空闲则拉起喂数器（否则 `running=false samples_in=0` 会被误判成界面缺陷）
+- **未决问题**：
+  1. **（阻塞，用户侧）** T-003 新增 **U 组**（浏览器手点 7 步）未回报；真实浏览器（尤其 Windows/Edge）下的视觉置灰、输入法与焦点行为均未实测——jsdom 无渲染，置灰是 `disabled` 属性断言而非视觉核对
+  2. T-003 的 S 组（无硬件复现）与 D 组（真实 CSV/TCP 协议）、T-002 的 W/R/P 组、T-001 的 B6/C6/D1~D7 仍未回报；4 个口径问题（相/线电压、实际编码与时标写法、PT/CT 是否恒 100/15、实时落地形态）仍未答
+  3. 观察项（未修）：引擎启动后服务端把 `source.path` 解析为**绝对路径**并经 `/api/config` 回显到表单（`_persist` 写盘时仍还原为相对路径），属外观问题
+  4. `tools/ui_dropdown_check.cjs` 依赖 node ≥18 + jsdom（沙盒装在 `/tmp/uitest`，**不入库**）；用户环境若无 node，只能跑 `tests/test_web_ui.py` ＋ README §3.1 手工点检清单
+- **相关文件/分支**：`README.md`(v0.4，§3.1 数据源面板联动/空值语义/6 步点检)、`REPORT_TEST.md`(v0.4，**T-003 的 S14~S18 + F-06~F-10 + U 组**)、`REPORT.md`(v0.4，C-13)、`STATUS.md`(第 5 次收尾)、`app/static/{index.html,style.css,app.js}`、`tools/ui_dropdown_check.cjs`、`tests/test_web_ui.py`｜分支 `arena/82e34fb8-nilm-calc-tool`（本轮提交见下）｜基点 `main`=`27b28ea`｜live preview：8000 端口（`ELEC_TOOL_AUTOSTART=1` + 模拟器源）

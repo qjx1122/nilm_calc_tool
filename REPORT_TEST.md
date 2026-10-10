@@ -23,7 +23,7 @@
 | --- | --- | --- | --- | --- | --- | --- |
 | T-001 | 2026-10-10 | 环境与数据基线核对（台账回填前置采集） | 验证专题 | B（用户本地执行） | 🔶待用户回报 | 待定 |
 | T-002 | 2026-10-10 | 电气量计算工具实现自验证 + 本地部署与真实数据验收执行包 | 验证专题 | 混合（沙盒 A 已实录 / 用户侧 B 待回报） | 🔶待用户回报（沙盒侧已✅实录） | 部分已升格 |
-| T-003 | 2026-10-10 | 四种数据源的配置·运行·验证（csv_file/csv_tail/tcp/simulator × CLI/Web/库） | 验证专题 | 混合（沙盒 A 已实录 / 用户侧 S·D 组待回报） | 🔶待用户回报（沙盒侧已✅实录，含 F-01~F-05 修复） | 是（四源等价性等 4 条） |
+| T-003 | 2026-10-10 | 四种数据源的配置·运行·验证（csv_file/csv_tail/tcp/simulator × CLI/Web/库） | 验证专题 | 混合（沙盒 A 已实录 / 用户侧 S·D 组待回报） | 🔶待用户回报（沙盒侧已✅实录，含 F-01~F-10 修复） | 是（四源等价性等 5 条） |
 
 ---
 
@@ -384,6 +384,11 @@ P1~P3：做法 + 现象
 | S11 | `python -m pytest tests/ -q` | `147 passed, 1 skipped in 59.35s`（唯一 skip＝`tests/test_cli.py:43`，60Hz×50 次逼近 Nyquist） | 全量回归通过；本轮新增 6 项（1 项 csv_tail 丢块回归 + 5 项工具防腐） |
 | S12 | `python cli.py selftest` | `44/44`，`worst_rel_err=1.508e-05` | 算法层解析解自证未受本轮改动影响 |
 | S13 | `python tools/verify_sources.py --kinds tcp_text --external-feeders --tcp-port-text 9999` | `[SKIP] tcp_text　没有可连的喂数器；先跑 python tools/tcp_feeder.py --port <端口> 或去掉 --external-feeders 让本工具自动拉起`，退出码 0 | 无采集侧时是 SKIP＋提示（退出码 0），参数错误 2、验证失败 1 ⇒ 可编入脚本/CI |
+| S14 | `JSDOM_DIR=/tmp/uitest node tools/ui_dropdown_check.cjs http://127.0.0.1:8000`（jsdom 加载**真实** `index.html`+`app.js`，打**真实**服务端；脚本自动在 9000 端口拉起 TCP 喂数器） | `=== 结果：PASS 74 / FAIL 0 ===`；`#src-kind` 4 项逐个：`✓ 可选中`＋`✓ 无关字段已联动禁用`＋`✓ 载荷只含该源相关字段`＋`✓ 载荷无空值/0 覆盖服务端配置`＋`✓ 服务端确实以该源运行`；载荷实录 csv_tail `{"kind":"csv_tail","path":"data/sample_6400hz.csv","tail_from_end":false,"watch_dir_newest":false,"block_samples":640}`、tcp `{"kind":"tcp","host":"127.0.0.1","port":9000,"frame":"text_csv","block_samples":640}`、simulator `{"kind":"simulator","sim_speed":4,"block_samples":640}`；服务端状态 csv_file `running=false finished=true samples_in=32000`，csv_tail/tcp/simulator `running=true samples_in=32000/39040/44800` | **「数据源输入方式」4 种输入方式都能正常选中并分别配置**，且服务端真的按所选 kind 摄入（csv_file 是离线源，读满即 finished 属预期）；载荷不再夹带无关字段/空值 |
+| S15 | 同上 → A2/A3 段 | `✓ frame=text_csv 时 struct 两项禁用`、`✓ 选 binary 后 struct 格式/字段顺序放开`、binary 载荷含 `"frame":"binary","struct_fmt":">7f","struct_fields":"t,ua,ia,ub,ib,uc,ic"`、切回 text_csv 后载荷**不含** struct 两项；脏值保护：经真实 WS `onmessage` 推入一条 `config.source.kind='simulator'` 的 state 后 `✓ #src-kind 仍是用户选的 csv_tail`、`✓ 正在输入的路径未被清空`（`data/我正在输入的一半路径`）、`✓ 给出「已暂停自动回填」的明确提示`；点「刷新」后 `✓ 丢弃修改并重新回填`（`formDirty=false`，kind 回到服务端值 tcp） | 「帧格式」下拉框与 binary 专属字段联动正确；F-09（推送覆盖用户输入）已消除，且「刷新」语义明确＝丢弃未保存修改 |
+| S16 | 同上 → B 段（口径三下拉框，逐个值点「保存配置（热更新）」）＋修复前 `/tmp/uitest/probe.cjs` 实录 | 修复前：全新加载 3 s 后 `cfg-pt/cfg-ct/cfg-fs/cfg-fnom/cfg-hmax/src-path/src-host` **全为空**；只改 `cfg-uin=line` 点保存 → `PUT /api/config` **HTTP 400**，body 含 `fs:0, pt_ratio:0, order_max:0`，报「sampling.fs 必须 > 0（当前 0）」，服务端仍 `phase/6400/100`。修复后：`cfg-uin` line/phase、`cfg-apparent` vector/arithmetic、`cfg-reactive` quadrature/harmonic_sum **6 组全部** `✓ PUT 已发出且未被 400 拒（HTTP 200）`＋`✓ 服务端配置已生效（回显一致）`＋`✓ 载荷不含 0 值` | F-08 已消除：空数字框不再被当 0 送出；口径下拉框选中即生效并可被 `GET /api/config` 复核 |
+| S17 | 空值语义 REST 实录：`PUT /api/config {"source":{"path":""}}`；`PUT {"source":{"host":""}}`；`POST /api/engine/start {"kind":"csv_file"}`（不带 path） | ① `HTTP 400 {"ok":false,"error":"source.kind=csv_file 需要 source.path（文件或目录路径）"}`；② `HTTP 200`（空 host **被存下**）；③ `HTTP 200 ok=true`，服务端沿用已存路径，2 s 后 `/api/state`：`running=false finished=true samples_in=32000`，源告警「采样率校验通过：时间戳推算 6399.962Hz ≈ 配置 6400Hz」 | 语义确证：**载荷里省略某键＝沿用服务端已存值**（深合并），而**送空串**要么被 400 拒（path）要么被静默存空（host）⇒ 前端必须按「非空才送」裁剪，这正是 F-07 的修法依据 |
+| S18 | `pytest tests/test_web_ui.py -q`；把 `app/static/app.js` 换回修复前版本再跑同一命令；`pytest tests/ -q` | 修复后 `14 passed in 0.05s`；换回旧版 `7 failed, 7 passed`（失败项＝两个下拉框 change 监听、脏值保护与联动函数、载荷裁剪、空值跳过、启动不夹带配置、SRC_HINT 覆盖 4 源）；还原后 `14 passed`；全量 `161 passed, 1 skipped in 59.28s` | 前端契约测试**撤销修复必 FAIL** 已验证（不是空跑绿）；全量回归 147→161 通过 |
 
 ### 四源横向对账（同一信号模型，三条入口）
 
@@ -413,6 +418,11 @@ P1~P3：做法 + 现象
 | F-03 | 实时源告警刷屏：3s 内 8 条只差小数位的「采样率校验通过」、6 条几乎相同的解析告警，关键信息被淹没；且 `cli.py live` 收尾**完全不打印**源告警 | 同类告警每块重发且文本含变化数值/模式名，按原文去重无效；live 收尾只打引擎状态 | `sources/base.py::note_key()` 按中文骨架（去数字与 ASCII）去重，tcp/csv_tail 共用；`cli.py::_print_diagnostics()` 让 compute/live 收尾统一打印「缺口 + 引擎告警 + 源告警」并截断 170 字 | 实录 S8/S9（同一问题只剩 1 条）、S3/S4（源告警可见） | ✅已修 |
 | F-04 | float32 存 epoch 秒 → 时标量化步长 ~128s，显示时刻比真实早约 2 分钟，却无任何告警 | 协议侧精度问题，解析层未检测「整块无递增/存在回退」 | `_flag_degenerate_clock()`：整块无递增或出现回退时显式告警，并说明电气量仍按样本序＋配置 fs 计算、时间轴与缺口检测不可信 | 实录 S9 | ✅已修 |
 | F-05 | `app/static/app.js::collectSourcePayload` 存在死代码：`return` 在前、后续「删空值」语句引用未定义的 `payload` | 上一轮 patch 时把 `return {…}` 直接后接新逻辑 | 改为 `const payload = {…}` → 删空值 → `return payload` | `node --check` 通过 ＋ 另做「`return` 之后残留语句数＝0」静态检查（**教训：`node --check` 只验语法不验逻辑**） | ✅已修 |
+| F-06 | 「数据源输入方式」与「帧格式」两个下拉框**选了界面毫无变化**：4 种源的字段全部平铺常驻、都能编辑，填了不生效也不提示；无逐源填写说明 | `app.js::bind()` 只给频谱 3 个下拉框注册了 change，`#src-kind`/`#src-frame` **没有任何监听**；`renderSource()` 只做回填不做联动 | 新增 `syncSourceForm()`：按 kind/frame 决定 10 个字段的 `disabled`，并写 `#src-hint` 逐源说明（`SRC_HINT` 单一事实来源）；两个下拉框注册 change；`style.css` 加 `label.off{opacity:.45}` 与 `:disabled{cursor:not-allowed}` 让置灰可见 | S14（4×「无关字段已联动禁用」全 ✓）、S15（binary 才放开 struct 两项）、`tests/test_web_ui.py::test_source_selects_have_change_listener`（换回旧 app.js 即 FAIL） | ✅已修 |
+| F-07 | 启动/保存载荷**无条件发送全部字段**：选 simulator 仍带 `path/host/port/frame`，TCP 切回 `text_csv` 仍带旧 `struct_fmt`；空 `path` 被服务端 400 拒，空 `host` 被静默存成 `''`（下次连不上且看不出原因） | `collectSourcePayload()` 是「全字段平铺」写法，上一轮只为 struct 两项做了删空 | 改为**按 kind 裁剪**＋「非空/有效才送」：`if (path) p.path = path`、`if (host) p.host = host`、`struct_*` 仅在 `frame==='binary'` 时送、`sim_speed/block_samples/port` 走 `Number.isFinite` 闸门 | S14（4×「载荷只含该源相关字段」「载荷无空值/0」）、S17（空值语义 REST 实录）、`test_source_payload_omits_irrelevant_and_empty_fields` | ✅已修 |
+| F-08 | **全新加载页面直接点「保存配置（热更新）」必失败**：`PUT /api/config` 400「sampling.fs 必须 > 0（当前 0）」，服务端配置不变，界面只提示「保存失败」，用户不知道是哪个框的问题 | 空输入框经 `+$('#cfg-fs').value` 变成 `0` 一并送出；`PUT` 是深合并，`0` 会真的覆盖 fs/PT/CT/order_max。根因是 `renderSource()` 只在源视图打开时回填（见 F-09 的另一面），未进过该页时表单停在 HTML 默认（空） | `collectConfigPayload()` 改为返回 `{payload, skipped}`：只送**有限且 >0** 的数字，`order_max` 再 `Math.round` 且 ≥2；被跳过的字段名写进成功提示（「PT 变比、采样率 fs 为空 → 保留服务端原值」），不静默 | S16（6 组口径 PUT 全 200 且回显生效、载荷无 0 值）、`test_config_payload_skips_empty_numbers` | ✅已修 |
+| F-09 | 停在「数据源与控制」页且引擎在跑时，**刚选的下拉框每 0.2 s 被改回服务端的 kind、输入一半的路径被清空**（本轮最隐蔽缺陷） | 快量推送 → `connectWS()` 收到 `result`/`state` 即 `render()` → `renderSource()` **无条件**把服务端配置写回表单 | 拆出 `fillSourceForm(cfg)`；`renderSource()` 仅在 `!S.formDirty` 时回填，否则显示 `#src-formnote`「⚠ 界面有未保存的修改…」；`#view-source` 全部 input/select 绑 `input`+`change` 置脏；「刷新」＝清脏并重新回填，保存/启动成功后也清脏 | S15（经真实 WS `onmessage` 推送后 kind 与半截路径均不变、提示出现、刷新后恢复）、`test_form_has_dirty_guard_and_sync` | ✅已修 |
+| F-10 | 改完 PT/CT 或功率口径后点「启动数据源」，用户以为生效，实际**被服务端静默忽略** | `startEngine()` 把 `collectConfigPayload()` 一起 POST，而 `/api/engine/start` 只取 source 白名单键＋`windows`，`transform/sampling/harmonic/power` 被丢弃 | 启动载荷只送 source（＋可选 windows）；若口径类字段有未保存修改，成功提示追加「（提示：口径/变比的修改请点「保存配置（热更新）」）」 | S14/S16（口径生效路径＝PUT，服务端回显一致）、`test_start_engine_does_not_smuggle_ignored_config` | ✅已修 |
 
 ### 能力补齐（本轮新增，均由实测驱动）
 
@@ -420,6 +430,9 @@ P1~P3：做法 + 现象
 - Web「数据源与控制」TCP 面板增加 `struct_fmt` / `struct_fields` 两个输入框；`POST /api/engine/start` 的 source 覆盖白名单同步加这两键（否则界面填了也不生效）。
 - `tools/tcp_feeder.py`、`tools/csv_appender.py`、`tools/verify_sources.py` ＋ `tests/test_tools.py`（5 项防腐测试）：**没有采集硬件也能完整验证四种源**，这是本专题可交付给用户复现的关键。
 - `parse_timestamps` 的退化时标检测与 TCP 解析告警冒泡（原先 `info.notes` 被源丢弃，用户看不到时间轴已退化）。
+- 界面自解释能力（本轮 S14~S18 驱动）：`#src-hint` 逐源填写说明、`#src-formnote` 未保存提示、`label.off`/`:disabled` 置灰视觉——让「选了哪种源、该填什么、哪些框填了不生效、有没有白改」都在界面上直接可见。
+- `tools/ui_dropdown_check.cjs`：jsdom 驱动**真实页面**打**真实服务端**的界面端到端检查（自动拉起 TCP 喂数器、捕获 PUT/POST 载荷原文、以 canvas 绘制调用计数验证重绘、结束把预览恢复为 simulator）。界面行为从此**可自动化回归**，不靠手点。
+- `tests/test_web_ui.py`（14 项前端契约，随 `pytest tests/` 一起跑，不需 node/浏览器）：下拉框选项 ↔ 后端枚举集合相等、app.js 引用的元素 id 全部存在、两个源下拉框已注册 change、载荷裁剪/空值跳过/脏值保护/不夹带配置四道闸门在位。
 
 ### 用户执行命令（模式 B 执行包，🔶待回报）
 
@@ -427,7 +440,7 @@ P1~P3：做法 + 现象
 
 ```bash
 S-W1  python tools/verify_sources.py                                  # 期望：PASS 5 / SKIP 0 / FAIL 0
-S-W2  python -m pytest tests/ -q                                      # 期望：147 passed, 1 skipped
+S-W2  python -m pytest tests/ -q                                      # 期望：161 passed, 1 skipped
 S-W3  python cli.py selftest                                          # 期望：44/44，worst_rel_err≈1.5e-05
 S-W4  # 终端1：python tools/tcp_feeder.py --port 9000 --mode text_csv --header --rate 4
       # 终端2：python cli.py live --source tcp --port 9000 --duration 10
@@ -436,6 +449,27 @@ S-W5  # 终端1：python tools/csv_appender.py --out data/tail_dir --rotate-ever
       # 终端2：python cli.py live --source csv_tail --path data/tail_dir --watch-newest --duration 20
       #                                              期望：缺口 0，且源告警含「旧文件补读 N 行」
 S-W6  python tools/csv_appender.py --out data/tail_live.csv --rate 4 --duration 20   # 然后按 S-W5 终端2 换成该文件
+```
+
+**U 组：Web 界面下拉框点检（浏览器手点，无需 node；对应 S14~S16 的用户侧复核）**
+
+```text
+先 python cli.py serve，浏览器打开 http://127.0.0.1:8000
+
+U-1  点左侧「🔌 数据源与控制」      期望：PT=100 / CT=15 / fs=6400 / 主机=127.0.0.1 等**均已回填**（不是空框）
+U-2  「数据源输入方式」依次选 4 项   期望：每次切换后**无关字段置灰**，下拉框下方说明文字随之变化
+U-3  选 tcp → 帧格式选 binary      期望：struct 格式/字段顺序两框由灰变可编辑；切回 text_csv 又变灰
+U-4  选 simulator → 速率填 4 → 点「启动数据源」
+                                    期望：右上状态变运行中、提示「已启动数据源：simulator」、总览面板开始出数
+U-5  在 CSV 路径框打半截字后**不点任何按钮**，等 2~3 s
+                                    期望：半截字不被清掉、下拉框不被改回，并出现「⚠ 界面有未保存的修改…」；
+                                          再点「刷新」→ 恢复成服务端配置
+U-6  电压输入口径改「线电压」→ 点「保存配置（热更新）」
+                                    期望：提示保存成功；F5 刷新后仍是「线电压」
+                                          （或 curl http://127.0.0.1:8000/api/config 看 transform.voltage_input=line）
+U-7  （可选，需 node ≥18）npm install jsdom --prefix /tmp/uitest
+     JSDOM_DIR=/tmp/uitest node tools/ui_dropdown_check.cjs http://127.0.0.1:8000
+                                    期望：PASS 74 / FAIL 0
 ```
 
 **D 组：接真实采集装置（需现场数据/协议，🔶）**
@@ -457,6 +491,10 @@ D-5  若采集器按时间分片写多个文件：回报分片命名规则、单
 - **J-S1**：S-W1 若出现 FAIL，先看 `why` 字段——「未取到 U1_abc/P_kW」＝跑得太短（加大 `--duration`）；「U1 偏差 >5‱」＝变比或列映射不对；「缺口 ≠0」＝采集侧丢数或时标退化。
 - **J-S2**：S-W2 在 Windows 上若有失败，重点看是否 `tests/test_tools.py`（子进程路径/编码差异）与 `tests/test_web.py`（端口占用）；沙盒侧 Linux 全绿。
 - **J-S3**：S-W4/S-W5 的数值应与本专题 S5/S4 一致到小数点后 1 位（同一信号模型、同一 seed）；不一致先查是否有人改过 `configs/runtime.json`。
+- **J-U1**：U-1 若为空框，说明 `/api/state` 没取到 config（按 F12 看控制台是否有 `/api/state` 失败）；修复后进入该页即回填，空框属回归（对应 F-08 的根因面）。
+- **J-U2**：U-5 是本轮最隐蔽的缺陷（F-09）：若半截字被清掉或下拉框自己跳回，说明脏值保护失效——**它只在「停在数据源页 + 引擎在跑」时出现，每 0.2 s 一次**，静态读代码或只点一次都发现不了。
+- **J-U3**：U-6 若提示「保存失败：sampling.fs 必须 > 0（当前 0）」，说明 F-08 回归（空数字框被当 0 送出）；正确行为是跳过该字段，并在成功提示里列出被跳过的字段名。
+- **J-U4**：U-4 若提示成功但总览不出数，先看「运行状态与告警」里的源告警原文（csv_file 读满即 `finished`，属预期，不是故障）。
 - **J-D1**：`fs_est` 与配置 fs 偏差应 <0.01%；偏差大说明时间戳精度不足（ms 级）或存在丢点，按 §4.2 注意事项处理。
 - **J-D2**：与现场表计对账时注意三点口径——① 本工具默认输出**一次值**（`transform.enabled=true`）② 电压默认按**相电压**解释（若现场给线电压需改 `transform.voltage_input=line`）③ 谐波口径为 50Hz 整周期矩形窗 FFT，未做 IEC 61000-4-7 分组，与电能表的谐波子组读数会有差异。
 - **J-D3**：`缺口 >0` 时先看告警里的 `gap_s` 是否等于整数个块（＝采集侧或分片切换丢数），还是随机值（＝传输丢包）。
@@ -471,6 +509,14 @@ S-W3 selftest：__/44，worst_rel_err=______
 S-W4 tcp text_csv：U=__/__/__V  P=____kW  缺口=__  源告警：______
 S-W5 csv_tail 目录：输出__次  样本__  缺口=__  是否出现「旧文件补读」：是/否
 S-W6 csv_tail 单文件：输出__次  样本__  缺口=__
+U-1 进入数据源页是否已回填：是/否（若否，空的字段名=______）
+U-2 4 种源是否都联动置灰＋说明变化：是/否（异常的源=______）
+U-3 binary 帧两框是否随之放开/收回：是/否
+U-4 simulator 速率4 启动是否成功出数：是/否（提示原文=______）
+U-5 半截输入是否被推送清掉：是/否；未保存提示是否出现：是/否；点刷新是否恢复：是/否
+U-6 口径改「线电压」保存是否成功且刷新后保留：是/否（失败提示原文=______）
+U-7 （若跑了）ui_dropdown_check：PASS __ / FAIL __；失败项=______
+浏览器与 OS=______
 D-1 sources 体检：encoding=__ header=__ fs_est=__ ts_mode=__ notes=______
 D-2 compute 与表计对照：U=______ I=______ P=______ 表计读数=______ 差=______
 D-3 live 真实追加文件：速率=__样本/s 缺口=__ 告警原文=______
@@ -483,18 +529,24 @@ D-5 分片规则：命名=__ 单文件时长=__ 是否保留旧文件=__
 
 - **沙盒侧（✅已复现）**：四种数据源在 CLI、Web/REST、Python 库三条入口下**全部实跑通过**，同源四路 P 极差 0.013%、U1 偏差 ≤0.70‱、THDu 偏差 ≤0.005 百分点、缺口 0 ⇒ 输入方式与入口不影响算法结果；`tools/verify_sources.py` 实测 PASS 5 / FAIL 0，`pytest` 147 passed / 1 skipped，`selftest` 44/44。
 - **实测发现并修复 5 个问题**（F-01~F-05），其中 **F-01（目录分片切换丢一整块）属现场必踩**：采集器按段换文件时会出现与轮转周期同频的假缺口，容易被误判成「现场丢点」。
+- **界面层（✅已复现，S14~S18）**：「数据源输入方式」下拉框的 **4 种输入方式都能正常选中并分别配置**，服务端确实按所选 kind 摄入（csv_file 读满 32000 样本后 finished；csv_tail/tcp/simulator running=true，samples_in 32000/39040/44800）；「帧格式」下拉框选 binary 才放开 struct 两项、切回 text_csv 载荷不再夹带；口径三下拉框（电压输入/视在/无功）6 组取值 PUT 后服务端回显全部生效；频谱三下拉框（通道/比例/频段上限）8 组取值 change 均触发重绘（234~1245 次绘制调用）。`tools/ui_dropdown_check.cjs` 实测 **PASS 74 / FAIL 0**（修复前同脚本 PASS 37 / **FAIL 10**）。
+- **本轮又修 5 个界面缺陷（F-06~F-10）**，其中 **F-09（实时推送覆盖用户正在编辑的表单）最隐蔽**：只有「停在数据源页 + 引擎在跑」时才出现，每 0.2 s 一次，表现为「下拉框自己跳回去、路径打一半被清空」；F-08 则让**全新加载页面后第一次点「保存配置」必 400**。
 - **用户侧（🔶未获实录，不下结论）**：真实采集 CSV 的编码/时标/相线口径、真实 TCP 协议帧格式、Windows 环境下的 S 组结果，均待回报。
-- **是否进入 REPORT.md（稳定结论）**：**是**——① 四源等价性（同源四路 P 极差 0.013%）② F-01 教训（切换监视对象前必须 drain 旧文件）③ 「float32 不可存 epoch 秒」的协议约束 ④ 无硬件验证路径（`tools/` 三件套）。
+- **是否进入 REPORT.md（稳定结论）**：**是**——① 四源等价性（同源四路 P 极差 0.013%）② F-01 教训（切换监视对象前必须 drain 旧文件）③ 「float32 不可存 epoch 秒」的协议约束 ④ 无硬件验证路径（`tools/` 三件套）⑤ **界面层验证方法与空值语义**（C-13：真实 DOM＋真实服务端才能验界面；深合并接口下「留空＝沿用、送 0＝被拒/被覆盖」，前端必须裁剪载荷）。
 - **遗留问题**：
   1. TCP 的 `timeout_s` / `reconnect_s`（各默认 2.0 s）只是构造参数，未暴露到配置文件与界面；
   2. 真实协议若含帧头/长度/校验，需要在 `_flush_block` 加拆帧逻辑（待协议文档）；
   3. 喂数器/追加器是**联调工具**，不替代真实装置的背压、断连、乱序行为验证；
   4. Windows 侧 S 组未实测（子进程与路径分隔符可能有差异）；
   5. `csv_tail` 目录模式按 mtime 选最新文件，若现场分片命名与 mtime 不一致（如补写旧分片），需要改成按文件名排序——待 D-5 回报后决定。
+  6. 界面检查在 **jsdom** 中运行，无真实浏览器渲染：置灰以 `disabled` 属性断言代替视觉核对，canvas 以绘制调用计数代替像素比对；真实浏览器（尤其 Windows/Edge）下的视觉、输入法与焦点行为未实测——由 U 组回报补齐。
+  7. 引擎启动后服务端把 `source.path` 解析为**绝对路径**并经 `/api/config` 回显到表单（`_persist` 写盘时仍还原为相对路径），属外观问题，未修。
+  8. U 组（浏览器手点 7 步）与 S 组、D 组一样**尚未获用户实录**，界面在真实浏览器下的表现不下结论。
 
 ---
 
 ## 🗒 变更记录
+- v0.4（2026-10-10）：T-003 追加 **Web 界面下拉框专项检查**：沙盒侧实录 S14~S18（jsdom 驱动真实页面打真实服务端 `PASS 74 / FAIL 0`、帧格式联动与脏值保护、口径三下拉框 PUT 回显、空值语义 REST 实录、前端契约测试「撤销修复必 FAIL」验证）、缺陷 **F-06~F-10**（两个源下拉框无联动／载荷无条件发送空值／空数字框导致保存必 400／实时推送覆盖用户正在编辑的表单／启动按钮夹带被服务端忽略的配置段）、能力补齐（`#src-hint`+`#src-formnote`+置灰视觉、`tools/ui_dropdown_check.cjs`、`tests/test_web_ui.py` 14 项）、用户侧 **U 组**（浏览器手点 7 步）＋判读 J-U1~J-U4＋回收格式。测试 147→**161 passed, 1 skipped**；S-W2 期望值同步更新。索引行升格为「F-01~F-10」「5 条稳定结论」
 - v0.3（2026-10-10）：追加专题 **T-003**（四种数据源的配置·运行·验证）：沙盒侧 S1~S13 实录三件套、四源横向对账表（同源四路 P 极差 0.013%、U1 偏差 ≤0.70‱、THDu 偏差 ≤0.005 百分点、缺口 0）、本轮实测发现并修复的 **F-01~F-05**（目录分片切换丢一整块／坏帧格式崩 OverflowError／告警刷屏且 live 收尾不打印源告警／float32 存 epoch 秒无告警／前端 collectSourcePayload 死代码）、能力补齐（`cli.py live --frame/--struct-fmt/--struct-fields`、界面 TCP 两字段、`tools/` 三件套＋5 项防腐测试）、用户侧 **S 组（无硬件可复现）与 D 组（真实装置/协议）** 执行包＋J-* 判读＋回收格式。测试 141→**147 passed, 1 skipped**。T-001/T-002 状态不变（仍待回报）
 - v0.2（2026-10-10）：追加专题 **T-002**（电气量计算工具实现自验证 + 本地部署与真实数据验收执行包）：沙盒侧 A1~A10 实录三件套、本轮修复的两个真 bug（B1 引擎线程换代竞争导致双重摄入、B2 整周期窗少算一个周期）、用户侧 W/R/P 三组模式 B 执行包与 J-* 判读要点、结果回收格式；专题索引与 T-001 状态保持不变（仍待回报）
 - v0.1（2026-10-10）：创建台账骨架 + 条目模板 + 专题索引；登记待归档专题 T-001（模式 B 执行包：E-0 环境说明 / A~D 四组只读命令 / 预期输出样例 / J-* 判读要点 / 结果回收格式）。⚠️ 本条**尚无结果**，等用户实录回报后追加三件套，不新建文件
