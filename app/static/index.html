@@ -87,8 +87,10 @@
             <label>TCP 主机 <input id="src-host" placeholder="127.0.0.1"></label>
             <label>TCP 端口 <input id="src-port" type="number" value="9000"></label>
             <label>TCP 帧格式
-              <select id="src-frame"><option value="text_csv">text_csv（每行一条 CSV）</option><option value="binary">binary（struct_fmt）</option></select>
+              <select id="src-frame"><option value="text_csv">text_csv（每行一条 CSV）</option><option value="binary">binary（struct 定长帧）</option></select>
             </label>
+            <label>binary 帧 struct 格式 <input id="src-fmt" placeholder="<7d" title="Python struct 格式串，默认 <7d＝7 个 double 小端"></label>
+            <label>binary 帧字段顺序 <input id="src-fields" placeholder="t,ua,ia,ub,ib,uc,ic" title="与 struct 格式逐项对应"></label>
             <label class="chk"><input id="src-tailend" type="checkbox">
               csv_tail：从文件末尾开始（只算新写入数据，不补算历史）</label>
             <label class="chk"><input id="src-newest" type="checkbox">

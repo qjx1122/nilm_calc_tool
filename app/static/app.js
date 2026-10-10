@@ -663,6 +663,8 @@ function renderSource() {
     $('#src-host').value = cfg.source.host || '';
     $('#src-port').value = cfg.source.port || 9000;
     $('#src-frame').value = cfg.source.frame || 'text_csv';
+    $('#src-fmt').value = cfg.source.struct_fmt || '';
+    $('#src-fields').value = cfg.source.struct_fields || '';
     $('#src-block').value = cfg.source.block_samples || 640;
     $('#src-speed').value = cfg.source.sim_speed !== undefined ? cfg.source.sim_speed : 1;
     $('#src-tailend').checked = !!cfg.source.tail_from_end;
@@ -746,7 +748,7 @@ function render() {
 /* ------------------------------------------------------------------ 交互 */
 
 function collectSourcePayload() {
-  return {
+  const payload = {
     kind: $('#src-kind').value,
     path: $('#src-path').value.trim(),
     host: $('#src-host').value.trim(),
@@ -756,7 +758,13 @@ function collectSourcePayload() {
     sim_speed: +$('#src-speed').value,
     tail_from_end: !!$('#src-tailend').checked,
     watch_dir_newest: !!$('#src-newest').checked,
+    struct_fmt: ($('#src-fmt').value || '').trim(),
+    struct_fields: ($('#src-fields').value || '').trim(),
   };
+  // 空字符串会覆盖掉配置里的默认帧格式，必须删掉未填项
+  if (!payload.struct_fmt) delete payload.struct_fmt;
+  if (!payload.struct_fields) delete payload.struct_fields;
+  return payload;
 }
 
 function collectConfigPayload() {

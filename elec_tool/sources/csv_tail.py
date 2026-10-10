@@ -16,7 +16,7 @@ import numpy as np
 
 from ..blocks import SampleBlock
 from ..config import AppConfig
-from .base import DataSource
+from .base import DataSource, note_key
 from .parsing import ParseError, decode_encoding, parse_rows
 
 
@@ -69,7 +69,7 @@ class CsvTailSource(DataSource):
                                                                   delimiter=self.cfg.columns.delimiter))]
         if self.tail_from_end:
             self._fh.seek(0, os.SEEK_END)
-            self._notes.append("tail_from_end=True：只读打开之后的新增内容（历史数据不计算）")
+            self._note("tail_from_end=True：只读打开之后的新增内容（历史数据不计算）")
         self._offset = self._fh.tell()
         self._opened_at = time.time()
 
@@ -88,12 +88,17 @@ class CsvTailSource(DataSource):
         return None
 
     # ---------- 读取 ----------
-    def read(self) -> Optional[SampleBlock]:
+    def _drain_current(self) -> int:
+        """把当前文件里**已写完**的行全部读进 _pending，返回行数。
+
+        为什么必须显式 drain：目录轮转/inode 变化时若直接 _reopen()，旧文件尚未读走的尾部
+        会被静默丢弃——实测每切换一次丢正好一整块（640 点＝100ms），在结果里表现为
+        「疑似丢点」的假缺口。切换前先 drain，样本一行不少地留在 _pending 里按序输出。
+        """
         if self._fh is None:
-            self.open()
-        self._last_read_at = time.time()
-        self._rotate_if_needed()
-        chunk = self._fh.read() if self._fh else ""
+            return 0
+        n_rows = 0
+        chunk = self._fh.read()
         if chunk:
             self._offset = self._fh.tell()
             text = self._remainder + chunk
@@ -105,6 +110,19 @@ class CsvTailSource(DataSource):
                 if not row or all(not str(c).strip() for c in row):
                     continue
                 self._pending.append(row)
+                n_rows += 1
+        if self._remainder.strip():
+            # 旧文件最后一行没写完就轮转了：字段可能残缺，宁可显式告警也不静默算错
+            self._note(f"切换文件时旧文件末行不完整，已丢弃该行：{self._remainder[:48]}…")
+            self._remainder = ""
+        return n_rows
+
+    def read(self) -> Optional[SampleBlock]:
+        if self._fh is None:
+            self.open()
+        self._last_read_at = time.time()
+        self._rotate_if_needed()
+        self._drain_current()
         if len(self._pending) >= self.block_samples:
             take = self._pending[:self.block_samples]
             self._pending = self._pending[self.block_samples:]
@@ -118,18 +136,22 @@ class CsvTailSource(DataSource):
         try:
             st = os.stat(self._active_path)
         except FileNotFoundError:
-            self._notes.append(f"监视文件消失：{self._active_path}，等待重建")
+            self._note(f"监视文件消失：{self._active_path}，等待重建")
             return
         if self._inode is not None and st.st_ino != self._inode:
-            self._notes.append("检测到文件轮转（inode 变化），重新打开")
+            drained = self._drain_current()      # 旧 inode 的数据先读完，否则丢尾块
+            self._note(f"检测到文件轮转（inode 变化），重新打开（旧文件补读 {drained} 行）")
             self._reopen()
         elif st.st_size < self._offset:
-            self._notes.append("检测到文件被截断（长度变小），从头重读")
+            # 截断＝原位置的数据已被覆盖，drain 无意义，直接从头重读
+            self._note("检测到文件被截断（长度变小），从头重读")
             self._reopen()
         elif self.watch_dir_newest and os.path.isdir(self.path or ""):
             newest = self._resolve_path()
             if newest and newest != self._active_path:
-                self._notes.append(f"目录中出现更新的文件，切换监视对象：{newest}")
+                drained = self._drain_current()  # 切换前把旧文件读完：这是丢一整块的根因
+                self._note(
+                    f"目录中出现更新的文件，切换监视对象：{newest}（旧文件补读 {drained} 行）")
                 self._active_path = newest
                 self._reopen()
 
@@ -143,6 +165,15 @@ class CsvTailSource(DataSource):
         self.tail_from_end = False      # 轮转后应从头读新文件
         self.open()
 
+    def _note(self, msg: str) -> None:
+        """追加告警并按中文骨架去重（同一告警每块都会重发，见 base.note_key）。"""
+        key = note_key(msg)
+        if any(note_key(n) == key for n in self._notes[-5:]):
+            return
+        self._notes.append(msg)          # 必须直接 append：调 _note 会无限递归
+        if len(self._notes) > 20:
+            self._notes = self._notes[-20:]
+
     def _to_block(self, rows: List[List[str]]) -> SampleBlock:
         block, info = parse_rows(rows, self.cfg.columns, self.cfg.sampling,
                                  source=f"csv_tail:{os.path.basename(self._active_path or '')}",
@@ -151,8 +182,7 @@ class CsvTailSource(DataSource):
         self._n_blocks += 1
         self._n_samples += block.n
         for n in info.get("notes", []):
-            if n not in self._notes:
-                self._notes.append(n)
+            self._note(n)
         self._notes = self._notes[-20:]
         return block
 

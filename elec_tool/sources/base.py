@@ -13,9 +13,20 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any, Dict, Optional
 
 from ..blocks import SampleBlock
+
+
+def note_key(msg: Any) -> str:
+    """告警去重键：只保留中文骨架（丢掉数字与 ASCII 词），取前 40 字符。
+
+    为什么需要：实时源的同类告警每个数据块都会重发一次，而文本里的数值/单位/文件名在变，
+    按原文去重完全无效——实测 csv_tail 跑 3s 就刷出 8 条只差小数位的「采样率校验通过」，
+    TCP 帧格式不匹配时刷出 6 条几乎相同的解析告警，真正的关键信息被淹没。
+    """
+    return re.sub(r"[0-9A-Za-z.+eE\-]+", "", str(msg))[:40]
 
 
 class DataSource:

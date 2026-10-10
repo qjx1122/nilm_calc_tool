@@ -292,3 +292,49 @@ def test_create_source_factory(base_cfg, tmp_path, csv_factory):
         assert src.kind == kind
     with pytest.raises(Exception):
         create_source(base_cfg, kind="modbus")
+
+
+def test_csv_tail_dir_switch_drains_old_file(tmp_path, base_cfg):
+    """目录轮转切换前必须把旧分片**未读走的尾部**读完（回归：2026-10-10 实测丢块）。
+
+    实测现象：采集器每 20 块换一个分片文件，csv_tail 检测到「目录里出现更新的文件」就
+    直接 _reopen()，旧分片在上次轮询之后新写入的数据被静默丢弃——每切换一次丢正好
+    一整块（640 点＝100.2ms），在结果里表现为与轮转周期同频的「疑似丢点」假缺口
+    （8s 内 8 处，间隔恰好 2.000s）。修法＝切换前先 drain 旧文件。
+    """
+    d = tmp_path / "shards"
+    d.mkdir()
+    t, u, i = build_signal([HarmSpec(1, 57.735, 5.0, 30.0)], FS, 0.5, 50.0)     # 3200 点
+    p0 = str(d / "part_000.csv")
+    write_csv(p0, t[:640], u[:, :640], i[:, :640])
+    cfg = AppConfig(sampling=base_cfg.sampling, transform=base_cfg.transform)
+    cfg.source = SourceConfig(kind="csv_tail", path=str(d), block_samples=640, watch_dir_newest=True)
+    cfg.validate()
+    src = CsvTailSource(cfg)
+    src.open()
+    b1 = src.read()
+    assert b1 is not None and b1.n == 640, "第一块应正常读出"
+    # 采集器又往旧分片写了一块，但计算侧还没轮询到（真实场景：poll_interval_s 内的写入）
+    with open(p0, "a", encoding="utf-8", newline="") as fh:
+        for k in range(640, 1280):
+            fh.write(f"{t[k]:.6f},{u[0,k]:.6f},{i[0,k]:.6f},{u[1,k]:.6f},{i[1,k]:.6f},"
+                     f"{u[2,k]:.6f},{i[2,k]:.6f}\n")
+    # 紧接着采集器轮转到新分片
+    time.sleep(0.02)
+    write_csv(str(d / "part_001.csv"), t[1280:1920], u[:, 1280:1920], i[:, 1280:1920])
+
+    got = [b1]
+    for _ in range(12):
+        b = src.read()
+        if b is not None:
+            got.append(b)
+    total = sum(b.n for b in got)
+    assert total == 1920, f"切换分片丢数据：应 1920 点（旧分片 1280＋新分片 640），实得 {total}"
+    merged = SampleBlock.concat(got)
+    dt = np.diff(merged.t)
+    assert np.all(dt > 0), "时间戳出现回退或重复"
+    assert float(np.max(dt)) < 5.0 / FS, \
+        f"仍有丢点造成的时间跳变：max dt={float(np.max(dt)) * 1e3:.2f}ms（应≈{1e3 / FS * 1e3:.0f}µs）"
+    np.testing.assert_allclose(merged.u[0][:64], u[0, :64], rtol=1e-5, atol=1e-4)
+    assert any("切换监视对象" in n for n in src.info()["notes"])
+    src.close()

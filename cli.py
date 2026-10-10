@@ -20,6 +20,7 @@ import dataclasses
 import json
 import math
 import os
+import re
 import sys
 import time
 from typing import Any, Dict, List, Optional, Sequence
@@ -117,6 +118,40 @@ def print_result_table(res: MetricsResult, keys: Optional[Sequence[str]] = None,
         for n in (w.get("notes") or []):
             print(f"    · {n}")
     print()
+
+
+def _print_diagnostics(engine, st: dict) -> None:
+    """收尾诊断：数据缺口 + 引擎告警 + **数据源告警**。
+
+    源告警只在 source.info() 里（如 TCP 帧格式不匹配→时间戳解析失败改用合成时间轴、
+    csv_tail 文件轮转、缺测插值），不打印就会出现「看着正常、其实时间轴是假的」。
+    """
+    if st.get("n_gaps"):
+        print(f"  ⚠ 检测到 {st['n_gaps']} 处数据时间跳变（疑似丢点），示例：{st['gaps'][:3]}")
+    for n in (st.get("notes") or [])[-6:]:
+        print(f"  · {n}")
+    try:
+        info = engine.source.info()
+    except Exception:
+        return
+    seen = set()
+    for n in (info.get("notes") or [])[-8:]:
+        key = re.sub(r"[0-9A-Za-z.+eE\-]+", "", str(n))[:40]
+        if key in seen:
+            continue
+        seen.add(key)
+        text = str(n)
+        print(f"  · 源：{text if len(text) <= 170 else text[:170] + '…'}")
+
+
+def _fmt_clock(t_ref: float) -> str:
+    """把数据时刻格式化成 HH:MM:SS；坏值（inf/nan/超范围）不得让 CLI 崩掉。"""
+    if not np.isfinite(t_ref):
+        return "--"
+    try:
+        return time.strftime("%H:%M:%S", time.localtime(float(t_ref)))
+    except (OverflowError, OSError, ValueError):
+        return f"t={t_ref:.6g}"      # 时间轴异常时原样显示，便于定位（如帧格式不匹配）
 
 
 def write_csv_rows(res: MetricsResult, path: str) -> int:
@@ -299,10 +334,7 @@ def cmd_compute(args: argparse.Namespace) -> int:
     print(f"✓ 完成：输出 {n_out} 次；读入样本 {st['samples_in']}（{st['data_duration_s']:.2f}s 数据），"
           f"块 {st['blocks_in']}，缓冲 {st['buffer_fill']}/{st['buffer_capacity']}")
     print(f"  各量输出次数：{st['emits']}")
-    if st["n_gaps"]:
-        print(f"  ⚠ 检测到 {st['n_gaps']} 处数据时间跳变（疑似丢点），示例：{st['gaps'][:3]}")
-    for n in st["notes"][-6:]:
-        print(f"  · {n}")
+    _print_diagnostics(engine, st)
     if csv_path:
         print(f"  CSV 结果：{csv_path}")
     return 0
@@ -326,6 +358,12 @@ def cmd_live(args: argparse.Namespace) -> int:
         cfg.source.tail_from_end = True
     if getattr(args, "watch_newest", False):
         cfg.source.watch_dir_newest = True
+    if getattr(args, "frame", None):
+        cfg.source.frame = args.frame
+    if getattr(args, "struct_fmt", None):
+        cfg.source.struct_fmt = args.struct_fmt
+    if getattr(args, "struct_fields", None):
+        cfg.source.struct_fields = args.struct_fields
     cfg.validate()
     engine = LiveEngine(cfg)
     engine.start()
@@ -363,7 +401,7 @@ def cmd_live(args: argparse.Namespace) -> int:
                         line.append(f"f={res.f_used:.3f}Hz")
                     elif k == "harmonic":
                         line.append(f"THDu={_dig(q.values,'thd_u_worst_pct'):.2f}%")
-                ts = time.strftime("%H:%M:%S", time.localtime(res.t_ref)) if np.isfinite(res.t_ref) else "--"
+                ts = _fmt_clock(res.t_ref)
                 print(f"[{ts}] " + "  ".join(line) + f"   ({','.join(res.quantities)})", flush=True)
     except KeyboardInterrupt:
         print("\n● 收到中断，停止…")
@@ -372,6 +410,7 @@ def cmd_live(args: argparse.Namespace) -> int:
     st = engine.state.to_dict()
     print(f"✓ 结束：输出 {n} 次，样本 {st['samples_in']}，数据时长 {st['data_duration_s']:.2f}s，"
           f"实时速率 {st['rate_samples_per_s']:.0f} 样本/s")
+    _print_diagnostics(engine, st)
     return 0
 
 
@@ -524,6 +563,12 @@ def build_parser() -> argparse.ArgumentParser:
                     help="csv_tail：从文件末尾开始，只算新写入的数据（不补算历史）")
     sp.add_argument("--watch-newest", action="store_true", dest="watch_newest",
                     help="csv_tail：--path 给目录时自动跟目录内最新的 CSV（采集器按天/按段换文件时用）")
+    sp.add_argument("--frame", choices=["text_csv", "binary"],
+                    help="tcp：帧格式（text_csv＝每行一条 CSV；binary＝struct 定长帧）")
+    sp.add_argument("--struct-fmt", dest="struct_fmt",
+                    help='tcp binary：struct 格式串（默认 "<7d"＝7 个 double 小端）')
+    sp.add_argument("--struct-fields", dest="struct_fields",
+                    help='tcp binary：字段顺序，逗号分隔（默认 "t,ua,ia,ub,ib,uc,ic"）')
     sp.add_argument("--duration", type=float, help="运行时长（秒）")
     sp.add_argument("--format", choices=["table", "json", "csv"], default="table")
     sp.add_argument("--out")

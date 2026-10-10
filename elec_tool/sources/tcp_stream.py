@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import csv
 import io
+import re
 import socket
 import struct
 import time
@@ -21,7 +22,7 @@ import numpy as np
 
 from ..blocks import SampleBlock
 from ..config import AppConfig
-from .base import DataSource
+from .base import DataSource, note_key
 from .parsing import ParseError, parse_timestamps
 
 
@@ -57,6 +58,20 @@ class TcpStreamSource(DataSource):
         self._frame_size = struct.calcsize(cfg.source.struct_fmt) if self.frame == "binary" else 0
         self._fields = [f.strip() for f in getattr(cfg.source, "struct_fields", "t,ua,ia,ub,ib,uc,ic").split(",")]
 
+    def _note(self, msg: str) -> None:
+        """追加告警并**去重**：同一问题每个数据块都会触发，重复 20 条会淹没真正的新信息。
+
+        去重口径见 base.note_key（中文骨架，去数字与 ASCII），只比对最近 5 条。
+        """
+        # 为什么要归一化：同一问题的告警每块都带不同数值/单位模式名（s、ms、us、ns），
+        # 按原文去重无效——实测帧格式不匹配时刷出 6 条几乎相同的告警
+        key = note_key(msg)
+        if any(note_key(n) == key for n in self._notes[-5:]):
+            return
+        self._notes.append(msg)          # 注意：此处必须直接 append，调 _note 会无限递归
+        if len(self._notes) > 20:
+            self._notes = self._notes[-20:]
+
     # ---------- 生命周期 ----------
     def open(self) -> None:
         self._connect()
@@ -66,7 +81,7 @@ class TcpStreamSource(DataSource):
             self._sock = socket.create_connection((self.host, self.port), timeout=self.timeout_s)
             self._sock.settimeout(self.timeout_s)
             self._connected_at = time.time()
-            self._notes.append(f"已连接 {self.host}:{self.port}（frame={self.frame}）")
+            self._note(f"已连接 {self.host}:{self.port}（frame={self.frame}）")
         except OSError as exc:
             self._sock = None
             raise ParseError(
@@ -96,25 +111,25 @@ class TcpStreamSource(DataSource):
         except (socket.timeout, TimeoutError):
             return None
         except OSError as exc:
-            self._notes.append(f"接收异常：{exc}；{self.reconnect_s}s 后重连")
+            self._note(f"接收异常：{exc}；{self.reconnect_s}s 后重连")
             self.close()
             time.sleep(self.reconnect_s)
             self._reconnects += 1
             try:
                 self._connect()
             except ParseError as exc2:
-                self._notes.append(str(exc2))
+                self._note(str(exc2))
                 return None
             return None
         if chunk == b"":
-            self._notes.append("对端关闭连接，准备重连")
+            self._note("对端关闭连接，准备重连")
             self.close()
             time.sleep(self.reconnect_s)
             self._reconnects += 1
             try:
                 self._connect()
             except ParseError as exc:
-                self._notes.append(str(exc))
+                self._note(str(exc))
             return None
         self._last_recv_at = time.time()
         self._buf += chunk
@@ -159,7 +174,7 @@ class TcpStreamSource(DataSource):
                     try:
                         self._colmap_resolved = self.cfg.columns.resolve(cells)
                         self._header_seen = True
-                        self._notes.append(f"识别到表头：{cells} → 映射 {self._colmap_resolved}")
+                        self._note(f"识别到表头：{cells} → 映射 {self._colmap_resolved}")
                         continue
                     except Exception:
                         pass
@@ -172,7 +187,7 @@ class TcpStreamSource(DataSource):
             else:
                 # 无表头：按用户给定列序 t,ua,ia,ub,ib,uc,ic
                 if len(cells) < 7:
-                    self._notes.append(f"跳过字段不足的行（{len(cells)}<7）：{cells[:3]}…")
+                    self._note(f"跳过字段不足的行（{len(cells)}<7）：{cells[:3]}…")
                     continue
                 self._append_record({"t": cells[0], "ua": cells[1], "ia": cells[2], "ub": cells[3],
                                      "ib": cells[4], "uc": cells[5], "ic": cells[6]}, str_timestamp=True)
@@ -181,7 +196,7 @@ class TcpStreamSource(DataSource):
         try:
             vals = [float(rec.get(k, np.nan)) for k in ("ua", "ia", "ub", "ib", "uc", "ic")]
         except (TypeError, ValueError):
-            self._notes.append(f"记录含非数值字段，已跳过：{rec}")
+            self._note(f"记录含非数值字段，已跳过：{rec}")
             return
         self._pending.append(vals)
         self._pending_t.append(rec.get("t"))
@@ -203,10 +218,12 @@ class TcpStreamSource(DataSource):
                 info = parse_timestamps([str(v) for v in ts_raw], self.cfg.columns.timestamp_unit,
                                         self.tz_offset_h)
                 t = info.t
+                for n in info.notes:          # 解析层告警必须冒泡，否则用户看不到时间轴已退化
+                    self._note(n)
                 if t.size != arr.shape[0] or not np.all(np.isfinite(t)):
                     raise ValueError("时间戳解析结果与样本数不一致")
             except Exception as exc:
-                self._notes.append(f"时间戳解析失败（{exc}），改用 fs 合成时间轴")
+                self._note(f"时间戳解析失败（{exc}），改用 fs 合成时间轴")
                 t = self._synthetic_t(arr.shape[0])
         else:
             t = self._synthetic_t(arr.shape[0])

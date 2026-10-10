@@ -348,7 +348,8 @@ async def engine_start(payload: Optional[Dict[str, Any]] = None) -> Any:
         data = cfg.to_dict()
         src_over = {k: v for k, v in payload.items()
                     if k in ("kind", "path", "host", "port", "frame", "block_samples",
-                             "poll_interval_s", "tail_from_end", "sim_speed", "watch_dir_newest")}
+                             "poll_interval_s", "tail_from_end", "sim_speed", "watch_dir_newest",
+                             "struct_fmt", "struct_fields")}
         if src_over:
             data["source"].update(src_over)
         if payload.get("windows"):

@@ -59,6 +59,29 @@ class TimestampInfo:
     notes: List[str]
 
 
+def _flag_degenerate_clock(t: np.ndarray, notes: List[str]) -> None:
+    """时间轴退化必须显式告警：否则 t「看着有值」，缺口检测与时段对齐全失真。
+
+    两类退化：① 整块无递增对（时标精度远粗于采样间隔，典型是用 float32 存 epoch 秒——
+    float32 在 1.7e9 秒处量化步长约 128s，一整块 0.1s 的样本时标完全相同）；
+    ② 存在回退（字节序/字段顺序解析错、多通道交错、设备时标回绕）。
+    注意：ms 级时标配 6400Hz 会出现**局部重复**但仍有递增对，属正常，不告警。
+    """
+    if t.size < 2:
+        return
+    dt = np.diff(t)
+    if not np.any(dt > 0):
+        notes.append(
+            "时间戳整块无递增（全部相同）：时标精度远粗于采样间隔，或用 float32 存 epoch 秒"
+            "导致量化（float32 在 1.7e9 秒处步长约 128s）。电气量仍按样本序与配置 fs 计算，"
+            "但时间轴与缺口检测不可信；建议协议改用 double 或整数毫秒时标")
+    elif np.any(dt < 0):
+        notes.append(
+            f"时间戳存在 {int(np.count_nonzero(dt < 0))} 处回退（非单调递增）："
+            "可能是字节序/字段顺序解析错误、多通道交错或设备时标回绕；"
+            "请核对 source.struct_fmt 与 columns 映射")
+
+
 def parse_timestamps(values: Sequence[str], unit: str = "auto",
                      tz_offset_h: float = 0.0) -> TimestampInfo:
     """把时间戳列解析为 epoch 秒数组。
@@ -101,7 +124,23 @@ def parse_timestamps(values: Sequence[str], unit: str = "auto",
         t = numeric * scale
         if mode == "relative_s":
             t = t - t[0]
-        return TimestampInfo(mode, t.astype(np.float64), _infer_fs(t), notes)
+        # 合理性闸门：换算后应是 epoch 秒（~1e9）或相对秒（~0 起）。
+        # 超出 1e11（≈公元 5138 年）或非有限值，说明**时间戳根本没被正确取到**——
+        # TCP 二进制帧最常见于 struct_fmt/struct_fields 与真实协议不一致（字节序/字段顺序/类型），
+        # CSV 则常见于列映射错位或时间戳单位判断失误。此处必须显式报错，
+        # 否则坏值会一路传到显示层（time.localtime 抛 OverflowError）或产出错误时间轴。
+        t = t.astype(np.float64)
+        if t.size and (not np.all(np.isfinite(t)) or float(np.max(np.abs(t))) > 1e11):
+            bad = float(np.max(np.abs(t[np.isfinite(t)]))) if np.any(np.isfinite(t)) else float("nan")
+            raise ParseError(
+                f"时间戳换算后不合理（模式={mode}，最大绝对值 {bad:.6g} 秒，超过 1e11 或含 inf/nan）。"
+                f"排查：① TCP 二进制帧请核对 source.struct_fmt（字节序/类型，如 '<7d' 小端 double、"
+                f"'>7f' 大端 float）与 struct_fields 字段顺序是否与真实协议一致；"
+                f"② CSV 请核对 columns 列映射与 timestamp_unit（原始中位值 "
+                f"{float(np.median(np.abs(numeric))):.6g}）；"
+                f"③ 若协议用 float32 存 epoch 秒，精度只有 ~1e2 秒级，必须改用 double 或整数毫秒")
+        _flag_degenerate_clock(t, notes)
+        return TimestampInfo(mode, t, _infer_fs(t), notes)
 
     # 2) 日期时间字符串
     parsed: List[float] = []
@@ -131,6 +170,7 @@ def parse_timestamps(values: Sequence[str], unit: str = "auto",
         parsed.append(float(got))
     t = np.asarray(parsed, dtype=np.float64)
     notes.append(f"时间戳格式识别为 '{used_fmt}'；tz_offset_h={tz_offset_h}（仅影响显示，不影响计算）")
+    _flag_degenerate_clock(t, notes)
     return TimestampInfo("datetime", t, _infer_fs(t), notes)
 
 
