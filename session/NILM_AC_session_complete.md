@@ -174,3 +174,20 @@
 - **踩坑**：F-15 两功能互相打架（勾选框热更新把 24 h 曲线清空，单测各绿连起来才暴露）；F-16 性能要按目标规模实测（43 万点）、`np.frombuffer` 视图会在 `array` 扩容时 `BufferError`；`time_local` 小数 `.3f` 进位错位→改截断；`notes()` 转义 HTML
 - **未决问题**：T-004 U6 组待回报；自定义时间只对 `csv_file` 生效；历史不跨进程落盘；`history_hours/max_points` 未上界面；横轴跨午夜不显示日期；起始时间按本地时区；此前 T-001/T-002 W-R-P/T-003 S-U-D 仍未回报；四个口径问题仍未答
 - **相关文件/分支**：`elec_tool/{metrics,engine,config}.py`、`elec_tool/sources/{parsing,csv_file}.py`、`app/server.py`、`app/static/*`、`cli.py`、`tests/test_r6_features.py`、`tools/ui_r6_check.cjs`、四份台账｜分支 `arena/82e34fb8-nilm-calc-tool`｜live preview 8000 端口
+
+---
+
+## [2026-10-12] 会话纪要（第 6 条：第 7 轮三功能——曲线实时落盘 / 离线文件指定位置播放 / 曲线悬停取值）
+
+- **任务**（用户 3 点）：① 计算的曲线数据实时保存到 `output/realtime` 目录下 CSV ② 离线文件可指定位置进行播放 ③ 鼠标移到曲线上显示该位置数据
+- **角色 / 模式**：工程实现工程师（延续）／混合模式——沙盒侧 pytest + jsdom + CLI/源层实录 ✅；用户侧＝T-005 **U7 组 8 步** 🔶待回报
+- **本轮产物**：
+  1. 实时落盘：`elec_tool/realtime_writer.py`（每点追加＋flush、按数据日期分文件、续写不重表头、受 `curve_save` 过滤、`ELEC_TOOL_REALTIME_DIR` 优先）；`metrics.curve_record()` 抽成界面趋势/手工保存/实时落盘三出口共用；`output.realtime_save/realtime_dir`；引擎 `poll_once/flush_all` 后写、热更新重建 writer、`stop()` 关句柄；`GET /api/realtime`；导出页「实时落盘」面板；CLI `--realtime-save on|off --realtime-dir`＋收尾诊断
+  2. 播放起点：`source.play_start_mode/play_start_value`（begin/row/seconds/percent/time，`parse_play_start` 保存时校验）；`iter_csv_blocks(skip_rows/start_percent/start_time/seek_info)`（percent 字节定位对齐行首；time 分块扫描时标列，只填 HH:MM:SS 与当天时刻比较）；`CsvFileSource` 换算/告警/`play_seek` 信息/超范围 `ParseError`；界面下拉框＋取值框联动、占位随模式变化、start 白名单放行、摘要显示；CLI `--play-from 模式:值`
+  3. 悬停取值：`app.js` `nearestIdx/hoverInfo/drawHover/bindHover`，`drawLine` 挂 `cv.__chart`、绑定一次事件、重绘末尾叠加；趋势图 `fmtTip` 含毫秒、频谱 Hz、波形带单位
+  4. 验证：`tests/test_r7_features.py` 18 项、`tools/ui_r7_check.cjs` PASS 39/0（3 次稳定）、旧 harness 30/0 与 74/0、全量 **204 passed, 1 skipped**
+  5. 文档：README v0.6、REPORT_TEST v0.6（T-005）、REPORT v0.6（C-16/C-17＋1 条教训）、STATUS 第 7 次收尾
+- **关键决策**：落盘默认开、目录可由 env 改写；三出口共用一份提取与勾选；按数据日期分文件；播放起点四种定位；悬停吸附最近点不插值
+- **踩坑**：F-17 超范围静默 0 样本→可诊断错误；F-18 默认落盘污染仓库目录→env＋autouse 夹具；F-19 `finished` 置位≠`flush_all` 完成→等待对准最后副作用；F-20 常驻模拟器污染测试目录→脚本先 stop；F-21 begin 模式送空值违反载荷纪律→只在非 begin 送
+- **未决问题**：U7 组待回报；落盘无轮转；percent 跳过行数未知；播放起点只对 csv_file；悬停不插值；此前 T-001~T-004 用户侧仍未回报
+- **相关文件/分支**：`elec_tool/{realtime_writer,engine,metrics,config}.py`、`elec_tool/sources/{parsing,csv_file}.py`、`app/server.py`、`app/static/*`、`cli.py`、`tests/{conftest,test_r6_features,test_r7_features}.py`、`tools/{ui_r6_check,ui_r7_check}.cjs`、四份台账｜分支 `arena/82e34fb8-nilm-calc-tool`（`f0fdea6`/`341fc9e`/docs）｜live preview 8000 端口

@@ -1,7 +1,7 @@
 # README.md — nilm_calc_tool（电力系统各类电气量计算工具）
 
 > 台账文件（BOOTSTRAP.md v2.2）：安装与环境 / 运行命令 / 数据目录 / 配置结构 / 输出产物 / 生产推荐流程。
-> **当前状态：v0.5（2026-10-12）**——软件已实现并在沙盒跑通（算法核心 + 4 类数据源 + 计算引擎 + CLI + Web 界面 + 187 项测试 + 5 项验证工具）。
+> **当前状态：v0.6（2026-10-12）**——软件已实现并在沙盒跑通（算法核心 + 4 类数据源 + 计算引擎 + CLI + Web 界面 + 205 项测试 + 6 项验证工具）。
 > 状态标注：✅已确认（有代码 / 实录 / 官方来源佐证）｜🔶待确认（占位或推断，需用户回填）｜❌已废弃（不删行，只翻状态）
 > **本文所有 ✅ 均为沙盒实录：Linux 6.1.158+ / CPython 3.11.2 / numpy 2.4.6，采集时间 2026-10-10。**
 > **Windows 命令、真实现场数据、生产部署三项尚未在用户环境验证，一律标 🔶，请按 `REPORT_TEST.md`「T-002 本地部署与验收执行包」逐条回填。**
@@ -205,10 +205,11 @@ nilm_calc_tool/
 │   ├── csv_appender.py        #   CSV 追加喂数器：按用户列格式边写边追加，可分片轮转
 │   ├── verify_sources.py      #   库级四源验证：自动拉起上面两个，输出与解析解的对账表
 │   ├── ui_dropdown_check.cjs  #   Web 下拉框端到端检查（jsdom 驱动真实页面，打真实服务端）
-│   └── ui_r6_check.cjs        #   第 6 轮界面检查：自定义播放时间 / 24h 曲线 / 保存曲线勾选（PASS 30）
+│   ├── ui_r6_check.cjs        #   第 6 轮界面检查：自定义播放时间 / 24h 曲线 / 保存曲线勾选（PASS 30）
+│   └── ui_r7_check.cjs        #   第 7 轮界面检查：实时落盘 / 播放起点 / 曲线悬停取值（PASS 39）
 ├── data/                      # 输入 CSV（gitignore，不入库）
 ├── output/                    # 导出结果（gitignore）
-├── tests/                     # 187 项测试（单元 + 端到端 + Web 层 + 前端契约 + 工具防腐 + 第 6 轮四功能）
+├── tests/                     # 205 项测试（单元 + 端到端 + Web 层 + 前端契约 + 工具防腐 + 第 6/7 轮功能）
 └── 台账：BOOTSTRAP/ROLE/STATUS/README/REPORT/REPORT_TEST/NILM_DATA_DICT/session/
 ```
 
@@ -381,6 +382,16 @@ nohup .venv/bin/python cli.py serve --port 8000 > logs/serve.log 2>&1 &
 
 手工点检（浏览器）：① 概览 4 个曲线面板标题右侧各有「保存曲线」勾选框，取消「三相电流」→ 右下 toast「已排除出保存项」，F5 后仍是未勾选；② 「导出与日志」页列表里「三相电流」同样未勾选，下载链接文案变「4/6」→ 点「保存曲线数据到 output/」→ 下方列出 4 个文件 ＋「三相电流：未勾选，已跳过」；③ 概览页底部有「趋势曲线显示最近 24 小时…」说明，曲线面板标题处有「最近 x · N 点（保留窗 24h）」。jsdom 自动版：`JSDOM_DIR=/tmp/uitest node tools/ui_r6_check.cjs http://127.0.0.1:8000` 期望 **PASS 30 / FAIL 0**。
 
+#### 实时落盘 ＋ 离线播放起点 ＋ 曲线悬停取值（v0.6）
+
+| 功能 | 在哪里 | 行为 | 依据 |
+| --- | --- | --- | --- |
+| **实时落盘** | 「导出与日志」→「实时落盘」面板（开关 / 目录 / 应用 / 刷新状态） | 开启后（出厂默认开）**每算出一个曲线点就追加写** `output/realtime/<曲线>_<数据日期>.csv`，6 条曲线各一个文件，按**数据时间**的本地日期分文件、跨午夜自动换文件；每次写后 flush（进程被杀最多丢最后一行）；同一天再跑续写同一文件、不重复表头；**受「保存曲线」勾选过滤**：未勾选的曲线不落盘。列＝`t_epoch_s,time_local,window_s,字段…`（与趋势曲线/手工保存同一提取规则），UTF-8-BOM | `elec_tool/realtime_writer.py`、`output.realtime_save/realtime_dir`、`GET /api/realtime`；环境变量 `ELEC_TOOL_REALTIME_DIR` 可整体改写目录 |
+| **播放起点** | 「数据源与控制」→ csv_file 下「播放起点」下拉框 ＋ 取值框（其它源置灰；选「文件开头」时取值框置灰） | 五种：`begin` 开头 / `row` 第 N 条数据行（1 起算，不含表头）/ `seconds` 跳过开头 N 秒（按配置 fs 换算成行）/ `percent` 文件 N% 处（按字节定位再对齐到行首，大文件 O(1)）/ `time` 文件时标 ≥ 指定时刻的第一条（完整 `2026-10-12 08:00:00`，或只填 `08:00:00` 与当天时刻比较——适合 `0/00/00` 写法）。之前的数据**直接跳过不参与计算**；起点超出文件 → 引擎报「播放起点超出文件范围」；非法取值 → 保存/启动时 400 | `source.play_start_mode/play_start_value`、CLI `--play-from row:120001|sec:30|pct:50|time:08:00:00`、`iter_csv_blocks(skip_rows/start_percent/start_time)`；状态摘要显示「播放起点：…（跳过 N 行）」 |
+| **曲线悬停取值** | 所有 canvas 曲线（6 条趋势、3 个波形、频谱） | 鼠标移入绘图区 → 竖向虚线吸附到**最近数据点**，各条曲线在该点处画圆点，右侧浮框列出「时刻（趋势图含毫秒 / 波形为秒 / 频谱为 Hz）＋每条曲线名: 数值」；浮框靠右边时自动翻到左侧；实时推送重绘（0.2 s 一次）后悬停仍在；移出清除；鼠标在刻度区不显示 | `app.js: bindHover/hoverInfo/drawHover`（有序二分找最近点；`cv.__hoverInfo` 可供脚本读取） |
+
+手工点检（浏览器）：① 「导出与日志」→「实时落盘」开关为勾选、目录 `output/realtime` → 启动模拟器 10 s → 点「刷新状态」→ 列出 6 个 `<曲线>_<今天>.csv` 与行数，用 Excel 打开 `voltage_<今天>.csv` 行数应随时间增长；取消概览页「三相电流」的「保存曲线」→ 再刷新 → `current_*.csv` 行数不再增长；② 数据源页选 csv_file、「播放起点」选「跳过开头 N 秒」填 `2` → 启动 → 摘要「已摄入」比全量少 2×fs 点、告警「播放起点：跳过开头 2 s…实际跳过 12800 行」；选「指定时刻」填 `23:59:59` → 启动 → 状态「✗ 播放起点超出文件范围」；③ 概览页把鼠标移到电压趋势上 → 出现虚线＋三色圆点＋浮框 `HH:MM:SS.mmm / Ua: … / Ub: … / Uc: …`，移到 y 轴刻度区浮框消失。jsdom 自动版：`JSDOM_DIR=/tmp/uitest node tools/ui_r7_check.cjs http://127.0.0.1:8000` 期望 **PASS 39 / FAIL 0**。
+
 ### 3.2 方式二：CLI（7 个子命令，全部实测）
 
 ```
@@ -536,12 +547,13 @@ THDu(A)  = 10.593 %   5次 = 346.4 V
 | `GET /api/state` | 全量状态：引擎（摄入点数/速率/缓冲/各量输出次数/告警/缺口）、数据源 info、生效配置、配置文件路径 |
 | `GET /api/config` | 读当前生效配置 |
 | `PUT /api/config` | **深合并**局部更新（只传要改的字段）并热更新到运行中的引擎；非法值返回 400 + 中文原因 |
-| `POST /api/engine/start` | 启动引擎；body 可覆盖 `kind/path/host/port/frame/block_samples/poll_interval_s/tail_from_end/sim_speed/watch_dir_newest/struct_fmt/struct_fields/custom_time/custom_time_start/windows/duration_s` |
+| `POST /api/engine/start` | 启动引擎；body 可覆盖 `kind/path/host/port/frame/block_samples/poll_interval_s/tail_from_end/sim_speed/watch_dir_newest/struct_fmt/struct_fields/custom_time/custom_time_start/play_start_mode/play_start_value/windows/duration_s` |
 | `POST /api/engine/stop` | 停止引擎（结果仍可查询/导出） |
 | `GET /api/result?full=true|false` | 最新结果；`full=true` 强制按当前缓冲把七类量都算一遍，`false` 取最近缓存；无结果返回 409 |
 | `GET /api/history/{quantity}?max_points=1500&hours=&n=` | 某量趋势点：默认返回**最近 `output.history_hours`（24h）内全部**，超过 `max_points` 按峰谷抽稀；`hours` 覆盖时间窗、`n` 兼容旧用法（只取最后 n 条）；附 `count_total/span_s/t_first/t_last/decimated` |
 | `POST /api/curves/save` | 把**已勾选**（`output.curve_save`）的曲线写到 `output/curves_<时间>/<曲线>.csv`；body 可选 `{"quantities":[…],"hours":24}`；未勾选项出现在 `skipped`，一个都没勾返回 400，有勾选但无数据返回 409 |
 | `GET /api/curves/export?quantity=&hours=` | 下载曲线 CSV：给 `quantity` ＝单曲线（未勾选返回 403）；不给＝所有已勾选曲线合并长表 |
+| `GET /api/realtime` | 实时落盘状态：`enabled/dir/rows_written{曲线:行}/files[本次会话打开的文件]/dir_files[目录现有 CSV 及大小]/curve_save/errors`；开关与目录通过 `PUT /api/config {output:{realtime_save,realtime_dir}}` 改，热更新即时生效 |
 | `GET /api/export?fmt=csv|json&quantity=` | 导出累计结果（CSV 扁平表 / JSON 全量）；未知 `fmt` 返回 400；无结果 409 |
 | `GET /api/selftest?fs=&freq=&pt=&ct=&window=` | 一键 44 项解析解自检 + 运行环境 |
 | `GET /api/probe?path=` | 数据体检（表头/编码/行数/时间戳模式/推算 fs/偏差） |
@@ -643,6 +655,8 @@ curl -s "http://127.0.0.1:8000/api/export?fmt=csv" -o output/result.csv
 | `columns.timestamp_col` 等 | 见 §6 | 列名映射（现场列名不同只需改这里，不用动代码） |
 | `source.custom_time` | `false` | **自定义播放时间**（v0.5）：true → 时间轴＝起始时间＋样本序号/`fs`（严格等间隔，不再有缺口检测）；false → 按文件内时间戳播放 |
 | `source.custom_time_start` | `""` | 自定义起始时间：**留空＝文件第 1 条数据的时间**；或填 `2026-10-12 08:00:00`（本地时间）/ `2026/10/12 08:00:00` / `2026-10-12T08:00:00` / `2026-10-12` / epoch 秒；非法文本在保存配置时即报错 |
+| `source.play_start_mode` | `"begin"` | **播放起点**（v0.6）：`begin` 从头 / `row` 第 N 条数据行 / `seconds` 跳过开头 N 秒 / `percent` 文件 N% 处 / `time` 文件时标 ≥ 指定时刻；起点之前的数据不参与计算 |
+| `source.play_start_value` | `""` | 起点取值，按模式解释：`120001` / `30` / `50` / `2026-10-12 08:00:00` 或 `08:00:00`（只填时刻＝与文件时标的当天时刻比较，适合 `0/00/00` 写法）；非法在保存配置时即报错；超出文件范围在启动后报「播放起点超出文件范围」 |
 
 **自定义播放时间（什么时候用）**
 
@@ -658,6 +672,11 @@ python cli.py compute --file data/你的.csv --format table
 python cli.py compute --file data/你的.csv --custom-time
 # 自定义播放时间：起始＝指定时刻（给了起始时间即隐含 --custom-time）
 python cli.py compute --file data/你的.csv --custom-time-start "2026-10-12 08:00:00"
+# 从指定位置开始播放（四选一）：
+python cli.py compute --file data/你的.csv --play-from sec:30            # 跳过开头 30 s
+python cli.py compute --file data/你的.csv --play-from row:120001        # 从第 120001 条数据行
+python cli.py compute --file data/你的.csv --play-from pct:50            # 从文件一半处
+python cli.py compute --file data/你的.csv --play-from time:08:00:00     # 时标 ≥ 08:00:00（0/00/00 写法只填时刻）
 ```
 
 Web：「数据源与控制」→ 离线文件 → 勾「csv_file：自定义播放时间」→（可选）填「自定义起始时间」→「启动数据源」；数据源状态摘要会显示「自定义播放时间：起始 配置起始时间/文件第 1 条数据时间 …」。
@@ -935,6 +954,7 @@ python cli.py selftest                            # 实测：44/44，worst_rel_e
 | | `sim_f` / `sim_harmonics` / `sim_noise_ratio` / `sim_unbalance` / `sim_speed` | 50 / {3:0.08,5:0.06,7:0.03,11:0.015,13:0.01} / 0.002 / 0.02 / 1.0 | 模拟器参数（`sim_speed>1` 加速联调） |
 | | `custom_time` / `custom_time_start` | false / `""` | csv_file 自定义播放时间（§4.2）：时间轴＝起始＋序号/fs；起始留空＝文件第 1 条数据时间 |
 | `output` | `history_hours` / `history_max_points` | 24.0 / 500000 | 趋势曲线保留窗（小时，按数据时间）与每条曲线内存上限（安全阀） |
+| | `realtime_save` / `realtime_dir` | true / `output/realtime` | **实时落盘**（v0.6）：每算出一个曲线点就追加写 `<realtime_dir>/<曲线>_<数据日期>.csv`（受 `curve_save` 过滤）；CLI `--realtime-save on|off --realtime-dir …`；环境变量 `ELEC_TOOL_REALTIME_DIR` 优先 |
 | | `curve_save` | 6 键全 true | 「保存曲线数据」时各曲线是否参与（`voltage/current/power/power_factor/fundamental/harmonic`）；false 的曲线保存/下载时跳过 |
 | | `history_len` / `export_dir` / `spectrum_max_points` | 600（已不再作上限用，兼容旧配置）/ `output` / 1600 | 导出目录、频谱显示抽稀上限 |
 | `windows.<量>` | `length_s` | voltage/current/power/power_factor/spectrum=1.0，fundamental/harmonic=0.2 | **需求⑥：逐量配置计算时间段** |
@@ -955,6 +975,7 @@ python cli.py selftest                            # 实测：44/44，worst_rel_e
 | 结果 JSON | `GET /api/export?fmt=json`、`compute --format json`（每行一个结果对象） | 完整结构：`t_ref/f_used/f_source/meta/quantities{values,series,window,units,notes}` | ✅沙盒实录 |
 | 历史趋势 | `GET /api/history/{quantity}?max_points=` | 每量独立时间序列（`t` 非递减），默认最近 24 h、超量峰谷抽稀 | ✅沙盒实录 |
 | 曲线数据 CSV | `output/curves_<时间>/<曲线>.csv`（`POST /api/curves/save`）；`GET /api/curves/export` 合并长表 | 只含已勾选曲线：`t_epoch_s,time_local,quantity,window_s,Ua,Ub,Uc,…`（UTF-8-BOM） | ✅沙盒实录（4 文件 + skipped 2） |
+| **实时落盘 CSV** | `output/realtime/<曲线>_<YYYYMMDD>.csv`（引擎每算一点追加一行，按数据日期分文件） | `t_epoch_s,time_local,window_s,字段…`（与趋势曲线同一提取规则，UTF-8-BOM，追加不重复表头） | ✅沙盒实录（文件行数 == 趋势历史点数 == `rows_written`） |
 | 自检报告 | `cli.py selftest --json`、`GET /api/selftest`、界面「算法自检」 | 44 项：`id/name/expected/actual/tol_rel/rel_err/ok/unit/note` + 运行环境（Python/OS/numpy） | ✅沙盒实录 |
 | 告警与缺口 | 界面「导出与日志」、结果 `notes` 字段 | 整周期截断、频谱抽稀、NaN 插值、采样率偏差、数据缺口、功率残差、口径退化提示 | ✅沙盒实录 |
 
@@ -970,6 +991,7 @@ python cli.py selftest                            # 实测：44/44，worst_rel_e
 | 4. 四源对账 | `tools/verify_sources.py` | PASS 5 / SKIP 0 / FAIL 0 | 证明 4 种数据源（含 TCP 两种帧）算出的电气量与解析解一致 |
 | 5. 界面契约 | `pytest tests/test_web_ui.py` ＋ `node tools/ui_dropdown_check.cjs` | 14 passed；PASS 74 / FAIL 0 | 证明下拉框选项与后端枚举一致、4 种源可分别配置并真的跑起来 |
 | 6. 第 6 轮四功能 | `pytest tests/test_r6_features.py` ＋ `node tools/ui_r6_check.cjs` | 25 passed；PASS 30 / FAIL 0 | 用户时标格式、24h 曲线、逐曲线保存开关、自定义播放时间（含界面联动与服务端真跑） |
+| 7. 第 7 轮三功能 | `pytest tests/test_r7_features.py` ＋ `node tools/ui_r7_check.cjs` | 18 passed；PASS 39 / FAIL 0 | 实时落盘（文件行数＝历史点数、勾选过滤、热更新开关、按日期分文件）、播放起点（5 种模式精确行数、超范围可诊断、CLI）、曲线悬停（悬停值＝真实数据、重绘不丢、离开清除、频谱同样可用） |
 
 自检 44 项覆盖（`cli.py selftest -v` 可看逐项）：S1 相电压/相电流/线电压/零线电流；S2 P/Q/S/PF/DPF/P1/Q1；S3 U1/I1/THD_U/THD_I 与 3·5·7·11·13 次；S4 频谱主峰与分辨率(=1/窗长)；S5 1s vs 5s 窗一致性；S6 PT/CT 缩放线性；S7 f=49.85Hz 非额定频率自适应抗泄漏；S8 5% 负序；S9 直流分量。
 
@@ -1021,7 +1043,7 @@ python cli.py selftest                            # 实测：44/44，worst_rel_e
 
 - **沙盒已验证（Linux / CPython 3.11.2，2026-10-10 实录）**
   - 安装：venv + `pip install -r requirements.txt`；离线安装（Linux 29 包 / Windows 目标 24 包下载）；最小安装报错提示
-  - 算法：`selftest` 44/44（最差 1.508e-05）；`pytest tests/ -q` **186 passed, 1 skipped**
+  - 算法：`selftest` 44/44（最差 1.508e-05）；`pytest tests/ -q` **204 passed, 1 skipped**
   - CLI：7 个子命令逐条实跑（含 `--set-window`、`--format csv/json/table`、`--pace`、`--ts-format`）
   - Web：页面与静态资源 200、12 个子界面、REST 12 组端点、WebSocket 推送与降级、配置热更新与持久化分离、导出 34.6 万行 CSV
   - 实时：模拟器 6400 点/s 稳定摄入（实测 6398–6400 点/s），各量按独立窗长输出（0.2s 量 5 次/s、1s 量 1 次/s）
@@ -1029,6 +1051,7 @@ python cli.py selftest                            # 实测：44/44，worst_rel_e
   - 本轮实测发现并修复：① `csv_tail` 目录分片切换丢一整块（640 点/100.2 ms 假缺口）→ 切换前 drain 旧文件＋回归测试；② 二进制帧格式不匹配时 CLI 崩 `OverflowError` → 解析层合理性闸门＋显示层兜底＋自动退回合成时间轴并给排查清单；③ 实时源告警未去重（3 s 刷 8 条）→ 按中文骨架去重；④ float32 存 epoch 秒造成时标量化（~128 s）→ 显式告警
   - **Web 界面下拉框专项检查**（§3.1、`REPORT_TEST.md` T-003 S14~S16）：jsdom 驱动真实页面 + 真实服务端，实测 **PASS 74 / FAIL 0**。修复 5 个界面缺陷：⑥ `src-kind`/`src-frame` 无 change 监听（选了不联动、无关字段可编辑却静默不生效）；⑦ 启动/保存载荷无条件发送空 `path`/`host`（空 path 被服务端 400 拒、空 host 被静默存空）；⑧ 空数字框按 `+''===0` 送出 → `PUT /api/config` 必 400「sampling.fs 必须 > 0」；⑨ 快量 0.2 s 一次的推送触发无条件回填 → **把用户刚选的下拉框改回服务端值、清掉输入一半的路径**；⑩ 「启动数据源」夹带 `transform/sampling/harmonic/power`，而 `/api/engine/start` 白名单只吃 source 键 → 改完 PT/CT 点启动被静默忽略
   - **第 6 轮四项功能**（2026-10-12，`REPORT_TEST.md` T-004）：① 用户时标格式 `0/00/00 00:12:40.0000`（无日期/无表头/0.1 ms 截断）解析、跨午夜展开、fs 推算 6400.003 Hz；② 趋势曲线改为按数据时间保留最近 24 h（紧凑列存储、峰谷抽稀、热更新不丢）；③ 6 条曲线逐条「保存曲线」开关（面板＋导出页同步、写入配置、保存/下载严格按勾选过滤）；④ 离线「自定义播放时间」（起始默认文件第 1 条，支持指定时刻，非法文本保存时即拒）。`tests/test_r6_features.py` 25 项 ＋ `tools/ui_r6_check.cjs` PASS 30/FAIL 0 ＋ 旧 harness 复跑 PASS 74/FAIL 0
+  - **第 7 轮三项功能**（2026-10-12，`REPORT_TEST.md` T-005）：① 曲线点实时落盘 `output/realtime/<曲线>_<数据日期>.csv`（每点追加＋flush、按数据日期分文件、受「保存曲线」勾选过滤、热更新开关即时生效、`GET /api/realtime`、界面面板）；② 离线文件指定位置播放（`row/seconds/percent/time` 四种定位＋`begin`，界面下拉框联动、CLI `--play-from`、超范围可诊断报错）；③ 曲线悬停取值（所有 canvas：吸附最近点、浮框列各曲线值、实时重绘不丢）。`tests/test_r7_features.py` 18 项 ＋ `tools/ui_r7_check.cjs` PASS 39/FAIL 0 ＋ 旧 harness 复跑 PASS 30/74
 - **用户环境未验证（🔶，需按 `REPORT_TEST.md` T-002 执行包回填）**
   - Windows 安装与运行（含离线 wheel 安装侧、NSSM/任务计划常驻、防火墙放行）
   - 真实采集数据：编码、时间戳格式、电压是相/线、PT/CT 实际值、数据完整性
@@ -1048,6 +1071,7 @@ python cli.py selftest                            # 实测：44/44，worst_rel_e
 ---
 
 ## 🗒 变更记录
+- **v0.6（2026-10-12）**：三项功能。① **实时落盘**：新增 `elec_tool/realtime_writer.py`，引擎每算出一个曲线点就追加到 `output/realtime/<曲线>_<数据日期>.csv`（与趋势曲线/手工保存同一提取规则 `metrics.curve_record`；按数据时间日期分文件；追加不重复表头；每次 flush；受 `output.curve_save` 过滤；配置 `output.realtime_save/realtime_dir`，环境变量 `ELEC_TOOL_REALTIME_DIR` 优先；热更新重建写入器）；`GET /api/realtime`；「导出与日志」页新增面板；CLI `--realtime-save on|off --realtime-dir`，收尾诊断打印落盘行数。② **离线播放起点**：`source.play_start_mode/play_start_value`（`begin/row/seconds/percent/time`），`iter_csv_blocks` 新增 `skip_rows/start_percent/start_time`（percent 按字节定位对齐行首；time 分块顺序扫描时标列，支持只填 `HH:MM:SS` 与当天时刻比较）；超出文件范围抛可诊断 `ParseError`；界面下拉框＋取值框（csv_file 下可用、begin 时取值框置灰、占位说明随模式变化），启动白名单放行，状态摘要显示跳过行数；CLI `--play-from 模式:值`。③ **曲线悬停取值**：`drawLine` 挂 `cv.__chart`、只绑定一次 `mousemove/mouseleave`、重绘末尾叠加十字线＋圆点＋浮框（趋势图提示含毫秒，频谱为 Hz），实时推送重绘不丢。新增 `tests/test_r7_features.py`（18 项）与 `tools/ui_r7_check.cjs`（PASS 39/FAIL 0）；修 r6 Web 测试「finished 后 flush_all 尚未完成」的等待竞争。测试 186→**204 passed, 1 skipped**。取证见 `REPORT_TEST.md` T-005。
 
 - **v0.5（2026-10-12）**：四项功能。① 离线 CSV 支持用户采集器时标 `0/00/00 00:12:40.0000`（日期段全 0 → 当天时刻、跨午夜自动展开、0.1 ms 截断下 fs 仍按线性拟合推算；无表头文件在 `/api/probe`、CLI、Web 三处都正确识别；顺带修复无表头文件把时间戳列记为「非数值单元格」的噪声告警）。② 所有趋势曲线改为**最近 24 h（按数据时间，不足则全部）**：`History` 改为按时间修剪的紧凑列存储（`array('d')`、线程安全、50 万点上限），`/api/history` 新增 `hours/max_points` 与峰谷保形抽稀，前端不再固定取 400 点，横轴跨度 >1 h 自动省略毫秒，面板标题标注跨度/点数；热更新（含已结束的离线引擎）不再清空历史与结果。③ 每条曲线可单独勾选「保存曲线数据」（`output.curve_save`，面板右上角与导出页同一份配置），新增 `POST /api/curves/save`（写 `output/curves_<ts>/<曲线>.csv`）与 `GET /api/curves/export`，未勾选项严格跳过。④ 离线播放「自定义播放时间」（`source.custom_time/custom_time_start`，CLI `--custom-time[-start]`，界面勾选框＋起始时间框只在 csv_file 下可用）。新增 `tests/test_r6_features.py`（25 项）与 `tools/ui_r6_check.cjs`（PASS 30/FAIL 0）。测试 161→**186 passed, 1 skipped**。取证见 `REPORT_TEST.md` T-004。
 - **v0.4（2026-10-10）**：§3.1 新增「数据源面板：4 种输入方式的联动、空值语义与两个保存入口」（含逐源可编辑/置灰字段表、`PUT /api/config` 深合并 vs `POST /api/engine/start` 白名单对照、6 步手工点检清单）。修复 Web 界面 5 个缺陷（F-06~F-10）：数据源两个下拉框无联动、载荷发送空值、空数字框导致保存必 400、实时推送覆盖用户正在编辑的表单、启动按钮夹带被服务端忽略的配置段；新增逐源填写说明 `#src-hint` 与未保存提示 `#src-formnote`。新增 `tools/ui_dropdown_check.cjs`（jsdom 端到端，实测 PASS 74/FAIL 0）与 `tests/test_web_ui.py`（前端契约静态检查 14 项，撤销修复必 FAIL 已验证）。测试 147→**161 passed, 1 skipped**。取证见 `REPORT_TEST.md` T-003 S14~S16。

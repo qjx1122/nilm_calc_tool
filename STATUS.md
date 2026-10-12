@@ -1,17 +1,24 @@
 # STATUS.md
 
 > 续接文件（BOOTSTRAP.md v2.2 台账）。每次收尾必更新；只改本文件，不另建同类文件。
-> 最后更新：2026-10-12（第 6 次收尾：第 6 轮四功能——用户时标格式 / 24h 曲线 / 逐曲线保存开关 / 自定义播放时间，修复 F-11~F-16）
+> 最后更新：2026-10-12（第 7 次收尾：第 7 轮三功能——曲线实时落盘 / 离线播放起点 / 曲线悬停取值，问题 F-17~F-21）
 
 ## 当前角色
 - 角色：**资深电力算法专家**（`ROLE.md` v1.4 指定的默认当前角色）
 - 本任务级覆盖：**工程实现工程师**（对「实现电气量计算工具」及其后续界面缺陷修复 / 功能增补任务生效；任务收尾后回归默认角色）
 - 生效范围：任务级（非全迭代）
 - 默认执行模式：**混合**——沙盒侧（模式 A）写码 + 合成信号解析解自验证 + live preview 实跑，**已有实录**；用户侧（模式 B）Windows 部署 / 真实数据对账 / 生产常驻，**只出执行包，未获实录不下结论**（执行包见 `REPORT_TEST.md` T-002 的 W/R/P 三组）
-  - 说明：更早任务用户显式指定过模式 B（仅对「补齐台账骨架」生效）；此后各任务用户均跳过模式澄清，故一律按上述混合模式执行并在此声明。第 5 轮（界面下拉框检查）沙盒侧＝jsdom 驱动真实页面打真实服务端 + REST 空值语义实录，**已✅实录**；用户侧＝浏览器手点 U 组 7 步，**🔶待回报**。**第 6 轮（四功能）**沙盒侧＝pytest 25 项 + jsdom 30 项 + REST/CLI 实录，**已✅实录**；用户侧＝浏览器手点 U6 组 8 步，**🔶待回报**
+  - 说明：更早任务用户显式指定过模式 B（仅对「补齐台账骨架」生效）；此后各任务用户均跳过模式澄清，故一律按上述混合模式执行并在此声明。第 5 轮（界面下拉框检查）沙盒侧＝jsdom 驱动真实页面打真实服务端 + REST 空值语义实录，**已✅实录**；用户侧＝浏览器手点 U 组 7 步，**🔶待回报**。**第 6 轮（四功能）**沙盒侧＝pytest 25 项 + jsdom 30 项 + REST/CLI 实录，**已✅实录**；用户侧＝浏览器手点 U6 组 8 步，**🔶待回报**。**第 7 轮（三功能）**沙盒侧＝pytest 18 项 + jsdom 39 项 + CLI/源层实录，**已✅实录**；用户侧＝U7 组 8 步，**🔶待回报**
 
 ## 当前目标
-- **本任务（2026-10-12 第 6 轮，已交付、沙盒侧✅实录）**：用户 5 点需求——① 离线 CSV 支持 `0/00/00 00:12:40.0000,290.175751,…` 格式 ② 界面所有曲线＝最新 24 小时（不足则全部）③ 每条曲线可分别配置是否保存，保存曲线数据时未勾选项不保存 ④ 离线播放可选「自定义时间」（起始默认文件第 1 条，后续按采样率推算；否则用文件时间）⑤ 完成后验证
+- **本任务（2026-10-12 第 7 轮，已交付、沙盒侧✅实录）**：用户 3 点需求——① 计算的曲线数据实时保存到 `output/realtime` 目录 CSV ② 离线文件可指定位置播放 ③ 鼠标移到曲线上显示该位置数据
+  - 实现：`elec_tool/realtime_writer.py`（每点追加＋flush、按数据日期分文件、续写不重表头、受 `curve_save` 过滤、`ELEC_TOOL_REALTIME_DIR` 优先）＋ `metrics.curve_record()` 抽成三出口共用；`output.realtime_save/realtime_dir`、`GET /api/realtime`、导出页面板、CLI `--realtime-save/--realtime-dir`；`source.play_start_mode/value`（begin/row/seconds/percent/time）＋ `iter_csv_blocks(skip_rows/start_percent/start_time)` ＋ 超范围 `ParseError` ＋ 界面下拉框联动 ＋ start 白名单 ＋ CLI `--play-from`；`app.js` `bindHover/hoverInfo/drawHover`（所有 canvas，吸附最近点，重绘不丢）
+  - 验证：`tests/test_r7_features.py` **18 项**；`tools/ui_r7_check.cjs` **PASS 39 / FAIL 0**（连跑 3 次稳定）；旧 harness 复跑 30/0、74/0；全量 **204 passed, 1 skipped**
+  - 问题 **F-17~F-21**（超范围静默 0 样本 / 默认落盘污染仓库目录 / finished≠flush 完成的测试竞争 / 常驻模拟器污染测试目录 / begin 模式送空值）
+  - 文档：`README.md` v0.6（§3.1 新小节、§3.4 `/api/realtime`、§4.2 字段＋CLI 示例、§6/§7/§8/§11、变更记录）；`REPORT_TEST.md` v0.6 **T-005**；`REPORT.md` v0.6 **C-16/C-17**＋1 条教训
+  - 验收状态：沙盒侧 ✅；**用户侧 🔶 待回报**（T-005 U7 组）
+  - 假设（已在 README 标注）：实时落盘默认**开**；「曲线数据」＝6 条趋势曲线标量点；按数据日期分文件；受「保存曲线」勾选过滤；悬停吸附最近点不插值
+- **上一任务（2026-10-12 第 6 轮，已交付、沙盒侧✅实录）**：用户 5 点需求——① 离线 CSV 支持 `0/00/00 00:12:40.0000,290.175751,…` 格式 ② 界面所有曲线＝最新 24 小时（不足则全部）③ 每条曲线可分别配置是否保存，保存曲线数据时未勾选项不保存 ④ 离线播放可选「自定义时间」（起始默认文件第 1 条，后续按采样率推算；否则用文件时间）⑤ 完成后验证
   - 实现：`parsing.py` `_parse_slash_clock`/`_unwrap_midnight`（无日期时标→当天时刻、跨午夜展开、按位数换算小数）+ `parse_rows` 跳过时间戳列 + `/api/probe` 无表头回退；`metrics.History` 重写为按数据时间保留的紧凑列存储（`array('d')`、锁、numpy 峰谷抽稀）+ `/api/history` 新参数 `hours/max_points` + `output.history_hours/history_max_points`；`output.curve_save` 六键 + `POST /api/curves/save` + `GET /api/curves/export` + 6 个面板勾选框与导出页列表同步；`source.custom_time/custom_time_start` + `CsvFileSource._apply_custom_time` + CLI `--custom-time[-start]` + 界面勾选框/起始框联动 + start 白名单放行
   - 验证：`tests/test_r6_features.py` **25 项**（每项写明撤销修复如何 FAIL）；`tools/ui_r6_check.cjs` **PASS 30 / FAIL 0**；旧 `ui_dropdown_check.cjs` 复跑 **PASS 74 / FAIL 0**；全量 **186 passed, 1 skipped**；selftest 44/44；History 24h 性能实测（43.2 万点 38.5 MB、抽稀 40 ms、并发读写 0 异常）
   - 实测发现并修复 **F-11~F-16**（时标格式 / probe 无表头 / 时间戳列记非数值 / 历史定长 600 点 / 热更新清空历史与结果 / 抽稀性能与读写竞争）
@@ -35,7 +42,7 @@
   - 交付形态：算法核心包 `elec_tool/` + 4 类数据源 + 计算引擎 + CLI（7 子命令）+ Web 界面（FastAPI + WebSocket + 12 个导航子界面）+ 142 项测试
   - 验收状态：**沙盒侧 ✅ 已复现**（6 条标准逐条有代码与测试对应，见 `README.md` §1 对照表）；**用户侧 🔶 待回报**（T-002 W/R/P 组）
 - **上一任务（已完结）**：补齐台账骨架（`README.md` / `REPORT.md` / `REPORT_TEST.md` / `NILM_DATA_DICT.md` / `session/…`）
-- **待用户回报的专题**：T-001（环境与数据基线核对，A~D 组）、T-002（本地部署与真实数据验收，W/R/P 组）、T-003（四源复现 S 组 / 真实装置 D 组 / 界面点检 U 组）、**T-004（第 6 轮四功能浏览器点检 U6 组）**——均未获实录
+- **待用户回报的专题**：T-001（环境与数据基线核对，A~D 组）、T-002（本地部署与真实数据验收，W/R/P 组）、T-003（四源复现 S 组 / 真实装置 D 组 / 界面点检 U 组）、**T-004（第 6 轮四功能浏览器点检 U6 组）**、**T-005（第 7 轮三功能点检 U7 组）**——均未获实录
 - 范围边界：~~本 session 不写业务代码~~ ❌**已失效**（该边界属上一任务；本任务即为写代码）；仍然遵守：不新建台账外散文件、不把数据/产物入库
 
 ## 已完成
@@ -54,15 +61,17 @@
 - [x] 2026-10-10 **沙盒回收事故恢复**：venv 重建、样例数据重生成、git 历史按原结构重提交并 push（远端 `d2337ab`）
 - [x] 2026-10-12 **沙盒回收事故恢复（第 3 次）**：`.git` 退回基线、工作树尚存 → `git fetch` + `reset --mixed FETCH_HEAD` 接回 `a88dcaa`（零差异、无丢失），venv/样例重建
 - [x] 2026-10-12 **第 6 轮四功能**：用户时标格式（F-11~F-13）/ 24h 趋势历史（F-14~F-16）/ 逐曲线保存开关 / 离线自定义播放时间；`tests/test_r6_features.py` 25 项 + `tools/ui_r6_check.cjs` PASS 30 + 旧 harness PASS 74 + 全量 **186 passed, 1 skipped**；README v0.5 / REPORT_TEST T-004 / REPORT C-14、C-15
+- [x] 2026-10-12 **第 7 轮三功能**：曲线实时落盘 `output/realtime/<曲线>_<日期>.csv` / 离线播放起点（5 模式）/ 曲线悬停取值；`tests/test_r7_features.py` 18 项 + `tools/ui_r7_check.cjs` PASS 39 + 旧 harness 30/74 + 全量 **204 passed, 1 skipped**；README v0.6 / REPORT_TEST T-005 / REPORT C-16、C-17
 
 ## 进行中
+- 等用户执行 **T-005 的 U7 组**（浏览器手点 8 步：实时落盘文件与行数 → 勾选过滤 → 开关关/开续写 → 真实文件跳过 60 s / 指定时刻 / 90% → 悬停浮框 → 可选过夜换文件）并回报实录
 - 等用户执行 **T-004 的 U6 组**（浏览器手点 8 步：真实 0/00/00 文件探查 → 不开/开自定义时间启动 → 勾选保存框与 F5 保持 → 保存曲线数据查 output/ → 跑 ≥10 min 看曲线标题跨度；可选过夜看 24.00h 与内存）并回报实录
 - 等用户执行 **T-003 的 U 组**（浏览器手点 7 步，约 5 分钟：回填/联动置灰/binary 帧字段/启动出数/脏值保护/口径保存/可选 node 脚本）并回报实录
 - 等用户执行 **T-003 的 S 组**（无硬件复现四源验证，约 10 分钟）与 **D 组**（真实采集 CSV / 真实 TCP 协议）并回报实录
 - 等用户执行 T-002 的 W/R/P 组（Windows 部署 / 真实数据对账 / 生产常驻）并回报实录
 
 ## 下一步（TODO）
-1. **用户侧（阻塞项，模式 B）**：先跑 **T-004 的 U6 组**（用真实采集文件，期望见 `REPORT_TEST.md` T-004），再跑 T-003 的 **S 组**（`python tools/verify_sources.py` 期望 PASS 5 / FAIL 0；`pytest tests/ -q` 期望 **186 passed**；两个终端跑 tcp_feeder / csv_appender + `cli.py live` 期望缺口 0），**T-003 的 U 组**（浏览器手点 7 步，界面下拉框，期望见 `REPORT_TEST.md`），再跑 T-002 的 W 组（Windows 部署，预计 10 分钟）与 R 组（真实数据对账，核心验收），按「结果回收格式」贴回；P 组（生产常驻）可选
+1. **用户侧（阻塞项，模式 B）**：先跑 **T-005 的 U7 组**与 **T-004 的 U6 组**（用真实采集文件，期望见 `REPORT_TEST.md`），再跑 T-003 的 **S 组**（`python tools/verify_sources.py` 期望 PASS 5 / FAIL 0；`pytest tests/ -q` 期望 **204 passed**；两个终端跑 tcp_feeder / csv_appender + `cli.py live` 期望缺口 0），**T-003 的 U 组**（浏览器手点 7 步，界面下拉框，期望见 `REPORT_TEST.md`），再跑 T-002 的 W 组（Windows 部署，预计 10 分钟）与 R 组（真实数据对账，核心验收），按「结果回收格式」贴回；P 组（生产常驻）可选
 2. Agent 侧（收到实录后）：把三件套写入 T-002「结果 / 结论」，按 J-\* 逐条对账，回填 `README.md` §2/§3/§4 与 `NILM_DATA_DICT.md` 的 🔶 项（注明来源＋日期）
 3. **待确认口径**：电压列是相电压还是线电压（`transform.voltage_input`）、真实编码与时间戳格式、PT/CT 实际值、实时落地方式（文件 or TCP 协议文档）
 4. 若验收方要求 IEC 口径：另立专题实现 IEC 61000-4-7 谐波分组（10/15 分钟评估、分组平方和）——当前为整周期矩形窗口径
@@ -73,6 +82,7 @@
 7. `TUNING_GUIDE.md` 仍未创建：待用户真实数据回报后，把「窗长/口径/变比怎么选」写成调参教学（BOOTSTRAP 规定该文件整篇重写、不追加流水，空骨架无意义）
 8. T-001 的 B6 / C6 / D1~D7 仍未回报（其中 fs、列格式、PT/CT 已由本轮需求描述实质回答）
 9. 可选增强（当前为单机工具形态）：用户/权限、历史入库（数据库）、报警推送、多测点并行
+11. **T-005 遗留**：实时落盘无大小/天数轮转（快量约 40 MB/天/文件）；percent 模式跳过行数未知、time 模式只取第一次 ≥ 目标；播放起点只对 `csv_file` 生效；悬停不插值、各曲线各取最近点；「不落盘但手工保存」需关总开关
 10. **T-004 遗留**：自定义播放时间目前只对 `csv_file` 生效（`csv_tail` 若现场文件也是 0/00/00 写法需扩展）；趋势历史随「重新启动数据源」清空，跨运行/跨进程的 24 h 需落盘（SQLite/滚动 CSV）；`history_hours`/`history_max_points` 未上界面；曲线横轴跨午夜不显示日期；自定义起始时间按本地时区（若现场要 UTC 需加 `tz` 字段）
 
 ## 决策记录 / 踩坑
@@ -97,6 +107,9 @@
 - 2026-10-10｜**踩坑 F-06~F-10（界面层，本轮 jsdom 端到端检查发现）**：① **F-06** `#src-kind`/`#src-frame` 在 `bind()` 里**没有任何 change 监听**（只有频谱 3 个下拉框有）→ 选了界面毫无变化、4 种源的字段全部平铺可编辑、填了不生效也无提示；修法＝新增 `syncSourceForm()` 按 kind/frame 决定 10 个字段的 `disabled` 并写 `#src-hint` 逐源说明（`SRC_HINT` 单一事实来源）。② **F-07** `collectSourcePayload()` 全字段平铺 → 选 simulator 仍带 `path/host/frame`、TCP 切回 text_csv 仍带旧 `struct_fmt`；实测空 `path` 被服务端 **400 拒**「source.kind=csv_file 需要 source.path」，空 `host` 被 **静默存成 ''**；修法＝按 kind 裁剪 + 「非空/有限才送」。③ **F-08** 空数字框经 `+$('#cfg-fs').value` 变 `0` 送出，而 `PUT /api/config` 是深合并 → **全新加载页面第一次点「保存配置」必 400**「sampling.fs 必须 > 0（当前 0）」且用户看不出是哪个框；修法＝只送「有限且 >0」，被跳过的字段名写进成功提示。④ **F-09（最隐蔽）** 快量 0.2 s 一次的推送 → `render()` → `renderSource()` **无条件回填** → 停在数据源页时「刚选的下拉框被改回服务端 kind、输入一半的路径被清空」；修法＝拆出 `fillSourceForm()`、`S.formDirty` 脏值保护 + `#src-formnote` 提示、「刷新」＝丢弃修改重新回填。⑤ **F-10** `startEngine()` 夹带 `collectConfigPayload()`，而 `/api/engine/start` 只取 source 白名单 + `windows` → 改完 PT/CT 点「启动数据源」被**静默忽略**；修法＝启动只送 source，提示指向「保存配置（热更新）」
 - 2026-10-10｜**方法论：界面缺陷需要「双层可复现验证」**：`node --check`（只验语法）与 `pytest`（不碰前端）全绿的情况下，上述 5 个缺陷全部隐身；最隐蔽的 F-09 只在「停在数据源页 + 引擎在跑」时每 0.2 s 复现一次。对策＝① `tools/ui_dropdown_check.cjs`（jsdom 驱动**真实页面**打**真实服务端**，可断言请求载荷原文、服务端回显、推送后的 DOM 值）② `tests/test_web_ui.py`（前端契约静态测试：下拉框选项 ↔ 后端枚举集合相等、`$('#id')` 引用的元素必须存在、四道闸门在位；不需 node，随 pytest 跑）。**踩坑**：断言「字段不可编辑」要用 `.disabled`，不能用 `offsetParent`（jsdom 无布局，恒为 null → 假 PASS）；捕获请求要同时过滤 PUT 与 POST，否则漏掉 `saveConfig`；`const` 声明在 `window.eval` 后不可见，需在同一次 eval 里用闭包导出（`window.__S=()=>S`）
 - 2026-10-12｜**决策（第 6 轮）**：① 无日期时标基准＝1970-01-01（保持 epoch 秒语义，界面时:分:秒正确），真实日期交给「自定义播放时间」而不是猜今天的日期（猜错比显示 1970 更危险）；② 24 h 按**数据时间**而非墙钟（离线回放同样成立，且与「不足 24 h 显示全部」自洽）；③ 「保存曲线」勾选＝配置项（`output.curve_save`，`PUT /api/config` 即时持久化），面板与导出页共用一份，而不是导出时临时勾选——用户要的是「配置功能」；④ 保存给两个入口：服务端写 `output/curves_<ts>/<曲线>.csv`（每曲线一文件，UTF-8-BOM 供 Excel）+ 浏览器下载合并长表；⑤ 热更新一律保留趋势历史与最近结果（含已结束的离线引擎），只有「重新启动数据源」清空
+- 2026-10-12｜**决策（第 7 轮）**：① 实时落盘**默认开**（用户明确要这个功能；关掉只需一个开关），目录 `output/realtime`，`ELEC_TOOL_REALTIME_DIR` 环境变量优先（测试隔离/现场指到数据盘）；② 落盘与界面趋势、手工保存**共用 `curve_record()` 与 `curve_save`**，三处数字必须对得上；③ 按**数据时间**日期分文件（与 24h 曲线按数据时间同一口径；0/00/00 文件落到 1970 文件名，真实日期靠自定义播放时间）；④ 播放起点给四种定位而不是只给行号：现场最常用的是「跳过前 N 秒」和「从某时刻开始」，percent 给大文件 O(1) 跳转；⑤ 悬停吸附最近点、不插值（显示的必须是真实算出的点）
+- 2026-10-12｜**踩坑 F-19（状态位≠工作完成）**：`finished=true` 后运行线程还要 `flush_all`（收尾强算＋入历史＋落盘），测试立刻数行就偶发 `4 == 3`，只在全量跑时复现。等待条件要对准最后一个副作用；本轮在 r6/r7 的 `_wait_finished` 与 jsdom 脚本里置位后再等一拍并重读
+- 2026-10-12｜**踩坑 F-18/F-20（默认开启的副作用要可隔离）**：默认落盘让每个测试/工具往仓库 `output/realtime/` 写文件 → env 优先级 + conftest autouse 夹具；jsdom 脚本切目录时预览进程里常驻的模拟器把「今天日期」文件写进测试目录 → 脚本先 stop 引擎再切
 - 2026-10-12｜**踩坑 F-15（功能互相打架）**：功能③的勾选框走 `PUT /api/config` 热更新，而 `EngineRunner.set_cfg()` 对「线程不存活」的引擎整个重建、`LiveEngine.update_config()` 重建 `MetricsCalculator` → 功能②的 24 h 曲线和 `/api/result` 一起清空；单测各绿，连起来点才暴露。修法＝已有引擎一律 `update_config`，`update_config` 搬运 `history` 并按新配置更新 `hours/max_points`；回归 `test_engine_hot_update_preserves_history` / `test_web_curve_save_toggle_persists_and_keeps_history`
 - 2026-10-12｜**踩坑 F-16（性能按目标规模实测）**：`History.get` 纯 Python 抽稀在 3 s 样例上无感，按 24 h@0.2 s＝43.2 万点实测 757 ms，6 曲线 / 3 s 轮询会把 2 核吃满；改 numpy 分桶（`linspace` 边界 + `nanargmax/nanargmin`）→ 40 ms。并发：引擎线程 `push` 与 Web 线程 `get`/`del` 切片竞争 → 加 `threading.Lock`；读侧用 `np.array(arr)` 单次拷贝，**不能**用 `np.frombuffer` 视图（`array('d')` 扩容时 `BufferError: cannot resize an array that is exporting buffers`，会打死引擎线程）
 - 2026-10-12｜**踩坑（时间格式细节）**：`time_local` 小数部分用 `f"{t%1:.3f}"[1:]` 在 .9998 时进位成 `.000` 但整秒没进位（显示 :40.000 实为 :40.9998）→ 改截断 `int((t%1)*1000)`；`notes()` 会转义 HTML，保存结果里的 `<code>` 会原样显示 → 列表文本不带标签
@@ -105,13 +118,13 @@
 ## 关键文件路径
 - `BOOTSTRAP.md` / `ROLE.md` — 协议 v2.2 与角色库 v1.4（默认角色：资深电力算法专家）
 - `STATUS.md` — 本文件，续接现场唯一入口
-- `README.md` — **v0.5**（§3.1 增「趋势曲线＝最近 24 小时＋保存曲线」、§4.2 增「自定义播放时间」与用户格式实测、§8 六层验证）：§0 快速开始、§1 验收对照、**§2 本地部署（详细）**、**§3 运行说明（Web/CLI/库/REST 四种；§3.1 含数据源面板逐源可编辑/置灰字段表、两个保存入口语义对照、空值语义与 6 步手工点检清单）**、**§4 四种数据源详解（配置·三入口·实测·注意事项·验证，含 §4.6 四源对账表与 §4.8 一键复现）**、§5 数据目录、§6 配置结构、§7 输出产物、§8 五层验证、§9 生产推荐流程、§10 台账索引、§11 交付说明
-- `REPORT.md` — **v0.5**（新增 C-14 趋势历史保留与抽稀、C-15 无日期时标规则）：稳定结论 C-01~C-08（电气量计算）+ C-09~C-12（四源等价性 / 切换前 drain / float32 禁存 epoch 秒与可诊断降级 / 无硬件验证路径）+ **C-13（界面层验证方法 + 深合并接口空值语义 + 推送覆盖用户输入）**；§3.3 十五类量口径；§5 六条实录教训
-- `REPORT_TEST.md` — **v0.5**（新增 **T-004** 第 6 轮四功能：S1~S9 / F-11~F-16 / U6 组）：T-001（待回报）+ T-002（沙盒 A1~A10、B1/B2、用户侧 W/R/P）+ **T-003（沙盒 S1~S18 实录、四源对账表、F-01~F-10 修复、用户侧 S/U/D 三组执行包 + J-\* 判读 + 回收格式）**
+- `README.md` — **v0.6**（§3.1 增「实时落盘＋播放起点＋悬停取值」小节、§3.4 `/api/realtime`、§4.2 播放起点字段与 CLI、§8 七层验证）：§0 快速开始、§1 验收对照、**§2 本地部署（详细）**、**§3 运行说明（Web/CLI/库/REST 四种；§3.1 含数据源面板逐源可编辑/置灰字段表、两个保存入口语义对照、空值语义与 6 步手工点检清单）**、**§4 四种数据源详解（配置·三入口·实测·注意事项·验证，含 §4.6 四源对账表与 §4.8 一键复现）**、§5 数据目录、§6 配置结构、§7 输出产物、§8 五层验证、§9 生产推荐流程、§10 台账索引、§11 交付说明
+- `REPORT.md` — **v0.6**（新增 C-16 三出口共用提取规则与按日期分文件、C-17 播放起点定位代价与可诊断）：稳定结论 C-01~C-08（电气量计算）+ C-09~C-12（四源等价性 / 切换前 drain / float32 禁存 epoch 秒与可诊断降级 / 无硬件验证路径）+ **C-13（界面层验证方法 + 深合并接口空值语义 + 推送覆盖用户输入）**；§3.3 十五类量口径；§5 六条实录教训
+- `REPORT_TEST.md` — **v0.6**（新增 **T-005** 第 7 轮三功能：S1~S4 / F-17~F-21 / U7 组）：T-001（待回报）+ T-002（沙盒 A1~A10、B1/B2、用户侧 W/R/P）+ **T-003（沙盒 S1~S18 实录、四源对账表、F-01~F-10 修复、用户侧 S/U/D 三组执行包 + J-\* 判读 + 回收格式）**
 - `NILM_DATA_DICT.md` — v0.2（用户已确认 fs/列格式/PT/CT）；另有 v0.1 模板（🔶=116 处；用户已确认的 fs/列格式/PT/CT 待本轮翻 ✅）
 - `session/NILM_AC_session_complete.md` — 会话纪要（只追加）
-- 代码：`cli.py`（7 子命令入口）、`elec_tool/`（算法核心 + `sources/` + `analysis/`）、`app/server.py` + `app/static/`（Web）、`configs/default.json`（出厂模板）、**`tools/`（tcp_feeder / csv_appender / verify_sources / ui_dropdown_check.cjs / ui_r6_check.cjs）**、`tests/`（**187 项，12 个文件**；第 6 轮＝`test_r6_features.py`）
+- 代码：`cli.py`（7 子命令入口）、`elec_tool/`（算法核心 + `sources/` + `analysis/`）、`app/server.py` + `app/static/`（Web）、`configs/default.json`（出厂模板）、**`tools/`（tcp_feeder / csv_appender / verify_sources / ui_dropdown_check.cjs / ui_r6_check.cjs / ui_r7_check.cjs）**、`tests/`（**205 项，13 个文件**；第 7 轮＝`test_r7_features.py`）、**`elec_tool/realtime_writer.py`**
 - 数据与产物（均 gitignore）：`data/`（输入 CSV，`cli.py gen-sample` 可重建样例）、`output/`（导出结果）、`configs/runtime.json`（界面保存的配置）
 - 运行环境：`.venv/`（gitignore，沙盒回收后需重建：`python3 -m venv .venv && .venv/bin/pip install -r requirements.txt`）
-- 分支：`arena/82e34fb8-nilm-calc-tool`（远端同名，已 push；第 5 轮 tip `a88dcaa`；第 6 轮提交＝feat(r6) 代码 / test+tools / docs 三个）｜基点 `main`=`27b28ea`
+- 分支：`arena/82e34fb8-nilm-calc-tool`（远端同名，已 push；第 6 轮 tip `f1966e8`；第 7 轮提交＝`f0fdea6` feat(r7) / `341fc9e` test(r7) / docs）｜基点 `main`=`27b28ea`
 - live preview：`cli.py serve` 或 `uvicorn app.server:app --host 0.0.0.0 --port 8000`（沙盒内已常驻，`ELEC_TOOL_AUTOSTART=1` + 模拟器源）
