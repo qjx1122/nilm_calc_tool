@@ -28,6 +28,13 @@ HEADER_CN = ["时间戳", "A相电压", "A相电流", "B相电压", "B相电流"
 HEADER_EN = ["timestamp", "Ua", "Ia", "Ub", "Ib", "Uc", "Ic"]
 
 
+@pytest.fixture(autouse=True)
+def _isolate_realtime_dir(tmp_path, monkeypatch):
+    """实时落盘（output.realtime_save 默认开）在测试里一律写到临时目录，不污染仓库 output/。"""
+    monkeypatch.setenv("ELEC_TOOL_REALTIME_DIR", str(tmp_path / "realtime"))
+    yield
+
+
 @pytest.fixture
 def base_cfg() -> AppConfig:
     """用户给定工况：fs=6400、PT=100、CT=15、50Hz、谐波 2~50。"""

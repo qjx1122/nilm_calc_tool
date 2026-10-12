@@ -286,8 +286,9 @@ def _wait_finished(client, deadline_s=30.0):
     while time.time() - t0 < deadline_s:
         st = client.get("/api/state").json()
         if st.get("finished") or st.get("error"):
-            return st
+            break
         time.sleep(0.05)
+    time.sleep(0.3)        # finished 置位后运行线程还要 flush_all 一次（收尾强算 + 入历史），等它做完再读计数
     return client.get("/api/state").json()
 
 

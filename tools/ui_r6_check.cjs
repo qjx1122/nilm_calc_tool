@@ -95,6 +95,7 @@ async function main() {
   await setKind('simulator');
   check('simulator 下「自定义播放时间」勾选框禁用', $('src-customtime').disabled && $('src-customstart').disabled);
   await setKind('csv_file');
+  if ($('src-customtime').checked) { $('src-customtime').checked = false; change($('src-customtime')); await sleep(100); }   // 服务端配置可能残留 custom_time=true
   check('csv_file 下勾选框可用、起始时间框在未勾选时禁用', !$('src-customtime').disabled && $('src-customstart').disabled,
     `customtime.disabled=${$('src-customtime').disabled} customstart.disabled=${$('src-customstart').disabled}`);
   $('src-customtime').checked = true; change($('src-customtime')); await sleep(100);
