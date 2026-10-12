@@ -24,6 +24,7 @@
 | T-001 | 2026-10-10 | 环境与数据基线核对（台账回填前置采集） | 验证专题 | B（用户本地执行） | 🔶待用户回报 | 待定 |
 | T-002 | 2026-10-10 | 电气量计算工具实现自验证 + 本地部署与真实数据验收执行包 | 验证专题 | 混合（沙盒 A 已实录 / 用户侧 B 待回报） | 🔶待用户回报（沙盒侧已✅实录） | 部分已升格 |
 | T-003 | 2026-10-10 | 四种数据源的配置·运行·验证（csv_file/csv_tail/tcp/simulator × CLI/Web/库） | 验证专题 | 混合（沙盒 A 已实录 / 用户侧 S·D 组待回报） | 🔶待用户回报（沙盒侧已✅实录，含 F-01~F-10 修复） | 是（四源等价性等 5 条） |
+| T-004 | 2026-10-12 | 第 6 轮四功能：用户时标格式 / 24h 曲线 / 逐曲线保存开关 / 自定义播放时间 | 用户专题（实现＋验证） | 混合（沙盒 A 已实录 / 用户侧 U6 组待回报） | 🔶待用户回报（沙盒侧已✅实录） | 是（C-14：按数据时间保留＋峰谷抽稀；C-15：无日期时标处理规则） |
 
 ---
 
@@ -543,9 +544,161 @@ D-5 分片规则：命名=__ 单文件时长=__ 是否保留旧文件=__
   7. 引擎启动后服务端把 `source.path` 解析为**绝对路径**并经 `/api/config` 回显到表单（`_persist` 写盘时仍还原为相对路径），属外观问题，未修。
   8. U 组（浏览器手点 7 步）与 S 组、D 组一样**尚未获用户实录**，界面在真实浏览器下的表现不下结论。
 
+## [2026-10-12] 专题 T-004：第 6 轮四功能（用户时标格式 / 24h 曲线 / 逐曲线保存开关 / 自定义播放时间）
+
+- 类型：用户专题（功能实现 + 验证测试）
+- 执行模式：混合——沙盒侧实录（✅）＋ 用户侧浏览器点检 U6 组（🔶待回报）
+- 本专题角色：工程实现工程师（默认资深电力算法专家负责口径复核）
+- 目标与假设：
+  1. 离线 CSV 支持 `0/00/00 00:12:40.0000,290.175751,…` 格式（用户原样给出三行：日期段全 0、只有当天时刻、小数 4 位＝0.1 ms、**无表头**）；
+  2. 界面所有趋势曲线＝最新 24 小时数据，不足则全部；
+  3. 每条曲线可分别配置是否保存，保存曲线数据时未勾选项不保存；
+  4. 离线播放可选「自定义时间」：启用则时间轴＝起始时间＋样本序号/采样率，起始默认文件第 1 条数据时间；否则按文件内时间播放；
+  5. 完成后验证各功能。
+  **假设**（用户未说明、按工程默认处理并在 README 标注）：「24 小时」按**数据时间**计（离线回放同样成立）；「曲线」指 6 条时间趋势（波形/频谱是单窗瞬时量）；「保存曲线数据」＝服务端写 `output/curves_<ts>/<曲线>.csv` ＋ 浏览器下载合并 CSV 两个入口；自定义起始时间文本按**本地时间**解释。
+- 方法 / 数据 / 参数：
+  - 数据：用户三行原样样例（单元测试直接引用）＋ 按同一写法合成的 3 s / 19200 行文件（`tests/conftest.py` 新增 `ts_mode="clock"`；`tools/ui_r6_check.cjs` 自动生成 `/tmp/ui_r6_user_fmt.csv`）
+  - 工具：`pytest tests/test_r6_features.py`（25 项，每项写明「撤销修复会怎样 FAIL」）、`tools/ui_r6_check.cjs`（jsdom 真实 DOM 打真实服务端，30 项）、旧 `tools/ui_dropdown_check.cjs` 复跑防回退、`curl` REST 取证
+
+### 沙盒侧实录（三件套：命令 + 输出 + 判读）✅
+
+**S1 修复前基线（证明问题真实存在）**
+```
+$ python cli.py compute --file /tmp/f1/user_fmt.csv
+✗ 执行失败：ParseError: 时间戳 '0/00/00 00:12:40.0000' 无法解析；已尝试格式 (...) 与 ISO8601
+$ curl "/api/probe?path=/tmp/f1/user_fmt.csv"
+{"ok":false,"error":"ConfigError: CSV 表头无法识别字段 [...]；表头=['0/00/00 00:12:40.0000', '0.000000', ...]"}
+```
+判读：两处失败——时间戳格式不认识；无表头文件在 `/api/probe` 被当成表头解析失败（`iter_csv_blocks` 本就能回退，probe 没有同样的回退）。
+
+**S2 修复后：解析器单元取证**
+```
+parse_timestamps(用户三行) → mode=clock_time  t=[760. 760.0001 760.0003]  (00:12:40 → 760 s)
+  notes: 时间戳格式识别为 'Y/M/D HH:MM:SS.f(无日期=0/00/00)'；时间戳只有时刻、无日期…按 1970-01-01 + 当天时刻处理，跨午夜自动展开…
+["0/00/00 23:59:59.9999","0/00/00 00:00:00.0001"] → diff=+0.0002（跨午夜不判回退）
+["2026/1/5 8:03:07.5", …] → mode=datetime（不补零写法顺带支持；与 strptime 路径结果一致）
+```
+
+**S3 修复后：CLI 端到端（3 s 合成文件，同一写法）**
+```
+$ python cli.py compute --file /tmp/f1/user_fmt.csv --quantities voltage,fundamental --format table
+✓ 完成：输出 16 次；读入样本 19200（3.00s 数据），块 15
+  · 源：时间戳格式识别为 'Y/M/D HH:MM:SS.f(无日期=0/00/00)'
+  · 源：采样率校验通过：时间戳推算 6400.008Hz ≈ 配置 6400.0Hz（偏差 0.0001%）
+$ python cli.py compute --file … --custom-time-start "2026-10-12 08:00:00" --limit 2
+数据时刻 2026-10-12 08:00:00 … · 源：自定义播放时间已启用：时间轴 = 起始时间(配置起始时间) + 样本序号/fs
+```
+判读：0.1 ms 截断下逐点差分在 0.1/0.2 ms 间跳动，`_infer_fs` 的最长段线性拟合仍给出 6400.008 Hz（偏差 1e-6 量级）。修复前该文件还会刷「1280 个单元格非数值（行0列0='0/00/00 …'）」——无表头路径把时间戳列当数值解析，已改为跳过第 0 列。
+
+**S4 源层：自定义时间三态（`CsvFileSource` 直读两块）**
+```
+custom=False start=''                     t0=760.0000 b2.t0=761.000000 dt_uniform=0.640  → 1970-01-01 00:12:40
+custom=True  start=''                     t0=760.0000 b2.t0=761.000000 dt_uniform=1.000  → 文件第 1 条数据时间
+custom=True  start='2026-10-12 08:00:00'  t0=1791792000.0000 b2.t0=1791792001.0  dt_uniform=0.999  → 配置起始时间
+```
+判读：`dt_uniform`＝相邻样本差×fs；关自定义时为 0.64（文件时标被 0.1 ms 量化），开自定义后恒为 1（跨块连续，不重置）。
+
+**S5 REST：probe / start / state / history**
+```
+GET /api/probe?path=…user_fmt.csv → ok=True has_header=False rows=19200 ts_mode=clock_time fs_est=6400.003 t_first_text='0/00/00 00:12:40.0000'
+POST /api/engine/start {"kind":"csv_file","path":…,"custom_time":true,"custom_time_start":"2026-10-12 08:00:00"} → ok=True（回显 custom_time=true：白名单已放行）
+GET /api/state → finished=True samples=19200 | source.custom_time=True 起始来源=配置起始时间 2026-10-12 08:00:00 | file_first_t=760.0
+GET /api/history/voltage?max_points=1500 → {count:4,count_total:4,hours:24.0,decimated:False,span_s:2.0} t_first=2026-10-12 08:00:00
+```
+
+**S6 History 24h 保留与性能（合成 30 h@1 pt/s、24 h@0.2 s）**
+```
+30h@1pt/s push 108000 → 保留 count=87000 dropped=21000 span=24.17h（懒修剪 ≤5% 余量；get(hours=24) 精确 86401 点）
+24h@0.2s ×2 快量：push 864k 条 3.7 s；内存 38.5 MB；count=432000 span=24.00h
+get(24h, max_points=1500) → 1000 点  40 ms（numpy 分桶前的纯 Python 版为 757 ms，24h 时 6 曲线/3 s 轮询会把 2 核吃满 → 已改）
+并发：引擎线程 push 2 万条 + Web 线程 get 200 次 → 0 异常（加了 History 锁；numpy 拷贝不保留 buffer 导出，否则 array 扩容会 BufferError）
+```
+
+**S7 保存曲线：勾选过滤（REST）**
+```
+PUT /api/config {"output":{"curve_save":{"current":false,"harmonic":false}}} → 200；GET /api/config 回显 current/harmonic=false，其余 true
+热更新后 GET /api/history/voltage count_total=4（不变）；GET /api/result 200（不变）
+POST /api/curves/save {} → ok dir=output/curves_20261012_113236 files=[voltage 4, power 4, power_factor 4, fundamental 16] skipped=[current, harmonic]
+voltage.csv 表头：t_epoch_s,time_local,quantity,window_s,Ua,Ub,Uc,Uab,Ubc,Uca,unbalance_pct,U1（UTF-8-BOM）
+GET /api/curves/export?quantity=current → 403；?quantity=voltage → 200 text/csv；合并下载只含 fundamental/power/power_factor/voltage
+全部取消 → POST /api/curves/save → 400「没有勾选任何要保存的曲线」
+```
+判读：**修复前**热更新后 `count_total=0`、`/api/result` 409——`EngineRunner.set_cfg()` 对「已结束」的离线引擎整个重建，勾一下保存框就把 24h 曲线和结果清空；改为任何已有引擎都走 `update_config()`，并让 `LiveEngine.update_config()` 搬运 `history`。另修 `time_local` 小数部分四舍五入进位（760.9998 → 「:40.000」）为截断。
+
+**S8 界面端到端（jsdom 真实 DOM + 真实服务端）**
+```
+$ JSDOM_DIR=/tmp/uitest node tools/ui_r6_check.cjs http://127.0.0.1:8000
+=== D1 自定义播放时间 ===  simulator 下勾选框禁用 ✓ / csv_file 下可用、起始框未勾选时禁用 ✓ / 勾选后放开 ✓
+  未勾选载荷 {"kind":"csv_file","path":…,"custom_time":false,"custom_time_start":"","block_samples":640} ✓ → 服务端跑完 samples_in=19200 ✓ t_last=762.9998（文件时标）✓
+  勾选+起始 → 载荷 custom_time=true ✓ → source.custom_time=true 起始来源=配置起始时间 ✓ 曲线 t_first-t0=1.000 t_last-t0=3.000 ✓ 摘要显示「自定义播放时间」✓
+  起始留空 → 起始来源=文件第 1 条数据时间 t0=760 ✓ / 起始填「昨天」→ 400 ✓ + toast 含可接受写法 ✓
+=== D3 曲线请求 ===  6 条请求均 max_points=1500、无 n= ✓ / 概览「最近 24 小时」说明 ✓ / 面板标题「最近 2.0s · 4 点（保留窗 24h）」✓ / history 元数据 ✓
+=== D2 保存曲线 ===  6 面板各 1 勾选框 ✓ 初始全选 ✓ 取消 current → PUT output.curve_save.current=false 200 ✓ 回显 ✓ render 后不翻回 ✓
+  PF 页勾选框 ✓ → power_factor=false ✓ / 导出页 6 项同步 ✓ 文案「4/6」✓ / 点保存 → POST 200 ✓ 列出 4 文件 +「三相电流：未勾选，已跳过」✓ / 导出页重勾 current → 概览同步 ✓ 服务端 true ✓
+=== 结果：PASS 30 / FAIL 0 ===
+$ node tools/ui_dropdown_check.cjs → PASS 74 / FAIL 0（上一轮 harness 复跑；唯一改动：允许 custom_time_start 为空串——空＝「用文件第 1 条」是有效语义）
+```
+
+**S9 全量回归**
+```
+$ pytest tests/ -q → 186 passed, 1 skipped（61 s）   （161 → 186，新增 tests/test_r6_features.py 25 项）
+$ python cli.py selftest → 44/44，最差相对误差 1.508e-05
+```
+
+### 本轮修复的缺陷（全部由实测发现）
+
+| 编号 | 现象 | 根因 | 修法 | 回归 |
+| --- | --- | --- | --- | --- |
+| F-11 | 用户时标 `0/00/00 00:12:40.0000` → `ParseError` | `TS_FORMATS` 全是 strptime，月/日为 0 必失败 | `_parse_slash_clock` 正则骨架：日期段任一为 0 → 当天时刻（1970-01-01 基准，mode=`clock_time`），`_unwrap_midnight` 跨日展开，小数按位数换算 | `test_user_clock_format_*`、`test_clock_format_unwraps_midnight` |
+| F-12 | 无表头文件 `/api/probe` 报「表头无法识别」 | probe 没有 `iter_csv_blocks` 的「首行不像表头→当数据」回退 | 同一规则；返回 `has_header/first_row/t_first_text` | `test_web_probe_accepts_headerless_clock_file` |
+| F-13 | 无表头文件每块刷「1280 个单元格非数值（行0列0=时间戳）」 | `parse_rows` 把第 0 列也按数值解析 | 跳过第 0 列 | `test_headerless_user_file_runs_through_csv_source` |
+| F-14 | 趋势曲线只有最后 600/400 点（`History(maxlen=600)`＋前端 `n=400`） | 定长 deque、无时间语义 | 按数据时间修剪的紧凑列存储＋`hours/max_points`＋峰谷抽稀 | `test_history_keeps_only_last_24h_by_data_time` 等 4 项 |
+| F-15 | 任何热更新（含勾选保存框）后已结束离线引擎的历史与结果清空 | `set_cfg` 对非存活线程重建 `LiveEngine`；`update_config` 重建 `MetricsCalculator` 丢 history | 已有引擎一律 `update_config`；`update_config` 搬运 history 并按新配置更新保留参数 | `test_engine_hot_update_preserves_history`、`test_web_curve_save_toggle_persists_and_keeps_history` |
+| F-16 | （自测发现）`History.get` 纯 Python 抽稀 43 万点 757 ms；无锁下引擎线程 `del` 切片与 Web 线程读取竞争 | — | numpy 分桶（40 ms）＋`threading.Lock`＋拷贝不保留 buffer 导出 | S6 并发实录 |
+
+### 用户执行命令（U6 组：浏览器手点，🔶待回报）
+
+```
+U6-1 数据源页选「离线文件」→ 出现「csv_file：自定义播放时间」勾选框与「自定义起始时间」输入框；选其它源时两者置灰
+U6-2 路径填你的真实 CSV（0/00/00 写法）→「探查数据」→ 期望 has_header=false、ts_mode=clock_time、fs_est≈6400、无红色错误
+U6-3 不勾自定义 →「启动数据源」→ 概览出数；曲线横轴显示 00:12:40 一类时刻（日期为 1970，属预期）
+U6-4 勾自定义、起始留空 → 启动 → 数据源状态摘要含「自定义播放时间：起始 文件第 1 条数据时间」
+U6-5 勾自定义、起始填 2026-10-12 08:00:00 → 启动 → 摘要含「配置起始时间」，曲线横轴从 08:00:00 起；起始填「昨天」→ 红色 toast 含可接受写法
+U6-6 概览任一曲线面板右上角取消「保存曲线」→ toast「已排除出保存项」→ F5 后仍未勾选；「导出与日志」列表同步、点「保存曲线数据到 output/」→ 列表含「…：未勾选，已跳过」，output/curves_<时间>/ 下无该曲线文件
+U6-7 让模拟器连续跑 ≥10 分钟 → 概览曲线面板标题显示「最近 10.x min · N 点」，横轴不显示毫秒；（可选）跑过夜后标题显示「最近 24.00h」且内存稳定
+U6-8（可选，有 node）npm install jsdom --prefix /tmp/uitest && JSDOM_DIR=/tmp/uitest node tools/ui_r6_check.cjs http://127.0.0.1:8000 → 期望 PASS 30 / FAIL 0
+```
+
+### 判读要点
+- J-U6a：U6-2 若 `fs_est` 明显偏离 6400（>1%），说明真实文件时标截断方式与样例不同（例如只写到 ms），把 probe 输出贴回即可，不影响电气量计算（计算只按样本序与配置 fs）；
+- J-U6b：U6-5 自定义起始时间按**你电脑的本地时区**解释；若现场要求 UTC，请回报，我们加 `tz` 字段；
+- J-U6c：U6-7 若 24 h 后内存持续增长，回报 `/api/state` 里 `history.*.count/dropped`，用于判断是修剪没生效还是别处泄漏。
+
+### 结果回收格式
+```
+T-004 回报  日期=____  浏览器=____  OS=____
+U6-1 ☐通过 ☐异常：____    U6-2 has_header=__ ts_mode=__ fs_est=__    U6-3 ☐通过
+U6-4 摘要文字=____          U6-5 ☐通过（起始=____）  非法文本提示=____
+U6-6 ☐通过（跳过的曲线=____；output 目录文件=____）
+U6-7 标题文字=____  内存（任务管理器）=____    U6-8 PASS __ / FAIL __
+```
+
+### 结果 / 结论
+- **沙盒侧（✅已复现）**：四项功能全部实现并通过三层验证——25 项 pytest（撤销修复必 FAIL）、30 项 jsdom 端到端、旧 74 项 harness 无回退；全量 **186 passed, 1 skipped**，selftest 44/44。用户给出的三行样例被单元测试原样引用并解析正确。
+- **实测发现并修复 6 个问题（F-11~F-16）**，其中 **F-15（热更新清空 24h 曲线）**若不修，功能③的勾选框每点一次就把功能②的曲线清空，两项功能互相打架；**F-16** 若不修，24 h 曲线在 2 核机器上会把 CPU 吃满。
+- **用户侧（🔶未获实录，不下结论）**：真实采集文件的时标截断方式、时区语义、真实浏览器下的勾选/曲线表现、过夜内存，待 U6 组回报。
+- **是否进入 REPORT.md（稳定结论）**：**是**——C-14「趋势历史按数据时间保留＋传输前峰谷抽稀」；C-15「无日期时标的处理规则（当天时刻→1970 基准、跨午夜展开、真实日期由自定义起始时间给）」。
+- **遗留问题**：
+  1. 自定义播放时间只对 `csv_file` 生效；`csv_tail` 实时追加按定义使用文件时标（若现场 tail 的文件也是 0/00/00 写法，曲线日期会是 1970——需要时可扩展）；
+  2. 开自定义时间后文件内缺口不再被检测（时间轴合成）；
+  3. 趋势历史随「重新启动数据源」清空（一次运行＝一个数据集的既有决策）；跨运行/跨进程的 24 h 需要落盘（SQLite/CSV 滚动文件），本轮未做；
+  4. `history_hours` / `history_max_points` 只能在配置文件改，未上界面；
+  5. 曲线 x 轴跨午夜时只显示时:分:秒不显示日期（24 h 内最多跨一次午夜，可从面板标题的跨度判断）。
+
 ---
 
 ## 🗒 变更记录
+- v0.5（2026-10-12）：追加专题 **T-004**（第 6 轮四功能：用户时标格式 `0/00/00 00:12:40.0000` / 24h 趋势曲线 / 逐曲线「保存曲线」开关 / 离线自定义播放时间）：沙盒侧 S1~S9 实录三件套（修复前基线、解析器取证、CLI/源层/REST/界面端到端、History 24h 性能与并发、全量回归 186 passed）、缺陷 **F-11~F-16**、用户侧 **U6 组**（浏览器手点 8 步）＋判读 J-U6a~c＋回收格式。索引新增 T-004 行。
 - v0.4（2026-10-10）：T-003 追加 **Web 界面下拉框专项检查**：沙盒侧实录 S14~S18（jsdom 驱动真实页面打真实服务端 `PASS 74 / FAIL 0`、帧格式联动与脏值保护、口径三下拉框 PUT 回显、空值语义 REST 实录、前端契约测试「撤销修复必 FAIL」验证）、缺陷 **F-06~F-10**（两个源下拉框无联动／载荷无条件发送空值／空数字框导致保存必 400／实时推送覆盖用户正在编辑的表单／启动按钮夹带被服务端忽略的配置段）、能力补齐（`#src-hint`+`#src-formnote`+置灰视觉、`tools/ui_dropdown_check.cjs`、`tests/test_web_ui.py` 14 项）、用户侧 **U 组**（浏览器手点 7 步）＋判读 J-U1~J-U4＋回收格式。测试 147→**161 passed, 1 skipped**；S-W2 期望值同步更新。索引行升格为「F-01~F-10」「5 条稳定结论」
 - v0.3（2026-10-10）：追加专题 **T-003**（四种数据源的配置·运行·验证）：沙盒侧 S1~S13 实录三件套、四源横向对账表（同源四路 P 极差 0.013%、U1 偏差 ≤0.70‱、THDu 偏差 ≤0.005 百分点、缺口 0）、本轮实测发现并修复的 **F-01~F-05**（目录分片切换丢一整块／坏帧格式崩 OverflowError／告警刷屏且 live 收尾不打印源告警／float32 存 epoch 秒无告警／前端 collectSourcePayload 死代码）、能力补齐（`cli.py live --frame/--struct-fmt/--struct-fields`、界面 TCP 两字段、`tools/` 三件套＋5 项防腐测试）、用户侧 **S 组（无硬件可复现）与 D 组（真实装置/协议）** 执行包＋J-* 判读＋回收格式。测试 141→**147 passed, 1 skipped**。T-001/T-002 状态不变（仍待回报）
 - v0.2（2026-10-10）：追加专题 **T-002**（电气量计算工具实现自验证 + 本地部署与真实数据验收执行包）：沙盒侧 A1~A10 实录三件套、本轮修复的两个真 bug（B1 引擎线程换代竞争导致双重摄入、B2 整周期窗少算一个周期）、用户侧 W/R/P 三组模式 B 执行包与 J-* 判读要点、结果回收格式；专题索引与 T-001 状态保持不变（仍待回报）

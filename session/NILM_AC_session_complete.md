@@ -155,3 +155,22 @@
   3. 观察项（未修）：引擎启动后服务端把 `source.path` 解析为**绝对路径**并经 `/api/config` 回显到表单（`_persist` 写盘时仍还原为相对路径），属外观问题
   4. `tools/ui_dropdown_check.cjs` 依赖 node ≥18 + jsdom（沙盒装在 `/tmp/uitest`，**不入库**）；用户环境若无 node，只能跑 `tests/test_web_ui.py` ＋ README §3.1 手工点检清单
 - **相关文件/分支**：`README.md`(v0.4，§3.1 数据源面板联动/空值语义/6 步点检)、`REPORT_TEST.md`(v0.4，**T-003 的 S14~S18 + F-06~F-10 + U 组**)、`REPORT.md`(v0.4，C-13)、`STATUS.md`(第 5 次收尾)、`app/static/{index.html,style.css,app.js}`、`tools/ui_dropdown_check.cjs`、`tests/test_web_ui.py`｜分支 `arena/82e34fb8-nilm-calc-tool`（本轮提交见下）｜基点 `main`=`27b28ea`｜live preview：8000 端口（`ELEC_TOOL_AUTOSTART=1` + 模拟器源）
+
+---
+
+## [2026-10-12] 会话纪要（第 5 条：第 6 轮四功能——用户时标格式 / 24h 曲线 / 逐曲线保存 / 自定义播放时间，修复 F-11~F-16）
+
+- **任务**（用户 5 点）：① 离线 CSV 支持 `0/00/00 00:12:40.0000,290.175751,…`（无日期、4 位小数秒、无表头）② 界面所有曲线只显示最新 24 小时（不足则全部）③ 每条曲线可分别配置是否保存，保存曲线数据时未勾选项不保存 ④ 离线播放可选「自定义时间」（起始默认文件第 1 条，后续按采样率推算；否则用文件时间）⑤ 完成后验证
+- **角色 / 模式**：工程实现工程师（延续）／混合模式——沙盒侧 pytest + jsdom + REST/CLI 实录 ✅；用户侧真实文件/浏览器点检＝T-004 **U6 组 8 步** 🔶待回报
+- **开局**：沙盒曾被回收（第 3 次），`.git` 退回基线但工作树尚存 → `git fetch` + `reset --mixed FETCH_HEAD` 接回 `a88dcaa`，零差异；venv/样例重建
+- **本轮产物**：
+  1. 解析层：`parsing.py` 新增 `_parse_slash_clock`（日期段任一为 0 → 只取当天时刻，基准 1970-01-01，小数按位数换算）、`_unwrap_midnight`（回退 >12 h 视为跨日）；`parse_rows` 跳过时间戳列的数值告警；`/api/probe` 无表头回退（F-11~F-13）
+  2. 历史层：`metrics.History` 重写＝按**数据时间**保留 `hours=24`（懒修剪 + `get(hours=)` 精确）、`array('d')` 列存储、`threading.Lock`、numpy 峰谷分桶抽稀；`/api/history?hours&max_points`；`output.history_hours/history_max_points`（兼容旧 `history_len`）；热更新搬运历史（F-14~F-16）
+  3. 保存层：`output.curve_save` 六键；`POST /api/curves/save`（写 `output/curves_<ts>/<曲线>.csv`，UTF-8-BOM，未勾选项「已跳过」）；`GET /api/curves/export`（浏览器下载合并长表，未勾选单曲线 403、全不勾 400、无数据 409）；6 个面板勾选框与导出页列表同步
+  4. 播放时间：`source.custom_time/custom_time_start`；`CsvFileSource._apply_custom_time`（时间轴＝起始＋样本序/fs，起始留空＝文件第 1 条，非法起始 400+toast）；CLI `--custom-time[-start]`；start 白名单放行；告警标注来源
+  5. 验证：`tests/test_r6_features.py` 25 项、`tools/ui_r6_check.cjs` PASS 30/0、旧 harness 复跑 74/0、全量 **186 passed, 1 skipped**、selftest 44/44；History 24h@0.2s×2 量＝43.2 万点 38.5 MB、抽稀 40 ms（纯 Python 757 ms）
+  6. 文档：`README.md` v0.5、`REPORT_TEST.md` v0.5（T-004）、`REPORT.md` v0.5（C-14/C-15 + 1 条教训）、`STATUS.md` 第 6 次收尾
+- **关键决策**：无日期时标基准 1970 而非猜「今天」（真实日期交给自定义时间）；24 h 按数据时间；保存勾选＝配置项（面板/导出页共用）；热更新一律保留历史与结果
+- **踩坑**：F-15 两功能互相打架（勾选框热更新把 24 h 曲线清空，单测各绿连起来才暴露）；F-16 性能要按目标规模实测（43 万点）、`np.frombuffer` 视图会在 `array` 扩容时 `BufferError`；`time_local` 小数 `.3f` 进位错位→改截断；`notes()` 转义 HTML
+- **未决问题**：T-004 U6 组待回报；自定义时间只对 `csv_file` 生效；历史不跨进程落盘；`history_hours/max_points` 未上界面；横轴跨午夜不显示日期；起始时间按本地时区；此前 T-001/T-002 W-R-P/T-003 S-U-D 仍未回报；四个口径问题仍未答
+- **相关文件/分支**：`elec_tool/{metrics,engine,config}.py`、`elec_tool/sources/{parsing,csv_file}.py`、`app/server.py`、`app/static/*`、`cli.py`、`tests/test_r6_features.py`、`tools/ui_r6_check.cjs`、四份台账｜分支 `arena/82e34fb8-nilm-calc-tool`｜live preview 8000 端口
