@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import json
 import math
+import threading
+from array import array
 from collections import deque
 from dataclasses import dataclass, field
 from typing import Any, Deque, Dict, List, Optional, Tuple
@@ -163,39 +165,174 @@ _EXTRACTORS: Dict[str, Any] = {
 }
 
 
-class History:
-    """各量标量历史（UI 趋势曲线用），按 quantity 分组，定长 deque。
+_NAN = float("nan")
 
-    只对本次**实际计算出**的量追加记录——各量窗长/步长独立（需求⑥），
-    若强行对齐会在曲线上插入 None 空点。
+
+class History:
+    """各量标量历史（UI 趋势曲线用），按 quantity 分组，**按数据时间保留最近 N 小时**。
+
+    - 只对本次**实际计算出**的量追加记录——各量窗长/步长独立（需求⑥），
+      若强行对齐会在曲线上插入 None 空点。
+    - 保留策略（需求「曲线＝最新 24 小时，不足则全部」）：以**最新一条记录的数据时间**为基准，
+      丢弃早于 ``hours`` 小时之前的记录；``max_points`` 是内存安全阀（6400Hz、0.2s 步长的快量
+      24h≈43.2 万点），超出按最旧丢弃。按「数据时间」而非墙钟计，离线文件回放同样成立。
+    - 存储按列（每个字段一个 ``array('d')``，缺值存 NaN）而不是每条一个 dict：
+      43 万条 dict 约占 300MB+，紧凑数组每值 8 字节（快量 8 个字段 ×50 万点 ≈ 32MB）；
+      修剪用切片一次性做，均摊 O(1)。
+    - ``get()`` 支持 ``max_points`` 抽稀：均匀分桶，每桶取**首点＋桶内最大值点＋最小值点**
+      （保峰谷），画 24h 趋势时 1500 点足以还原形状，前端不必接收几十万点。
     """
 
-    def __init__(self, maxlen: int = 600):
-        self.maxlen = int(maxlen)
-        self._h: Dict[str, Deque[Dict[str, Any]]] = {k: deque(maxlen=self.maxlen) for k in QUANTITY_KEYS}
+    def __init__(self, hours: float = 24.0, max_points: int = 200000, maxlen: Optional[int] = None):
+        # maxlen 为兼容旧调用（History(600)），等价于 max_points
+        self.hours = float(hours)
+        self.max_points = int(maxlen if maxlen is not None else max_points)
+        self._t: Dict[str, array] = {k: array("d") for k in QUANTITY_KEYS}
+        self._cols: Dict[str, Dict[str, array]] = {k: {} for k in QUANTITY_KEYS}
+        self._dropped: Dict[str, int] = {k: 0 for k in QUANTITY_KEYS}
+        # 引擎线程 push、Web 线程 get：修剪时的 del 切片与读取必须互斥
+        self._lock = threading.Lock()
 
+    # ---------- 写 ----------
     def push(self, result: "MetricsResult") -> None:
+        with self._lock:
+            self._push(result)
+
+    def _push(self, result: "MetricsResult") -> None:
         for key, q in result.quantities.items():
             ext = _EXTRACTORS.get(key)
             if ext is None:
                 continue
-            rec: Dict[str, Any] = {"t": q.t_ref, "window_s": q.window.get("length_s_requested")}
+            rec: Dict[str, Any] = {"window_s": q.window.get("length_s_requested")}
             try:
                 rec.update(ext(result, q))
             except Exception:                      # 提取失败不影响主流程
                 pass
-            self._h.setdefault(key, deque(maxlen=self.maxlen)).append(rec)
+            t = q.t_ref
+            if not isinstance(t, (int, float)) or not math.isfinite(float(t)):
+                continue
+            ts = self._t.setdefault(key, array("d"))
+            cols = self._cols.setdefault(key, {})
+            n = len(ts)
+            for f, v in rec.items():
+                col = cols.get(f)
+                if col is None:
+                    col = cols[f] = array("d", [_NAN]) * n      # 新字段：历史位置补 NaN
+                col.append(float(v) if isinstance(v, (int, float)) and math.isfinite(float(v)) else _NAN)
+            for f, col in cols.items():                  # 本条缺的字段补 NaN，保持等长
+                if len(col) < n + 1:
+                    col.append(_NAN)
+            ts.append(float(t))
+            self._trim(key)
 
-    def get(self, quantity: str, n: Optional[int] = None) -> List[Dict[str, Any]]:
-        d = self._h.get(quantity)
-        if d is None:
-            return []
-        items = list(d)
-        return items[-int(n):] if n else items
+    def _trim(self, key: str) -> None:
+        ts = self._t[key]
+        n = len(ts)
+        if n == 0:
+            return
+        cut = 0
+        if n > self.max_points:
+            cut = n - self.max_points
+        horizon = ts[-1] - self.hours * 3600.0
+        if ts[cut] < horizon:
+            # 时间按递增追加（同一数据集内 t_ref 单调），二分找到第一个 ≥ horizon 的位置；
+            # 若数据时间倒退（换源未清空）就退化为线性，结果仍正确
+            lo, hi = cut, n
+            while lo < hi:
+                mid = (lo + hi) // 2
+                if ts[mid] < horizon:
+                    lo = mid + 1
+                else:
+                    hi = mid
+            cut = lo
+        # 修剪只在积压超过 5% 或 1000 条时真正切片，避免每次 push 都 O(n)
+        if cut and (cut >= 1000 or cut * 20 >= n):
+            del ts[:cut]
+            for col in self._cols[key].values():
+                del col[:cut]
+            self._dropped[key] += cut
+
+    # ---------- 读 ----------
+    def count(self, quantity: str) -> int:
+        return len(self._t.get(quantity, ()))
+
+    def span(self, quantity: str) -> Tuple[Optional[float], Optional[float]]:
+        ts = self._t.get(quantity) or []
+        return (ts[0], ts[-1]) if ts else (None, None)
+
+    def get(self, quantity: str, n: Optional[int] = None, hours: Optional[float] = None,
+            max_points: Optional[int] = None) -> List[Dict[str, Any]]:
+        """取记录列表（每条 {t, window_s, 字段...}）。
+
+        n：只取最后 n 条（兼容旧接口）；hours：只取最新记录往前 hours 小时（默认全部已保留的）；
+        max_points：超出则抽稀（保首点/峰/谷）。43 万点抽到 1500 点约 10ms（numpy 分桶）。
+        """
+        with self._lock:
+            ts_arr = self._t.get(quantity)
+            if not ts_arr:
+                return []
+            # 复制成 numpy（单次 C 调用，持 GIL；不保留对 array 的 buffer 导出，否则引擎线程 append 会 BufferError）
+            ts = np.array(ts_arr, dtype=np.float64)
+            cols = {f: np.array(c, dtype=np.float64) for f, c in self._cols.get(quantity, {}).items()}
+        hi = ts.size
+        lo = 0
+        if hours is not None and hours > 0:
+            lo = int(np.searchsorted(ts, ts[-1] - float(hours) * 3600.0, side="left"))
+        if n:
+            lo = max(lo, hi - int(n))
+        if max_points and (hi - lo) > int(max_points) > 2:
+            idx = self._decimate(lo, hi, cols, int(max_points))
+        else:
+            idx = np.arange(lo, hi)
+        out: List[Dict[str, Any]] = []
+        names = list(cols)
+        vals = [cols[f][idx] for f in names]
+        tsel = ts[idx]
+        for j in range(idx.size):
+            rec: Dict[str, Any] = {"t": float(tsel[j])}
+            for f, v in zip(names, vals):
+                x = v[j]
+                rec[f] = None if x != x else float(x)      # NaN → None（JSON 里 NaN 不合法）
+            out.append(rec)
+        return out
+
+    @staticmethod
+    def _decimate(lo: int, hi: int, cols: Dict[str, np.ndarray], max_points: int) -> np.ndarray:
+        """均匀分桶抽稀：每桶保留首点，再按「首个数值字段」补桶内最大/最小值点；最后一点永远保留。"""
+        n = hi - lo
+        nb = max(1, max_points // 3)
+        key_field = next((f for f in cols if f != "window_s"), None)
+        edges = np.linspace(0, n, nb + 1).astype(np.int64)
+        picks: List[int] = []
+        col = cols[key_field][lo:hi] if key_field is not None else None
+        for b in range(nb):
+            a, z = int(edges[b]), int(edges[b + 1])
+            if z <= a:
+                continue
+            picks.append(a)
+            if col is not None and z - a > 2:
+                seg = col[a:z]
+                if not np.all(np.isnan(seg)):
+                    picks.append(a + int(np.nanargmax(seg)))
+                    picks.append(a + int(np.nanargmin(seg)))
+        picks.append(n - 1)
+        return np.unique(np.asarray(picks, dtype=np.int64)) + lo
+
+    def stats(self) -> Dict[str, Dict[str, Any]]:
+        with self._lock:
+            return self._stats()
+
+    def _stats(self) -> Dict[str, Dict[str, Any]]:
+        return {k: {"count": len(self._t.get(k, ())), "dropped": self._dropped.get(k, 0),
+                    "t_first": (self._t[k][0] if self._t.get(k) else None),
+                    "t_last": (self._t[k][-1] if self._t.get(k) else None)}
+                for k in QUANTITY_KEYS}
 
     def clear(self) -> None:
-        for d in self._h.values():
-            d.clear()
+        with self._lock:
+            for k in QUANTITY_KEYS:
+                self._t[k] = array("d")
+                self._cols[k] = {}
 
 
 class MetricsCalculator:
@@ -203,7 +340,7 @@ class MetricsCalculator:
 
     def __init__(self, cfg: AppConfig):
         self.cfg = cfg.validate()
-        self.history = History(cfg.output.history_len)
+        self.history = History(hours=cfg.output.history_hours, max_points=cfg.output.history_max_points)
 
     # ---------------- 对外入口 ----------------
     def compute(self, block: SampleBlock, f_used: Optional[float] = None,

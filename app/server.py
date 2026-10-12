@@ -31,7 +31,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from elec_tool import __version__
-from elec_tool.config import (AppConfig, ConfigError, QUANTITY_KEYS, SourceConfig, WindowSpec,
+from elec_tool.config import (AppConfig, ConfigError, CURVE_KEYS, QUANTITY_KEYS, SourceConfig, WindowSpec,
                               load_or_default)
 from elec_tool.engine import LiveEngine
 from elec_tool.metrics import MetricsResult
@@ -93,7 +93,9 @@ class EngineRunner:
     def set_cfg(self, cfg: AppConfig) -> None:
         cfg.validate()
         with self.lock:
-            if self.engine is not None and self.thread and self.thread.is_alive():
+            if self.engine is not None:
+                # 运行中或已结束（离线文件读完）都走热更新：保留趋势历史与最近结果。
+                # 旧写法对「已结束」的引擎整个重建 → 勾一下「保存曲线」24h 曲线和结果全部清空。
                 self.engine.update_config(cfg)
             else:
                 self.engine = LiveEngine(cfg)
@@ -233,6 +235,7 @@ class EngineRunner:
                 "latest_keys": latest_keys,
                 "latest_t_ref": self.latest.t_ref if self.latest else None,
                 "stored_results": len(self.store),
+                "history": (eng.calc.history.stats() if eng else {}),
                 "clients": len(self.clients),
                 "server_time": time.time(),
             }
@@ -349,7 +352,7 @@ async def engine_start(payload: Optional[Dict[str, Any]] = None) -> Any:
         src_over = {k: v for k, v in payload.items()
                     if k in ("kind", "path", "host", "port", "frame", "block_samples",
                              "poll_interval_s", "tail_from_end", "sim_speed", "watch_dir_newest",
-                             "struct_fmt", "struct_fields")}
+                             "struct_fmt", "struct_fields", "custom_time", "custom_time_start")}
         if src_over:
             data["source"].update(src_over)
         if payload.get("windows"):
@@ -389,14 +392,162 @@ async def get_result(full: bool = True) -> Any:
 
 
 @app.get("/api/history/{quantity}")
-async def get_history(quantity: str, n: int = 300) -> Any:
+async def get_history(quantity: str, n: Optional[int] = None, hours: Optional[float] = None,
+                      max_points: int = 1500) -> Any:
+    """趋势曲线数据。默认＝最近 output.history_hours（24h）内全部记录，超过 max_points 则抽稀（保峰谷）。
+
+    n：兼容旧调用，只取最后 n 条；hours：覆盖默认时间窗；max_points≤0 表示不抽稀。
+    返回 count＝本次返回点数、count_total＝该曲线内存中保留的总点数、span_s＝保留区间长度。
+    """
     if quantity not in QUANTITY_KEYS:
         return JSONResponse(status_code=400, content={
             "ok": False, "error": f"未知电气量 '{quantity}'，可用：{list(QUANTITY_KEYS)}"})
     with RUNNER.lock:
         eng = RUNNER.engine
-        hist = eng.calc.history.get(quantity, n) if eng else []
-    return {"quantity": quantity, "points": hist, "count": len(hist)}
+        cfg = RUNNER.cfg
+        use_hours = float(hours) if hours is not None else float(cfg.output.history_hours)
+        if eng:
+            h = eng.calc.history
+            hist = h.get(quantity, n=n, hours=use_hours, max_points=(max_points if max_points > 0 else None))
+            total = h.count(quantity)
+            t0, t1 = h.span(quantity)
+        else:
+            hist, total, t0, t1 = [], 0, None, None
+    return {"quantity": quantity, "points": hist, "count": len(hist), "count_total": total,
+            "hours": use_hours, "decimated": bool(total and len(hist) < min(total, 10**9) and max_points > 0 and total > max_points),
+            "t_first": t0, "t_last": t1, "span_s": ((t1 - t0) if (t0 is not None and t1 is not None) else 0.0)}
+
+
+# ------------------------------------------------------------------ 曲线数据保存
+
+def _display_path(p: str) -> str:
+    """仓库内路径显示为相对路径，仓库外（如自定义 export_dir）保持绝对路径。"""
+    ap = os.path.abspath(p)
+    root = os.path.abspath(ROOT)
+    return os.path.relpath(ap, root) if ap.startswith(root + os.sep) else ap
+
+
+def _curve_rows(quantity: str, hours: Optional[float]) -> List[Dict[str, Any]]:
+    with RUNNER.lock:
+        eng = RUNNER.engine
+        if not eng:
+            return []
+        return eng.calc.history.get(quantity, hours=hours)
+
+
+def _curve_fields(rows: List[Dict[str, Any]]) -> List[str]:
+    fields: List[str] = []
+    for r in rows:
+        for k in r:
+            if k not in ("t",) and k not in fields:
+                fields.append(k)
+    return fields
+
+
+def _curve_csv(quantity: str, rows: List[Dict[str, Any]]) -> str:
+    import csv as _csv
+    import io as _io
+    buf = _io.StringIO()
+    w = _csv.writer(buf)
+    fields = _curve_fields(rows)
+    w.writerow(["t_epoch_s", "time_local", "quantity"] + fields)
+    for r in rows:
+        tl = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(r["t"])) + ".%03d" % int((r["t"] % 1.0) * 1000)
+        w.writerow([repr(float(r["t"])), tl, quantity] + [("" if r.get(f) is None else r.get(f)) for f in fields])
+    return buf.getvalue()
+
+
+def _selected_curves(payload: Optional[Dict[str, Any]], cfg: AppConfig) -> Tuple[List[str], List[str]]:
+    """返回 (要保存的曲线, 因未勾选而跳过的曲线)。payload.quantities 显式给出时仍受勾选过滤。"""
+    want = payload.get("quantities") if payload else None
+    keys = [k for k in CURVE_KEYS if (not want or k in want)]
+    enabled = cfg.output.curve_save
+    return [k for k in keys if enabled.get(k, True)], [k for k in keys if not enabled.get(k, True)]
+
+
+@app.post("/api/curves/save")
+async def curves_save(payload: Optional[Dict[str, Any]] = None) -> Any:
+    """把已勾选「保存」的曲线数据写到 output/curves_<时间>/<曲线>.csv（未勾选的曲线不写）。
+
+    payload 可选：{"quantities": [...], "hours": 24}
+    """
+    payload = payload or {}
+    cfg = RUNNER.cfg
+    hours = payload.get("hours")
+    hours = float(hours) if hours is not None else float(cfg.output.history_hours)
+    chosen, skipped = _selected_curves(payload, cfg)
+    if not chosen:
+        return JSONResponse(status_code=400, content={
+            "ok": False, "error": "没有勾选任何要保存的曲线：请在曲线面板或「导出与日志」勾选后再保存",
+            "skipped": skipped})
+    out_dir = cfg.output.export_dir
+    if not os.path.isabs(out_dir):
+        out_dir = os.path.join(ROOT, out_dir)
+    stamp = time.strftime("%Y%m%d_%H%M%S")
+    target = os.path.join(out_dir, f"curves_{stamp}")
+    os.makedirs(target, exist_ok=True)
+    files: List[Dict[str, Any]] = []
+    empty: List[str] = []
+    for k in chosen:
+        rows = _curve_rows(k, hours)
+        if not rows:
+            empty.append(k)
+            continue
+        fp = os.path.join(target, f"{k}.csv")
+        with open(fp, "w", encoding="utf-8-sig", newline="") as fh:
+            fh.write(_curve_csv(k, rows))
+        files.append({"quantity": k, "path": _display_path(fp), "rows": len(rows),
+                      "t_first": rows[0]["t"], "t_last": rows[-1]["t"]})
+    if not files:
+        try:
+            os.rmdir(target)
+        except OSError:
+            pass
+        return JSONResponse(status_code=409, content={
+            "ok": False, "error": "已勾选的曲线暂无数据可保存（请先启动数据源并累计 ≥1 个窗）",
+            "skipped": skipped, "empty": empty})
+    return {"ok": True, "dir": _display_path(target), "files": files,
+            "skipped": skipped, "empty": empty, "hours": hours}
+
+
+@app.get("/api/curves/export")
+async def curves_export(quantity: Optional[str] = None, hours: Optional[float] = None) -> Response:
+    """下载曲线数据 CSV：quantity 给出＝单曲线；不给＝所有**已勾选**曲线合并（长表）。未勾选的曲线不输出。"""
+    cfg = RUNNER.cfg
+    use_hours = float(hours) if hours is not None else float(cfg.output.history_hours)
+    if quantity:
+        if quantity not in CURVE_KEYS:
+            return JSONResponse(status_code=400, content={
+                "ok": False, "error": f"未知曲线 '{quantity}'，可用：{list(CURVE_KEYS)}"})
+        if not cfg.output.curve_save.get(quantity, True):
+            return JSONResponse(status_code=403, content={
+                "ok": False, "error": f"曲线 '{quantity}' 未勾选「保存曲线数据」，已按配置跳过；需要请先勾选"})
+        rows = _curve_rows(quantity, use_hours)
+        if not rows:
+            return JSONResponse(status_code=409, content={"ok": False, "error": f"曲线 '{quantity}' 暂无数据"})
+        stamp = time.strftime("%Y%m%d_%H%M%S")
+        return Response(content=_curve_csv(quantity, rows), media_type="text/csv; charset=utf-8",
+                        headers={"Content-Disposition": f'attachment; filename="curve_{quantity}_{stamp}.csv"'})
+    chosen, _ = _selected_curves(None, cfg)
+    import csv as _csv
+    import io as _io
+    buf = _io.StringIO()
+    w = _csv.writer(buf)
+    w.writerow(["t_epoch_s", "time_local", "quantity", "field", "value"])
+    n = 0
+    for k in chosen:
+        for r in _curve_rows(k, use_hours):
+            tl = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(r["t"]))
+            for f, v in r.items():
+                if f in ("t", "window_s") or v is None:
+                    continue
+                w.writerow([repr(float(r["t"])), tl, k, f, v])
+                n += 1
+    if n == 0:
+        return JSONResponse(status_code=409, content={"ok": False, "error": "已勾选的曲线暂无数据可导出"})
+    stamp = time.strftime("%Y%m%d_%H%M%S")
+    return Response(content=buf.getvalue(), media_type="text/csv; charset=utf-8",
+                    headers={"Content-Disposition": f'attachment; filename="curves_{stamp}.csv"'})
 
 
 @app.get("/api/export")
@@ -469,19 +620,31 @@ async def probe(path: str) -> Dict[str, Any]:
             return {"ok": False, "error": f"文件不存在：{p}"}
         enc = detect_encoding(p)
         header, enc2 = read_header(p, cfg.columns.encoding, cfg.columns.delimiter)
-        idx = cfg.columns.resolve(header)
+        # 首行解析不出表头 → 视为**无表头**数据行（与 iter_csv_blocks 同一规则）：
+        # 采集器直写的 CSV（如 ``0/00/00 00:12:40.0000,290.17,...``）第一行就是数据。
+        has_header = True
+        try:
+            idx = cfg.columns.resolve(header)
+        except ConfigError:
+            has_header = False
+            idx = {k: i for i, k in enumerate(("timestamp", "ua", "ia", "ub", "ib", "uc", "ic"))}
         ts: List[str] = []
         n_rows = 0
         with open(p, "r", encoding=enc2, newline="") as fh:
             rdr = _csv.reader(fh, delimiter=cfg.columns.delimiter)
-            next(rdr, None)
+            if has_header:
+                next(rdr, None)
             for row in rdr:
                 n_rows += 1
                 if row and len(row) > idx["timestamp"] and n_rows <= 5000:
                     ts.append(row[idx["timestamp"]])
         info = parse_timestamps(ts[:3000], cfg.columns.timestamp_unit)
         return {"ok": True, "path": p, "size_mb": round(os.path.getsize(p) / 1024 / 1024, 3),
-                "encoding": enc, "header": header, "columns": idx, "rows": n_rows,
+                "encoding": enc, "header": header if has_header else None, "has_header": has_header,
+                "first_row": None if has_header else header,
+                "columns": idx, "rows": n_rows,
+                "t_first": (float(info.t[0]) if info.t.size else None),
+                "t_first_text": (ts[0] if ts else None),
                 "ts_mode": info.mode, "fs_est": info.fs_est, "fs_configured": cfg.sampling.fs,
                 "fs_deviation_pct": (abs(info.fs_est - cfg.sampling.fs) / cfg.sampling.fs * 100
                                      if info.fs_est == info.fs_est else None),

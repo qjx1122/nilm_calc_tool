@@ -30,10 +30,42 @@ SOURCE_KINDS = ("csv_file", "csv_tail", "simulator", "tcp")
 APPARENT_MODES = ("arithmetic", "vector")
 REACTIVE_MODES = ("harmonic_sum", "quadrature")
 VOLTAGE_INPUT_MODES = ("phase", "line")
+# 有「趋势曲线」的电气量（spectrum 是瞬时频谱，不是时间趋势，不在此列）
+CURVE_KEYS = ("voltage", "current", "power", "power_factor", "fundamental", "harmonic")
 
 
 class ConfigError(ValueError):
     """配置非法（给出可直接执行的修复提示）。"""
+
+
+def parse_time_text(text: str) -> float:
+    """把用户填写的起始时间解析为 epoch 秒（**本地时间**解释）。
+
+    接受：epoch 秒数字（如 1791800000 或 1791800000.5）、
+          "2026-10-12 08:00:00[.fff]"、"2026/10/12 08:00:00"、"2026-10-12T08:00:00"、"2026-10-12"。
+    非法文本抛 ConfigError（附可接受写法）。
+    """
+    from datetime import datetime
+    s = str(text).strip()
+    if not s:
+        raise ConfigError("起始时间为空")
+    try:
+        v = float(s)
+        if v < 0 or v > 1e11:
+            raise ConfigError(f"起始时间 epoch 秒超出合理范围：{s}")
+        return v
+    except ValueError:
+        pass
+    for fmt in ("%Y-%m-%d %H:%M:%S.%f", "%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S.%f", "%Y-%m-%dT%H:%M:%S",
+                "%Y/%m/%d %H:%M:%S.%f", "%Y/%m/%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y/%m/%d %H:%M",
+                "%Y-%m-%d", "%Y/%m/%d"):
+        try:
+            return datetime.strptime(s, fmt).timestamp()
+        except ValueError:
+            continue
+    raise ConfigError(
+        f"起始时间 '{s}' 无法解析；可写 epoch 秒（1791800000）或 '2026-10-12 08:00:00' / "
+        f"'2026/10/12 08:00:00' / '2026-10-12T08:00:00' / '2026-10-12'")
 
 
 @dataclass
@@ -307,10 +339,20 @@ class SourceConfig:
     sim_noise_ratio: float = 0.002
     sim_unbalance: float = 0.02
     sim_speed: float = 1.0               # 1.0＝按真实时间速率产出；>1 加速（联调用）
+    # 离线文件播放的时间轴（csv_file 专用）：
+    #   custom_time=False → 用文件里的时间戳播放（默认，保留文件真实缺口）
+    #   custom_time=True  → 时间轴 = 起始时间 + 样本序号 / fs（等间隔，不再有缺口）；
+    #       起始时间 custom_time_start 留空＝文件第 1 条数据的时间，否则填
+    #       "2026-10-12 08:00:00"（本地时间文本）或 epoch 秒数字。
+    #   典型用途：采集器时标只有当天时刻（0/00/00 00:12:40.0000）或 0.1ms 量化造成的抖动。
+    custom_time: bool = False
+    custom_time_start: str = ""
 
     def validate(self) -> None:
         if self.kind not in SOURCE_KINDS:
             raise ConfigError(f"source.kind 必须是 {SOURCE_KINDS}（当前 {self.kind}）")
+        if self.custom_time and str(self.custom_time_start).strip():
+            parse_time_text(str(self.custom_time_start))      # 非法文本在保存配置时就报错，而不是启动后
         if self.kind in ("csv_file", "csv_tail") and not self.path:
             raise ConfigError(f"source.kind={self.kind} 需要 source.path（文件或目录路径）")
         if self.kind == "tcp" and not (0 < self.port < 65536):
@@ -329,11 +371,33 @@ class SourceConfig:
         return cls(**keep)
 
 
+def default_curve_save() -> Dict[str, bool]:
+    """六条趋势曲线的「保存曲线数据」开关默认值（全部保存）。"""
+    return {k: True for k in CURVE_KEYS}
+
+
 @dataclass
 class OutputConfig:
-    history_len: int = 600          # 每个量在内存中保留的历史点数（UI 曲线用）
+    history_len: int = 600          # 兼容旧配置：已不再作为上限使用（见 history_hours / history_max_points）
+    history_hours: float = 24.0     # 趋势曲线保留最近多少小时（按数据时间计；不足则全部保留）
+    history_max_points: int = 500000  # 每条曲线内存上限（安全阀）：0.2s 步长的快量 24h≈43.2 万点，
+                                      # 默认 50 万点可完整覆盖；紧凑数组存储每值 8 字节（≈32MB/曲线）。
+                                      # 超出按时间最旧的丢弃；界面请求时再按 max_points 抽稀
     export_dir: str = "output"      # 导出目录
     spectrum_max_points: int = 1600  # 频谱推送给 UI 的最大点数（超出则等间隔抽稀）
+    # 「保存曲线数据」时各曲线是否参与：键＝曲线（电气量）名，False＝保存时跳过该项
+    curve_save: Dict[str, bool] = field(default_factory=default_curve_save)
+
+    def validate(self) -> None:
+        if self.history_hours <= 0:
+            raise ConfigError(f"output.history_hours 必须 > 0（当前 {self.history_hours}）")
+        if self.history_max_points < 10:
+            raise ConfigError(f"output.history_max_points 必须 ≥ 10（当前 {self.history_max_points}）")
+        unknown = [k for k in self.curve_save if k not in CURVE_KEYS]
+        if unknown:
+            raise ConfigError(f"output.curve_save 含未知曲线 {unknown}；可用：{list(CURVE_KEYS)}")
+        # 缺省键补齐为 True，界面与导出按完整六键工作
+        self.curve_save = {k: bool(self.curve_save.get(k, True)) for k in CURVE_KEYS}
 
 
 @dataclass
@@ -371,6 +435,7 @@ class AppConfig:
         self.harmonic.validate(self.sampling)
         self.power.validate()
         self.source.validate()
+        self.output.validate()
         for name, spec in self.windows.items():
             spec.validate(name, self.sampling.fs)
         missing = [k for k in QUANTITY_KEYS if k not in self.windows]

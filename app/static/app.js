@@ -17,11 +17,16 @@ const S = {
   // 不做这层保护时，快量 0.2s 一次的 result 推送会触发 render()→renderSource()，
   // 把用户刚选的下拉框、刚输入一半的路径**改回服务端配置**（实测可复现）。
   formDirty: false, srcDirty: false, cfgDirty: false,
+  // 趋势曲线元数据（/api/history 返回的 count_total/span_s/hours 等）与「保存曲线」勾选的本地镜像
+  histMeta: {}, curveLocal: null, curvePending: false,
 };
+const CURVE_KEYS = ['voltage', 'current', 'power', 'power_factor', 'fundamental', 'harmonic'];
+const CURVE_NAME = { voltage: '三相电压', current: '三相电流', power: 'P/Q/S', power_factor: 'PF/DPF', fundamental: '频率', harmonic: 'THD' };
+const HIST_MAX_POINTS = 1500;   // 浏览器侧每条曲线最多接收的点数（服务端按峰谷保形抽稀）
 
 /* 数据源表单：每种源的填写说明与「哪些字段该启用」的单一事实来源 */
 const SRC_HINT = {
-  csv_file: '离线文件：填 CSV 路径（相对仓库根或绝对路径）。文件读完自动结束；建议先点「探查数据」核对编码/表头/推算采样率。',
+  csv_file: '离线文件：填 CSV 路径（相对仓库根或绝对路径）。文件读完自动结束；建议先点「探查数据」核对编码/表头/推算采样率。支持无表头、时间戳只有当天时刻的采集器格式（如 0/00/00 00:12:40.0000）。「自定义播放时间」勾选后时间轴＝起始时间＋样本序号/采样率，起始时间留空＝文件第 1 条数据时间。',
   csv_tail: '实时·文件追加：路径可填单个文件，也可填目录（目录模式自动跟 mtime 最新的 CSV，采集器分片轮转时用）。「从文件末尾开始」＝只算启动之后新写入的数据，不补算历史。',
   tcp: '实时·TCP 流：本工具作客户端连接采集装置。text_csv＝每行一条 CSV（可带中文表头，自动识别）；binary＝定长帧，需填 struct 格式与字段顺序（默认 <7d＝7 个 double 小端，56 字节/帧）。连不上/帧格式不匹配都会在下方「运行状态与告警」里给出排查项。',
   simulator: '实时·内置模拟器：无需任何硬件，用于联调与算法自证（与 cli.py selftest 同一信号模型，可与解析解对账）。速率倍数 >1 加速产出。',
@@ -57,6 +62,22 @@ function ts(v) {
   const d = new Date(+v * 1000);
   const p = (n, w = 2) => String(n).padStart(w, '0');
   return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}.${p(d.getMilliseconds(), 3)}`;
+}
+
+function tsX(v, spanS) {
+  // 趋势曲线横轴：跨度超过 1 小时时不再显示毫秒（24h 曲线上毫秒毫无意义，还挤占刻度）
+  if (!isNum(+v)) return '—';
+  if (!(spanS > 3600)) return ts(v);
+  const d = new Date(+v * 1000);
+  const p = (n, w = 2) => String(n).padStart(w, '0');
+  return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+}
+function spanOf(key) { const m = S.histMeta[key]; return m && isNum(m.span_s) ? m.span_s : 0; }
+function fmtDur(sec) {
+  if (!isNum(sec) || sec <= 0) return '0s';
+  if (sec < 60) return sec.toFixed(1) + 's';
+  if (sec < 3600) return (sec / 60).toFixed(1) + 'min';
+  return (sec / 3600).toFixed(2) + 'h';
 }
 
 function toast(msg, cls = '') {
@@ -378,11 +399,75 @@ async function refreshHistory() {
   const keys = ['voltage', 'current', 'power', 'power_factor', 'fundamental', 'harmonic'];
   await Promise.all(keys.map(async k => {
     try {
-      const d = await api(`/api/history/${k}?n=400`);
+      // 不再传 n=400：服务端默认返回「最近 output.history_hours（24h）内全部点」，超过 max_points 按峰谷抽稀
+      const d = await api(`/api/history/${k}?max_points=${HIST_MAX_POINTS}`);
       S.histCache[k] = d.points || []; S.histAt[k] = Date.now();
+      S.histMeta[k] = { count: d.count, count_total: d.count_total, span_s: d.span_s, hours: d.hours,
+                        t_first: d.t_first, t_last: d.t_last, decimated: !!d.decimated };
     } catch (e) { S.histCache[k] = S.histCache[k] || []; }
   }));
   render();
+}
+
+function curveSpanText(key) {
+  const m = S.histMeta[key];
+  if (!m || !m.count_total) return '';
+  return `最近 ${fmtDur(m.span_s)} · ${m.count_total} 点` + (m.decimated ? `（显示抽稀至 ${m.count}）` : '') +
+    `（保留窗 ${m.hours}h）`;
+}
+
+/* 「保存曲线」勾选：各曲线面板右上角 + 导出页列表 共用 config.output.curve_save */
+function curveSaveMap() {
+  if (S.curvePending && S.curveLocal) return S.curveLocal;
+  const cfg = ((S.state || {}).config || {}).output || {};
+  const m = {};
+  CURVE_KEYS.forEach(k => { m[k] = cfg.curve_save ? cfg.curve_save[k] !== false : true; });
+  return m;
+}
+
+function renderCurveSave() {
+  const m = curveSaveMap();
+  $$('.curve-save').forEach(el => { if (el.dataset.curve in m) el.checked = !!m[el.dataset.curve]; });
+  $$('.curvespan').forEach(el => { el.textContent = curveSpanText(el.dataset.curve); });
+  const list = $('#curve-save-list');
+  if (list && !list.children.length) {
+    list.innerHTML = CURVE_KEYS.map(k =>
+      `<label><input type="checkbox" class="curve-save" data-curve="${k}"> ${CURVE_NAME[k]}（${k}）</label>`).join('');
+    $$('#curve-save-list .curve-save').forEach(el => { el.checked = !!m[el.dataset.curve]; });
+  }
+  const on = CURVE_KEYS.filter(k => m[k]);
+  const lnk = $('#lnk-curves-dl');
+  if (lnk) lnk.textContent = `下载已勾选曲线（${on.length}/${CURVE_KEYS.length}，合并 CSV）`;
+}
+
+async function setCurveSave(key, on) {
+  const m = { ...curveSaveMap(), [key]: !!on };
+  S.curveLocal = m; S.curvePending = true;
+  renderCurveSave();
+  try {
+    await api('/api/config', { method: 'PUT', headers: { 'Content-Type': 'application/json' },
+                               body: JSON.stringify({ output: { curve_save: { [key]: !!on } } }) });
+    if (S.state && S.state.config) {
+      S.state.config.output = S.state.config.output || {};
+      S.state.config.output.curve_save = { ...(S.state.config.output.curve_save || {}), ...m };
+    }
+    toast(`曲线「${CURVE_NAME[key]}」${on ? '已加入' : '已排除出'}保存项（已写入配置）`, 'ok');
+  } catch (e) {
+    toast('保存曲线勾选失败：' + e.message, 'err');
+  } finally { S.curvePending = false; S.curveLocal = null; renderCurveSave(); }
+}
+
+async function saveCurves() {
+  const out = $('#curves-out');
+  try {
+    const d = await api('/api/curves/save', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+    // notes() 会转义 HTML（告警文本来自服务端，必须转义），这里是纯文本列表即可
+    const lines = d.files.map(f => `✓ ${CURVE_NAME[f.quantity] || f.quantity}：${f.path}（${f.rows} 点，${ts(f.t_first)} → ${ts(f.t_last)}）`);
+    (d.skipped || []).forEach(k => lines.push(`－ ${CURVE_NAME[k] || k}：未勾选，已跳过`));
+    (d.empty || []).forEach(k => lines.push(`－ ${CURVE_NAME[k] || k}：已勾选但暂无数据`));
+    out.innerHTML = notes([`已保存到目录 ${d.dir}（最近 ${d.hours}h）`].concat(lines));
+    toast(`曲线数据已保存：${d.files.length} 个文件`, 'ok');
+  } catch (e) { out.innerHTML = notes(['✗ ' + e.message]); toast('保存曲线数据失败：' + e.message, 'err'); }
 }
 
 function hseries(key, field) {
@@ -418,18 +503,26 @@ function renderOverview() {
   drawLine($('#ov-u'), hv.map ? [{ name: 'Ua', color: COLORS.A, data: hv.map((p, k) => [p.t - tref(hv), p.Ua]) },
                                  { name: 'Ub', color: COLORS.B, data: hv.map((p, k) => [p.t - tref(hv), p.Ub]) },
                                  { name: 'Uc', color: COLORS.C, data: hv.map((p, k) => [p.t - tref(hv), p.Uc]) }] : [],
-           { ylabel: 'V', fmtX: x => ts(x + tref(hv)), empty: '暂无电压趋势（需累计 ≥2 个窗）' });
+           { ylabel: 'V', fmtX: x => tsX(x + tref(hv), spanOf('voltage')), empty: '暂无电压趋势（需累计 ≥2 个窗）' });
   drawLine($('#ov-i'), [{ name: 'Ia', color: COLORS.A, data: hi.map(p => [p.t - tref(hi), p.Ia]) },
                         { name: 'Ib', color: COLORS.B, data: hi.map(p => [p.t - tref(hi), p.Ib]) },
                         { name: 'Ic', color: COLORS.C, data: hi.map(p => [p.t - tref(hi), p.Ic]) }],
-           { ylabel: 'A', fmtX: x => ts(x + tref(hi)) });
+           { ylabel: 'A', fmtX: x => tsX(x + tref(hi), spanOf('current')) });
   drawLine($('#ov-p'), [{ name: 'P', color: COLORS.P, data: hp.map(p => [p.t - tref(hp), p.P]) },
                         { name: 'Q', color: COLORS.Q, data: hp.map(p => [p.t - tref(hp), p.Q]) },
                         { name: 'S', color: COLORS.S, data: hp.map(p => [p.t - tref(hp), p.S]) }],
-           { ylabel: 'W/var/VA', fmtX: x => ts(x + tref(hp)) });
+           { ylabel: 'W/var/VA', fmtX: x => tsX(x + tref(hp), spanOf('power')) });
   drawLine($('#ov-thd'), [{ name: 'THD_U', color: COLORS.A, data: hh.map(p => [p.t - tref(hh), p.THD_U]) },
                           { name: 'THD_I', color: COLORS.C, data: hh.map(p => [p.t - tref(hh), p.THD_I]) }],
-           { ylabel: '%', fmtX: x => ts(x + tref(hh)), zero: true });
+           { ylabel: '%', fmtX: x => tsX(x + tref(hh), spanOf('harmonic')), zero: true });
+  renderCurveSave();
+  const hn = $('#ov-histnote');
+  if (hn) {
+    const hrs = ((((S.state || {}).config || {}).output || {}).history_hours) || 24;
+    hn.innerHTML = notes([`趋势曲线显示<b>最近 ${hrs} 小时</b>的数据（按数据时间计；不足 ${hrs} 小时则显示全部）。` +
+      `每条曲线最多传输 ${HIST_MAX_POINTS} 点（超出按峰谷保形抽稀，面板标题处标注）。` +
+      `曲线面板右上角「保存曲线」＝保存曲线数据时是否包含该曲线。`]);
+  }
 
   const allNotes = [];
   Object.keys((S.result || {}).quantities || {}).forEach(k => {
@@ -551,7 +644,8 @@ function renderPF() {
   const t0 = hp.length ? hp[0].t : 0;
   drawLine($('#pf-trend'), [{ name: 'PF', color: COLORS.P, data: hp.map(x => [x.t - t0, x.PF]) },
                             { name: 'DPF', color: COLORS.B, data: hp.map(x => [x.t - t0, x.DPF]) }],
-           { ylabel: '', fmtX: x => ts(x + t0), height: 220 });
+           { ylabel: '', fmtX: x => tsX(x + t0, spanOf('power_factor')), height: 220 });
+  renderCurveSave();
   drawQuadrant($('#pf-quad'), p ? p.values.p_total : NaN, p ? p.values.q_total : NaN);
   $('#pf-quadtxt').innerHTML = p && p.values.quadrant ? notes([`${p.values.quadrant.name}：${p.values.quadrant.meaning}`]) : '';
   $('#pf-phase').innerHTML = pf ? table(['相', 'PF', '说明'], PH.map(k => [k + ' 相', num(pf.values.pf_per_phase[k], 4), '分相 P/S'])) : '';
@@ -577,7 +671,8 @@ function renderFundamental() {
   const hf = S.histCache.fundamental || [];
   const t0 = hf.length ? hf[0].t : 0;
   drawLine($('#f-trend'), [{ name: '频率 (Hz)', color: COLORS.A, data: hf.map(x => [x.t - t0, x.f]) }],
-           { ylabel: 'Hz', fmtX: x => ts(x + t0), height: 200 });
+           { ylabel: 'Hz', fmtX: x => tsX(x + t0, spanOf('fundamental')), height: 200 });
+  renderCurveSave();
   $('#f-win').innerHTML = winNotes('fundamental');
 }
 
@@ -680,6 +775,8 @@ function fillSourceForm(cfg) {
     $('#src-speed').value = cfg.source.sim_speed !== undefined ? cfg.source.sim_speed : 1;
     $('#src-tailend').checked = !!cfg.source.tail_from_end;
     $('#src-newest').checked = !!cfg.source.watch_dir_newest;
+    $('#src-customtime').checked = !!cfg.source.custom_time;
+    $('#src-customstart').value = cfg.source.custom_time_start || '';
   }
   if (cfg.transform) {
     $('#cfg-pt').value = cfg.transform.pt_ratio;
@@ -719,6 +816,8 @@ function syncSourceForm() {
     'src-fields': bin,
     'src-tailend': kind === 'csv_tail',
     'src-newest': kind === 'csv_tail',
+    'src-customtime': kind === 'csv_file',
+    'src-customstart': kind === 'csv_file' && $('#src-customtime').checked,
     'src-speed': kind === 'simulator',
     'src-block': true,
   };
@@ -750,7 +849,9 @@ function renderSource() {
       (st.error ? `　✗ ${esc(st.error)}` : ''),
     `数据源：<b>${esc(src.kind || e.source_kind || '—')}</b>` +
       (src.path ? `　文件 ${esc(src.path)}` : '') +
-      (src.endpoint ? `　${esc(src.endpoint)}` : ''),
+      (src.endpoint ? `　${esc(src.endpoint)}` : '') +
+      (src.custom_time ? `　<b>自定义播放时间</b>：起始 ${esc(src.custom_time_start_source || '')} ` +
+        (isNum(src.custom_time_start) ? new Date(src.custom_time_start * 1000).toLocaleString() : '') : ''),
     `已摄入 ${num(e.samples_in, 0)} 点（${num(e.blocks_in, 0)} 块），数据时长 ${num(e.data_duration_s, 2)}s，` +
       `速率 ${num(e.rate_samples_per_s, 1)} 点/s（配置采样率 ${num((cfg.sampling || {}).fs, 0)}）`,
     `环形缓冲 ${num(e.buffer_fill, 0)} / ${num(e.buffer_capacity, 0)} 点（各量窗长按需自动扩容），` +
@@ -771,6 +872,7 @@ function renderSource() {
 
 function renderExport() {
   const st = S.state || {};
+  renderCurveSave();
   $('#ex-state').textContent = JSON.stringify(st.engine || {}, null, 2);
   const notesArr = [];
   ((st.engine || {}).notes || []).forEach(n => notesArr.push(n));
@@ -818,6 +920,11 @@ function collectSourcePayload() {
   if (kind === 'csv_file' || kind === 'csv_tail') {
     const path = txt('src-path');
     if (path) p.path = path;                 // 留空则不送：由服务端校验并给出「需要 source.path」
+  }
+  if (kind === 'csv_file') {
+    // 自定义播放时间：布尔必送（取消勾选要能关掉）；起始时间**空串也送**——空＝「用文件第 1 条数据时间」是有效语义
+    p.custom_time = !!$('#src-customtime').checked;
+    p.custom_time_start = txt('src-customstart');
   }
   if (kind === 'csv_tail') {
     p.tail_from_end = !!$('#src-tailend').checked;
@@ -1026,6 +1133,13 @@ function bind() {
   // 数据源下拉框联动：选 kind 切换可用字段与填写说明；选 frame=binary 才放开 struct 两项
   $('#src-kind').addEventListener('change', () => { S.srcDirty = true; S.formDirty = true; syncSourceForm(); });
   $('#src-frame').addEventListener('change', () => { S.srcDirty = true; S.formDirty = true; syncSourceForm(); });
+  $('#src-customtime').addEventListener('change', () => { S.srcDirty = true; S.formDirty = true; syncSourceForm(); });
+  // 「保存曲线」勾选（面板标题处 + 导出页列表，动态生成 → 事件委托）
+  document.addEventListener('change', (ev) => {
+    const el = ev.target;
+    if (el && el.classList && el.classList.contains('curve-save')) setCurveSave(el.dataset.curve, el.checked);
+  });
+  $('#btn-save-curves').addEventListener('click', saveCurves);
   // 任何用户输入都置脏：否则 0.2s 一次的推送会把正在编辑的字段改回服务端配置
   $$('#view-source input, #view-source select').forEach((el) => {
     const mark = () => { S.formDirty = true; if (el.id.startsWith('cfg-')) S.cfgDirty = true; else S.srcDirty = true; };

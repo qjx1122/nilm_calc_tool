@@ -80,3 +80,11 @@ th{color:var(--mut);font-weight:600;background:#141b2b;position:sticky;top:0}
 /* 数据源表单：与当前源无关的字段置灰禁用，避免填了却静默不生效 */
 label.off { opacity: .45; }
 input:disabled, select:disabled { cursor: not-allowed; }
+
+/* 曲线面板标题：标题 + 「保存曲线」勾选 + 数据跨度 */
+.panel h3.curvehdr{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.panel h3.curvehdr>span:first-child{flex:1}
+.curvesave{font-weight:400;font-size:12px;color:var(--mut);display:inline-flex;align-items:center;gap:4px;cursor:pointer}
+.curvesave input{margin:0}
+.curvespan{font-weight:400;font-size:11px;color:var(--mut)}
+#curve-save-list label{display:inline-flex;align-items:center;gap:4px;padding:4px 8px;border:1px solid var(--line);border-radius:6px;cursor:pointer}

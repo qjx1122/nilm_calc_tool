@@ -277,6 +277,11 @@ def _apply_overrides(cfg: AppConfig, args: argparse.Namespace) -> AppConfig:
         cfg.power.reactive = args.reactive
     if getattr(args, "no_scale", None):
         cfg.transform.enabled = False
+    if getattr(args, "custom_time", None):
+        cfg.source.custom_time = True
+    if getattr(args, "custom_time_start", None):
+        cfg.source.custom_time = True
+        cfg.source.custom_time_start = str(args.custom_time_start)
     for item in (getattr(args, "set_window", None) or []):
         if not item or "=" not in item:
             continue
@@ -549,6 +554,10 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--every", type=int, default=1, help="table 模式下每 N 次输出打印一次")
     sp.add_argument("--limit", type=int, help="最多输出次数")
     sp.add_argument("--max-ticks", type=int, dest="max_ticks", help="最多轮询次数")
+    sp.add_argument("--custom-time", action="store_true", dest="custom_time",
+                    help="自定义播放时间：时间轴＝起始时间＋样本序号/fs（起始默认＝文件第 1 条数据时间）")
+    sp.add_argument("--custom-time-start", dest="custom_time_start",
+                    help="自定义播放的起始时间（'2026-10-12 08:00:00' 或 epoch 秒），给出即启用 --custom-time")
     sp.set_defaults(func=cmd_compute)
 
     sp = sub.add_parser("live", help="实时监视（simulator / csv_tail / tcp）")

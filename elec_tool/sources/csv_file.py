@@ -5,8 +5,10 @@ from __future__ import annotations
 import os
 from typing import Any, Dict, Iterator, Optional, Tuple
 
+import numpy as np
+
 from ..blocks import SampleBlock
-from ..config import AppConfig
+from ..config import AppConfig, parse_time_text
 from .base import DataSource
 from .parsing import ParseError, iter_csv_blocks, read_header
 
@@ -33,6 +35,34 @@ class CsvFileSource(DataSource):
         self._last_info: Dict[str, Any] = {}
         self._first_t: Optional[float] = None
         self._last_t: Optional[float] = None
+        # 自定义播放时间（需求：离线播放可不用文件时标）
+        self.custom_time = bool(cfg.source.custom_time)
+        self._custom_t0: Optional[float] = (
+            parse_time_text(cfg.source.custom_time_start)
+            if self.custom_time and str(cfg.source.custom_time_start).strip() else None)
+        self._custom_t0_source = ("配置起始时间" if self._custom_t0 is not None else "文件第 1 条数据时间")
+        self._file_first_t: Optional[float] = None     # 文件原始第 1 条时标（供界面显示）
+        self._custom_notes: list = []
+
+    def _apply_custom_time(self, block: SampleBlock) -> SampleBlock:
+        """把块时间轴改写为 起始时间 + 全局样本序号 / fs（等间隔）。
+
+        起始时间：配置给了就用配置；否则取文件第 1 条数据的时标（文件时标不可解析时
+        parsing 层已退化为 0 起算的合成轴，此时等价于相对时间）。
+        """
+        if not self.custom_time or block.n == 0:
+            return block
+        if self._file_first_t is None:
+            self._file_first_t = float(block.t[0])
+            if self._custom_t0 is None:
+                self._custom_t0 = self._file_first_t
+            self._custom_notes = [
+                f"自定义播放时间已启用：时间轴 = 起始时间({self._custom_t0_source}) + 样本序号/fs，"
+                f"文件内时标仅用于推算采样率；文件中的时间缺口在此模式下**不会**被检测"]
+        fs = float(self.cfg.sampling.fs)
+        n0 = self._n_samples                      # 本块之前已产出的样本数（read() 在之后才累加）
+        block.t = self._custom_t0 + (np.arange(block.n, dtype=np.float64) + n0) / fs
+        return block
 
     def open(self) -> None:
         if not self.path or not os.path.isfile(self.path):
@@ -55,6 +85,10 @@ class CsvFileSource(DataSource):
         except StopIteration:
             self._exhausted = True
             return None
+        block = self._apply_custom_time(block)
+        if self._custom_notes:
+            info = dict(info)
+            info["notes"] = list(info.get("notes", [])) + self._custom_notes
         self._n_blocks += 1
         self._n_samples += block.n
         self._last_info = info
@@ -82,5 +116,9 @@ class CsvFileSource(DataSource):
             "duration_s": (self._n_samples / self.cfg.sampling.fs) if self._n_samples else 0.0,
             "fs_est_from_timestamps": self._last_info.get("fs_est"),
             "ts_mode": self._last_info.get("ts_mode"),
+            "custom_time": self.custom_time,
+            "custom_time_start": self._custom_t0 if self.custom_time else None,
+            "custom_time_start_source": self._custom_t0_source if self.custom_time else None,
+            "file_first_t": self._file_first_t,
             "notes": self._last_info.get("notes", []),
         }

@@ -100,7 +100,13 @@ class LiveEngine:
         new_cfg = cfg.validate()
         keep = self.buffer.snapshot()
         self.cfg = new_cfg
+        old_hist = self.calc.history
         self.calc = MetricsCalculator(new_cfg)
+        # 趋势历史跨热更新保留：否则勾一下「保存曲线」或改一次窗长，24h 曲线就被清空。
+        # 保留参数按新配置生效（history_hours / history_max_points）。
+        old_hist.hours = float(new_cfg.output.history_hours)
+        old_hist.max_points = int(new_cfg.output.history_max_points)
+        self.calc.history = old_hist
         fs = new_cfg.sampling.fs
         cap = int(np.ceil(new_cfg.max_window_s * fs * 1.5)) + max(int(new_cfg.source.block_samples), 64)
         self.buffer = FrameBuffer(capacity=max(cap, int(fs)))

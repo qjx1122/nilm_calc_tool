@@ -10,6 +10,7 @@ from __future__ import annotations
 import csv
 import io
 import os
+import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Sequence, Tuple
@@ -32,6 +33,48 @@ TS_FORMATS = (
 
 class ParseError(ValueError):
     """解析失败（带可执行修复提示）。"""
+
+
+# 「日期/日期/日期 时:分:秒[.小数]」通用骨架：日期段三个整数、任意位数小数秒。
+# 覆盖用户 2026-10-12 给出的采集器写法 ``0/00/00 00:12:40.0000``（日期段全 0 ＝无日期，
+# 小数 4 位＝0.1ms 分辨率），也顺手覆盖 ``2026/1/5 8:03:07.5`` 这类非补零写法——
+# strptime 对这两类都解析失败。
+_RE_SLASH_CLOCK = re.compile(
+    r"^\s*(\d{1,4})[/-](\d{1,2})[/-](\d{1,4})[ T](\d{1,2}):(\d{2}):(\d{2})(?:\.(\d+))?\s*$")
+
+# 无日期（日期段全 0）时的时间基准：epoch 日 0（1970-01-01 00:00:00 UTC）。
+# 这样 t 仍是「epoch 秒」语义（界面按 时:分:秒 显示正确），而绝对日期由
+# source.custom_time_start 指定（离线播放自定义时间功能）。
+_NO_DATE_BASE = 0.0
+
+
+def _parse_slash_clock(s: str, tz_offset_h: float) -> Optional[Tuple[float, bool]]:
+    """解析 ``Y/M/D HH:MM:SS.ffff`` 骨架。返回 (epoch 秒, 是否无日期) 或 None（不匹配）。
+
+    日期段为 0/00/00（或任一段为 0）→ 判为**无日期**，只取当天时刻（秒数自 00:00:00 起）。
+    小数秒按十进制位数换算（4 位 = 0.1ms，不受 %f 的 6 位限制）。
+    """
+    m = _RE_SLASH_CLOCK.match(s)
+    if not m:
+        return None
+    a, b, c, hh, mm, ss, frac = m.groups()
+    frac_s = (float("0." + frac) if frac else 0.0)
+    tod = int(hh) * 3600.0 + int(mm) * 60.0 + int(ss) + frac_s
+    if int(hh) > 23 or int(mm) > 59 or int(ss) > 60:
+        return None
+    y, mo, d = int(a), int(b), int(c)
+    if y == 0 or mo == 0 or d == 0:
+        return _NO_DATE_BASE + tod, True
+    # 日/月/年 或 年/月/日：第一段 >31 视为年；两位年补 2000
+    if y <= 31 and d > 31:
+        y, d = d, y
+    if y < 100:
+        y += 2000
+    try:
+        base = datetime(y, mo, d, tzinfo=timezone.utc).timestamp()
+    except ValueError:
+        return None
+    return base + tod - tz_offset_h * 3600.0, False
 
 
 def detect_encoding(path: str, sample_bytes: int = 65536) -> str:
@@ -146,9 +189,17 @@ def parse_timestamps(values: Sequence[str], unit: str = "auto",
     parsed: List[float] = []
     used_fmt: Optional[str] = None
     offset = tz_offset_h * 3600.0
+    no_date = 0
     for v in vals:
         s = str(v).strip()
         got = None
+        sc = _parse_slash_clock(s, tz_offset_h)
+        if sc is not None:
+            got, nd = sc
+            no_date += int(nd)
+            used_fmt = used_fmt or ("Y/M/D HH:MM:SS.f(无日期=0/00/00)" if nd else "Y/M/D HH:MM:SS.f")
+            parsed.append(float(got))
+            continue
         for fmt in TS_FORMATS:
             try:
                 dt = datetime.strptime(s, fmt)
@@ -170,8 +221,31 @@ def parse_timestamps(values: Sequence[str], unit: str = "auto",
         parsed.append(float(got))
     t = np.asarray(parsed, dtype=np.float64)
     notes.append(f"时间戳格式识别为 '{used_fmt}'；tz_offset_h={tz_offset_h}（仅影响显示，不影响计算）")
+    mode = "datetime"
+    if no_date:
+        # 只有当天时刻：跨午夜会回绕（23:59:59.9 → 00:00:00.0），按「回退超过半天即跨日」展开，
+        # 否则 diff<0 会被判为时标回退、缺口检测把整段数据当成倒流。
+        t = _unwrap_midnight(t)
+        mode = "clock_time"
+        notes.append(
+            "时间戳只有时刻、无日期（日期段为 0/00/00）：绝对时刻按 1970-01-01 + 当天时刻处理，"
+            "跨午夜自动展开；需要真实日期请在数据源启用「自定义播放时间」并填写起始时间")
     _flag_degenerate_clock(t, notes)
-    return TimestampInfo("datetime", t, _infer_fs(t), notes)
+    return TimestampInfo(mode, t, _infer_fs(t), notes)
+
+
+def _unwrap_midnight(t: np.ndarray) -> np.ndarray:
+    """当天时刻序列跨午夜展开：相邻差 < -12h 视为跨日，其后整体 +86400。"""
+    if t.size < 2:
+        return t
+    dt = np.diff(t)
+    wraps = np.where(dt < -43200.0)[0]
+    if wraps.size == 0:
+        return t
+    out = t.copy()
+    for w in wraps:
+        out[w + 1:] += 86400.0
+    return out
 
 
 def _infer_fs(t: np.ndarray) -> float:
@@ -232,7 +306,7 @@ def parse_rows(rows: Sequence[Sequence[str]], colmap: ColumnMap, sampling: Sampl
         if len(row) < ncols:
             row = list(row) + [""] * (ncols - len(row))
         ts_raw.append(row[0] if not isinstance(row[0], (int, float)) else str(row[0]))
-        for c in range(ncols):
+        for c in range(1, ncols):          # 第 0 列是时间戳（字符串），不按数值解析，否则每行都记一次「非数值」
             cell = str(row[c]).strip()
             if cell == "" or cell.lower() in ("nan", "null", "none", "-"):
                 continue
