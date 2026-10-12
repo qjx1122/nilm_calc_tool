@@ -78,6 +78,12 @@ def write_csv(path: str, t: np.ndarray, u: np.ndarray, i: np.ndarray,
                 ts = _dt.fromtimestamp(t[k]).strftime("%Y-%m-%d %H:%M:%S.%f")   # µs 精度
             elif ts_mode == "none":
                 ts = f"{k / FS:.9f}"
+            elif ts_mode == "clock":
+                # 用户 2026-10-12 给出的采集器写法：日期段全 0、只有当天时刻、小数 4 位（0.1ms，截断）
+                tod = float(t[k]) % 86400.0
+                hh, mm = int(tod // 3600), int(tod % 3600 // 60)
+                ss = tod % 60
+                ts = f"0/00/00 {hh:02d}:{mm:02d}:{int(ss):02d}.{int((ss - int(ss)) * 10000):04d}"
             else:
                 raise ValueError(ts_mode)
             row = [ts, num(u[0, k]), num(i[0, k]), num(u[1, k]),

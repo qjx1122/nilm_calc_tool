@@ -138,7 +138,8 @@ async function main() {
       || (c.kind !== 'tcp' && ['frame', 'struct_fmt', 'struct_fields'].includes(k))
       || (c.kind !== 'csv_tail' && ['tail_from_end', 'watch_dir_newest'].includes(k))) : [];
     check(`${c.kind}：载荷只含该源相关字段`, irrelevant.length === 0, irrelevant.join(',') || JSON.stringify(body));
-    const empties = body ? Object.keys(body).filter((k) => body[k] === '' || body[k] === null || body[k] === 0) : [];
+    // custom_time_start 的空串是**有效语义**（＝用文件第 1 条数据时间），是唯一允许为空的字段
+    const empties = body ? Object.keys(body).filter((k) => k !== 'custom_time_start' && (body[k] === '' || body[k] === null || body[k] === 0)) : [];
     check(`${c.kind}：载荷无空值/0 覆盖服务端配置`, empties.length === 0, empties.join(','));
     const st = await (await fetch(BASE + '/api/state')).json();
     const runKind = ((st.source || {}).kind) || ((st.engine || {}).source_kind);
