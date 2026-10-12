@@ -10,10 +10,11 @@ from __future__ import annotations
 import csv
 import io
 import os
+import time
 import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 
@@ -393,11 +394,86 @@ def read_header(path: str, encoding: str, delimiter: str) -> Tuple[List[str], st
     return [h.strip() for h in header], enc
 
 
+def _tod_of(t: float, mode: str) -> float:
+    """时标的「当天时刻」秒数：无日期写法（clock_time）直接取模；带日期的按本地时间取时刻（与界面显示一致）。"""
+    if mode == "clock_time":
+        return float(t) % 86400.0
+    lt = time.localtime(t)
+    return lt.tm_hour * 3600.0 + lt.tm_min * 60.0 + lt.tm_sec + (float(t) % 1.0)
+
+
+def _seek_rows(reader, first_rows: List[List[str]], n_skip: int) -> Tuple[List[List[str]], int]:
+    """跳过 n_skip 条非空数据行（含 first_rows 里已经读到的）。返回 (剩余待处理的行, 实际跳过行数)。"""
+    skipped = 0
+    pending = list(first_rows)
+    while skipped < n_skip:
+        if pending:
+            pending.pop(0)
+            skipped += 1
+            continue
+        try:
+            row = next(reader)
+        except StopIteration:
+            break
+        if not row or all(not str(c).strip() for c in row):
+            continue
+        skipped += 1
+    return pending, skipped
+
+
+def _seek_time(reader, first_rows: List[List[str]], colmap: ColumnMap, idx_map: Optional[Dict[str, int]],
+               target: Tuple[str, float], tz_offset_h: float, chunk: int = 8192) -> Tuple[List[List[str]], int, Optional[float]]:
+    """按时标定位：返回 (从目标时刻起的剩余行, 跳过行数, 命中行时标)。target=("abs", epoch) | ("tod", 当天秒)。"""
+    kind, tv = target
+    ts_col = idx_map["timestamp"] if idx_map else 0      # 无表头：第 0 列为时间戳
+    skipped = 0
+    pending = list(first_rows)
+    exhausted = False
+    while True:
+        rows = pending
+        pending = []
+        while len(rows) < chunk and not exhausted:
+            try:
+                row = next(reader)
+            except StopIteration:
+                exhausted = True
+                break
+            if not row or all(not str(c).strip() for c in row):
+                continue
+            rows.append(row)
+        if not rows:
+            return [], skipped, None
+        raw = [(r[ts_col].strip() if ts_col < len(r) else "") for r in rows]
+        info = parse_timestamps(raw, colmap.timestamp_unit, tz_offset_h)
+        t = info.t
+        if kind == "abs":
+            hit = np.nonzero(t >= tv)[0]
+        else:
+            tod = (t % 86400.0) if info.mode == "clock_time" else np.array([_tod_of(float(x), info.mode) for x in t])
+            hit = np.nonzero(tod >= tv - 1e-6)[0]
+        if hit.size:
+            i = int(hit[0])
+            return rows[i:], skipped + i, float(t[i])
+        skipped += len(rows)
+        if exhausted:
+            return [], skipped, None
+
+
 def iter_csv_blocks(path: str, colmap: ColumnMap, sampling: SamplingConfig,
                     block_samples: int = 6400, encoding: str = "auto",
                     delimiter: str = ",", has_header: Optional[bool] = None,
-                    tz_offset_h: float = 0.0, max_blocks: Optional[int] = None):
-    """流式读取 CSV，按 block_samples 逐块产出 (SampleBlock, info)。"""
+                    tz_offset_h: float = 0.0, max_blocks: Optional[int] = None,
+                    skip_rows: int = 0, start_percent: Optional[float] = None,
+                    start_time: Optional[Tuple[str, float]] = None,
+                    seek_info: Optional[Dict[str, Any]] = None):
+    """流式读取 CSV，按 block_samples 逐块产出 (SampleBlock, info)。
+
+    播放起点（三选一，优先级 start_time > start_percent > skip_rows）：
+      skip_rows      跳过开头 N 条数据行（不含表头、不含空行）
+      start_percent  按字节位置跳到文件 N% 处并对齐到下一行行首（大文件 O(1) 定位，跳过行数未知）
+      start_time     ("abs", epoch 秒) / ("tod", 当天秒)：顺序扫描时标列直到 ≥ 目标的第一条
+    定位结果写入 seek_info（skipped_rows / start_byte / start_t / reached_eof）。
+    """
     if not os.path.isfile(path):
         raise ParseError(f"CSV 文件不存在：{path}")
     enc = encoding if encoding != "auto" else detect_encoding(path)
@@ -421,6 +497,33 @@ def iter_csv_blocks(path: str, colmap: ColumnMap, sampling: SamplingConfig,
         else:
             buf.append(first)
         idx_map = colmap.resolve(header) if header else None
+        # ---- 播放起点定位 ----
+        if start_time is not None:
+            buf, skipped, hit_t = _seek_time(reader, buf, colmap, idx_map, start_time, tz_offset_h)
+            if seek_info is not None:
+                seek_info.update({"mode": "time", "skipped_rows": skipped, "start_t": hit_t,
+                                  "reached_eof": hit_t is None})
+        elif start_percent is not None and start_percent > 0:
+            size = os.path.getsize(path)
+            pos = int(size * float(start_percent) / 100.0)
+            # 文本模式下 seek 只接受 tell() 的值；这里改用二进制定位后重新包装
+            fh.seek(0)
+            raw_fh = fh.buffer
+            raw_fh.seek(pos)
+            if pos > 0:
+                raw_fh.readline()                       # 丢弃半行，对齐到下一行行首
+            start_byte = raw_fh.tell()
+            import io as _io
+            fh2 = _io.TextIOWrapper(raw_fh, encoding=enc, newline="")
+            reader = csv.reader(fh2, delimiter=delimiter)
+            buf = []
+            if seek_info is not None:
+                seek_info.update({"mode": "percent", "start_byte": start_byte, "file_size": size,
+                                  "skipped_rows": None, "reached_eof": start_byte >= size})
+        elif skip_rows and skip_rows > 0:
+            buf, skipped = _seek_rows(reader, buf, int(skip_rows))
+            if seek_info is not None:
+                seek_info.update({"mode": "row", "skipped_rows": skipped, "reached_eof": skipped < skip_rows})
         seq = 0
         produced = 0
         for row in reader:

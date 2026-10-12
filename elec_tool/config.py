@@ -347,10 +347,23 @@ class SourceConfig:
     #   典型用途：采集器时标只有当天时刻（0/00/00 00:12:40.0000）或 0.1ms 量化造成的抖动。
     custom_time: bool = False
     custom_time_start: str = ""
+    # 离线文件播放起点（csv_file 专用）：从文件的指定位置开始播放，之前的数据直接跳过（不参与计算）。
+    #   play_start_mode: begin   从头（默认，play_start_value 忽略）
+    #                    row     从第 N 条数据行开始（1 起算，不含表头）：value="120001"
+    #                    seconds 跳过文件开头 N 秒的数据（按配置 fs 换算成行数）：value="30"
+    #                    percent 从文件的 N% 处开始（按字节位置，再对齐到行首）：value="50"
+    #                    time    从文件时标 ≥ 指定时刻的第一条数据开始：value="2026-10-12 08:00:00"
+    #                            或只填时刻 "08:00:00"（与文件时标的当天时刻比较，适合 0/00/00 写法）
+    play_start_mode: str = "begin"
+    play_start_value: str = ""
 
     def validate(self) -> None:
         if self.kind not in SOURCE_KINDS:
             raise ConfigError(f"source.kind 必须是 {SOURCE_KINDS}（当前 {self.kind}）")
+        if self.play_start_mode not in PLAY_START_MODES:
+            raise ConfigError(f"source.play_start_mode 必须是 {PLAY_START_MODES}（当前 {self.play_start_mode}）")
+        if self.play_start_mode != "begin":
+            parse_play_start(self.play_start_mode, self.play_start_value)   # 非法在保存配置时就报
         if self.custom_time and str(self.custom_time_start).strip():
             parse_time_text(str(self.custom_time_start))      # 非法文本在保存配置时就报错，而不是启动后
         if self.kind in ("csv_file", "csv_tail") and not self.path:
@@ -371,6 +384,53 @@ class SourceConfig:
         return cls(**keep)
 
 
+PLAY_START_MODES = ("begin", "row", "seconds", "percent", "time")
+
+
+def parse_play_start(mode: str, value: Any) -> Any:
+    """校验并解析播放起点取值：row→int(≥1)，seconds→float(≥0)，percent→float(0~100)，
+    time→("abs", epoch 秒) 或 ("tod", 当天秒数)；begin→None。非法抛 ConfigError。"""
+    text = str(value if value is not None else "").strip()
+    if mode == "begin":
+        return None
+    if not text:
+        raise ConfigError(f"source.play_start_mode={mode} 需要填写 source.play_start_value")
+    if mode == "row":
+        try:
+            n = int(float(text))
+        except ValueError:
+            raise ConfigError(f"播放起点「第 N 行」必须是整数（当前 {text!r}）") from None
+        if n < 1:
+            raise ConfigError(f"播放起点「第 N 行」必须 ≥ 1（当前 {n}）")
+        return n
+    if mode == "seconds":
+        try:
+            v = float(text)
+        except ValueError:
+            raise ConfigError(f"播放起点「跳过 N 秒」必须是数字（当前 {text!r}）") from None
+        if v < 0:
+            raise ConfigError(f"播放起点「跳过 N 秒」不能为负（当前 {v}）")
+        return v
+    if mode == "percent":
+        try:
+            v = float(text.rstrip("%"))
+        except ValueError:
+            raise ConfigError(f"播放起点「百分比」必须是数字（当前 {text!r}）") from None
+        if not (0 <= v <= 100):
+            raise ConfigError(f"播放起点「百分比」须在 0~100（当前 {v}）")
+        return v
+    if mode == "time":
+        import re as _re
+        m = _re.fullmatch(r"(\d{1,2}):(\d{2})(?::(\d{2})(?:\.(\d+))?)?", text)
+        if m:
+            hh, mm, ss, frac = m.groups()
+            if int(hh) > 23 or int(mm) > 59 or int(ss or 0) > 60:
+                raise ConfigError(f"播放起点时刻非法：{text!r}")
+            return ("tod", int(hh) * 3600 + int(mm) * 60 + int(ss or 0) + (float("0." + frac) if frac else 0.0))
+        return ("abs", parse_time_text(text))
+    raise ConfigError(f"未知播放起点模式 {mode!r}")
+
+
 def default_curve_save() -> Dict[str, bool]:
     """六条趋势曲线的「保存曲线数据」开关默认值（全部保存）。"""
     return {k: True for k in CURVE_KEYS}
@@ -387,8 +447,13 @@ class OutputConfig:
     spectrum_max_points: int = 1600  # 频谱推送给 UI 的最大点数（超出则等间隔抽稀）
     # 「保存曲线数据」时各曲线是否参与：键＝曲线（电气量）名，False＝保存时跳过该项
     curve_save: Dict[str, bool] = field(default_factory=default_curve_save)
+    # 实时落盘：每算出一个曲线点就追加到 realtime_dir/<曲线>_<数据日期>.csv（受 curve_save 勾选过滤）
+    realtime_save: bool = True
+    realtime_dir: str = "output/realtime"
 
     def validate(self) -> None:
+        if not str(self.realtime_dir).strip():
+            raise ConfigError("output.realtime_dir 不能为空")
         if self.history_hours <= 0:
             raise ConfigError(f"output.history_hours 必须 > 0（当前 {self.history_hours}）")
         if self.history_max_points < 10:

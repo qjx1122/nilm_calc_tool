@@ -19,6 +19,8 @@ const S = {
   formDirty: false, srcDirty: false, cfgDirty: false,
   // 趋势曲线元数据（/api/history 返回的 count_total/span_s/hours 等）与「保存曲线」勾选的本地镜像
   histMeta: {}, curveLocal: null, curvePending: false,
+  // 实时落盘面板（/api/realtime 快照 + 表单脏标记）
+  realtime: null, rtDirty: false,
 };
 const CURVE_KEYS = ['voltage', 'current', 'power', 'power_factor', 'fundamental', 'harmonic'];
 const CURVE_NAME = { voltage: '三相电压', current: '三相电流', power: 'P/Q/S', power_factor: 'PF/DPF', fundamental: '频率', harmonic: 'THD' };
@@ -30,6 +32,14 @@ const SRC_HINT = {
   csv_tail: '实时·文件追加：路径可填单个文件，也可填目录（目录模式自动跟 mtime 最新的 CSV，采集器分片轮转时用）。「从文件末尾开始」＝只算启动之后新写入的数据，不补算历史。',
   tcp: '实时·TCP 流：本工具作客户端连接采集装置。text_csv＝每行一条 CSV（可带中文表头，自动识别）；binary＝定长帧，需填 struct 格式与字段顺序（默认 <7d＝7 个 double 小端，56 字节/帧）。连不上/帧格式不匹配都会在下方「运行状态与告警」里给出排查项。',
   simulator: '实时·内置模拟器：无需任何硬件，用于联调与算法自证（与 cli.py selftest 同一信号模型，可与解析解对账）。速率倍数 >1 加速产出。',
+};
+
+const PLAY_PLACEHOLDER = {
+  begin: '（从文件开头播放，无需填写）',
+  row: '例：120001（第几条数据行，1 起算，不含表头）',
+  seconds: '例：30（跳过开头 30 s 的数据，按采样率换算成行数）',
+  percent: '例：50（从文件 50% 处开始，按字节定位到行首）',
+  time: '例：2026-10-12 08:00:00 或 08:00:00（只填时刻＝与文件时标的当天时刻比较）',
 };
 
 /* ------------------------------------------------------------------ 工具 */
@@ -183,10 +193,104 @@ function niceTicks(min, max, n = 5) {
   return out;
 }
 
+/* ---- 曲线悬停取值：鼠标移到曲线上显示该位置各条曲线的数值 ----
+ * drawLine 每次重绘后把坐标映射与数据挂到 canvas 上（cv.__chart），并只绑定一次 mousemove/mouseleave；
+ * 悬停位置存在 cv.__hover，重绘（实时推送 0.2s 一次）时在末尾重新叠加十字线与提示框，所以悬停不会被刷新抹掉。
+ */
+function nearestIdx(data, x) {
+  // data 按 x 递增（趋势按时间、波形按秒、频谱按 Hz）→ 二分找最近点；非递增时退化为线性
+  let lo = 0, hi = data.length - 1;
+  if (hi < 0) return -1;
+  if (data[0][0] > data[hi][0]) {
+    let best = 0, bd = Infinity;
+    data.forEach((p, i) => { const d = Math.abs(p[0] - x); if (d < bd) { bd = d; best = i; } });
+    return best;
+  }
+  while (hi - lo > 1) { const m = (lo + hi) >> 1; if (data[m][0] < x) lo = m; else hi = m; }
+  return (Math.abs(data[lo][0] - x) <= Math.abs(data[hi][0] - x)) ? lo : hi;
+}
+
+function fmtVal(v) {
+  if (!isNum(v)) return '—';
+  const a = Math.abs(v);
+  if (a >= 1e6) return (v / 1e6).toFixed(3) + 'M';
+  if (a >= 1e4) return (v / 1e3).toFixed(2) + 'k';
+  if (a >= 100) return v.toFixed(2);
+  if (a >= 1) return v.toFixed(3);
+  return v.toPrecision(4);
+}
+
+function hoverInfo(cv, mx) {
+  // 纯函数：给定鼠标 x（CSS 像素）返回 {x, xText, items:[{name,color,y,px,py}]}；测试可直接调用
+  const c = cv.__chart;
+  if (!c || !c.pts.length) return null;
+  if (mx < c.pad.l || mx > c.w - c.pad.r) return null;
+  const xv = c.xmin + (mx - c.pad.l) / Math.max(1e-9, (c.w - c.pad.l - c.pad.r)) * (c.xmax - c.xmin);
+  const items = [];
+  let xAt = null;
+  c.pts.forEach(s => {
+    const i = nearestIdx(s.data, xv);
+    if (i < 0) return;
+    const [x, y] = s.data[i];
+    if (xAt === null) xAt = x;
+    items.push({ name: s.name, color: s.color || '#4ea1ff', x, y, px: c.X(x), py: isNum(y) ? c.Y(y) : null, idx: i });
+  });
+  if (!items.length) return null;
+  const fx = c.opt.fmtTip || c.opt.fmtX;
+  return { x: xAt, xText: fx ? fx(xAt) : (+xAt.toFixed(3)).toString(), items, mx };
+}
+
+function drawHover(cv) {
+  const c = cv.__chart, hv = cv.__hover;
+  if (!c || !hv) return;
+  const info = hoverInfo(cv, hv.mx);
+  if (!info) return;
+  const { ctx, w, h, pad } = c;
+  const px = c.X(info.x);
+  ctx.save();
+  ctx.setLineDash([3, 3]); ctx.strokeStyle = '#8fa3cc'; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(px + .5, pad.t); ctx.lineTo(px + .5, h - pad.b); ctx.stroke();
+  ctx.setLineDash([]);
+  info.items.forEach(it => {
+    if (it.py === null) return;
+    ctx.fillStyle = it.color; ctx.beginPath(); ctx.arc(it.px, it.py, 3.2, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = '#0b1020'; ctx.stroke();
+  });
+  const lines = [info.xText].concat(info.items.map(it => `${it.name}: ${fmtVal(it.y)}${c.opt.unit ? ' ' + c.opt.unit : ''}`));
+  ctx.font = '11px sans-serif';
+  const bw = Math.max(...lines.map(l => ctx.measureText(l).width)) + 16, bh = lines.length * 15 + 10;
+  let bx = px + 12, by = Math.max(pad.t, Math.min(hv.my - bh / 2, h - pad.b - bh));
+  if (bx + bw > w - pad.r) bx = px - 12 - bw;
+  ctx.fillStyle = 'rgba(12, 17, 32, 0.92)'; ctx.strokeStyle = '#3a4a70';
+  ctx.beginPath(); ctx.rect(bx, by, bw, bh); ctx.fill(); ctx.stroke();
+  ctx.textAlign = 'left'; ctx.textBaseline = 'top';
+  lines.forEach((l, i) => {
+    ctx.fillStyle = i === 0 ? '#c9d6f5' : (info.items[i - 1].color || '#c9d6f5');
+    ctx.fillText(l, bx + 8, by + 5 + i * 15);
+  });
+  ctx.restore();
+  cv.__hoverInfo = info;         // 供测试/其它面板读取
+}
+
+function bindHover(cv) {
+  if (cv.__hoverBound) return;
+  cv.__hoverBound = true;
+  cv.addEventListener('mousemove', (e) => {
+    const r = cv.getBoundingClientRect();
+    cv.__hover = { mx: e.clientX - r.left, my: e.clientY - r.top };
+    if (cv.__redraw) cv.__redraw();
+  });
+  cv.addEventListener('mouseleave', () => { cv.__hover = null; cv.__hoverInfo = null; if (cv.__redraw) cv.__redraw(); });
+  cv.style.cursor = 'crosshair';
+}
+
 function drawLine(cv, series, opt = {}) {
   const { ctx, w, h } = prep(cv, opt.height);
   const pad = { l: 62, r: 12, t: 12, b: 26 };
   const pts = series.filter(s => s && s.data && s.data.length);
+  cv.__chart = null;
+  cv.__redraw = () => drawLine(cv, series, opt);
+  bindHover(cv);
   ctx.strokeStyle = '#1e2740'; ctx.lineWidth = 1;
   ctx.strokeRect(pad.l + .5, pad.t + .5, w - pad.l - pad.r, h - pad.t - pad.b);
   if (!pts.length) {
@@ -250,6 +354,8 @@ function drawLine(cv, series, opt = {}) {
     ctx.save(); ctx.translate(12, h / 2); ctx.rotate(-Math.PI / 2);
     ctx.fillStyle = '#7b8ab0'; ctx.textAlign = 'center'; ctx.fillText(opt.ylabel, 0, 0); ctx.restore();
   }
+  cv.__chart = { ctx, w, h, pad, pts, xmin, xmax, ymin, ymax, X, Y, opt };
+  drawHover(cv);
 }
 
 function drawBars(cv, labels, datasets, opt = {}) {
@@ -503,18 +609,18 @@ function renderOverview() {
   drawLine($('#ov-u'), hv.map ? [{ name: 'Ua', color: COLORS.A, data: hv.map((p, k) => [p.t - tref(hv), p.Ua]) },
                                  { name: 'Ub', color: COLORS.B, data: hv.map((p, k) => [p.t - tref(hv), p.Ub]) },
                                  { name: 'Uc', color: COLORS.C, data: hv.map((p, k) => [p.t - tref(hv), p.Uc]) }] : [],
-           { ylabel: 'V', fmtX: x => tsX(x + tref(hv), spanOf('voltage')), empty: '暂无电压趋势（需累计 ≥2 个窗）' });
+           { ylabel: 'V', fmtX: x => tsX(x + tref(hv), spanOf('voltage')), fmtTip: x => ts(x + tref(hv)), empty: '暂无电压趋势（需累计 ≥2 个窗）' });
   drawLine($('#ov-i'), [{ name: 'Ia', color: COLORS.A, data: hi.map(p => [p.t - tref(hi), p.Ia]) },
                         { name: 'Ib', color: COLORS.B, data: hi.map(p => [p.t - tref(hi), p.Ib]) },
                         { name: 'Ic', color: COLORS.C, data: hi.map(p => [p.t - tref(hi), p.Ic]) }],
-           { ylabel: 'A', fmtX: x => tsX(x + tref(hi), spanOf('current')) });
+           { ylabel: 'A', fmtX: x => tsX(x + tref(hi), spanOf('current')), fmtTip: x => ts(x + tref(hi)) });
   drawLine($('#ov-p'), [{ name: 'P', color: COLORS.P, data: hp.map(p => [p.t - tref(hp), p.P]) },
                         { name: 'Q', color: COLORS.Q, data: hp.map(p => [p.t - tref(hp), p.Q]) },
                         { name: 'S', color: COLORS.S, data: hp.map(p => [p.t - tref(hp), p.S]) }],
-           { ylabel: 'W/var/VA', fmtX: x => tsX(x + tref(hp), spanOf('power')) });
+           { ylabel: 'W/var/VA', fmtX: x => tsX(x + tref(hp), spanOf('power')), fmtTip: x => ts(x + tref(hp)) });
   drawLine($('#ov-thd'), [{ name: 'THD_U', color: COLORS.A, data: hh.map(p => [p.t - tref(hh), p.THD_U]) },
                           { name: 'THD_I', color: COLORS.C, data: hh.map(p => [p.t - tref(hh), p.THD_I]) }],
-           { ylabel: '%', fmtX: x => tsX(x + tref(hh), spanOf('harmonic')), zero: true });
+           { ylabel: '%', fmtX: x => tsX(x + tref(hh), spanOf('harmonic')), fmtTip: x => ts(x + tref(hh)), zero: true });
   renderCurveSave();
   const hn = $('#ov-histnote');
   if (hn) {
@@ -573,7 +679,7 @@ function renderVoltage() {
     cards.push(card('零序含量', num(seq.zero_seq_pct, 3), '%', `U0=${si(seq.U0, 'V')}`));
   }
   $('#v-cards').innerHTML = cards.join('') || card('状态', '尚无结果', '', '请先启动数据源');
-  drawLine($('#v-wave'), waveData(v), { ylabel: 'V', zero: true, fmtX: x => x.toFixed(3) + 's', height: 240 });
+  drawLine($('#v-wave'), waveData(v), { ylabel: 'V', unit: 'V', zero: true, fmtX: x => x.toFixed(3) + 's', height: 240 });
   $('#v-percycle').innerHTML = v ? perCycleTable(v.values.per_cycle, 'V') : '';
   $('#v-seq').innerHTML = v ? seqTable(v.values.sequence, 'V') + table(['相', '基波有效值'], PH.map(k => [k + ' 相', si(v.values.fundamental_rms[k], 'V')])) : '';
   $('#v-win').innerHTML = winNotes('voltage');
@@ -589,7 +695,7 @@ function renderCurrent() {
     cards.push(card('基波不平衡度', num(i.values.unbalance_pct, 3), '%', '负序/正序'));
   }
   $('#i-cards').innerHTML = cards.join('') || card('状态', '尚无结果', '', '请先启动数据源');
-  drawLine($('#i-wave'), waveData(i), { ylabel: 'A', zero: true, fmtX: x => x.toFixed(3) + 's', height: 240 });
+  drawLine($('#i-wave'), waveData(i), { ylabel: 'A', unit: 'A', zero: true, fmtX: x => x.toFixed(3) + 's', height: 240 });
   $('#i-percycle').innerHTML = i ? perCycleTable(i.values.per_cycle, 'A') : '';
   $('#i-seq').innerHTML = i ? seqTable(i.values.sequence, 'A') + table(['相', '基波有效值', '波峰系数'],
     PH.map(k => [k + ' 相', si(i.values.fundamental_rms[k], 'A'), num(i.values.crest_factor[k], 3)])) : '';
@@ -612,7 +718,7 @@ function renderPower() {
   }
   $('#p-cards').innerHTML = cards.join('') || card('状态', '尚无结果', '', '请先启动数据源');
   const ser = (p && p.series && p.series.p_total) ? [{ name: 'p(t) 总瞬时功率', color: COLORS.P, data: p.series.p_total.map((v2, k) => [k * (p.series.stride || 1) / ((S.state.config.sampling || {}).fs || 6400), v2]) }] : [];
-  drawLine($('#p-wave'), ser, { ylabel: 'W', zero: true, fmtX: x => x.toFixed(3) + 's', height: 220 });
+  drawLine($('#p-wave'), ser, { ylabel: 'W', unit: 'W', zero: true, fmtX: x => x.toFixed(3) + 's', height: 220 });
   $('#p-phase').innerHTML = p ? table(['相', 'P (W)', 'Q (var)', 'S (VA)', 'PF', 'U (V)', 'I (A)'],
     PH.map(k => [k + ' 相', si(p.values.p_per_phase[k], 'W'), si(p.values.q_per_phase[k], 'var'),
                  si(p.values.s_per_phase[k], 'VA'), num(p.values.pf_per_phase[k], 4),
@@ -644,7 +750,7 @@ function renderPF() {
   const t0 = hp.length ? hp[0].t : 0;
   drawLine($('#pf-trend'), [{ name: 'PF', color: COLORS.P, data: hp.map(x => [x.t - t0, x.PF]) },
                             { name: 'DPF', color: COLORS.B, data: hp.map(x => [x.t - t0, x.DPF]) }],
-           { ylabel: '', fmtX: x => tsX(x + t0, spanOf('power_factor')), height: 220 });
+           { ylabel: '', fmtX: x => tsX(x + t0, spanOf('power_factor')), fmtTip: x => ts(x + t0), height: 220 });
   renderCurveSave();
   drawQuadrant($('#pf-quad'), p ? p.values.p_total : NaN, p ? p.values.q_total : NaN);
   $('#pf-quadtxt').innerHTML = p && p.values.quadrant ? notes([`${p.values.quadrant.name}：${p.values.quadrant.meaning}`]) : '';
@@ -671,7 +777,7 @@ function renderFundamental() {
   const hf = S.histCache.fundamental || [];
   const t0 = hf.length ? hf[0].t : 0;
   drawLine($('#f-trend'), [{ name: '频率 (Hz)', color: COLORS.A, data: hf.map(x => [x.t - t0, x.f]) }],
-           { ylabel: 'Hz', fmtX: x => tsX(x + t0, spanOf('fundamental')), height: 200 });
+           { ylabel: 'Hz', fmtX: x => tsX(x + t0, spanOf('fundamental')), fmtTip: x => ts(x + t0), height: 200 });
   renderCurveSave();
   $('#f-win').innerHTML = winNotes('fundamental');
 }
@@ -721,7 +827,7 @@ function renderSpectrum() {
   let idx = c.freqs.map((f, k) => k).filter(k => !lim || c.freqs[k] <= lim);
   const data = idx.map(k => [c.freqs[k], scale === 'db' ? c.amp_db[k] : c.amp_rms[k]]);
   drawLine($('#sp-chart'), [{ name: `${ch} 幅值谱`, color: COLORS.A, data }],
-           { ylabel: scale === 'db' ? 'dB' : (ch[0] === 'U' ? 'V' : 'A'), fmtX: x => x.toFixed(0) + 'Hz', height: 300, legend: true });
+           { ylabel: scale === 'db' ? 'dB' : (ch[0] === 'U' ? 'V' : 'A'), fmtX: x => x.toFixed(0) + 'Hz', fmtTip: x => x.toFixed(2) + ' Hz', height: 300, legend: true });
   const pk = (sp.values.peaks || {})[ch] || {};
   $('#sp-info').innerHTML = table(['项目', '数值'], [
     ['主峰频率', num(pk.freq_hz, 3) + ' Hz'],
@@ -777,7 +883,10 @@ function fillSourceForm(cfg) {
     $('#src-newest').checked = !!cfg.source.watch_dir_newest;
     $('#src-customtime').checked = !!cfg.source.custom_time;
     $('#src-customstart').value = cfg.source.custom_time_start || '';
+    $('#src-playmode').value = cfg.source.play_start_mode || 'begin';
+    $('#src-playvalue').value = cfg.source.play_start_value || '';
   }
+
   if (cfg.transform) {
     $('#cfg-pt').value = cfg.transform.pt_ratio;
     $('#cfg-ct').value = cfg.transform.ct_ratio;
@@ -818,6 +927,8 @@ function syncSourceForm() {
     'src-newest': kind === 'csv_tail',
     'src-customtime': kind === 'csv_file',
     'src-customstart': kind === 'csv_file' && $('#src-customtime').checked,
+    'src-playmode': kind === 'csv_file',
+    'src-playvalue': kind === 'csv_file' && $('#src-playmode').value !== 'begin',
     'src-speed': kind === 'simulator',
     'src-block': true,
   };
@@ -830,6 +941,8 @@ function syncSourceForm() {
   });
   const hint = $('#src-hint');
   if (hint) hint.textContent = SRC_HINT[kind] || '';
+  const pv = $('#src-playvalue');
+  if (pv) pv.placeholder = PLAY_PLACEHOLDER[$('#src-playmode').value] || '';
 }
 
 function renderSource() {
@@ -851,7 +964,12 @@ function renderSource() {
       (src.path ? `　文件 ${esc(src.path)}` : '') +
       (src.endpoint ? `　${esc(src.endpoint)}` : '') +
       (src.custom_time ? `　<b>自定义播放时间</b>：起始 ${esc(src.custom_time_start_source || '')} ` +
-        (isNum(src.custom_time_start) ? new Date(src.custom_time_start * 1000).toLocaleString() : '') : ''),
+        (isNum(src.custom_time_start) ? new Date(src.custom_time_start * 1000).toLocaleString() : '') : '') +
+      (src.play_start_mode && src.play_start_mode !== 'begin'
+        ? `　<b>播放起点</b>：${esc(src.play_start_mode)}=${esc(src.play_start_value || '')}` +
+          (src.play_seek && isNum(src.play_seek.skipped_rows) ? `（跳过 ${src.play_seek.skipped_rows} 行）` : '') +
+          (src.play_seek && isNum(src.play_seek.start_byte) ? `（字节 ${src.play_seek.start_byte}/${src.play_seek.file_size}）` : '')
+        : ''),
     `已摄入 ${num(e.samples_in, 0)} 点（${num(e.blocks_in, 0)} 块），数据时长 ${num(e.data_duration_s, 2)}s，` +
       `速率 ${num(e.rate_samples_per_s, 1)} 点/s（配置采样率 ${num((cfg.sampling || {}).fs, 0)}）`,
     `环形缓冲 ${num(e.buffer_fill, 0)} / ${num(e.buffer_capacity, 0)} 点（各量窗长按需自动扩容），` +
@@ -870,9 +988,44 @@ function renderSource() {
   $('#src-state').textContent = JSON.stringify({ engine: st.engine, source: st.source, error: st.error }, null, 2);
 }
 
+/* 实时落盘面板：开关/目录 走 PUT /api/config（热更新即时生效），状态来自 GET /api/realtime */
+async function refreshRealtime() {
+  const out = $('#rt-out');
+  if (!out) return;
+  try {
+    const d = await api('/api/realtime');
+    S.realtime = d;
+    const total = Object.values(d.rows_written || {}).reduce((a, b) => a + (b || 0), 0);
+    const lines = [`状态：${d.enabled ? '已启用' : '未启用'}　目录：${d.dir_display || d.dir}　本次会话已写 ${total} 行`];
+    (d.files || []).forEach(f => lines.push(`✓ ${CURVE_NAME[f.quantity] || f.quantity}：${f.path}（本次 ${f.rows_this_session} 行）`));
+    CURVE_KEYS.filter(k => d.curve_save && d.curve_save[k] === false).forEach(k => lines.push(`－ ${CURVE_NAME[k]}：未勾选「保存曲线」，不落盘`));
+    (d.dir_files || []).forEach(f => lines.push(`· 目录现有 ${f.name}（${(f.size_bytes / 1024).toFixed(1)} KB，${new Date(f.mtime * 1000).toLocaleString()}）`));
+    (d.errors || []).forEach(e => lines.push('✗ ' + e));
+    out.innerHTML = notes(lines);
+  } catch (e) { out.innerHTML = notes(['✗ ' + e.message]); }
+}
+
+async function saveRealtime() {
+  const on = !!$('#rt-enable').checked, dir = ($('#rt-dir').value || '').trim();
+  const body = { output: { realtime_save: on } };
+  if (dir) body.output.realtime_dir = dir;
+  try {
+    await api('/api/config', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    S.rtDirty = false;
+    toast(`实时落盘已${on ? '启用' : '关闭'}（已写入配置）`, 'ok');
+    refreshRealtime();
+  } catch (e) { toast('实时落盘设置失败：' + e.message, 'err'); }
+}
+
 function renderExport() {
   const st = S.state || {};
   renderCurveSave();
+  const outCfg = (st.config || {}).output;
+  if (outCfg && !S.rtDirty) {              // 开关/目录回填服务端配置；用户正在编辑（rtDirty）时不覆盖
+    if ($('#rt-enable')) $('#rt-enable').checked = outCfg.realtime_save !== false;
+    if ($('#rt-dir')) $('#rt-dir').value = outCfg.realtime_dir || 'output/realtime';
+  }
+  if (!S.realtime) refreshRealtime();
   $('#ex-state').textContent = JSON.stringify(st.engine || {}, null, 2);
   const notesArr = [];
   ((st.engine || {}).notes || []).forEach(n => notesArr.push(n));
@@ -925,6 +1078,9 @@ function collectSourcePayload() {
     // 自定义播放时间：布尔必送（取消勾选要能关掉）；起始时间**空串也送**——空＝「用文件第 1 条数据时间」是有效语义
     p.custom_time = !!$('#src-customtime').checked;
     p.custom_time_start = txt('src-customstart');
+    // 播放起点：模式必送（选回「开头」要能关掉）；取值只在非 begin 时送（begin 不读取值，旧值留着无害）
+    p.play_start_mode = $('#src-playmode').value || 'begin';
+    if (p.play_start_mode !== 'begin') p.play_start_value = txt('src-playvalue');
   }
   if (kind === 'csv_tail') {
     p.tail_from_end = !!$('#src-tailend').checked;
@@ -1140,6 +1296,10 @@ function bind() {
     if (el && el.classList && el.classList.contains('curve-save')) setCurveSave(el.dataset.curve, el.checked);
   });
   $('#btn-save-curves').addEventListener('click', saveCurves);
+  $('#btn-rt-save').addEventListener('click', saveRealtime);
+  $('#btn-rt-refresh').addEventListener('click', refreshRealtime);
+  ['rt-enable', 'rt-dir'].forEach(id => { $('#' + id).addEventListener('input', () => { S.rtDirty = true; }); $('#' + id).addEventListener('change', () => { S.rtDirty = true; }); });
+  $('#src-playmode').addEventListener('change', () => { S.srcDirty = true; S.formDirty = true; syncSourceForm(); });
   // 任何用户输入都置脏：否则 0.2s 一次的推送会把正在编辑的字段改回服务端配置
   $$('#view-source input, #view-source select').forEach((el) => {
     const mark = () => { S.formDirty = true; if (el.id.startsWith('cfg-')) S.cfgDirty = true; else S.srcDirty = true; };

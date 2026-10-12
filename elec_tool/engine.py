@@ -17,6 +17,7 @@ import numpy as np
 from .blocks import FrameBuffer, SampleBlock
 from .config import AppConfig, QUANTITY_KEYS
 from .metrics import MetricsCalculator, MetricsResult
+from .realtime_writer import RealtimeCurveWriter
 from .scaling import scale_block
 from .sources import create_source
 from .sources.base import DataSource
@@ -61,7 +62,7 @@ class EngineState:
 class LiveEngine:
     def __init__(self, cfg: AppConfig, source: Optional[DataSource] = None,
                  on_result: Optional[Callable[[MetricsResult], None]] = None,
-                 tz_offset_h: float = 0.0):
+                 tz_offset_h: float = 0.0, output_root: Optional[str] = None):
         self.cfg = cfg.validate()
         fs = self.cfg.sampling.fs
         cap = int(np.ceil(self.cfg.max_window_s * fs * 1.5)) + max(int(self.cfg.source.block_samples), 64)
@@ -74,6 +75,9 @@ class LiveEngine:
         self._last_emit: Dict[str, Optional[float]] = {k: None for k in QUANTITY_KEYS}
         self._last_t: Optional[float] = None
         self._ready: Dict[str, bool] = {k: False for k in QUANTITY_KEYS}
+        # 曲线点实时落盘（output.realtime_save）：与趋势历史共用同一提取规则
+        self.writer = RealtimeCurveWriter(self.cfg, root=output_root)
+        self._output_root = output_root
 
     # ---------------- 生命周期 ----------------
     def start(self) -> EngineState:
@@ -89,6 +93,10 @@ class LiveEngine:
 
     def stop(self) -> EngineState:
         self.state.running = False
+        try:
+            self.writer.close()
+        except Exception:
+            pass
         try:
             self.source.close()
         except Exception as exc:                       # 关闭失败不影响状态回收
@@ -107,6 +115,12 @@ class LiveEngine:
         old_hist.hours = float(new_cfg.output.history_hours)
         old_hist.max_points = int(new_cfg.output.history_max_points)
         self.calc.history = old_hist
+        # 实时落盘开关/目录/勾选热更新：关旧句柄，按新配置重建（同一天同一曲线会续写同一文件）
+        try:
+            self.writer.close()
+        except Exception:
+            pass
+        self.writer = RealtimeCurveWriter(new_cfg, root=self._output_root)
         fs = new_cfg.sampling.fs
         cap = int(np.ceil(new_cfg.max_window_s * fs * 1.5)) + max(int(new_cfg.source.block_samples), 64)
         self.buffer = FrameBuffer(capacity=max(cap, int(fs)))
@@ -149,6 +163,7 @@ class LiveEngine:
         for k in due:
             self._last_emit[k] = result.t_ref if np.isfinite(result.t_ref) else self._last_emit[k]
             self.state.emits[k] = self.state.emits.get(k, 0) + 1
+        self._write_realtime(result)
         if self.on_result:
             try:
                 self.on_result(result)
@@ -197,6 +212,7 @@ class LiveEngine:
         for k in QUANTITY_KEYS:
             self._last_emit[k] = result.t_ref
             self.state.emits[k] = self.state.emits.get(k, 0) + 1
+        self._write_realtime(result)
         if self.on_result:
             self.on_result(result)
         return result
@@ -210,6 +226,14 @@ class LiveEngine:
         return self.calc.compute(block, keys=list(QUANTITY_KEYS), with_history=False)
 
     # ---------------- 内部 ----------------
+    def _write_realtime(self, result: MetricsResult) -> None:
+        try:
+            self.writer.write(result)
+        except Exception as exc:                       # 落盘失败只记错误，不中断计算
+            msg = f"实时落盘异常：{type(exc).__name__}: {exc}"
+            if msg not in self.state.errors:
+                self.state.errors.append(msg)
+
     def _ingest(self, block: SampleBlock) -> None:
         scaled = scale_block(block, self.cfg.transform)
         # 数据连续性检查（时间跳变 → 记为 gap，对应数据质量规则 Q-01/Q-02）
@@ -276,4 +300,5 @@ class LiveEngine:
                             "window_fn": w.window_fn, "remove_dc": w.remove_dc}
                         for k, w in self.cfg.windows.items()},
             "last_emit": dict(self._last_emit),
+            "realtime": self.writer.info(),
         }

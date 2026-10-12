@@ -128,6 +128,14 @@ def _print_diagnostics(engine, st: dict) -> None:
     """
     if st.get("n_gaps"):
         print(f"  ⚠ 检测到 {st['n_gaps']} 处数据时间跳变（疑似丢点），示例：{st['gaps'][:3]}")
+    try:
+        rt = engine.writer.info()
+        if rt.get("enabled"):
+            total = sum(rt.get("rows_written", {}).values())
+            print(f"  · 实时落盘：{rt.get('dir')}（本次写入 {total} 行，"
+                  f"{len(rt.get('files') or [])} 个文件" + ("" if not rt.get("errors") else f"，错误：{rt['errors'][-1]}") + "）")
+    except Exception:
+        pass
     for n in (st.get("notes") or [])[-6:]:
         print(f"  · {n}")
     try:
@@ -282,6 +290,21 @@ def _apply_overrides(cfg: AppConfig, args: argparse.Namespace) -> AppConfig:
     if getattr(args, "custom_time_start", None):
         cfg.source.custom_time = True
         cfg.source.custom_time_start = str(args.custom_time_start)
+    if getattr(args, "play_from", None):
+        text = str(args.play_from)
+        if ":" not in text:
+            raise ConfigError(f"--play-from 需写成 模式:值（row/sec/pct/time），当前 {text!r}")
+        mode, val = text.split(":", 1)
+        mode = {"row": "row", "sec": "seconds", "seconds": "seconds", "pct": "percent", "percent": "percent",
+                "time": "time"}.get(mode.strip().lower())
+        if mode is None:
+            raise ConfigError(f"--play-from 模式只能是 row/sec/pct/time，当前 {text!r}")
+        cfg.source.play_start_mode = mode
+        cfg.source.play_start_value = val.strip()
+    if getattr(args, "realtime_save", None):
+        cfg.output.realtime_save = (args.realtime_save == "on")
+    if getattr(args, "realtime_dir", None):
+        cfg.output.realtime_dir = str(args.realtime_dir)
     for item in (getattr(args, "set_window", None) or []):
         if not item or "=" not in item:
             continue
@@ -505,6 +528,9 @@ def build_parser() -> argparse.ArgumentParser:
                         help="设置某电气量窗长，可重复（如 --set-window voltage=5 --set-window harmonic=0.2）")
         sp.add_argument("--apparent", choices=["arithmetic", "vector"], help="视在功率口径")
         sp.add_argument("--reactive", choices=["harmonic_sum", "quadrature"], help="无功口径")
+        sp.add_argument("--realtime-save", dest="realtime_save", choices=["on", "off"],
+                        help="曲线点实时落盘到 output/realtime/<曲线>_<日期>.csv（默认按配置 output.realtime_save，出厂 on）")
+        sp.add_argument("--realtime-dir", dest="realtime_dir", help="实时落盘目录（默认 output/realtime）")
 
     sp = sub.add_parser("init-config", help="生成默认配置文件")
     sp.add_argument("--out", default=DEFAULT_CONFIG)
@@ -558,6 +584,9 @@ def build_parser() -> argparse.ArgumentParser:
                     help="自定义播放时间：时间轴＝起始时间＋样本序号/fs（起始默认＝文件第 1 条数据时间）")
     sp.add_argument("--custom-time-start", dest="custom_time_start",
                     help="自定义播放的起始时间（'2026-10-12 08:00:00' 或 epoch 秒），给出即启用 --custom-time")
+    sp.add_argument("--play-from", dest="play_from", metavar="模式:值",
+                    help="从文件指定位置开始播放：row:120001（第 N 行）/ sec:30（跳过 N 秒）/ "
+                         "pct:50（文件 N%% 处）/ time:'2026-10-12 08:00:00' 或 time:08:00:00（时标 ≥ 该时刻）")
     sp.set_defaults(func=cmd_compute)
 
     sp = sub.add_parser("live", help="实时监视（simulator / csv_tail / tcp）")

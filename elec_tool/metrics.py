@@ -168,6 +168,25 @@ _EXTRACTORS: Dict[str, Any] = {
 _NAN = float("nan")
 
 
+def curve_record(result: "MetricsResult", key: str, q: "QuantityResult") -> Optional[Dict[str, Any]]:
+    """某量本次结果对应的「曲线标量记录」（History 入库与实时落盘共用同一提取规则）。
+
+    返回 {"window_s": …, 字段: 值, …}；该量无曲线定义或 t_ref 非有限时返回 None。
+    """
+    ext = _EXTRACTORS.get(key)
+    if ext is None:
+        return None
+    t = q.t_ref
+    if not isinstance(t, (int, float)) or not math.isfinite(float(t)):
+        return None
+    rec: Dict[str, Any] = {"window_s": q.window.get("length_s_requested")}
+    try:
+        rec.update(ext(result, q))
+    except Exception:                      # 提取失败不影响主流程
+        pass
+    return rec
+
+
 class History:
     """各量标量历史（UI 趋势曲线用），按 quantity 分组，**按数据时间保留最近 N 小时**。
 
@@ -200,17 +219,10 @@ class History:
 
     def _push(self, result: "MetricsResult") -> None:
         for key, q in result.quantities.items():
-            ext = _EXTRACTORS.get(key)
-            if ext is None:
+            rec = curve_record(result, key, q)
+            if rec is None:
                 continue
-            rec: Dict[str, Any] = {"window_s": q.window.get("length_s_requested")}
-            try:
-                rec.update(ext(result, q))
-            except Exception:                      # 提取失败不影响主流程
-                pass
             t = q.t_ref
-            if not isinstance(t, (int, float)) or not math.isfinite(float(t)):
-                continue
             ts = self._t.setdefault(key, array("d"))
             cols = self._cols.setdefault(key, {})
             n = len(ts)

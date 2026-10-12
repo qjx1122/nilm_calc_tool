@@ -98,7 +98,7 @@ class EngineRunner:
                 # 旧写法对「已结束」的引擎整个重建 → 勾一下「保存曲线」24h 曲线和结果全部清空。
                 self.engine.update_config(cfg)
             else:
-                self.engine = LiveEngine(cfg)
+                self.engine = LiveEngine(cfg, output_root=ROOT)
                 self.latest = None
 
     # ---------- 生命周期 ----------
@@ -117,7 +117,7 @@ class EngineRunner:
             # 一次运行＝一个数据集：重启引擎必须清空历史，否则导出/趋势会把
             # 不同数据源、不同窗长的结果混在一张表里（误导性极强）。
             self.store.clear()
-            self.engine = LiveEngine(cfg)
+            self.engine = LiveEngine(cfg, output_root=ROOT)
             self.started_at = time.time()
             # 引擎与停止事件按值传给线程：线程内绝不重读 self.engine
             self.thread = threading.Thread(target=self._run,
@@ -352,7 +352,8 @@ async def engine_start(payload: Optional[Dict[str, Any]] = None) -> Any:
         src_over = {k: v for k, v in payload.items()
                     if k in ("kind", "path", "host", "port", "frame", "block_samples",
                              "poll_interval_s", "tail_from_end", "sim_speed", "watch_dir_newest",
-                             "struct_fmt", "struct_fields", "custom_time", "custom_time_start")}
+                             "struct_fmt", "struct_fields", "custom_time", "custom_time_start",
+                             "play_start_mode", "play_start_value")}
         if src_over:
             data["source"].update(src_over)
         if payload.get("windows"):
@@ -508,6 +509,30 @@ async def curves_save(payload: Optional[Dict[str, Any]] = None) -> Any:
             "skipped": skipped, "empty": empty})
     return {"ok": True, "dir": _display_path(target), "files": files,
             "skipped": skipped, "empty": empty, "hours": hours}
+
+
+@app.get("/api/realtime")
+async def realtime_status() -> Dict[str, Any]:
+    """实时落盘状态：开关、目录、本次会话各曲线写入行数、目录下现有文件清单（含大小/行数估计）。"""
+    cfg = RUNNER.cfg
+    with RUNNER.lock:
+        eng = RUNNER.engine
+        info = eng.writer.info() if eng else {"enabled": bool(cfg.output.realtime_save), "dir": cfg.output.realtime_dir,
+                                               "files": [], "rows_written": {}, "errors": []}
+    d = os.environ.get("ELEC_TOOL_REALTIME_DIR") or cfg.output.realtime_dir
+    if not os.path.isabs(d):
+        d = os.path.join(ROOT, d)
+    listing: List[Dict[str, Any]] = []
+    if os.path.isdir(d):
+        for name in sorted(os.listdir(d)):
+            fp = os.path.join(d, name)
+            if name.endswith(".csv") and os.path.isfile(fp):
+                listing.append({"name": name, "path": _display_path(fp), "size_bytes": os.path.getsize(fp),
+                                "mtime": os.path.getmtime(fp)})
+    info["dir_display"] = _display_path(d)
+    info["dir_files"] = listing
+    info["curve_save"] = dict(cfg.output.curve_save)
+    return info
 
 
 @app.get("/api/curves/export")

@@ -8,7 +8,7 @@ from typing import Any, Dict, Iterator, Optional, Tuple
 import numpy as np
 
 from ..blocks import SampleBlock
-from ..config import AppConfig, parse_time_text
+from ..config import AppConfig, parse_play_start, parse_time_text
 from .base import DataSource
 from .parsing import ParseError, iter_csv_blocks, read_header
 
@@ -43,6 +43,11 @@ class CsvFileSource(DataSource):
         self._custom_t0_source = ("配置起始时间" if self._custom_t0 is not None else "文件第 1 条数据时间")
         self._file_first_t: Optional[float] = None     # 文件原始第 1 条时标（供界面显示）
         self._custom_notes: list = []
+        # 播放起点（需求：离线文件可指定位置开始播放）
+        self.play_start_mode = str(cfg.source.play_start_mode or "begin")
+        self._play_start = parse_play_start(self.play_start_mode, cfg.source.play_start_value)
+        self._seek_info: Dict[str, Any] = {}
+        self._seek_notes: list = []
 
     def _apply_custom_time(self, block: SampleBlock) -> SampleBlock:
         """把块时间轴改写为 起始时间 + 全局样本序号 / fs（等间隔）。
@@ -69,12 +74,36 @@ class CsvFileSource(DataSource):
             raise ParseError(f"离线数据文件不存在：{self.path!r}（请检查 source.path 配置）")
         self._header, self._encoding = read_header(
             self.path, self.cfg.columns.encoding, self.cfg.columns.delimiter)
+        seek_kw: Dict[str, Any] = {}
+        mode, v = self.play_start_mode, self._play_start
+        if mode == "row":
+            seek_kw["skip_rows"] = int(v) - 1
+        elif mode == "seconds":
+            seek_kw["skip_rows"] = int(round(float(v) * float(self.cfg.sampling.fs)))
+        elif mode == "percent":
+            seek_kw["start_percent"] = float(v)
+        elif mode == "time":
+            seek_kw["start_time"] = v
+        self._seek_info = {}
         self._it = iter_csv_blocks(
             self.path, self.cfg.columns, self.cfg.sampling,
             block_samples=self.block_samples, encoding=self.cfg.columns.encoding,
             delimiter=self.cfg.columns.delimiter, has_header=self.cfg.columns.has_header,
-            tz_offset_h=self.tz_offset_h, max_blocks=self.max_blocks)
+            tz_offset_h=self.tz_offset_h, max_blocks=self.max_blocks,
+            seek_info=self._seek_info, **seek_kw)
         self._exhausted = False
+        self._seek_notes = []
+        if mode != "begin":
+            # 定位发生在生成器第一次 next() 时；这里先把意图写进告警，定位结果在 read() 后补充
+            if mode == "row":
+                desc = f"第 {int(v)} 行"
+            elif mode == "seconds":
+                desc = f"跳过开头 {float(v):g} s（≈{seek_kw.get('skip_rows')} 行）"
+            elif mode == "percent":
+                desc = f"文件 {float(v):g}% 处"
+            else:
+                desc = f"时标 ≥ {self.cfg.source.play_start_value}"
+            self._seek_notes = [f"播放起点：{desc}（之前的数据已跳过，不参与计算）"]
 
     def read(self) -> Optional[SampleBlock]:
         if self._it is None:
@@ -84,11 +113,24 @@ class CsvFileSource(DataSource):
             block, info = next(self._it)
         except StopIteration:
             self._exhausted = True
+            if self._n_blocks == 0 and self.play_start_mode != "begin" and self._seek_info.get("reached_eof"):
+                raise ParseError(
+                    f"播放起点超出文件范围：{self.play_start_mode}={self.cfg.source.play_start_value!r}，"
+                    f"文件共 {self._seek_info.get('skipped_rows', '?')} 条数据行"
+                    + ("" if self.play_start_mode != "time" else "（没有时标 ≥ 该时刻的数据；请核对文件时标范围，"
+                       "无日期写法可只填 HH:MM:SS）"))
             return None
         block = self._apply_custom_time(block)
-        if self._custom_notes:
+        if self._n_blocks == 0 and self._seek_info and self._seek_info.get("mode") in ("row", "time"):
+            sk = self._seek_info.get("skipped_rows")
+            if sk is not None and self._seek_notes:
+                extra = f"；实际跳过 {sk} 行"
+                if self._seek_info.get("mode") == "time" and self._seek_info.get("start_t") is not None:
+                    extra += f"，命中时标 t={self._seek_info['start_t']:.4f}"
+                self._seek_notes = [self._seek_notes[0] + extra]
+        if self._custom_notes or self._seek_notes:
             info = dict(info)
-            info["notes"] = list(info.get("notes", [])) + self._custom_notes
+            info["notes"] = list(info.get("notes", [])) + self._seek_notes + self._custom_notes
         self._n_blocks += 1
         self._n_samples += block.n
         self._last_info = info
@@ -120,5 +162,8 @@ class CsvFileSource(DataSource):
             "custom_time_start": self._custom_t0 if self.custom_time else None,
             "custom_time_start_source": self._custom_t0_source if self.custom_time else None,
             "file_first_t": self._file_first_t,
+            "play_start_mode": self.play_start_mode,
+            "play_start_value": self.cfg.source.play_start_value if self.play_start_mode != "begin" else None,
+            "play_seek": dict(self._seek_info) if self._seek_info else None,
             "notes": self._last_info.get("notes", []),
         }
