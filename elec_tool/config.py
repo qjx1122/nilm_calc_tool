@@ -260,6 +260,14 @@ class ColumnMap:
     delimiter: str = ","
     has_header: bool = True
     timestamp_unit: str = "auto"    # auto / s / ms / us / ns / datetime
+    # ---- 离线文件列映射（第 10 轮）----
+    # mapping_enabled=False（默认）：表头可识别（配置名/别名）时按表头取列，否则按默认列序
+    #   「时间,A相电压,A相电流,B相电压,B相电流,C相电压,C相电流」（第 1~7 列）。
+    # mapping_enabled=True：只按 mapping 取列。每个字段的值为：""＝不映射（该通道不播放，按 0 处理；
+    #   时间戳不映射＝按配置 fs 合成时间轴）、纯数字＝第几列（从 1 起）、其它＝表头列名（精确或忽略大小写/空格）。
+    mapping_enabled: bool = False
+    mapping: Dict[str, str] = field(default_factory=lambda: {
+        "timestamp": "1", "ua": "2", "ia": "3", "ub": "4", "ib": "5", "uc": "6", "ic": "7"})
 
     ALIASES: Dict[str, List[str]] = field(
         default_factory=lambda: {
@@ -301,6 +309,92 @@ class ColumnMap:
                 f"请在 configs 中显式指定 column_map 或修正表头（支持别名见 ColumnMap.ALIASES）"
             )
         return out
+
+    FIELDS = ("timestamp", "ua", "ia", "ub", "ib", "uc", "ic")
+    FIELD_NAMES = {"timestamp": "时间", "ua": "A相电压", "ia": "A相电流", "ub": "B相电压",
+                   "ib": "B相电流", "uc": "C相电压", "ic": "C相电流"}
+
+    def validate(self) -> None:
+        if not isinstance(self.mapping, dict):
+            raise ConfigError("columns.mapping 必须是 {字段: 列号或列名} 字典")
+        self.mapping = {k: ("" if v is None else str(v).strip()) for k, v in self.mapping.items() if k in self.FIELDS}
+        for k in self.FIELDS:
+            self.mapping.setdefault(k, "")
+        if self.mapping_enabled:
+            for k, v in self.mapping.items():
+                if v.isdigit() and int(v) < 1:
+                    raise ConfigError(f"columns.mapping.{k} 列号必须从 1 起（当前 {v}）")
+            if not any(self.mapping[k] for k in self.FIELDS if k != "timestamp"):
+                raise ConfigError("columns.mapping_enabled=true 但没有任何电压/电流通道被映射")
+            used = [v for v in self.mapping.values() if v]
+            dup = sorted({v for v in used if used.count(v) > 1})
+            if dup:
+                raise ConfigError(f"columns.mapping 有多个字段映射到同一列：{dup}")
+
+    def layout(self, header: Optional[List[str]]) -> Dict[str, Optional[int]]:
+        """字段 → 0 基列索引（None＝未映射）。这是离线/追加 CSV 取列的**唯一**规则。"""
+        positional = {k: i for i, k in enumerate(self.FIELDS)}
+        if not self.mapping_enabled:
+            if header:
+                try:
+                    return dict(self.resolve(header))
+                except ConfigError:
+                    pass
+            return positional
+        norm = {self._norm(h): i for i, h in enumerate(header)} if header else {}
+        out: Dict[str, Optional[int]] = {}
+        for k in self.FIELDS:
+            spec = str(self.mapping.get(k, "") or "").strip()
+            if not spec:
+                out[k] = None
+            elif spec.isdigit():
+                out[k] = int(spec) - 1
+            elif header and spec in header:
+                out[k] = header.index(spec)
+            elif self._norm(spec) in norm:
+                out[k] = norm[self._norm(spec)]
+            else:
+                raise ConfigError(f"columns.mapping.{k}='{spec}' 既不是列号也不在表头中"
+                                  f"（表头={header}）；无表头文件请用列号（从 1 起）")
+        return out
+
+    def looks_like_header(self, row: List[str]) -> bool:
+        """首行是否为表头。未启用映射：能按名字/别名识别即表头；启用映射：按名字映射的字段能在首行找到，
+        或任一按列号映射的数据列在首行不是数值。"""
+        cells = [str(c).strip() for c in row]
+        if not self.mapping_enabled:
+            try:
+                self.resolve(cells)
+                return True
+            except ConfigError:
+                pass
+            # 识别不出名字但数据列（默认列序第 2~7 列）有非数值 → 仍是表头（否则会把表头当成一行坏数据）
+            for c in range(1, min(7, len(cells))):
+                if cells[c] == "":
+                    continue
+                try:
+                    float(cells[c])
+                except ValueError:
+                    return True
+            return False
+        norm = {self._norm(h) for h in cells}
+        for k in self.FIELDS:
+            spec = str(self.mapping.get(k, "") or "").strip()
+            if not spec:
+                continue
+            if spec.isdigit():
+                c = int(spec) - 1
+                if k != "timestamp" and c < len(cells) and cells[c] != "":
+                    try:
+                        float(cells[c])
+                    except ValueError:
+                        return True
+            elif spec in cells or self._norm(spec) in norm:
+                return True
+        return False
+
+    def unmapped(self, lay: Dict[str, Optional[int]]) -> List[str]:
+        return [k for k in self.FIELDS if lay.get(k) is None]
 
     @staticmethod
     def _norm(s: str) -> str:
@@ -574,6 +668,7 @@ class AppConfig:
         self.harmonic.validate(self.sampling)
         self.power.validate()
         self.source.validate()
+        self.columns.validate()
         self.output.validate()
         self.events.validate()
         for name, spec in self.windows.items():

@@ -296,40 +296,38 @@ def check_fs(fs_est: float, sampling: SamplingConfig) -> Tuple[float, List[str]]
 def parse_rows(rows: Sequence[Sequence[str]], colmap: ColumnMap, sampling: SamplingConfig,
                source: str = "", seq: int = 0,
                tz_offset_h: float = 0.0) -> Tuple[SampleBlock, Dict[str, object]]:
-    """把 CSV 数据行（不含表头）解析为 SampleBlock（二次侧值，未做 PT/CT 变换）。"""
+    """把 CSV 数据行（不含表头）解析为 SampleBlock（二次侧值，未做 PT/CT 变换）。
+    取列规则＝``colmap.layout(None)``：未启用映射＝默认列序；启用映射＝按列号。"""
     if not rows:
         return SampleBlock.empty(source), {"n_rows": 0, "notes": ["无数据行"]}
-    ncols = len(rows[0])
-    data = np.full((len(rows), ncols), np.nan, dtype=np.float64)
-    bad_cells: List[Tuple[int, int, str]] = []
-    ts_raw: List[str] = []
-    for r, row in enumerate(rows):
-        if len(row) < ncols:
-            row = list(row) + [""] * (ncols - len(row))
-        ts_raw.append(row[0] if not isinstance(row[0], (int, float)) else str(row[0]))
-        for c in range(1, ncols):          # 第 0 列是时间戳（字符串），不按数值解析，否则每行都记一次「非数值」
-            cell = str(row[c]).strip()
-            if cell == "" or cell.lower() in ("nan", "null", "none", "-"):
-                continue
-            try:
-                data[r, c] = float(cell)
-            except ValueError:
-                bad_cells.append((r, c, cell))
-    # 时间戳列索引由 colmap 决定（默认第 0 列）
-    return _assemble(data, ts_raw, colmap, sampling, source, seq, bad_cells, tz_offset_h)
+    return _rows_to_block([list(r) for r in rows], colmap, sampling, colmap.layout(None), source, seq, tz_offset_h)
 
 
 def _assemble(data: np.ndarray, ts_raw: List[str], colmap: ColumnMap, sampling: SamplingConfig,
               source: str, seq: int, bad_cells: List[Tuple[int, int, str]],
-              tz_offset_h: float) -> Tuple[SampleBlock, Dict[str, object]]:
+              tz_offset_h: float, unmapped: Optional[List[str]] = None,
+              layout: Optional[Dict[str, Optional[int]]] = None) -> Tuple[SampleBlock, Dict[str, object]]:
+    """data 已是标准列序（0=时间戳占位，1..6=ua,ia,ub,ib,uc,ic）。unmapped 列出未映射字段：
+    通道按 0 播放（不参与插值），时间戳未映射则合成时间轴。"""
     notes: List[str] = []
-    # 表头缺失时按用户给定列序（时间戳,A相电压,A相电流,...）假定
-    header = [colmap.timestamp, colmap.ua, colmap.ia, colmap.ub, colmap.ib, colmap.uc, colmap.ic]
-    idx = colmap.resolve(header)
-    ts_info = parse_timestamps(ts_raw, colmap.timestamp_unit, tz_offset_h)
-    notes.extend(ts_info.notes)
-    _, fs_notes = check_fs(ts_info.fs_est, sampling)
-    notes.extend(fs_notes)
+    idx = {k: i for i, k in enumerate(ColumnMap.FIELDS)}
+    unmapped = list(unmapped or [])
+    for k in unmapped:
+        if k != "timestamp":
+            data[:, idx[k]] = 0.0
+    if unmapped:
+        names = "、".join(ColumnMap.FIELD_NAMES[k] for k in unmapped)
+        notes.append(f"列映射：未映射字段 {names} 不播放（通道按 0 处理"
+                     + ("，时间轴按配置 fs 合成" if "timestamp" in unmapped else "") + "）")
+    if "timestamp" in unmapped or not ts_raw:
+        ts_raw = []
+    if ts_raw:
+        ts_info = parse_timestamps(ts_raw, colmap.timestamp_unit, tz_offset_h)
+        notes.extend(ts_info.notes)
+        _, fs_notes = check_fs(ts_info.fs_est, sampling)
+        notes.extend(fs_notes)
+    else:
+        ts_info = parse_timestamps([], colmap.timestamp_unit, tz_offset_h)
 
     def col(key: str) -> np.ndarray:
         c = idx[key]
@@ -341,7 +339,8 @@ def _assemble(data: np.ndarray, ts_raw: List[str], colmap: ColumnMap, sampling: 
     # 时间戳无效（全 nan / 非单调）时用配置 fs 合成等间隔时间轴
     t = ts_info.t
     if t.size != data.shape[0] or not np.all(np.isfinite(t)):
-        notes.append("时间戳不可用，按配置 fs 合成等间隔时间轴（绝对时刻以 0 起算）")
+        if "timestamp" not in unmapped:
+            notes.append("时间戳不可用，按配置 fs 合成等间隔时间轴（绝对时刻以 0 起算）")
         t = np.arange(data.shape[0], dtype=np.float64) / sampling.fs
     nan_count = int(np.sum(~np.isfinite(u)) + np.sum(~np.isfinite(i)))
     if nan_count:
@@ -357,7 +356,8 @@ def _assemble(data: np.ndarray, ts_raw: List[str], colmap: ColumnMap, sampling: 
     block = SampleBlock(t=t, u=u, i=i, scaled=False, source=source, seq=seq)
     info = {"n_rows": int(data.shape[0]), "n_nan": nan_count, "n_bad_cells": len(bad_cells),
             "ts_mode": ts_info.mode, "fs_est": ts_info.fs_est, "notes": notes,
-            "columns": idx, "t_start": block.t_start, "t_end": block.t_end}
+            "columns": (layout if layout is not None else idx), "unmapped": unmapped,
+            "t_start": block.t_start, "t_end": block.t_end}
     return block, info
 
 
@@ -425,7 +425,11 @@ def _seek_time(reader, first_rows: List[List[str]], colmap: ColumnMap, idx_map: 
                target: Tuple[str, float], tz_offset_h: float, chunk: int = 8192) -> Tuple[List[List[str]], int, Optional[float]]:
     """按时标定位：返回 (从目标时刻起的剩余行, 跳过行数, 命中行时标)。target=("abs", epoch) | ("tod", 当天秒)。"""
     kind, tv = target
-    ts_col = idx_map["timestamp"] if idx_map else 0      # 无表头：第 0 列为时间戳
+    ts_col = (idx_map or {}).get("timestamp")
+    if ts_col is None:
+        if idx_map is not None and idx_map.get("timestamp") is None and getattr(colmap, "mapping_enabled", False):
+            raise ParseError("播放起点按时刻定位需要时间戳列，但列映射未映射时间戳")
+        ts_col = 0                                           # 无表头：第 0 列为时间戳
     skipped = 0
     pending = list(first_rows)
     exhausted = False
@@ -486,17 +490,12 @@ def iter_csv_blocks(path: str, colmap: ColumnMap, sampling: SamplingConfig,
         use_header = has_header if has_header is not None else colmap.has_header
         header: Optional[List[str]] = None
         buf: List[List[str]] = []
-        if use_header:
+        if use_header and colmap.looks_like_header(first):
             header = [h.strip() for h in first]
-            try:
-                colmap.resolve(header)
-            except Exception:
-                # 首行不像表头（解析失败）→ 当数据行处理
-                header = None
-                buf.append(first)
         else:
+            # 首行不像表头 → 当数据行处理
             buf.append(first)
-        idx_map = colmap.resolve(header) if header else None
+        idx_map = colmap.layout(header)            # 未启用映射＝表头/默认列序；启用＝只按 mapping
         # ---- 播放起点定位 ----
         if start_time is not None:
             buf, skipped, hit_t = _seek_time(reader, buf, colmap, idx_map, start_time, tz_offset_h)
@@ -526,12 +525,14 @@ def iter_csv_blocks(path: str, colmap: ColumnMap, sampling: SamplingConfig,
                 seek_info.update({"mode": "row", "skipped_rows": skipped, "reached_eof": skipped < skip_rows})
         seq = 0
         produced = 0
+        row_offset = 0
         for row in reader:
             if not row or all(not str(c).strip() for c in row):
                 continue
             buf.append(row)
             if len(buf) >= block_samples:
-                blk, info = _rows_to_block(buf, colmap, sampling, idx_map, path, seq, tz_offset_h)
+                blk, info = _rows_to_block(buf, colmap, sampling, idx_map, path, seq, tz_offset_h, row_offset)
+                row_offset += len(buf)
                 buf = []
                 seq += 1
                 produced += 1
@@ -539,39 +540,39 @@ def iter_csv_blocks(path: str, colmap: ColumnMap, sampling: SamplingConfig,
                 if max_blocks and produced >= max_blocks:
                     return
         if buf:
-            blk, info = _rows_to_block(buf, colmap, sampling, idx_map, path, seq, tz_offset_h)
+            blk, info = _rows_to_block(buf, colmap, sampling, idx_map, path, seq, tz_offset_h, row_offset)
             yield blk, info
 
 
 def _rows_to_block(rows: List[List[str]], colmap: ColumnMap, sampling: SamplingConfig,
-                   idx_map: Optional[Dict[str, int]], source: str, seq: int,
-                   tz_offset_h: float) -> Tuple[SampleBlock, Dict[str, object]]:
+                   idx_map: Optional[Dict[str, Optional[int]]], source: str, seq: int,
+                   tz_offset_h: float, row_offset: int = 0) -> Tuple[SampleBlock, Dict[str, object]]:
+    """row_offset：本块首行在文件中的数据行序号——时间戳未映射时用它合成连续时间轴（t = 行号 / fs）。"""
     if idx_map is None:
-        return parse_rows(rows, colmap, sampling, source, seq, tz_offset_h)
-    ncols = max(idx_map.values()) + 1
-    data = np.full((len(rows), ncols), np.nan, dtype=np.float64)
+        idx_map = colmap.layout(None)
+    unmapped = colmap.unmapped(idx_map)
+    std = np.full((len(rows), 7), np.nan, dtype=np.float64)
     ts_raw: List[str] = []
     bad: List[Tuple[int, int, str]] = []
+    ts_c = idx_map.get("timestamp")
+    chan = [(new_c, idx_map[key]) for new_c, key in enumerate(ColumnMap.FIELDS)
+            if key != "timestamp" and idx_map.get(key) is not None]
     for r, row in enumerate(rows):
-        ts_raw.append(row[idx_map["timestamp"]].strip() if idx_map["timestamp"] < len(row) else "")
-        for key, c in idx_map.items():
-            if key == "timestamp":
-                continue
+        if ts_c is not None:
+            ts_raw.append(str(row[ts_c]).strip() if ts_c < len(row) else "")
+        for new_c, c in chan:
             if c >= len(row):
                 continue
             cell = str(row[c]).strip()
             if cell == "" or cell.lower() in ("nan", "null", "none", "-"):
                 continue
             try:
-                data[r, c] = float(cell)
+                std[r, new_c] = float(cell)
             except ValueError:
                 bad.append((r, c, cell))
-    # 重排到标准列序（0..6）供 _assemble 使用
-    std = np.full((len(rows), 7), np.nan, dtype=np.float64)
-    order = ["timestamp", "ua", "ia", "ub", "ib", "uc", "ic"]
-    for new_c, key in enumerate(order):
-        old_c = idx_map[key]
-        if key == "timestamp":
-            continue
-        std[:, new_c] = data[:, old_c]
-    return _assemble(std, ts_raw, colmap, sampling, source, seq, bad, tz_offset_h)
+    blk, info = _assemble(std, ts_raw, colmap, sampling, source, seq, bad, tz_offset_h, unmapped, idx_map)
+    if ts_c is None and row_offset and blk.n:
+        blk = SampleBlock(t=(row_offset + np.arange(blk.n, dtype=np.float64)) / sampling.fs, u=blk.u, i=blk.i,
+                          scaled=blk.scaled, source=blk.source, seq=blk.seq)
+        info["t_start"], info["t_end"] = blk.t_start, blk.t_end
+    return blk, info

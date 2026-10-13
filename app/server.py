@@ -688,12 +688,9 @@ async def probe(path: str) -> Dict[str, Any]:
         header, enc2 = read_header(p, cfg.columns.encoding, cfg.columns.delimiter)
         # 首行解析不出表头 → 视为**无表头**数据行（与 iter_csv_blocks 同一规则）：
         # 采集器直写的 CSV（如 ``0/00/00 00:12:40.0000,290.17,...``）第一行就是数据。
-        has_header = True
-        try:
-            idx = cfg.columns.resolve(header)
-        except ConfigError:
-            has_header = False
-            idx = {k: i for i, k in enumerate(("timestamp", "ua", "ia", "ub", "ib", "uc", "ic"))}
+        has_header = cfg.columns.looks_like_header(header)
+        idx = cfg.columns.layout(header if has_header else None)      # 启用映射时只按 mapping；可能抛 ConfigError
+        ts_c = idx.get("timestamp")
         ts: List[str] = []
         n_rows = 0
         with open(p, "r", encoding=enc2, newline="") as fh:
@@ -702,13 +699,15 @@ async def probe(path: str) -> Dict[str, Any]:
                 next(rdr, None)
             for row in rdr:
                 n_rows += 1
-                if row and len(row) > idx["timestamp"] and n_rows <= 5000:
-                    ts.append(row[idx["timestamp"]])
+                if ts_c is not None and row and len(row) > ts_c and n_rows <= 5000:
+                    ts.append(row[ts_c])
         info = parse_timestamps(ts[:3000], cfg.columns.timestamp_unit)
         return {"ok": True, "path": p, "size_mb": round(os.path.getsize(p) / 1024 / 1024, 3),
                 "encoding": enc, "header": header if has_header else None, "has_header": has_header,
                 "first_row": None if has_header else header,
-                "columns": idx, "rows": n_rows,
+                "columns": idx, "rows": n_rows, "ncols": len(header),
+                "mapping_enabled": cfg.columns.mapping_enabled,
+                "unmapped": [cfg.columns.FIELD_NAMES[k] for k in cfg.columns.unmapped(idx)],
                 "t_first": (float(info.t[0]) if info.t.size else None),
                 "t_first_text": (ts[0] if ts else None),
                 "ts_mode": info.mode, "fs_est": info.fs_est, "fs_configured": cfg.sampling.fs,

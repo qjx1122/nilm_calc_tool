@@ -512,8 +512,12 @@ def cmd_sources(args: argparse.Namespace) -> int:
     print(f"  大小：{os.path.getsize(path)/1024/1024:.2f} MB   编码：{enc}（表头读取用 {enc2}）")
     print(f"  表头：{header}")
     try:
-        idx = cfg.columns.resolve(header)
-        print(f"  列映射：{idx}")
+        is_hdr = cfg.columns.looks_like_header(header)
+        idx = cfg.columns.layout(header if is_hdr else None)
+        print(f"  首行{'是表头' if is_hdr else '是数据（无表头）'}；列映射（{'启用 columns.mapping' if cfg.columns.mapping_enabled else '默认：表头/默认列序'}）：{idx}")
+        um = cfg.columns.unmapped(idx)
+        if um:
+            print(f"  未映射字段（不播放）：{[cfg.columns.FIELD_NAMES[k] for k in um]}")
     except Exception as exc:
         print(f"  ✗ 列映射失败：{exc}")
         return 1

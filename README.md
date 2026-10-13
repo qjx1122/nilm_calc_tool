@@ -1,7 +1,7 @@
 # README.md — nilm_calc_tool（电力系统各类电气量计算工具）
 
 > 台账文件（BOOTSTRAP.md v2.2）：安装与环境 / 运行命令 / 数据目录 / 配置结构 / 输出产物 / 生产推荐流程。
-> **当前状态：v0.8（2026-10-13）**——软件已实现并在沙盒跑通（算法核心 + 4 类数据源 + 计算引擎 + 事件检测 + 离线重采样 + CLI + Web 界面 + 235 项测试 + 8 项验证工具）。
+> **当前状态：v0.9（2026-10-13）**——软件已实现并在沙盒跑通（算法核心 + 4 类数据源 + 计算引擎 + 事件检测 + 离线重采样 + 离线列映射 + CLI + Web 界面 + 243 项测试 + 9 项验证工具）。
 > 状态标注：✅已确认（有代码 / 实录 / 官方来源佐证）｜🔶待确认（占位或推断，需用户回填）｜❌已废弃（不删行，只翻状态）
 > **本文所有 ✅ 均为沙盒实录：Linux 6.1.158+ / CPython 3.11.2 / numpy 2.4.6，采集时间 2026-10-10。**
 > **Windows 命令、真实现场数据、生产部署三项尚未在用户环境验证，一律标 🔶，请按 `REPORT_TEST.md`「T-002 本地部署与验收执行包」逐条回填。**
@@ -417,6 +417,20 @@ CLI 同等能力：`.venv/bin/python cli.py resample "data/波形_农业排灌_�
 **注意**：`linear` 降采样无抗混叠（高于新 Nyquist 的谐波会折叠到低频），要做谐波分析请用 `fft`；`fft` 的输出点数 = round(N·fs_new/fs_src)（周期语义），比例非整时实际采样率略有偏差并写入 notes；重采样后播放时请把「配置采样率 fs」改成目标值。
 
 
+#### 离线文件列映射开关（v0.9）
+
+> 适用 `csv_file` / `csv_tail`（离线与追加文件）。TCP 实时源的字段顺序仍由 `source.struct_fields` 决定，不受本开关影响。界面位置：「数据源」页 →「离线文件列映射」面板；配置项 `columns.mapping_enabled` / `columns.mapping`，`PUT /api/config` 热更新，**对下次启动数据源生效**。
+
+| 开关 | 取列规则 | 未映射的列 |
+|---|---|---|
+| **未启用**（默认） | 默认依次为 **时间, A相电压, A相电流, B相电压, B相电流, C相电压, C相电流**（第 1~7 列）。兼容规则：若首行是可识别表头（列名/别名命中全部 7 个字段），仍按表头取列（与 v0.8 及之前一致）；首行非数值但识别不出列名 → 判为表头并跳过，按默认列序 | 不存在的概念：7 列全部参与 |
+| **启用** | **只播放有映射关系的列**。`columns.mapping` 7 个字段各填一个：**列号**（从 1 起）或**表头列名**（精确或忽略大小写/空格/下划线），留空＝不映射 | 未映射的 U/I 通道**按 0 播放**（不插值、不跳过），数据源状态 notes 提示「列映射：未映射字段 … 不播放」，`/api/probe` 返回 `unmapped`；**时间戳未映射**→ 时间轴按 `sampling.fs` 合成（t = 行号/fs，跨块连续），此时重采样子界面不可用（需要时间戳列） |
+
+- 校验（保存时 400、`cli.py probe` 直接报错）：启用时必须至少映射 1 个电压/电流通道；列号 ≥1；两个字段不能映射同一列；按名映射的列名必须在表头中。
+- 界面：勾选「启用列映射」后 7 个输入可编辑；「填入默认列序 1~7」一键填入；先「探查数据」再「按探查表头填入」会按别名把表头名写进各字段（识别不到的留空）。探查输出会列出 `[序号] 表头名`，方便填列号。
+- **假设（用户跳过澄清，按此实现，可改）**：① 未映射通道按 0 而不是从计算中剔除——这样功率/不平衡度等三相量仍可算出，但未映射相的结果就是 0，请结合 notes 判读；② 未启用时「表头优先」是为了兼容既有现场文件（列顺序与默认不同但表头规范）；如需严格按位置，请启用映射并填 1~7；③ CLI `analyze` 与 Web 使用同一套 `ColumnMap.layout()`，行为一致。
+- 验证：`tests/test_r10_colmap.py` 8 项（默认列序 / 表头乱序 / 列号+列名混填 / 未映射置 0 / 无时间戳合成连续时间轴 / 表头判定 / 校验报错 / REST 端到端 B、C 相为 0）；`tools/ui_r10_check.cjs` 15 项。
+
 #### 间谐波 / 直流偏置 / 事件 子界面（v0.8）
 
 左侧导航 **「🎚 间谐波」「➖ 直流偏置」「🚨 事件」**（事件项带活动事件数徽标）。三者都走既有管线：各有独立窗长（「窗口配置」页 `interharmonic` / `dc` 两行）、趋势曲线（`CURVE_KEYS` 从 6 条扩到 **8 条**：`interharmonic`＝TIHD_U/TIHD_I 与最大组含有率，`dc`＝Ua/Ub/Uc/Ia/Ib/Ic/In 直流）、保存/实时落盘/导出/CLI 标量表自动纳入。
@@ -699,6 +713,7 @@ curl -s "http://127.0.0.1:8000/api/export?fmt=csv" -o output/result.csv
 | `source.block_samples` | `640` | 分块读入，内存占用与文件大小无关（2.5 MB/32000 行实测分 50 块） |
 | `columns.encoding` | `"auto"` | auto 时按 utf-8-sig→utf-8→gb18030→gbk→big5→latin-1 探测 |
 | `columns.has_header` | `true` | 有表头按表头名映射（中文表头实测可识别）；无表头按 `t,ua,ia,ub,ib,uc,ic` 顺序取列 |
+| `columns.mapping_enabled` / `mapping` | `false` / 1~7 | v0.9 列映射开关：启用后只播放有映射关系的列（列号或表头名），见 §3.1 |
 | `columns.timestamp_unit` | `"auto"` | auto 按数量级判 epoch s/ms/us/ns 或相对秒；也可强制指定 |
 | `columns.timestamp_col` 等 | 见 §6 | 列名映射（现场列名不同只需改这里，不用动代码） |
 | `source.custom_time` | `false` | **自定义播放时间**（v0.5）：true → 时间轴＝起始时间＋样本序号/`fs`（严格等间隔，不再有缺口检测）；false → 按文件内时间戳播放 |
@@ -995,6 +1010,8 @@ python cli.py selftest                            # 实测：44/44，worst_rel_e
 | | `encoding` | `auto` | 编码探测顺序见 §4.1 |
 | | `delimiter` / `has_header` | `,` / true | 分隔符与是否有表头 |
 | | `timestamp_unit` | `auto` | `>1e17`→ns，`>1e14`→µs，`>1e11`→ms，`>1e8`→s，否则按相对秒（并记 note） |
+| | `mapping_enabled` | `false` | v0.9：离线文件列映射开关。false＝默认列序 时间,A相电压,A相电流,B相电压,B相电流,C相电压,C相电流（可识别表头时按表头）；true＝只播放 `mapping` 里有映射的列 |
+| | `mapping` | `{"timestamp":"1","ua":"2",…,"ic":"7"}` | 字段→列号（从 1 起）或表头列名；空串＝不映射（通道按 0 播放；时间戳未映射则按 fs 合成时间轴）；见 §3.1「离线文件列映射开关」 |
 | `source` | `kind` | `simulator` | `csv_file`/`csv_tail`/`tcp`/`simulator` |
 | | `path` / `host` / `port` / `frame` / `struct_fmt` / `struct_fields` | — | 各源参数（TCP 帧格式 🔶待确认） |
 | | `block_samples` / `poll_interval_s` | 640 / 0.05 | 每块点数与轮询间隔 |
@@ -1091,7 +1108,7 @@ python cli.py selftest                            # 实测：44/44，worst_rel_e
 
 - **沙盒已验证（Linux / CPython 3.11.2，2026-10-10 实录）**
   - 安装：venv + `pip install -r requirements.txt`；离线安装（Linux 29 包 / Windows 目标 24 包下载）；最小安装报错提示
-  - 算法：`selftest` 44/44（最差 1.508e-05）；`pytest tests/ -q` **204 passed, 1 skipped**
+  - 算法：`selftest` 44/44（最差 1.508e-05）；`pytest tests/ -q` **243 passed, 1 skipped**（v0.9）
   - CLI：7 个子命令逐条实跑（含 `--set-window`、`--format csv/json/table`、`--pace`、`--ts-format`）
   - Web：页面与静态资源 200、12 个子界面、REST 12 组端点、WebSocket 推送与降级、配置热更新与持久化分离、导出 34.6 万行 CSV
   - 实时：模拟器 6400 点/s 稳定摄入（实测 6398–6400 点/s），各量按独立窗长输出（0.2s 量 5 次/s、1s 量 1 次/s）
@@ -1121,6 +1138,7 @@ python cli.py selftest                            # 实测：44/44，worst_rel_e
 ---
 
 ## 🗒 变更记录
+- **v0.9（2026-10-13，第 10 轮）**：新增 **离线文件列映射开关** `columns.mapping_enabled` / `columns.mapping`：未启用＝默认列序「时间,A相电压,A相电流,B相电压,B相电流,C相电压,C相电流」（可识别表头仍按表头）；启用＝只播放有映射的列（列号或表头名），未映射通道按 0 并提示，时间戳未映射按 fs 合成连续时间轴。`ColumnMap.layout()/looks_like_header()/validate()` 成为离线取列唯一规则（parsing / probe / CLI probe / 重采样预扫描共用）；界面「数据源」页新增面板（开关 + 7 字段 + 默认列序 / 按探查表头填入）；`/api/probe` 增 `mapping_enabled/unmapped/ncols`。`tests/test_r10_colmap.py` 8 项、`tools/ui_r10_check.cjs` 15 项；全量 **243 passed**。
 - **v0.8.1（2026-10-13，F-32 热修）**：去掉事件告警的右下角弹出提示（事件多时刷屏）；活动事件数仍显示在导航徽标，明细在「事件」页。
 - **v0.8（2026-10-13，第 9 轮）**：新增 **「间谐波」「直流偏置」「事件」三个子界面**。电气量 7→9（`interharmonic`、`dc`，各自独立窗长/趋势/落盘/导出），曲线 6→8；`elec_tool/events.py` 事件检测（基波相量/谐波相量/间谐波相量/频率/ROCOF 超限 + 功率振荡；开始/峰值/复归滞回、阈值热改即复归、数据时间、`output/events/events_<日期>.csv`）；`EventConfig` 全部阈值可配置（含 `limits_secondary` 按 PT/CT 自动折算）；REST `GET /api/events`、`POST /api/events/clear`，WS `type=event`。`tests/test_r9_events.py` 13 项、`tools/ui_r9_check.cjs` 28 项；全量 **235 passed**。
 - **v0.7（2026-10-12，第 8 轮）**：新增 **「数据处理」子界面**——离线波形 CSV 按指定采样率重采样到 `data/<原名>_re_<fs>.csv`（`elec_tool/resample.py`：linear 流式 / nearest / fft 抗混叠；时间戳按源写法重生成；表头/编码/BOM 保留；后台任务＋进度＋取消）；REST 4 个接口；CLI `resample`；`tests/test_r8_resample.py` 16 项、`tools/ui_r8_check.cjs` 29 项。测试 **222 passed**。

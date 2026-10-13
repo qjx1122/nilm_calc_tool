@@ -909,6 +909,11 @@ function fillSourceForm(cfg) {
     $('#src-playvalue').value = cfg.source.play_start_value || '';
   }
 
+  if (cfg.columns) {
+    $('#cfg-mapen').checked = !!cfg.columns.mapping_enabled;
+    MAP_FIELDS.forEach(k => { document.getElementById(`cfg-map-${k}`).value = (cfg.columns.mapping || {})[k] || ''; });
+    syncColmapForm();
+  }
   if (cfg.transform) {
     $('#cfg-pt').value = cfg.transform.pt_ratio;
     $('#cfg-ct').value = cfg.transform.ct_ratio;
@@ -1295,6 +1300,42 @@ function collectSourcePayload() {
   return p;
 }
 
+const MAP_FIELDS = ['timestamp', 'ua', 'ia', 'ub', 'ib', 'uc', 'ic'];
+const MAP_ALIAS = { timestamp: ['时间戳', '时间', '时标', 'timestamp', 'time', 'ts', 'datetime'],
+  ua: ['a相电压', 'ua', 'u_a', 'va'], ia: ['a相电流', 'ia', 'i_a'], ub: ['b相电压', 'ub', 'u_b', 'vb'],
+  ib: ['b相电流', 'ib', 'i_b'], uc: ['c相电压', 'uc', 'u_c', 'vc'], ic: ['c相电流', 'ic', 'i_c'] };
+
+function syncColmapForm() {
+  const on = $('#cfg-mapen').checked;
+  MAP_FIELDS.forEach(k => { const el = document.getElementById(`cfg-map-${k}`); el.disabled = !on; const lab = el.closest('label'); if (lab) lab.classList.toggle('off', !on); });
+  ['btn-map-default', 'btn-map-fromprobe'].forEach(id => { $('#' + id).disabled = !on; });
+}
+
+function collectColumnsPayload() {
+  const mapping = {};
+  MAP_FIELDS.forEach(k => { mapping[k] = document.getElementById(`cfg-map-${k}`).value.trim(); });
+  return { mapping_enabled: $('#cfg-mapen').checked, mapping };
+}
+
+function fillColmapDefault() {
+  MAP_FIELDS.forEach((k, i) => { document.getElementById(`cfg-map-${k}`).value = String(i + 1); });
+  S.formDirty = true; S.cfgDirty = true;
+}
+
+function fillColmapFromProbe() {
+  const hdr = S.lastProbe && S.lastProbe.header;
+  if (!hdr || !hdr.length) { toast('请先「探查数据」且文件需有表头', 'err'); return; }
+  const norm = (x) => String(x).replace(/[\s_\-]/g, '').toLowerCase();
+  const found = [];
+  MAP_FIELDS.forEach(k => {
+    const i = hdr.findIndex(h => MAP_ALIAS[k].includes(norm(h)));
+    document.getElementById(`cfg-map-${k}`).value = i >= 0 ? hdr[i] : '';
+    if (i >= 0) found.push(k);
+  });
+  S.formDirty = true; S.cfgDirty = true;
+  toast(`已按表头填入 ${found.length}/7 个字段${found.length < 7 ? '，其余留空＝不播放' : ''}`, 'ok');
+}
+
 function collectConfigPayload() {
   // PUT /api/config 是**深合并**：不送的键保留服务端现值。
   // 所以空输入框必须**跳过**而不是送 0——否则 +'' === 0 会让 fs/PT/CT 变成 0，
@@ -1321,6 +1362,7 @@ function collectConfigPayload() {
     payload: {
       transform, sampling, harmonic,
       power: { apparent: $('#cfg-apparent').value, reactive: $('#cfg-reactive').value },
+      columns: collectColumnsPayload(),
     },
     skipped,
   };
@@ -1397,10 +1439,13 @@ async function probe() {
   try {
     const r = await api('/api/probe?path=' + encodeURIComponent(p));
     if (!r.ok) { $('#probe-out').innerHTML = notes(['✗ ' + r.error]); return; }
+    S.lastProbe = r;
+    const cols = r.header || r.first_row || [];
     $('#probe-out').innerHTML = notes([
       `✓ ${r.path}`, `大小 ${r.size_mb} MB · 编码 ${r.encoding} · 行数 ${r.rows} · 时长约 ${num(r.duration_s, 2)}s`,
-      `表头：${(r.header || []).join(' | ')}`,
-      `列映射：${JSON.stringify(r.columns)}`,
+      (r.header ? '表头' : '首行即数据（无表头）') + `（${cols.length} 列）：` + cols.map((h, i) => `[${i + 1}] ${h}`).join('  '),
+      `列映射（${r.mapping_enabled ? '启用 columns.mapping' : '默认：表头/默认列序'}）：${JSON.stringify(r.columns)}` +
+        ((r.unmapped || []).length ? `；未映射不播放：${r.unmapped.join('、')}` : ''),
       `时间戳模式 ${r.ts_mode} · 推算 fs ${num(r.fs_est, 3)} Hz（配置 ${r.fs_configured} Hz，偏差 ${num(r.fs_deviation_pct, 4)}%）`,
       ...(r.notes || []),
     ]);
@@ -1469,6 +1514,9 @@ function bind() {
   $('#btn-probe').addEventListener('click', probe);
   $('#btn-listfiles').addEventListener('click', listFiles);
   $('#btn-savecfg').addEventListener('click', saveConfig);
+  $('#cfg-mapen').addEventListener('change', syncColmapForm);
+  $('#btn-map-default').addEventListener('click', fillColmapDefault);
+  $('#btn-map-fromprobe').addEventListener('click', fillColmapFromProbe);
   $('#btn-save-win').addEventListener('click', saveWindows);
   $('#btn-preset-fast').addEventListener('click', () => applyPreset(0.2));
   $('#btn-preset-std').addEventListener('click', () => applyPreset(1));

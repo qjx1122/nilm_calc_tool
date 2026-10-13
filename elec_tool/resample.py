@@ -158,18 +158,16 @@ def _prescan(path: str, enc: str, delimiter: str, colmap: ColumnMap, has_header:
         first = next(rdr, None)
         if first is None:
             raise ResampleError(f"{path} 为空文件")
-        idx: Optional[Dict[str, int]] = None
         rows: List[List[str]] = []
-        if has_header:
-            try:
-                idx = colmap.resolve([h.strip() for h in first])
-                header = first
-            except ConfigError:
-                idx = None
+        if has_header and colmap.looks_like_header(first):
+            header = first
         if header is None:
             rows.append(first)
-        if idx is None:
-            idx = {k: i for i, k in enumerate(("timestamp", "ua", "ia", "ub", "ib", "uc", "ic"))}
+        # 重采样按整行处理，只需要时间戳列；启用映射且未映射时间戳则无法重采样
+        lay = colmap.layout([h.strip() for h in header] if header else None)
+        if lay.get("timestamp") is None:
+            raise ResampleError("重采样需要时间戳列：columns.mapping 未映射时间戳")
+        idx = {k: (v if v is not None else 0) for k, v in lay.items()}
         for row in rdr:
             if row and any(str(c).strip() for c in row):
                 rows.append(row)

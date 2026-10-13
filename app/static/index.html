@@ -156,6 +156,26 @@
           </div>
         </div>
       </div>
+      <div class="panel" id="panel-colmap">
+        <h3>离线文件列映射（csv_file / csv_tail 取列规则）</h3>
+        <div class="form">
+          <label class="check"><input id="cfg-mapen" type="checkbox"> 启用列映射（不勾选＝默认列序：时间, A相电压, A相电流, B相电压, B相电流, C相电压, C相电流；有可识别表头时按表头取列）</label>
+          <div class="row2" id="colmap-grid">
+            <label>时间 <input id="cfg-map-timestamp" placeholder="列号(从1起) 或 表头列名；留空＝不映射→按配置 fs 合成时间轴"></label>
+            <label>A相电压 <input id="cfg-map-ua" placeholder="如 2 或 Ua"></label>
+            <label>A相电流 <input id="cfg-map-ia" placeholder="如 3 或 Ia"></label>
+            <label>B相电压 <input id="cfg-map-ub" placeholder="留空＝该通道不播放（按 0）"></label>
+            <label>B相电流 <input id="cfg-map-ib" placeholder="留空＝该通道不播放（按 0）"></label>
+            <label>C相电压 <input id="cfg-map-uc" placeholder="留空＝该通道不播放（按 0）"></label>
+            <label>C相电流 <input id="cfg-map-ic" placeholder="留空＝该通道不播放（按 0）"></label>
+          </div>
+          <div class="row">
+            <button id="btn-map-default">填入默认列序 1~7</button>
+            <button id="btn-map-fromprobe" title="先在上方「探查数据」，再按表头名自动填入（按别名识别）">按探查表头填入</button>
+          </div>
+          <div id="colmap-note" class="notes">启用后只播放有映射关系的列：未映射的通道按 0 处理并在数据源状态中提示；保存配置后对下次启动/下一块数据生效。</div>
+        </div>
+      </div>
       <div class="panel"><h3>数据源状态</h3>
         <div id="src-summary" class="notes"></div>
         <details><summary>原始状态 JSON</summary><pre id="src-state" class="pre"></pre></details>
