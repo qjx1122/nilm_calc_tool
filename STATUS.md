@@ -75,6 +75,7 @@
 - [x] 2026-10-10 **沙盒回收事故恢复**：venv 重建、样例数据重生成、git 历史按原结构重提交并 push（远端 `d2337ab`）
 - [x] 2026-10-12 **沙盒回收事故恢复（第 3 次）**：`.git` 退回基线、工作树尚存 → `git fetch` + `reset --mixed FETCH_HEAD` 接回 `a88dcaa`（零差异、无丢失），venv/样例重建
 - [x] 2026-10-12 **第 6 轮四功能**：用户时标格式（F-11~F-13）/ 24h 趋势历史（F-14~F-16）/ 逐曲线保存开关 / 离线自定义播放时间；`tests/test_r6_features.py` 25 项 + `tools/ui_r6_check.cjs` PASS 30 + 旧 harness PASS 74 + 全量 **186 passed, 1 skipped**；README v0.5 / REPORT_TEST T-004 / REPORT C-14、C-15
+- [x] 2026-10-13 **F-32 热修**（用户回报：事件多时告警弹窗刷屏）：`onEventPush` 去掉逐条 toast，只更新徽标/事件页；回归 28/28
 - [x] 2026-10-13 **第 9 轮三功能**：间谐波（IEC 分组）/ 直流偏置 / 事件（6 类）三个子界面 + `events.py` + REST/WS + CSV 落盘；`tests/test_r9_events.py` 13 项 + `tools/ui_r9_check.cjs` PASS 28 + 全量 235 passed；提交 `8539d8a`（feat）+ docs
 - [x] 2026-10-12 **第 7 轮三功能**：曲线实时落盘 `output/realtime/<曲线>_<日期>.csv` / 离线播放起点（5 模式）/ 曲线悬停取值；`tests/test_r7_features.py` 18 项 + `tools/ui_r7_check.cjs` PASS 39 + 旧 harness 30/74 + 全量 **204 passed, 1 skipped**；README v0.6 / REPORT_TEST T-005 / REPORT C-16、C-17
 

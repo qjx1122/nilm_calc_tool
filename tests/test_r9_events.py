@@ -344,6 +344,10 @@ def test_frontend_has_new_views_and_wiring():
     for f in ("renderInterharmonic", "renderDC", "renderEvents", "saveEventConfig", "onEventPush", "/api/events"):
         assert f in js
     assert "'interharmonic', 'dc'" in js                                    # CURVE_KEYS 同步
+    # F-32：事件到达不再逐条弹 toast（事件多时刷屏）；只更新徽标 + 事件页
+    body = js[js.index("function onEventPush"):]
+    body = body[: body.index("\n}")]
+    assert "toast(" not in body and "setEventBadge(" in body
     js_fields = set(re.findall(r"id=\"ev-([a-z0-9_]+)\"", html)) - {"enabled", "save", "filter", "only-active", "cards", "active",
                                                                      "table", "total", "form", "notes", "form-note"}
     assert js_fields <= set(EventConfig.__dataclass_fields__), js_fields - set(EventConfig.__dataclass_fields__)

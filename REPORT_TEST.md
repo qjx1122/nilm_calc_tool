@@ -904,6 +904,7 @@ U8-6/7（可选）：____
 | F-29 | 基波阈值按二次侧默认值（57.74 V / 6 A）直接与**一次值**结果比较 → 真实样例一开机 6 条基波超限 | `EventConfig.limits_secondary`（默认 true）：启用 PT/CT 时阈值自动 ×PT/×CT；摘要回传 `effective_limits/limit_scale`，界面卡片显示 | ✅ |
 | F-30 | 复归按**事件记录的旧阈值**判，用户把阈值抬高后旧事件永远挂着 | `_release(limit=当前阈值)`；并把频率滞回从「limit×0.95」改为绝对带 `(1−h)×(f_high−f_low)`（否则 50.5×0.95=47.98 永不复归） | ✅ |
 | F-31 | `ui_r7_check` 1 项（播放起点摘要）在 jsdom 下失败，改动前后一致 | 判为测试时序（WS 桩），未改产品代码 | 🔶观察 |
+| F-32 | （用户回报 2026-10-13）开启事件检测、事件很多时，每条事件都在右下角弹 toast，界面被刷屏 | `app.js onEventPush` 去掉逐条 toast；事件到达只更新导航徽标（活动数）并刷新「事件」页表格；回归断言加入 `test_frontend_has_new_views_and_wiring`；`ui_r9_check` 复跑 28/28 | ✅ |
 | — | `sampling.adaptive_freq=false` 时频率恒为额定 → 频率/ROCOF 事件永不触发，且偏频下谐波/间谐波泄漏虚高 | 事件摘要 `notes` 给出提示（出厂 `configs/default.json` 为 true） | ✅ |
 
 ### 用户执行命令（U9 组：浏览器手点，🔶待回报）

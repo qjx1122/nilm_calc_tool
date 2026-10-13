@@ -1141,9 +1141,10 @@ function onEventPush(list) {
   list.forEach(e => {
     const idx = S.events.findIndex(x => x.id === e.id);
     if (idx >= 0) S.events[idx] = e; else S.events.unshift(e);
-    if (e.active) toast(`🚨 ${e.type_name}：${e.subject}（${fmtVal(e.value_start)}${e.unit} / 限 ${fmtVal(e.limit)}${e.unit}）`, 'err');
+    // 不再逐条弹 toast（事件多时右下角被刷屏）：活动数走导航徽标，明细进「事件」页表格
   });
   if (S.events.length > 2000) S.events.length = 2000;
+  setEventBadge(S.events.filter(x => x.active).length);
   if (S.view === 'events') renderEvents();
 }
 
