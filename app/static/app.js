@@ -170,7 +170,12 @@ function winNotes(key) {
 function prep(cv, h) {
   const dpr = window.devicePixelRatio || 1;
   const w = cv.clientWidth || cv.parentElement.clientWidth || 600;
-  const height = h || cv.getAttribute('height') || 200;
+  // 逻辑高度（CSS 像素）只从 opt.height 或**首次**读到的 HTML height 属性取，并缓存在 data-h 里。
+  // 不能每次回读 getAttribute('height')：下面 `cv.height = height*dpr` 会同步改写该属性，
+  // 当 devicePixelRatio≠1（Windows 125% 缩放、或浏览器对某个主机名记忆了 110% 缩放）时，
+  // 每次重绘高度都乘一次 dpr → 页面纵向越拉越长（实测 200→250→312→390…）。
+  if (!cv.dataset.h) cv.dataset.h = String(h || cv.getAttribute('height') || 200);
+  const height = +(h || cv.dataset.h) || 200;
   cv.width = Math.max(200, Math.floor(w * dpr));
   cv.height = Math.floor(height * dpr);
   cv.style.height = height + 'px';

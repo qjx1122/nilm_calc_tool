@@ -155,3 +155,17 @@ def test_source_hint_covers_every_kind():
         assert re.search(rf"^\s*{kind}:\s*'", block, re.M), f"SRC_HINT 缺少 {kind}"
     assert 'id="src-hint"' in HTML, "index.html 缺少 #src-hint 容器"
     assert 'id="src-formnote"' in HTML, "index.html 缺少 #src-formnote（未保存提示）"
+
+
+def test_canvas_prep_does_not_reread_scaled_height_attribute():
+    """F-22：`cv.height = h*dpr` 会同步改写 HTML height 属性；若 prep() 每次回读 getAttribute('height')，
+    devicePixelRatio≠1（Windows 125% 缩放 / 浏览器对某主机名记忆了缩放级别）时每次重绘高度乘一次 dpr，
+    页面纵向无限拉伸（127.0.0.1 缩放 100% 看不出、换 IP 访问就复现）。逻辑高度必须缓存（data-h）。"""
+    import re
+    js = (ROOT / "app" / "static" / "app.js").read_text(encoding="utf-8")
+    body = js.split("function prep(")[1].split("\nfunction ")[0]
+    assert "cv.dataset.h" in body, "prep() 必须把逻辑高度缓存在 data-h"
+    # 回读属性只允许出现在「首次缓存」那一行里
+    reads = [ln for ln in body.splitlines() if "getAttribute('height')" in ln]
+    assert len(reads) == 1 and "if (!cv.dataset.h)" in reads[0], reads
+    assert not re.search(r"const height = h \|\| cv\.getAttribute", body)
