@@ -1,7 +1,7 @@
 # README.md — nilm_calc_tool（电力系统各类电气量计算工具）
 
 > 台账文件（BOOTSTRAP.md v2.2）：安装与环境 / 运行命令 / 数据目录 / 配置结构 / 输出产物 / 生产推荐流程。
-> **当前状态：v0.9（2026-10-13）**——软件已实现并在沙盒跑通（算法核心 + 4 类数据源 + 计算引擎 + 事件检测 + 离线重采样 + 离线列映射 + CLI + Web 界面 + 243 项测试 + 9 项验证工具）。
+> **当前状态：v0.10（2026-10-13）**——软件已实现并在沙盒跑通（算法核心 + 4 类数据源 + 计算引擎 + 事件检测 + 离线重采样 + 离线列映射 / 时标时区开关 + CLI + Web 界面 + 249 项测试 + 10 项验证工具）。
 > 状态标注：✅已确认（有代码 / 实录 / 官方来源佐证）｜🔶待确认（占位或推断，需用户回填）｜❌已废弃（不删行，只翻状态）
 > **本文所有 ✅ 均为沙盒实录：Linux 6.1.158+ / CPython 3.11.2 / numpy 2.4.6，采集时间 2026-10-10。**
 > **Windows 命令、真实现场数据、生产部署三项尚未在用户环境验证，一律标 🔶，请按 `REPORT_TEST.md`「T-002 本地部署与验收执行包」逐条回填。**
@@ -416,6 +416,20 @@ CLI 同等能力：`.venv/bin/python cli.py resample "data/波形_农业排灌_�
 
 **注意**：`linear` 降采样无抗混叠（高于新 Nyquist 的谐波会折叠到低频），要做谐波分析请用 `fft`；`fft` 的输出点数 = round(N·fs_new/fs_src)（周期语义），比例非整时实际采样率略有偏差并写入 notes；重采样后播放时请把「配置采样率 fs」改成目标值。
 
+
+#### 离线文件时标的 UTC 开关（v0.10）
+
+> 适用 `csv_file`（未启用「自定义播放时间」时）与 `csv_tail`；配置项 `source.file_time_utc`（默认 **false**），界面在「数据源」页「自定义播放时间」勾选框下方；启动数据源时随表单下发，也可 CLI `--file-time-utc`。
+
+| `file_time_utc` | 文件文本时标（`2026-10-12 08:00:00` / `0/00/00 00:12:40.0000`）如何解释 | 曲线 / 落盘 CSV / 事件 上看到的时间 |
+|---|---|---|
+| **false**（默认） | 按本机**本地时间**解释（解析时 tz_offset_h＝本机时区偏移，东八区 8） | **与文件中的数据时间一致**（文件 `00:12:40` → 界面 `00:12:40`） |
+| **true** | 视为 **UTC** | 换算成本地时间显示（北京时间下文件 `00:12:40` → 界面 `08:12:40`，即 v0.9 及之前的表现） |
+
+- 纯数字 epoch 时标是绝对时刻，不受本开关影响；`sampling`/计算结果也不受影响（只平移时间轴的绝对位置）。
+- 播放起点 `time` 模式与 `0/00/00` 写法的「当天时刻」比较已按同一偏移还原，所填时刻仍是文件里的时刻。
+- **假设（已按此实现，可改）**：① 浏览器与服务端在同一时区（界面用浏览器本地时间格式化 epoch）；② 启用「自定义播放时间」时时间轴由起始时间决定，本开关不显示（起始时间留空＝文件第 1 条时间，仍按本开关解释）；③ 偏移按当前时刻的本机时区取（含夏令时），不按每条数据各自判断；④ TCP 文本帧沿用同一开关。
+- 验证：`tests/test_r11_file_time.py` 6 项（`TZ=Asia/Shanghai` 下日期时间 / 0/00/00 / epoch 三种写法、`create_source` 默认偏移、REST 探查与启动透传）；`tools/ui_r11_check.cjs` 11 项；全量测试在 `TZ=UTC` 与 `TZ=Asia/Shanghai` 下均通过。
 
 #### 离线文件列映射开关（v0.9）
 
@@ -1017,6 +1031,7 @@ python cli.py selftest                            # 实测：44/44，worst_rel_e
 | | `block_samples` / `poll_interval_s` | 640 / 0.05 | 每块点数与轮询间隔 |
 | | `tail_from_end` / `watch_dir_newest` | false / **true** | csv_tail 行为：只算新增 / 目录模式跟最新文件（CLI `--from-end`、`--watch-newest` 与界面勾选框可改） |
 | | `sim_f` / `sim_harmonics` / `sim_noise_ratio` / `sim_unbalance` / `sim_speed` | 50 / {3:0.08,5:0.06,7:0.03,11:0.015,13:0.01} / 0.002 / 0.02 / 1.0 | 模拟器参数（`sim_speed>1` 加速联调） |
+| | `file_time_utc` | `false` | v0.10：离线文件文本时标是否按 UTC 解释；false＝曲线时间与文件时间一致（按本机本地时间解释），true＝视为 UTC 换算显示。epoch 数字时标不受影响 |
 | | `custom_time` / `custom_time_start` | false / `""` | csv_file 自定义播放时间（§4.2）：时间轴＝起始＋序号/fs；起始留空＝文件第 1 条数据时间 |
 | `output` | `history_hours` / `history_max_points` | 24.0 / 500000 | 趋势曲线保留窗（小时，按数据时间）与每条曲线内存上限（安全阀） |
 | | `realtime_save` / `realtime_dir` | true / `output/realtime` | **实时落盘**（v0.6）：每算出一个曲线点就追加写 `<realtime_dir>/<曲线>_<数据日期>.csv`（受 `curve_save` 过滤）；CLI `--realtime-save on|off --realtime-dir …`；环境变量 `ELEC_TOOL_REALTIME_DIR` 优先 |
@@ -1108,7 +1123,7 @@ python cli.py selftest                            # 实测：44/44，worst_rel_e
 
 - **沙盒已验证（Linux / CPython 3.11.2，2026-10-10 实录）**
   - 安装：venv + `pip install -r requirements.txt`；离线安装（Linux 29 包 / Windows 目标 24 包下载）；最小安装报错提示
-  - 算法：`selftest` 44/44（最差 1.508e-05）；`pytest tests/ -q` **243 passed, 1 skipped**（v0.9）
+  - 算法：`selftest` 44/44（最差 1.508e-05）；`pytest tests/ -q` **249 passed, 1 skipped**（v0.10，UTC / Asia/Shanghai 双时区）
   - CLI：7 个子命令逐条实跑（含 `--set-window`、`--format csv/json/table`、`--pace`、`--ts-format`）
   - Web：页面与静态资源 200、12 个子界面、REST 12 组端点、WebSocket 推送与降级、配置热更新与持久化分离、导出 34.6 万行 CSV
   - 实时：模拟器 6400 点/s 稳定摄入（实测 6398–6400 点/s），各量按独立窗长输出（0.2s 量 5 次/s、1s 量 1 次/s）
@@ -1138,6 +1153,7 @@ python cli.py selftest                            # 实测：44/44，worst_rel_e
 ---
 
 ## 🗒 变更记录
+- **v0.10（2026-10-13，第 11 轮）**：新增 **离线文件时标 UTC 开关** `source.file_time_utc`（默认 false）：未启用自定义播放时间时，文件里的日期时间 / `0/00/00 HH:MM:SS` 文本时标按本机本地时间解释，**曲线、落盘 CSV、事件时间与文件中的时间一致**；true 则视为 UTC 换算显示（旧行为）。`create_source/LiveEngine` 的 `tz_offset_h` 默认改为按配置推导；`/api/probe` 增 `file_time_utc/tz_offset_h/t_first_local`；`/api/engine/start` 白名单放行；CLI `--file-time-utc`；界面勾选框随「自定义播放时间」联动。`tests/test_r11_file_time.py` 6 项、`tools/ui_r11_check.cjs` 11 项；全量 **249 passed**（UTC 与 Asia/Shanghai 双时区）。
 - **v0.9（2026-10-13，第 10 轮）**：新增 **离线文件列映射开关** `columns.mapping_enabled` / `columns.mapping`：未启用＝默认列序「时间,A相电压,A相电流,B相电压,B相电流,C相电压,C相电流」（可识别表头仍按表头）；启用＝只播放有映射的列（列号或表头名），未映射通道按 0 并提示，时间戳未映射按 fs 合成连续时间轴。`ColumnMap.layout()/looks_like_header()/validate()` 成为离线取列唯一规则（parsing / probe / CLI probe / 重采样预扫描共用）；界面「数据源」页新增面板（开关 + 7 字段 + 默认列序 / 按探查表头填入）；`/api/probe` 增 `mapping_enabled/unmapped/ncols`。`tests/test_r10_colmap.py` 8 项、`tools/ui_r10_check.cjs` 15 项；全量 **243 passed**。
 - **v0.8.1（2026-10-13，F-32 热修）**：去掉事件告警的右下角弹出提示（事件多时刷屏）；活动事件数仍显示在导航徽标，明细在「事件」页。
 - **v0.8（2026-10-13，第 9 轮）**：新增 **「间谐波」「直流偏置」「事件」三个子界面**。电气量 7→9（`interharmonic`、`dc`，各自独立窗长/趋势/落盘/导出），曲线 6→8；`elec_tool/events.py` 事件检测（基波相量/谐波相量/间谐波相量/频率/ROCOF 超限 + 功率振荡；开始/峰值/复归滞回、阈值热改即复归、数据时间、`output/events/events_<日期>.csv`）；`EventConfig` 全部阈值可配置（含 `limits_secondary` 按 PT/CT 自动折算）；REST `GET /api/events`、`POST /api/events/clear`，WS `type=event`。`tests/test_r9_events.py` 13 项、`tools/ui_r9_check.cjs` 28 项；全量 **235 passed**。

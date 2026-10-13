@@ -445,6 +445,12 @@ class SourceConfig:
     #   典型用途：采集器时标只有当天时刻（0/00/00 00:12:40.0000）或 0.1ms 量化造成的抖动。
     custom_time: bool = False
     custom_time_start: str = ""
+    # 离线文件（csv_file / csv_tail）文本时标的时区解释（custom_time=False 时决定曲线时间）：
+    #   file_time_utc=False → 文件里的日期时间 / "0/00/00 HH:MM:SS" 按本机本地时间解释，
+    #                         曲线、落盘 CSV、事件时间与文件中的时间**一致**（默认）
+    #   file_time_utc=True  → 文件时标视为 UTC，显示时换算成本地时间（北京时间会比文件多 8 h）
+    #   纯数字 epoch 时标是绝对时刻，不受本开关影响。
+    file_time_utc: bool = False
     # 离线文件播放起点（csv_file 专用）：从文件的指定位置开始播放，之前的数据直接跳过（不参与计算）。
     #   play_start_mode: begin   从头（默认，play_start_value 忽略）
     #                    row     从第 N 条数据行开始（1 起算，不含表头）：value="120001"

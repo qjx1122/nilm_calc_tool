@@ -290,6 +290,8 @@ def _apply_overrides(cfg: AppConfig, args: argparse.Namespace) -> AppConfig:
     if getattr(args, "custom_time_start", None):
         cfg.source.custom_time = True
         cfg.source.custom_time_start = str(args.custom_time_start)
+    if getattr(args, "file_time_utc", None) is not None:
+        cfg.source.file_time_utc = bool(args.file_time_utc)
     if getattr(args, "play_from", None):
         text = str(args.play_from)
         if ":" not in text:
@@ -621,6 +623,8 @@ def build_parser() -> argparse.ArgumentParser:
                     help="自定义播放时间：时间轴＝起始时间＋样本序号/fs（起始默认＝文件第 1 条数据时间）")
     sp.add_argument("--custom-time-start", dest="custom_time_start",
                     help="自定义播放的起始时间（'2026-10-12 08:00:00' 或 epoch 秒），给出即启用 --custom-time")
+    sp.add_argument("--file-time-utc", dest="file_time_utc", action="store_true", default=None,
+                    help="离线文件文本时标按 UTC 解释（默认不按：曲线/落盘时间与文件中的时间一致）")
     sp.add_argument("--play-from", dest="play_from", metavar="模式:值",
                     help="从文件指定位置开始播放：row:120001（第 N 行）/ sec:30（跳过 N 秒）/ "
                          "pct:50（文件 N%% 处）/ time:'2026-10-12 08:00:00' 或 time:08:00:00（时标 ≥ 该时刻）")

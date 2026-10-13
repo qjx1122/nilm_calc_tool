@@ -904,6 +904,7 @@ function fillSourceForm(cfg) {
     $('#src-tailend').checked = !!cfg.source.tail_from_end;
     $('#src-newest').checked = !!cfg.source.watch_dir_newest;
     $('#src-customtime').checked = !!cfg.source.custom_time;
+    $('#src-utc').checked = !!cfg.source.file_time_utc;
     $('#src-customstart').value = cfg.source.custom_time_start || '';
     $('#src-playmode').value = cfg.source.play_start_mode || 'begin';
     $('#src-playvalue').value = cfg.source.play_start_value || '';
@@ -954,6 +955,7 @@ function syncSourceForm() {
     'src-newest': kind === 'csv_tail',
     'src-customtime': kind === 'csv_file',
     'src-customstart': kind === 'csv_file' && $('#src-customtime').checked,
+    'src-utc': (kind === 'csv_file' && !$('#src-customtime').checked) || kind === 'csv_tail',
     'src-playmode': kind === 'csv_file',
     'src-playvalue': kind === 'csv_file' && $('#src-playmode').value !== 'begin',
     'src-speed': kind === 'simulator',
@@ -990,6 +992,8 @@ function renderSource() {
     `数据源：<b>${esc(src.kind || e.source_kind || '—')}</b>` +
       (src.path ? `　文件 ${esc(src.path)}` : '') +
       (src.endpoint ? `　${esc(src.endpoint)}` : '') +
+      (src.kind === 'csv_file' && !src.custom_time && src.tz_offset_h !== undefined ?
+        `　时标解释：${src.file_time_utc ? 'UTC（显示换算为本地）' : '与文件一致（本地 UTC' + (src.tz_offset_h >= 0 ? '+' : '') + src.tz_offset_h + '）'}` : '') +
       (src.custom_time ? `　<b>自定义播放时间</b>：起始 ${esc(src.custom_time_start_source || '')} ` +
         (isNum(src.custom_time_start) ? new Date(src.custom_time_start * 1000).toLocaleString() : '') : '') +
       (src.play_start_mode && src.play_start_mode !== 'begin'
@@ -1272,6 +1276,10 @@ function collectSourcePayload() {
     // 自定义播放时间：布尔必送（取消勾选要能关掉）；起始时间**空串也送**——空＝「用文件第 1 条数据时间」是有效语义
     p.custom_time = !!$('#src-customtime').checked;
     p.custom_time_start = txt('src-customstart');
+    if (!p.custom_time) p.file_time_utc = !!$('#src-utc').checked;   // 自定义时间关闭时才有意义
+  }
+  if (kind === 'csv_tail') {
+    p.file_time_utc = !!$('#src-utc').checked;
     // 播放起点：模式必送（选回「开头」要能关掉）；取值只在非 begin 时送（begin 不读取值，旧值留着无害）
     p.play_start_mode = $('#src-playmode').value || 'begin';
     if (p.play_start_mode !== 'begin') p.play_start_value = txt('src-playvalue');

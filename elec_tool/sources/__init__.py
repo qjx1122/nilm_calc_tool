@@ -16,9 +16,15 @@ __all__ = ["DataSource", "CsvFileSource", "CsvTailSource", "SimulatorSource", "T
 
 
 def create_source(cfg: AppConfig, kind: Optional[str] = None, path: Optional[str] = None,
-                  realtime_pace: Optional[bool] = None, tz_offset_h: float = 0.0) -> DataSource:
-    """按 source.kind 构造数据源（kind/path 可临时覆盖配置）。"""
+                  realtime_pace: Optional[bool] = None, tz_offset_h: Optional[float] = None) -> DataSource:
+    """按 source.kind 构造数据源（kind/path 可临时覆盖配置）。
+
+    tz_offset_h=None（默认）→ 按 source.file_time_utc 决定：False＝本地时区偏移（曲线时间＝文件时间），True＝0（按 UTC）。
+    """
     cfg.validate()
+    if tz_offset_h is None:
+        from .parsing import file_tz_offset_h
+        tz_offset_h = file_tz_offset_h(cfg)
     k = kind or cfg.source.kind
     p = path if path is not None else cfg.source.path
     if k == "csv_file":

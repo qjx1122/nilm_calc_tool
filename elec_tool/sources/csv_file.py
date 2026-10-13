@@ -162,6 +162,7 @@ class CsvFileSource(DataSource):
             "custom_time_start": self._custom_t0 if self.custom_time else None,
             "custom_time_start_source": self._custom_t0_source if self.custom_time else None,
             "file_first_t": self._file_first_t,
+            "file_time_utc": bool(self.cfg.source.file_time_utc), "tz_offset_h": self.tz_offset_h,
             "play_start_mode": self.play_start_mode,
             "play_start_value": self.cfg.source.play_start_value if self.play_start_mode != "begin" else None,
             "play_seek": dict(self._seek_info) if self._seek_info else None,

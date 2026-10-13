@@ -100,6 +100,8 @@
             <label>binary 帧字段顺序 <input id="src-fields" placeholder="t,ua,ia,ub,ib,uc,ic" title="与 struct 格式逐项对应"></label>
             <label class="chk"><input id="src-customtime" type="checkbox">
               csv_file：自定义播放时间（时间轴＝起始时间＋样本序号/采样率；不勾选＝按文件内时间戳播放）</label>
+            <label class="chk"><input id="src-utc" type="checkbox">
+              csv_file / csv_tail：文件时标按 UTC 解释（不勾选＝曲线上的数据时间与文件中的数据时间一致；勾选＝视为 UTC 并换算成本地时间显示；仅对日期时间 / 0/00/00 文本时标有效，epoch 数字不受影响）</label>
             <label>自定义起始时间 <input id="src-customstart" placeholder="留空＝文件第 1 条数据时间；或 2026-10-12 08:00:00 / epoch 秒"
               title="启用自定义播放时间后生效：留空用文件第 1 条数据的时间作为起点"></label>
             <label>csv_file：播放起点

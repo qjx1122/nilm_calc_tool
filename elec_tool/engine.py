@@ -66,7 +66,7 @@ class EngineState:
 class LiveEngine:
     def __init__(self, cfg: AppConfig, source: Optional[DataSource] = None,
                  on_result: Optional[Callable[[MetricsResult], None]] = None,
-                 tz_offset_h: float = 0.0, output_root: Optional[str] = None):
+                 tz_offset_h: Optional[float] = None, output_root: Optional[str] = None):
         self.cfg = cfg.validate()
         fs = self.cfg.sampling.fs
         cap = int(np.ceil(self.cfg.max_window_s * fs * 1.5)) + max(int(self.cfg.source.block_samples), 64)

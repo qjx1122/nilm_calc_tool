@@ -245,7 +245,8 @@ def test_play_start_time_on_user_clock_format(csv_factory, tmp_path):
     target = f"{h:02d}:{mi:02d}:{s + 1:02d}"
     n, t0, src = _play(cfg, "time", target)
     assert n == len(d["t"]) - 6400, (n, target)
-    assert t0 == pytest.approx(h * 3600 + mi * 60 + s + 1, abs=1e-3)
+    import time as _time
+    assert t0 == pytest.approx(h * 3600 + mi * 60 + s + 1 - _time.localtime().tm_gmtoff, abs=1e-3)   # v0.10：无日期时标按本地时间解释
 
 
 def test_play_start_beyond_eof_raises_diagnosable_error(csv_factory, tmp_path):

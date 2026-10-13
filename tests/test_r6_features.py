@@ -18,6 +18,13 @@ import time
 from pathlib import Path
 
 import numpy as np
+import time as _time
+
+
+def _tz_s() -> float:
+    """本地时区偏移（秒），与 parsing.local_utc_offset_h 一致；沙盒 UTC 为 0。"""
+    return float(_time.localtime().tm_gmtoff)
+
 import pytest
 
 from elec_tool.config import AppConfig, ConfigError, CURVE_KEYS, parse_time_text
@@ -108,7 +115,8 @@ def test_custom_time_off_keeps_file_timestamps(csv_factory, tmp_path):
     cfg.source.kind, cfg.source.path, cfg.source.block_samples = "csv_file", d["path"], 640
     blocks, src = _blocks(cfg)
     t = np.concatenate([b.t for b in blocks])
-    assert t[0] == pytest.approx(float(d["t"][0]) % 86400.0, abs=1e-4)
+    # v0.10：无日期时标按本地时间解释（source.file_time_utc=False 默认）→ epoch = 当天秒 − 本地时区偏移
+    assert t[0] == pytest.approx(float(d["t"][0]) % 86400.0 - _tz_s(), abs=1e-4)
     # 文件时标被 0.1ms 截断 → 间隔不是常数（这正是用户要「自定义时间」的原因）
     assert np.unique(np.round(np.diff(t), 5)).size > 1
     assert src.info()["custom_time"] is False
@@ -122,7 +130,7 @@ def test_custom_time_default_start_is_first_row_and_uniform(csv_factory, tmp_pat
     cfg.source.custom_time, cfg.source.custom_time_start = True, ""
     blocks, src = _blocks(cfg)
     t = np.concatenate([b.t for b in blocks])
-    first_file_t = float(d["t"][0]) % 86400.0
+    first_file_t = float(d["t"][0]) % 86400.0 - _tz_s()
     assert t[0] == pytest.approx(math.floor(first_file_t * 10000) / 10000, abs=1e-9)   # 文件第 1 条（截断后）
     assert np.allclose(np.diff(t), 1.0 / FS, atol=1e-9)                                # 严格等间隔
     assert t[-1] - t[0] == pytest.approx((t.size - 1) / FS, abs=1e-7)                  # 跨块连续，不重置

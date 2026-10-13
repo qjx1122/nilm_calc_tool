@@ -379,7 +379,7 @@ async def engine_start(payload: Optional[Dict[str, Any]] = None) -> Any:
                     if k in ("kind", "path", "host", "port", "frame", "block_samples",
                              "poll_interval_s", "tail_from_end", "sim_speed", "watch_dir_newest",
                              "struct_fmt", "struct_fields", "custom_time", "custom_time_start",
-                             "play_start_mode", "play_start_value")}
+                             "file_time_utc", "play_start_mode", "play_start_value")}
         if src_over:
             data["source"].update(src_over)
         if payload.get("windows"):
@@ -701,7 +701,9 @@ async def probe(path: str) -> Dict[str, Any]:
                 n_rows += 1
                 if ts_c is not None and row and len(row) > ts_c and n_rows <= 5000:
                     ts.append(row[ts_c])
-        info = parse_timestamps(ts[:3000], cfg.columns.timestamp_unit)
+        from elec_tool.sources.parsing import file_tz_offset_h
+        tz_h = file_tz_offset_h(cfg)
+        info = parse_timestamps(ts[:3000], cfg.columns.timestamp_unit, tz_h)
         return {"ok": True, "path": p, "size_mb": round(os.path.getsize(p) / 1024 / 1024, 3),
                 "encoding": enc, "header": header if has_header else None, "has_header": has_header,
                 "first_row": None if has_header else header,
@@ -710,6 +712,8 @@ async def probe(path: str) -> Dict[str, Any]:
                 "unmapped": [cfg.columns.FIELD_NAMES[k] for k in cfg.columns.unmapped(idx)],
                 "t_first": (float(info.t[0]) if info.t.size else None),
                 "t_first_text": (ts[0] if ts else None),
+                "file_time_utc": bool(cfg.source.file_time_utc), "tz_offset_h": tz_h,
+                "t_first_local": (time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(float(info.t[0]))) if len(info.t) else None),
                 "ts_mode": info.mode, "fs_est": info.fs_est, "fs_configured": cfg.sampling.fs,
                 "fs_deviation_pct": (abs(info.fs_est - cfg.sampling.fs) / cfg.sampling.fs * 100
                                      if info.fs_est == info.fs_est else None),

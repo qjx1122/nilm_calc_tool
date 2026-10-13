@@ -49,6 +49,17 @@ _RE_SLASH_CLOCK = re.compile(
 _NO_DATE_BASE = 0.0
 
 
+def local_utc_offset_h(t: Optional[float] = None) -> float:
+    """本机本地时区相对 UTC 的偏移（小时，东八区＝8）。t 给出时按该时刻（含夏令时）计算。"""
+    lt = time.localtime(t if t is not None else time.time())
+    return float(lt.tm_gmtoff) / 3600.0
+
+
+def file_tz_offset_h(cfg) -> float:
+    """离线文件文本时标的解释偏移：source.file_time_utc=True → 0（按 UTC）；否则本地时区偏移（时间与文件一致）。"""
+    return 0.0 if bool(getattr(cfg.source, "file_time_utc", False)) else local_utc_offset_h()
+
+
 def _parse_slash_clock(s: str, tz_offset_h: float) -> Optional[Tuple[float, bool]]:
     """解析 ``Y/M/D HH:MM:SS.ffff`` 骨架。返回 (epoch 秒, 是否无日期) 或 None（不匹配）。
 
@@ -65,7 +76,7 @@ def _parse_slash_clock(s: str, tz_offset_h: float) -> Optional[Tuple[float, bool
         return None
     y, mo, d = int(a), int(b), int(c)
     if y == 0 or mo == 0 or d == 0:
-        return _NO_DATE_BASE + tod, True
+        return _NO_DATE_BASE + tod - tz_offset_h * 3600.0, True   # 与带日期写法同样按 tz_offset_h 解释（本地显示＝文件时刻）
     # 日/月/年 或 年/月/日：第一段 >31 视为年；两位年补 2000
     if y <= 31 and d > 31:
         y, d = d, y
@@ -221,7 +232,8 @@ def parse_timestamps(values: Sequence[str], unit: str = "auto",
                 ) from exc
         parsed.append(float(got))
     t = np.asarray(parsed, dtype=np.float64)
-    notes.append(f"时间戳格式识别为 '{used_fmt}'；tz_offset_h={tz_offset_h}（仅影响显示，不影响计算）")
+    notes.append(f"时间戳格式识别为 '{used_fmt}'；按{'UTC' if abs(tz_offset_h) < 1e-9 else f'本地时间（UTC{tz_offset_h:+g}）'}解释"
+                 f"（source.file_time_utc 可改；只影响时间轴的绝对位置，不影响计算）")
     mode = "datetime"
     if no_date:
         # 只有当天时刻：跨午夜会回绕（23:59:59.9 → 00:00:00.0），按「回退超过半天即跨日」展开，
@@ -394,10 +406,10 @@ def read_header(path: str, encoding: str, delimiter: str) -> Tuple[List[str], st
     return [h.strip() for h in header], enc
 
 
-def _tod_of(t: float, mode: str) -> float:
-    """时标的「当天时刻」秒数：无日期写法（clock_time）直接取模；带日期的按本地时间取时刻（与界面显示一致）。"""
+def _tod_of(t: float, mode: str, tz_offset_h: float = 0.0) -> float:
+    """时标的「当天时刻」秒数：无日期写法（clock_time）按解释偏移还原文件时刻；带日期的按本地时间取时刻（与界面显示一致）。"""
     if mode == "clock_time":
-        return float(t) % 86400.0
+        return (float(t) + tz_offset_h * 3600.0) % 86400.0
     lt = time.localtime(t)
     return lt.tm_hour * 3600.0 + lt.tm_min * 60.0 + lt.tm_sec + (float(t) % 1.0)
 
@@ -453,7 +465,7 @@ def _seek_time(reader, first_rows: List[List[str]], colmap: ColumnMap, idx_map: 
         if kind == "abs":
             hit = np.nonzero(t >= tv)[0]
         else:
-            tod = (t % 86400.0) if info.mode == "clock_time" else np.array([_tod_of(float(x), info.mode) for x in t])
+            tod = ((t + tz_offset_h * 3600.0) % 86400.0) if info.mode == "clock_time" else np.array([_tod_of(float(x), info.mode) for x in t])
             hit = np.nonzero(tod >= tv - 1e-6)[0]
         if hit.size:
             i = int(hit[0])
