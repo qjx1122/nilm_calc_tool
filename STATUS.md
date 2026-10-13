@@ -1,17 +1,24 @@
 # STATUS.md
 
 > 续接文件（BOOTSTRAP.md v2.2 台账）。每次收尾必更新；只改本文件，不另建同类文件。
-> 最后更新：2026-10-12（第 8 次收尾：数据处理子界面——离线波形 CSV 重采样；含 F-22/F-23 热修）
+> 最后更新：2026-10-13（第 9 次收尾：间谐波 / 直流偏置 / 事件 三个子界面）
 
 ## 当前角色
 - 角色：**资深电力算法专家**（`ROLE.md` v1.4 指定的默认当前角色）
 - 本任务级覆盖：**工程实现工程师**（对「实现电气量计算工具」及其后续界面缺陷修复 / 功能增补任务生效；任务收尾后回归默认角色）
 - 生效范围：任务级（非全迭代）
 - 默认执行模式：**混合**——沙盒侧（模式 A）写码 + 合成信号解析解自验证 + live preview 实跑，**已有实录**；用户侧（模式 B）Windows 部署 / 真实数据对账 / 生产常驻，**只出执行包，未获实录不下结论**（执行包见 `REPORT_TEST.md` T-002 的 W/R/P 三组）
-  - 说明：更早任务用户显式指定过模式 B（仅对「补齐台账骨架」生效）；此后各任务用户均跳过模式澄清，故一律按上述混合模式执行并在此声明。第 5 轮（界面下拉框检查）沙盒侧＝jsdom 驱动真实页面打真实服务端 + REST 空值语义实录，**已✅实录**；用户侧＝浏览器手点 U 组 7 步，**🔶待回报**。**第 6 轮（四功能）**沙盒侧＝pytest 25 项 + jsdom 30 项 + REST/CLI 实录，**已✅实录**；用户侧＝浏览器手点 U6 组 8 步，**🔶待回报**。**第 7 轮（三功能）**沙盒侧＝pytest 18 项 + jsdom 39 项 + CLI/源层实录，**已✅实录**；用户侧＝U7 组 8 步，**🔶待回报**
+  - 说明：更早任务用户显式指定过模式 B（仅对「补齐台账骨架」生效）；此后各任务用户均跳过模式澄清，故一律按上述混合模式执行并在此声明。第 5 轮（界面下拉框检查）沙盒侧＝jsdom 驱动真实页面打真实服务端 + REST 空值语义实录，**已✅实录**；用户侧＝浏览器手点 U 组 7 步，**🔶待回报**。**第 6 轮（四功能）**沙盒侧＝pytest 25 项 + jsdom 30 项 + REST/CLI 实录，**已✅实录**；用户侧＝浏览器手点 U6 组 8 步，**🔶待回报**。**第 7 轮（三功能）**沙盒侧＝pytest 18 项 + jsdom 39 项 + CLI/源层实录，**已✅实录**；用户侧＝U7 组 8 步，**🔶待回报**。**第 9 轮（间谐波/直流/事件）**沙盒侧＝pytest 13 项 + jsdom 28 项 + live preview 实跑，**已✅实录**；用户侧＝U9 组 6 步，**🔶待回报**
 
 ## 当前目标
-- **本任务（2026-10-12 第 8 轮，已交付、沙盒侧✅实录）**：用户需求——新增「数据处理」子界面：对指定路径离线波形 CSV 按指定采样率重采样，输出到 `data/`，文件名＝原名+`_re_`+采样率（`波形_农业排灌_大水泵_80_1.csv` → `波形_农业排灌_大水泵_80_1_re_6400.csv`）
+- **本任务（2026-10-13 第 9 轮，已交付、沙盒侧✅实录）**：用户需求——① 间谐波电气量子界面；② 事件子界面（基波相量/谐波相量/间谐波相量/频率/频率变化率 超限 + 功率振荡）；③ 直流偏置电气量。
+  - 实现：`config.py`（`QUANTITY_KEYS` 7→9：`interharmonic`(0.2 s) / `dc`(1 s, 不去直流)；`CURVE_KEYS` 6→8；`EventConfig` 全部阈值 + `limits_secondary` PT/CT 自动折算）；`analysis/harmonic.py` `interharmonic_analysis`（IEC 61000-4-7 组/中心子组/主导相量/TIHD）与 `dc_analysis`（整周期均值/逐周期漂移）；`metrics.py` `_q_interharmonic/_q_dc` + 趋势标量；**`elec_tool/events.py`**（6 类事件状态机：开始/峰值/复归滞回、频率绝对滞回带、阈值热改按新阈值复归、数据时间、`output/events/events_<日期>.csv`）；`engine.py` 接入检测器 + 状态计数；`server.py` `GET /api/events`、`POST /api/events/clear`、WS `type=event`；前端 3 个子界面 + 导航徽标 + 阈值表单
+  - 验证：`tests/test_r9_events.py` **13 项**（解析解 1e-9）；`tools/ui_r9_check.cjs` **PASS 28 / FAIL 0**；旧 harness 复跑 dropdown 74/74、r6 30/30、r8 29/29、r7 38/39（1 项 jsdom 时序，改动前后一致，F-31 观察）；全量 **235 passed, 1 skipped**；selftest 44/44
+  - 问题 **F-29**（阈值未按 PT/CT 折算 → 一开机 6 条假基波超限）、**F-30**（复归用旧阈值 + 频率相对滞回永不复归）已修；F-31 观察
+  - 文档：`README.md` v0.8（§1 ⑤、§3.1 新小节「间谐波 / 直流偏置 / 事件」含**假设与可配置项表**、§3.4 3 接口、§11、变更记录）；`REPORT_TEST.md` v0.8 **T-007**；`REPORT.md` v0.8 **C-19/C-20**
+  - 验收状态：沙盒侧 ✅；**用户侧 🔶 待回报**（T-007 U9 组）
+  - 假设（已在 README 标注）：间谐波＝IEC 分组单窗值（无 10/15 min 聚合）；直流＝整周期均值；事件默认阈值 110/90% U_nom、6 A、HR 5/10%、THD 5/10%、IH 1/2%、49.5–50.5 Hz、1 Hz/s、功率振荡 0.1–2.5 Hz 峰峰 5%；阈值按二次侧填并自动折算
+- **上一任务（2026-10-12 第 8 轮，已交付、沙盒侧✅实录）**：用户需求——新增「数据处理」子界面：对指定路径离线波形 CSV 按指定采样率重采样，输出到 `data/`，文件名＝原名+`_re_`+采样率（`波形_农业排灌_大水泵_80_1.csv` → `波形_农业排灌_大水泵_80_1_re_6400.csv`）
   - 实现：`elec_tool/resample.py`（numpy only：linear 流式分块 / nearest / fft 抗混叠；原采样率推算或手填；时间轴等间隔重建；时标按源写法重生成；表头/列序/编码/BOM 保留；`.part` 原子写；进度/取消句柄）；`app/server.py` `POST/GET /api/process/resample`、`/cancel`、`/preview`（单任务后台线程）；`cli.py resample`；前端「🧮 数据处理」视图（下拉选文件/探查/参数/进度条/结果/用作播放源）
   - 验证：`tests/test_r8_resample.py` **16 项**；`tools/ui_r8_check.cjs` **PASS 29 / FAIL 0**；旧 harness 复跑 39/0、30/0、74/0；全量 **222 passed, 1 skipped**
   - 问题 **F-24~F-28**（fft 周期语义 / 大整数 epoch 精度 / 伪 BOM / `.part` 残留 / 测试轮询竞争）均已修
@@ -68,9 +75,11 @@
 - [x] 2026-10-10 **沙盒回收事故恢复**：venv 重建、样例数据重生成、git 历史按原结构重提交并 push（远端 `d2337ab`）
 - [x] 2026-10-12 **沙盒回收事故恢复（第 3 次）**：`.git` 退回基线、工作树尚存 → `git fetch` + `reset --mixed FETCH_HEAD` 接回 `a88dcaa`（零差异、无丢失），venv/样例重建
 - [x] 2026-10-12 **第 6 轮四功能**：用户时标格式（F-11~F-13）/ 24h 趋势历史（F-14~F-16）/ 逐曲线保存开关 / 离线自定义播放时间；`tests/test_r6_features.py` 25 项 + `tools/ui_r6_check.cjs` PASS 30 + 旧 harness PASS 74 + 全量 **186 passed, 1 skipped**；README v0.5 / REPORT_TEST T-004 / REPORT C-14、C-15
+- [x] 2026-10-13 **第 9 轮三功能**：间谐波（IEC 分组）/ 直流偏置 / 事件（6 类）三个子界面 + `events.py` + REST/WS + CSV 落盘；`tests/test_r9_events.py` 13 项 + `tools/ui_r9_check.cjs` PASS 28 + 全量 235 passed；提交 `8539d8a`（feat）+ docs
 - [x] 2026-10-12 **第 7 轮三功能**：曲线实时落盘 `output/realtime/<曲线>_<日期>.csv` / 离线播放起点（5 模式）/ 曲线悬停取值；`tests/test_r7_features.py` 18 项 + `tools/ui_r7_check.cjs` PASS 39 + 旧 harness 30/74 + 全量 **204 passed, 1 skipped**；README v0.6 / REPORT_TEST T-005 / REPORT C-16、C-17
 
 ## 进行中
+- 等用户执行 **T-007 的 U9 组**（浏览器手点 6 步：样例事件分布与徽标 → 热改阈值复归 → 间谐波页 → 直流页 → 真实文件事件分布 → 事件 CSV）并回报实录
 - 等用户执行 **T-006 的 U8 组**（浏览器手点 5+2 步：真实文件探查 → 重采样 6400 → 文件表头/时标核对 → 覆盖保护与 fft → 用作播放源并对账 RMS）并回报实录
 - 等用户执行 **T-005 的 U7 组**（浏览器手点 8 步：实时落盘文件与行数 → 勾选过滤 → 开关关/开续写 → 真实文件跳过 60 s / 指定时刻 / 90% → 悬停浮框 → 可选过夜换文件）并回报实录
 - 等用户执行 **T-004 的 U6 组**（浏览器手点 8 步：真实 0/00/00 文件探查 → 不开/开自定义时间启动 → 勾选保存框与 F5 保持 → 保存曲线数据查 output/ → 跑 ≥10 min 看曲线标题跨度；可选过夜看 24.00h 与内存）并回报实录
@@ -79,10 +88,11 @@
 - 等用户执行 T-002 的 W/R/P 组（Windows 部署 / 真实数据对账 / 生产常驻）并回报实录
 
 ## 下一步（TODO）
-1. **用户侧（阻塞项，模式 B）**：先跑 **T-006 的 U8 组**、**T-005 的 U7 组**与 **T-004 的 U6 组**（用真实采集文件，期望见 `REPORT_TEST.md`），再跑 T-003 的 **S 组**（`python tools/verify_sources.py` 期望 PASS 5 / FAIL 0；`pytest tests/ -q` 期望 **204 passed**；两个终端跑 tcp_feeder / csv_appender + `cli.py live` 期望缺口 0），**T-003 的 U 组**（浏览器手点 7 步，界面下拉框，期望见 `REPORT_TEST.md`），再跑 T-002 的 W 组（Windows 部署，预计 10 分钟）与 R 组（真实数据对账，核心验收），按「结果回收格式」贴回；P 组（生产常驻）可选
+1. **用户侧（阻塞项，模式 B）**：先跑 **T-007 的 U9 组**、**T-006 的 U8 组**、**T-005 的 U7 组**与 **T-004 的 U6 组**（用真实采集文件，期望见 `REPORT_TEST.md`），再跑 T-003 的 **S 组**（`python tools/verify_sources.py` 期望 PASS 5 / FAIL 0；`pytest tests/ -q` 期望 **204 passed**；两个终端跑 tcp_feeder / csv_appender + `cli.py live` 期望缺口 0），**T-003 的 U 组**（浏览器手点 7 步，界面下拉框，期望见 `REPORT_TEST.md`），再跑 T-002 的 W 组（Windows 部署，预计 10 分钟）与 R 组（真实数据对账，核心验收），按「结果回收格式」贴回；P 组（生产常驻）可选
 2. Agent 侧（收到实录后）：把三件套写入 T-002「结果 / 结论」，按 J-\* 逐条对账，回填 `README.md` §2/§3/§4 与 `NILM_DATA_DICT.md` 的 🔶 项（注明来源＋日期）
 3. **待确认口径**：电压列是相电压还是线电压（`transform.voltage_input`）、真实编码与时间戳格式、PT/CT 实际值、实时落地方式（文件 or TCP 协议文档）
-4. 若验收方要求 IEC 口径：另立专题实现 IEC 61000-4-7 谐波分组（10/15 分钟评估、分组平方和）——当前为整周期矩形窗口径
+4. 若验收方要求 IEC 口径：另立专题实现 IEC 61000-4-7 的 10/15 分钟聚合（分组平方和已随 v0.8 间谐波实现）——当前谐波/间谐波均为整周期单窗值
+4b. **T-007 遗留**：事件单级固定阈值（无持续时间门槛/分级/动态阈值）；功率振荡只看 P 总、可分辨上限受 power 步长限制；ROCOF 分辨率＝fundamental 步长；事件 CSV 无轮转
 5. TCP 实时源联调：`--frame/--struct-fmt/--struct-fields` 三处已可配（CLI/界面/REST 白名单），文本帧与二进制帧均已用喂数器验证；**仍需现场协议文档**确认帧头帧尾/长度字段/缩放系数/时标类型；若协议含帧头+长度+校验，需在 `sources/tcp_stream.py::_flush_block` 加拆帧（`DataSource` 接口不变，上层零改动）
 5b. TCP 的 `timeout_s` / `reconnect_s`（各默认 2.0 s）目前只是构造参数，未暴露到配置文件与界面——待现场联调时按需提升为配置项
 5c. `csv_tail` 目录模式按 mtime 选最新文件；若现场分片命名与 mtime 不一致（如补写旧分片），需改成按文件名排序——待 T-003 的 D-5 回报后决定
@@ -129,13 +139,13 @@
 ## 关键文件路径
 - `BOOTSTRAP.md` / `ROLE.md` — 协议 v2.2 与角色库 v1.4（默认角色：资深电力算法专家）
 - `STATUS.md` — 本文件，续接现场唯一入口
-- `README.md` — **v0.7**（§3.1 增「数据处理子界面：离线波形 CSV 重采样」小节、§3.2 8 子命令、§3.4 4 个 `/api/process/resample*` 接口；v0.6：§3.1 增「实时落盘＋播放起点＋悬停取值」小节、§3.4 `/api/realtime`、§4.2 播放起点字段与 CLI、§8 七层验证）：§0 快速开始、§1 验收对照、**§2 本地部署（详细）**、**§3 运行说明（Web/CLI/库/REST 四种；§3.1 含数据源面板逐源可编辑/置灰字段表、两个保存入口语义对照、空值语义与 6 步手工点检清单）**、**§4 四种数据源详解（配置·三入口·实测·注意事项·验证，含 §4.6 四源对账表与 §4.8 一键复现）**、§5 数据目录、§6 配置结构、§7 输出产物、§8 五层验证、§9 生产推荐流程、§10 台账索引、§11 交付说明
-- `REPORT.md` — **v0.7**（新增 C-18 重采样时间轴/时标规则；v0.6：新增 C-16 三出口共用提取规则与按日期分文件、C-17 播放起点定位代价与可诊断）：稳定结论 C-01~C-08（电气量计算）+ C-09~C-12（四源等价性 / 切换前 drain / float32 禁存 epoch 秒与可诊断降级 / 无硬件验证路径）+ **C-13（界面层验证方法 + 深合并接口空值语义 + 推送覆盖用户输入）**；§3.3 十五类量口径；§5 六条实录教训
-- `REPORT_TEST.md` — **v0.7**（新增 **T-006** 第 8 轮数据处理子界面：S1~S7 / F-24~F-28 / U8 组；v0.6：新增 **T-005** 第 7 轮三功能：S1~S4 / F-17~F-21 / U7 组）：T-001（待回报）+ T-002（沙盒 A1~A10、B1/B2、用户侧 W/R/P）+ **T-003（沙盒 S1~S18 实录、四源对账表、F-01~F-10 修复、用户侧 S/U/D 三组执行包 + J-\* 判读 + 回收格式）**
+- `README.md` — **v0.8**（§3.1 增「间谐波 / 直流偏置 / 事件 子界面」小节含假设与可配置项表、§3.4 `/api/events*` 与 WS `event`、§11 第 9 轮；v0.7：§3.1 增「数据处理子界面：离线波形 CSV 重采样」小节、§3.2 8 子命令、§3.4 4 个 `/api/process/resample*` 接口；v0.6：§3.1 增「实时落盘＋播放起点＋悬停取值」小节、§3.4 `/api/realtime`、§4.2 播放起点字段与 CLI、§8 七层验证）：§0 快速开始、§1 验收对照、**§2 本地部署（详细）**、**§3 运行说明（Web/CLI/库/REST 四种；§3.1 含数据源面板逐源可编辑/置灰字段表、两个保存入口语义对照、空值语义与 6 步手工点检清单）**、**§4 四种数据源详解（配置·三入口·实测·注意事项·验证，含 §4.6 四源对账表与 §4.8 一键复现）**、§5 数据目录、§6 配置结构、§7 输出产物、§8 五层验证、§9 生产推荐流程、§10 台账索引、§11 交付说明
+- `REPORT.md` — **v0.8**（新增 C-19 间谐波分组分辨率前提、C-20 事件状态机四规则；v0.7：新增 C-18 重采样时间轴/时标规则；v0.6：新增 C-16 三出口共用提取规则与按日期分文件、C-17 播放起点定位代价与可诊断）：稳定结论 C-01~C-08（电气量计算）+ C-09~C-12（四源等价性 / 切换前 drain / float32 禁存 epoch 秒与可诊断降级 / 无硬件验证路径）+ **C-13（界面层验证方法 + 深合并接口空值语义 + 推送覆盖用户输入）**；§3.3 十五类量口径；§5 六条实录教训
+- `REPORT_TEST.md` — **v0.8**（新增 **T-007** 第 9 轮间谐波/直流/事件：S1~S7 / F-29~F-31 / U9 组；v0.7：新增 **T-006** 第 8 轮数据处理子界面：S1~S7 / F-24~F-28 / U8 组；v0.6：新增 **T-005** 第 7 轮三功能：S1~S4 / F-17~F-21 / U7 组）：T-001（待回报）+ T-002（沙盒 A1~A10、B1/B2、用户侧 W/R/P）+ **T-003（沙盒 S1~S18 实录、四源对账表、F-01~F-10 修复、用户侧 S/U/D 三组执行包 + J-\* 判读 + 回收格式）**
 - `NILM_DATA_DICT.md` — v0.2（用户已确认 fs/列格式/PT/CT）；另有 v0.1 模板（🔶=116 处；用户已确认的 fs/列格式/PT/CT 待本轮翻 ✅）
 - `session/NILM_AC_session_complete.md` — 会话纪要（只追加）
-- 代码：`cli.py`（8 子命令入口，含 `resample`）、`elec_tool/`（算法核心 + `sources/` + `analysis/` + `resample.py` 离线重采样）、`tools/ui_r8_check.cjs`（数据处理子界面 29 项端到端）、`tests/test_r8_resample.py`、`app/server.py` + `app/static/`（Web）、`configs/default.json`（出厂模板）、**`tools/`（tcp_feeder / csv_appender / verify_sources / ui_dropdown_check.cjs / ui_r6_check.cjs / ui_r7_check.cjs）**、`tests/`（**205 项，13 个文件**；第 7 轮＝`test_r7_features.py`）、**`elec_tool/realtime_writer.py`**
+- 代码：`cli.py`（8 子命令入口，含 `resample`）、`elec_tool/`（算法核心 + `sources/` + `analysis/` + `resample.py` 离线重采样 + **`events.py` 事件检测**）、`tools/ui_r9_check.cjs`（间谐波/直流/事件 28 项端到端）、`tests/test_r9_events.py`、`tools/ui_r8_check.cjs`（数据处理子界面 29 项端到端）、`tests/test_r8_resample.py`、`app/server.py` + `app/static/`（Web）、`configs/default.json`（出厂模板）、**`tools/`（tcp_feeder / csv_appender / verify_sources / ui_dropdown_check.cjs / ui_r6_check.cjs / ui_r7_check.cjs）**、`tests/`（**236 项，15 个文件**；第 9 轮＝`test_r9_events.py`）、**`elec_tool/realtime_writer.py`**
 - 数据与产物（均 gitignore）：`data/`（输入 CSV，`cli.py gen-sample` 可重建样例）、`output/`（导出结果）、`configs/runtime.json`（界面保存的配置）
 - 运行环境：`.venv/`（gitignore，沙盒回收后需重建：`python3 -m venv .venv && .venv/bin/pip install -r requirements.txt`）
-- 分支：`arena/82e34fb8-nilm-calc-tool`（远端同名，已 push；第 8 轮提交＝`a6fd42d`（feat）+ `b6c7ca6`（docs）；第 6 轮 tip `f1966e8`；第 7 轮提交＝`f0fdea6` feat(r7) / `341fc9e` test(r7) / docs）｜基点 `main`=`27b28ea`
+- 分支：`arena/82e34fb8-nilm-calc-tool`（远端同名，已 push；第 9 轮提交＝`8539d8a`（feat）+ docs；第 8 轮提交＝`a6fd42d`（feat）+ `b6c7ca6`（docs）；第 6 轮 tip `f1966e8`；第 7 轮提交＝`f0fdea6` feat(r7) / `341fc9e` test(r7) / docs）｜基点 `main`=`27b28ea`
 - live preview：`cli.py serve` 或 `uvicorn app.server:app --host 0.0.0.0 --port 8000`（沙盒内已常驻，`ELEC_TOOL_AUTOSTART=1` + 模拟器源）

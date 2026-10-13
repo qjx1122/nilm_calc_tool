@@ -1,7 +1,7 @@
 # README.md — nilm_calc_tool（电力系统各类电气量计算工具）
 
 > 台账文件（BOOTSTRAP.md v2.2）：安装与环境 / 运行命令 / 数据目录 / 配置结构 / 输出产物 / 生产推荐流程。
-> **当前状态：v0.7（2026-10-12）**——软件已实现并在沙盒跑通（算法核心 + 4 类数据源 + 计算引擎 + 离线重采样 + CLI + Web 界面 + 222 项测试 + 7 项验证工具）。
+> **当前状态：v0.8（2026-10-13）**——软件已实现并在沙盒跑通（算法核心 + 4 类数据源 + 计算引擎 + 事件检测 + 离线重采样 + CLI + Web 界面 + 235 项测试 + 8 项验证工具）。
 > 状态标注：✅已确认（有代码 / 实录 / 官方来源佐证）｜🔶待确认（占位或推断，需用户回填）｜❌已废弃（不删行，只翻状态）
 > **本文所有 ✅ 均为沙盒实录：Linux 6.1.158+ / CPython 3.11.2 / numpy 2.4.6，采集时间 2026-10-10。**
 > **Windows 命令、真实现场数据、生产部署三项尚未在用户环境验证，一律标 🔶，请按 `REPORT_TEST.md`「T-002 本地部署与验收执行包」逐条回填。**
@@ -43,7 +43,7 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt          # Li
 | ② | 各类电气量计算分到各子界面 | `app/static/index.html` 中 12 个 `view-*` 容器 | `tests/test_server.py::test_index_page_has_nav_and_one_subview_per_quantity` | ✅沙盒 |
 | ③ | 子界面通过导航条切换 | `<nav id="navbar">` 12 个 `data-view` 按钮 + `app.js:switchView()` | 同上测试断言每个子界面都有导航入口 | ✅沙盒 |
 | ④ | 输入支持实时采集数据与离线文件数据 | `elec_tool/sources/`：`csv_file`(离线)、`csv_tail`(实时追加)、`tcp`(实时流)、`simulator`(实时联调) | 实时链路 `test_realtime_simulator_streams_*`；离线链路 `test_offline_csv_end_to_end_values` | ✅沙盒（真实采集设备 🔶） |
-| ⑤ | 三相电压/电流、功率因数、有功、无功、基波、谐波(2–50)、频谱 | `elec_tool/analysis/{rms,harmonic,power,window}.py` + `metrics.py` | 数值对齐解析解（`expected_values()`），见 §8 | ✅沙盒 |
+| ⑤ | 三相电压/电流、功率因数、有功、无功、基波、谐波(2–50)、频谱；**v0.8 增：间谐波、直流偏置、事件** | `elec_tool/analysis/{rms,harmonic,power,window}.py` + `metrics.py` + `events.py` | 数值对齐解析解（`expected_values()`），见 §8；间谐波/直流/事件见 `tests/test_r9_events.py` | ✅沙盒 |
 | ⑥ | 各电气量分别配置指定时间段计算 | `configs/*.json` 的 `windows.<量>.length_s/step_s`；引擎按量独立调度 | 实测：电压窗 1s→输出 6 次、谐波窗 0.2s→输出 26 次（同一份 5s 数据）；改 5s→输出 2 次、缓冲自动扩到 49280 点 | ✅沙盒 |
 
 **代码规模**（`wc -l` 实录）：`elec_tool/` + `app/server.py` + `cli.py` = 4922 行；`app/static/`（HTML/CSS/JS）= 1318 行；`tests/` = 2006 行。
@@ -416,6 +416,21 @@ CLI 同等能力：`.venv/bin/python cli.py resample "data/波形_农业排灌_�
 
 **注意**：`linear` 降采样无抗混叠（高于新 Nyquist 的谐波会折叠到低频），要做谐波分析请用 `fft`；`fft` 的输出点数 = round(N·fs_new/fs_src)（周期语义），比例非整时实际采样率略有偏差并写入 notes；重采样后播放时请把「配置采样率 fs」改成目标值。
 
+
+#### 间谐波 / 直流偏置 / 事件 子界面（v0.8）
+
+左侧导航 **「🎚 间谐波」「➖ 直流偏置」「🚨 事件」**（事件项带活动事件数徽标）。三者都走既有管线：各有独立窗长（「窗口配置」页 `interharmonic` / `dc` 两行）、趋势曲线（`CURVE_KEYS` 从 6 条扩到 **8 条**：`interharmonic`＝TIHD_U/TIHD_I 与最大组含有率，`dc`＝Ua/Ub/Uc/Ia/Ib/Ic/In 直流）、保存/实时落盘/导出/CLI 标量表自动纳入。
+
+| 子界面 | 口径（**假设与可配置项**） | 显示 | 依据 |
+| --- | --- | --- | --- |
+| **间谐波** | **IEC 61000-4-7 分组**：窗 = 整数周期（出厂 **0.2 s ＝ 10 周波 → Δf = 5 Hz，每组 9 条谱线**；1 周波窗无法分辨间谐波，界面会提示）。第 h 间谐波组（h=0…order_max−1，介于 h 与 h+1 次之间）：**组有效值** `IHG_h = √Σ C_k²`（不含两端谐波 bin）、**中心子组** `IHSG_h`（再去掉紧邻谐波的各 1 个 bin，抗泄漏）、**间谐波相量**＝组内最大谱线的 频率 / RMS 幅值 / 相角（cos 参考，与基波相量同口径）；**含有率** = IHG_h / X1 ×100%；**TIHD** = √Σ IHG_h² / X1 ×100%。*未做* IEC 的 10/15 min 平滑与 200 ms 聚合（与谐波一样是单窗值） | TIHD 卡片（三相 U/I、最大组）、各组柱状图（含有率 % / 组有效值 切换）、三相「前 10 组」相量表、TIHD 趋势 | `elec_tool/analysis/harmonic.py:interharmonic_analysis`，`tests/test_r9_events.py::test_interharmonic_groups_exact`（175 Hz 注入 → 第 3 组 2.000 A、175.0 Hz、17.19°，其余组 <1e-9） |
+| **直流偏置** | 直流 = **整数周期窗的算术均值**（整周期上交流分量均值恒为 0，故无偏；窗出厂 1 s，`remove_dc=false` 且不可被误开）；相对值 = DC / 基波有效值 ×100%；中性线直流 = (Ia+Ib+Ic) 的均值；窗内**逐周期均值**给出漂移范围 | 三相 U/I 直流卡片、表格（含 N 行）、逐周期曲线、直流趋势（U/I 切换） | `dc_analysis`，`test_dc_analysis_exact` |
+| **事件** | 6 类，阈值全部在界面「阈值配置」表单可改（即 `events.*`，PUT 热生效）。① **基波相量超限**：任一相 U1 > `u1_high_pct`%·`u_nom` 或 < `u1_low_pct`%·`u_nom`，I1 > `i1_high`；**`limits_secondary=true`（默认）时 `u_nom`/`i1_high` 按二次侧填（57.74 V / 6 A），启用 PT/CT 变换则自动 ×PT/×CT 与一次值结果比较**（界面卡片显示折算后有效阈值）。② **谐波相量超限**：任一相任一次 HR_h > `hr_u/i_limit_pct` 或 THD > `thd_u/i_limit_pct`。③ **间谐波相量超限**：任一相任一组含有率 > `ih_u/i_limit_pct`（出厂 1% / 2%）。④ **频率超限**：f ∉ [`f_low`,`f_high`]（出厂 49.5/50.5）。⑤ **频率变化率超限**：|Δf/Δt| > `rocof_limit`（出厂 1 Hz/s），Δ 取相邻两次 fundamental 输出（故时间分辨率＝fundamental 步长）。⑥ **功率振荡**：最近 `osc_window_s`（10 s）内 P 总序列 → 均匀重采样 → 去线性趋势 → hann+FFT，在 [`osc_f_min`,`osc_f_max`]（0.1–2.5 Hz）取主导分量，**峰峰值 ≥ `osc_limit_pct`%·|P̄| 且 ≥ `osc_min_w`** 判为振荡（可分辨的最高频率 = 1/(2×power 步长)，power 步长 1 s 时只到 0.5 Hz，要看 2 Hz 请把 power 窗/步长改到 0.2 s）。**生命周期**：同一(类型,对象)只有一个活动事件，记录开始/峰值/结束，复归用**滞回**（`hysteresis`=0.95：越上限事件需回到 limit×0.95 以下；频率用绝对带 0.05×(f_high−f_low)），**阈值热改后按新阈值复归**；所有时刻＝**数据时间**（离线回放同样成立）。**落盘**：`output/events/events_<数据日期>.csv`（start/end 各一行，UTF-8-BOM，每行 flush，`ELEC_TOOL_EVENTS_DIR` 可改）。⑦ 若 `sampling.adaptive_freq=false`，频率恒为额定值 → 频率/ROCOF 事件不会触发，界面给出提示 | 6 类计数卡片、活动事件表、历史表（类型过滤/只看活动/刷新/清空）、阈值表单、WS 推送时右下角 toast | `elec_tool/events.py`，`tests/test_r9_events.py`（6 类事件 9 项用例），`tools/ui_r9_check.cjs` 28 项 |
+
+手工点检：① 启动离线样例 `data/sample_6400hz.csv`（含 8% 3 次 / 6% 5 次谐波）→「事件」页应出现 **12 条「谐波相量超限」活动事件**（THD_U/HR_U-h3/HR_U-h5 ×3 相 + THD_I ×3 相），基波相量不报（二次 57.7 V/5 A 折算后在限内）；② 把 THD_U/HR_U 上限改到 50%、THD_I 到 50% → 保存 → 1–2 s 后活动表清空、历史表状态变「已结束」且有持续时长；③ 「间谐波」页 TIHD 约 0.24%、最大组含有率 <0.1%（样例无间谐波，只有数值噪声）；④ 「直流偏置」页三相直流 |DC| < 0.5 V（样例含微小偏置）。
+
+CLI/库：`cli.py run/analyze` 的标量表自动含 `interharmonic`/`dc` 两行；库用法 `MetricsCalculator(cfg).compute(block).quantities["interharmonic"].values["top_u"]`、`EventDetector(cfg).process(result)` 返回本次开始/结束的事件列表。
+
 ### 3.2 方式二：CLI（8 个子命令，全部实测）
 
 ```
@@ -586,6 +601,9 @@ THDu(A)  = 10.593 %   5次 = 346.4 V
 | `GET /api/process/resample` | 任务进度/结果/错误（`running, progress, stage, rows_in, rows_out, result, error`） |
 | `POST /api/process/resample/cancel` | 取消运行中的重采样 |
 | `GET /api/process/resample/preview?path&fs_new` | 只算输出文件名与是否已存在 |
+| `GET /api/events?active=&limit=&types=&since_id=` | v0.8 事件列表 + 摘要（`counts/active_by_type/effective_limits/limit_scale/writer/osc/notes`）；`types` 逗号分隔；`since_id` 增量拉取 |
+| `POST /api/events/clear` | 清空内存事件与活动状态（不删已落盘 CSV），并 WS 广播 `events_cleared` |
+| `WS /ws` 新消息 | `{"type":"event","data":[事件…]}`：每次有事件开始/结束即推（对象含 `id/type/type_name/subject/start_t/end_t/value_start/value_peak/limit/unit/direction/detail/active`） |
 | `GET /` `/static/*` | 界面与静态资源 |
 | `WS /ws` | 实时推送：连上即发 `hello`(状态) + `snapshot`(结果)，之后按 `result`/`state`/`error` 推送。**注意推送是「分量子集」**（只含本次到期的电气量），客户端必须按键合并——`app.js:mergeResult()` 已实现 |
 
@@ -1088,8 +1106,10 @@ python cli.py selftest                            # 实测：44/44，worst_rel_e
   - 与现场表计/其它系统的对账误差
   - TCP 实时协议帧格式（帧头/长度字段/缩放系数/字节序/时标类型；两种帧格式已用喂数器验证，真实协议未验证）
   - 生产部署形态（systemd/NSSM/nginx 反代）
+  - **第 9 轮三项功能**（2026-10-13，`REPORT_TEST.md` T-007）：① 间谐波子界面（IEC 61000-4-7 组/中心子组/主导相量/TIHD，解析解对齐 1e-9）；② 直流偏置子界面（整周期均值、逐周期漂移、中性线直流）；③ 事件子界面（6 类事件状态机 + 阈值表单热生效 + REST/WS + CSV 落盘）。`tests/test_r9_events.py` 13 项 ＋ `tools/ui_r9_check.cjs` PASS 28/FAIL 0 ＋ 全量 **235 passed**；旧 harness 复跑 dropdown 74/74、r6 30/30、r8 29/29、r7 38/39（1 项为 jsdom 无 WS 推送下的摘要刷新时序，与本轮改动无关，详见 T-007）
 - **已知缺口**
-  - IEC 61000-4-7 谐波分组（10/15 分钟评估、分组平方和）未实现，当前为整周期矩形窗口径（已在代码与文档标注）
+  - IEC 61000-4-7 的 10/15 分钟评估与 200 ms 聚合未实现（谐波/间谐波都是单窗值；间谐波分组本身 v0.8 已实现）
+  - 事件阈值为单级固定限值（无分级告警、无持续时间门槛、无按时段/负荷的动态阈值）；功率振荡只看 P 总，不区分机电/次同步模态
   - Qt 桌面壳未实现（本轮决策：Web 优先，见 `STATUS.md` 决策记录）
   - 用户/权限、历史数据库落盘、报警推送未实现（当前为单机工具形态）
   - `TUNING_GUIDE.md` 未建
@@ -1101,6 +1121,7 @@ python cli.py selftest                            # 实测：44/44，worst_rel_e
 ---
 
 ## 🗒 变更记录
+- **v0.8（2026-10-13，第 9 轮）**：新增 **「间谐波」「直流偏置」「事件」三个子界面**。电气量 7→9（`interharmonic`、`dc`，各自独立窗长/趋势/落盘/导出），曲线 6→8；`elec_tool/events.py` 事件检测（基波相量/谐波相量/间谐波相量/频率/ROCOF 超限 + 功率振荡；开始/峰值/复归滞回、阈值热改即复归、数据时间、`output/events/events_<日期>.csv`）；`EventConfig` 全部阈值可配置（含 `limits_secondary` 按 PT/CT 自动折算）；REST `GET /api/events`、`POST /api/events/clear`，WS `type=event`。`tests/test_r9_events.py` 13 项、`tools/ui_r9_check.cjs` 28 项；全量 **235 passed**。
 - **v0.7（2026-10-12，第 8 轮）**：新增 **「数据处理」子界面**——离线波形 CSV 按指定采样率重采样到 `data/<原名>_re_<fs>.csv`（`elec_tool/resample.py`：linear 流式 / nearest / fft 抗混叠；时间戳按源写法重生成；表头/编码/BOM 保留；后台任务＋进度＋取消）；REST 4 个接口；CLI `resample`；`tests/test_r8_resample.py` 16 项、`tools/ui_r8_check.cjs` 29 项。测试 **222 passed**。
 - **v0.6.2（2026-10-12）**：修复 **F-23**——离线文件播放时顶栏「样本」/「数据源状态」汇总不自动更新：`/ws` 改为每 1 s 定期推送 `state`（`WS_STATE_INTERVAL_S`），不再依赖队列空闲。测试 **206 passed**。
 - **v0.6.1（2026-10-12）**：修复 **F-22**——用局域网 IP 访问（或浏览器缩放≠100% / Windows 125% 缩放）时页面每次刷新纵向拉伸：`prep()` 不再回读被 `canvas.height` 改写的 `height` 属性，逻辑高度缓存于 `data-h`。测试 204→**205 passed**。
