@@ -409,3 +409,27 @@ def test_frontend_hover_tooltip_contract():
     assert "fmtTip: x => x.toFixed(2) + ' Hz'" in APP_JS
     # 最近点查找：有序二分
     assert "function nearestIdx(data, x)" in APP_JS and "while (hi - lo > 1)" in APP_JS
+
+
+def test_ws_pushes_state_periodically_during_continuous_playback(client, csv_factory, tmp_path):
+    """F-23（用户回报）：离线文件播放时 result 连续不断，旧实现只在队列空闲 1s 才发 state，
+    顶栏「样本」/「数据源状态」汇总冻结在启动瞬间、需手动刷新。要求：result 流中每 ~1s 必有 state，
+    且其中 engine.samples_in 单调增长。"""
+    d = csv_factory(str(tmp_path / "ws.csv"), duration_s=60.0)     # 离线全速播放，足够跑满 3s 以上
+    with client.websocket_connect("/ws") as ws:
+        hello = ws.receive_json()
+        assert hello["type"] == "hello"
+        r = client.post("/api/engine/start", json={"kind": "csv_file", "path": d["path"], "block_samples": 640})
+        assert r.json().get("ok"), r.json()
+        t0 = time.time(); kinds = []; samples = []
+        while time.time() - t0 < 3.2:
+            m = ws.receive_json()
+            kinds.append(m["type"])
+            if m["type"] == "state" and (m["data"].get("engine") or {}).get("running"):
+                samples.append(m["data"]["engine"]["samples_in"])
+            if m["type"] == "state" and m["data"].get("finished"):
+                break
+    client.post("/api/engine/stop")
+    assert kinds.count("result") >= 5, kinds[:20]                     # 的确是连续 result 流
+    assert kinds.count("state") >= 2, (kinds.count("state"), kinds[:40])  # 流中仍定期有 state
+    assert samples == sorted(samples) and samples[-1] > samples[0], samples

@@ -699,6 +699,9 @@ async def list_files(sub: str = "data") -> Dict[str, Any]:
 
 # ------------------------------------------------------------------ WebSocket
 
+WS_STATE_INTERVAL_S = 1.0   # state 定期推送周期（秒）；与 result 流量无关
+
+
 @app.websocket("/ws")
 async def ws_endpoint(ws: WebSocket) -> None:
     await ws.accept()
@@ -709,11 +712,19 @@ async def ws_endpoint(ws: WebSocket) -> None:
         snap = RUNNER.snapshot(force=False)
         if snap:
             await ws.send_text(json.dumps({"type": "snapshot", "data": snap}, ensure_ascii=False))
+        # F-23：state（samples_in / 数据时长 / 缓冲 / 输出次数…）必须**按时间**定期推送，
+        # 不能只在队列空闲 1s 时才发——离线文件播放时 result 连续不断、队列永不空闲，
+        # 顶栏「样本」与「数据源状态」汇总会一直停在启动瞬间，只能手动刷新。
+        last_state = time.monotonic()
         while True:
             try:
-                text = await asyncio.wait_for(q.get(), timeout=1.0)
+                text = await asyncio.wait_for(q.get(), timeout=WS_STATE_INTERVAL_S)
                 await ws.send_text(text)
             except asyncio.TimeoutError:
+                pass
+            now = time.monotonic()
+            if now - last_state >= WS_STATE_INTERVAL_S:
+                last_state = now
                 await ws.send_text(json.dumps({"type": "state", "data": RUNNER.state()}, ensure_ascii=False))
     except (WebSocketDisconnect, RuntimeError):
         pass
