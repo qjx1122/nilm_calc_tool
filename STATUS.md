@@ -1,17 +1,24 @@
 # STATUS.md
 
 > 续接文件（BOOTSTRAP.md v2.2 台账）。每次收尾必更新；只改本文件，不另建同类文件。
-> 最后更新：2026-10-13（第 11 次收尾：离线文件时标 UTC 开关）
+> 最后更新：2026-10-13（第 12 次收尾：负荷辨识子界面·逐周波事件检测）
 
 ## 当前角色
 - 角色：**资深电力算法专家**（`ROLE.md` v1.4 指定的默认当前角色）
 - 本任务级覆盖：**工程实现工程师**（对「实现电气量计算工具」及其后续界面缺陷修复 / 功能增补任务生效；任务收尾后回归默认角色）
 - 生效范围：任务级（非全迭代）
 - 默认执行模式：**混合**——沙盒侧（模式 A）写码 + 合成信号解析解自验证 + live preview 实跑，**已有实录**；用户侧（模式 B）Windows 部署 / 真实数据对账 / 生产常驻，**只出执行包，未获实录不下结论**（执行包见 `REPORT_TEST.md` T-002 的 W/R/P 三组）
-  - 说明：更早任务用户显式指定过模式 B（仅对「补齐台账骨架」生效）；此后各任务用户均跳过模式澄清，故一律按上述混合模式执行并在此声明。第 5 轮（界面下拉框检查）沙盒侧＝jsdom 驱动真实页面打真实服务端 + REST 空值语义实录，**已✅实录**；用户侧＝浏览器手点 U 组 7 步，**🔶待回报**。**第 6 轮（四功能）**沙盒侧＝pytest 25 项 + jsdom 30 项 + REST/CLI 实录，**已✅实录**；用户侧＝浏览器手点 U6 组 8 步，**🔶待回报**。**第 7 轮（三功能）**沙盒侧＝pytest 18 项 + jsdom 39 项 + CLI/源层实录，**已✅实录**；用户侧＝U7 组 8 步，**🔶待回报**。**第 9 轮（间谐波/直流/事件）**沙盒侧＝pytest 13 项 + jsdom 28 项 + live preview 实跑，**已✅实录**；用户侧＝U9 组 6 步，**🔶待回报**。**第 10 轮（离线列映射开关）**沙盒侧＝pytest 8 项 + jsdom 15 项 + REST 实录，**已✅实录**；用户侧＝U10 组 6 步，**🔶待回报**。**第 11 轮（时标 UTC 开关）**沙盒侧＝pytest 6 项 + 双时区全量 + jsdom 11 项，**已✅实录**；用户侧＝U11 组 5 步，**🔶待回报**
+  - 说明：更早任务用户显式指定过模式 B（仅对「补齐台账骨架」生效）；此后各任务用户均跳过模式澄清，故一律按上述混合模式执行并在此声明。第 5 轮（界面下拉框检查）沙盒侧＝jsdom 驱动真实页面打真实服务端 + REST 空值语义实录，**已✅实录**；用户侧＝浏览器手点 U 组 7 步，**🔶待回报**。**第 6 轮（四功能）**沙盒侧＝pytest 25 项 + jsdom 30 项 + REST/CLI 实录，**已✅实录**；用户侧＝浏览器手点 U6 组 8 步，**🔶待回报**。**第 7 轮（三功能）**沙盒侧＝pytest 18 项 + jsdom 39 项 + CLI/源层实录，**已✅实录**；用户侧＝U7 组 8 步，**🔶待回报**。**第 9 轮（间谐波/直流/事件）**沙盒侧＝pytest 13 项 + jsdom 28 项 + live preview 实跑，**已✅实录**；用户侧＝U9 组 6 步，**🔶待回报**。**第 10 轮（离线列映射开关）**沙盒侧＝pytest 8 项 + jsdom 15 项 + REST 实录，**已✅实录**；用户侧＝U10 组 6 步，**🔶待回报**。**第 11 轮（时标 UTC 开关）**沙盒侧＝pytest 6 项 + 双时区全量 + jsdom 11 项，**已✅实录**；用户侧＝U11 组 5 步，**🔶待回报**。**第 12 轮（负荷辨识）**沙盒侧＝pytest 8 项 + jsdom 16 项 + 引擎/CSV 实录，**已✅实录**；用户侧＝U12 组 5 步，**🔶待回报**
 
 ## 当前目标
-- **本任务（2026-10-13 第 11 轮，已交付、沙盒侧✅实录）**：用户需求——「离线文件不启用自定义时间时，增加是否使用 UTC 时间配置；不使用 UTC 时曲线上数据时间与文件中的数据时间一致」。
+- **本任务（2026-10-13 第 12 轮，已交付、沙盒侧✅实录）**：用户需求——负荷辨识子界面：① 尽量多的事件检测算法实时检测窗口内周波数据；② 事件含发生时刻、方向、幅度；③ 各算法参数可配；④ 事件保存 CSV（算法类型、起止时间、方向、幅值）。
+  - 实现：`elec_tool/nilm.py`（`CycleFeatures` 逐周波 P/Q/I，4 对象；6 算法纯函数 `detect_steps`：threshold / two_window / cusum / glr / steady_state / median_diff；`NilmDetector` 滚动窗重评估 + 终点序号去重 + 确认周波；`NilmWriter` → `output/nilm/nilm_events_<日期>.csv` 18 列）；`config.NilmConfig`（通用 + 相对门槛 `rel_tol_pct/min_delta_pct` + `algorithms` 字典，`from_dict` 合并默认、`validate` 逐参数校验）；引擎 `_ingest` 后 `_detect_nilm`、状态 `nilm_events_total/nilm_cycles`、`info().nilm`；REST `/api/nilm/events|cycles|clear`、WS `nilm_event/nilm_cleared`；前端「🧩 负荷辨识」视图（卡片、周波窗曲线 + `drawLine opt.marks` 事件竖线、事件表 + 过滤、按算法生成的参数表单、徽标）；`tools/gen_nilm_sample.py`
+  - 验证：`tests/test_r12_nilm.py` **8 项**；`tools/ui_r12_check.cjs` **16/16**；全量 **257 passed**（4 次中 1 次偶发 1 项失败未复现，F-39 观察）
+  - 问题 **F-38**（绝对门槛跨量级失效 / CUSUM 起点提前 / 噪声触发粘连）已修
+  - 文档：README v0.11（§3.1 新小节含算法表与假设、变更记录）；REPORT_TEST **T-010**；REPORT **C-23** + 第 12 次判定
+  - 验收状态：沙盒侧 ✅；**用户侧 🔶 待回报**（T-010 U12 组）
+  - 假设（已在 README 标注）：对象＝逐周波 P；只做事件检测不做分类；周波按额定频率定长；双滑窗/CUSUM 尖峰特性；幅值＝稳态差
+- **上一任务（2026-10-13 第 11 轮，已交付、沙盒侧✅实录）**：用户需求——「离线文件不启用自定义时间时，增加是否使用 UTC 时间配置；不使用 UTC 时曲线上数据时间与文件中的数据时间一致」。
   - 实现：`source.file_time_utc`（默认 false）；`parsing.local_utc_offset_h()/file_tz_offset_h(cfg)`；`create_source/LiveEngine` 的 `tz_offset_h` 默认 None→按配置推导；`_parse_slash_clock` 无日期写法同样减偏移、`_seek_time/_tod_of` 当天时刻按偏移还原；`/api/probe` 增 `file_time_utc/tz_offset_h/t_first_local`、start 白名单、CsvFileSource.info、CLI `--file-time-utc`；界面「文件时标按 UTC 解释」勾选框（csv_file 未自定义时间 / csv_tail 可用），摘要显示解释方式
   - 验证：`tests/test_r11_file_time.py` **6 项**；`tools/ui_r11_check.cjs` **11/11**（服务端 TZ=Asia/Shanghai）；全量 **249 passed** 在 UTC 与 Asia/Shanghai 双时区
   - 问题 **F-36**（无日期写法未减偏移）、**F-37**（旧用例隐含 UTC 假设）已修

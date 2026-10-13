@@ -102,6 +102,7 @@ class EngineRunner:
             else:
                 self.engine = LiveEngine(cfg, output_root=ROOT)
                 self.engine.on_event = self._on_event
+                self.engine.on_nilm_event = self._on_nilm_event
                 self.latest = None
 
     # ---------- 事件 ----------
@@ -126,6 +127,36 @@ class EngineRunner:
             eng = self.engine
         return eng.detector.clear() if eng is not None else 0
 
+    # ---------- 负荷辨识（第 12 轮） ----------
+    def _on_nilm_event(self, new: List[Dict[str, Any]]) -> None:
+        self.broadcast({"type": "nilm_event", "data": new})
+
+    def nilm_events(self, limit: int = 500, algos: Optional[List[str]] = None, channel: Optional[str] = None,
+                    since_id: int = 0) -> Dict[str, Any]:
+        with self.lock:
+            eng = self.engine
+        if eng is None:
+            from elec_tool.config import NILM_ALGO_DEFAULTS, NILM_ALGO_NAMES
+            return {"ok": True, "events": [], "summary": {"enabled": bool(self.cfg.nilm.enabled), "total": 0,
+                                                          "counts": {k: 0 for k in NILM_ALGO_DEFAULTS},
+                                                          "algorithm_names": NILM_ALGO_NAMES, "notes": ["引擎尚未启动"]}}
+        return {"ok": True, "events": eng.nilm.list(limit=limit, algos=algos, channel=channel, since_id=since_id),
+                "summary": eng.nilm.summary()}
+
+    def nilm_cycles(self, n: int) -> Dict[str, Any]:
+        with self.lock:
+            eng = self.engine
+        if eng is None:
+            return {"ok": True, "t": [], "channels": {}, "note": "引擎尚未启动"}
+        d = eng.nilm.cycles(n)
+        d["ok"] = True
+        return d
+
+    def clear_nilm(self) -> int:
+        with self.lock:
+            eng = self.engine
+        return eng.nilm.clear() if eng is not None else 0
+
     # ---------- 生命周期 ----------
     def start(self, cfg: AppConfig, duration_s: Optional[float] = None) -> Dict[str, Any]:
         cfg.validate()
@@ -144,6 +175,7 @@ class EngineRunner:
             self.store.clear()
             self.engine = LiveEngine(cfg, output_root=ROOT)
             self.engine.on_event = self._on_event
+            self.engine.on_nilm_event = self._on_nilm_event
             self.started_at = time.time()
             # 引擎与停止事件按值传给线程：线程内绝不重读 self.engine
             self.thread = threading.Thread(target=self._run,
@@ -422,6 +454,27 @@ async def clear_events() -> Dict[str, Any]:
     n = RUNNER.clear_events()
     RUNNER.broadcast({"type": "events_cleared", "data": {"removed": n}})
     return {"ok": True, "removed": n, "summary": RUNNER.events(limit=1)["summary"]}
+
+
+@app.get("/api/nilm/events")
+async def get_nilm_events(limit: int = 500, algos: Optional[str] = None, channel: Optional[str] = None,
+                          since_id: int = 0) -> Dict[str, Any]:
+    """负荷辨识事件列表：algos=逗号分隔算法键；channel=total/A/B/C；since_id 增量拉取。"""
+    al = [a.strip() for a in algos.split(",") if a.strip()] if algos else None
+    return RUNNER.nilm_events(limit=max(1, min(int(limit), 5000)), algos=al, channel=(channel or None), since_id=int(since_id))
+
+
+@app.get("/api/nilm/cycles")
+async def get_nilm_cycles(n: int = 300) -> Dict[str, Any]:
+    """最近 n 个周波的 P/Q/I 序列（total/A/B/C），供负荷辨识界面画图。"""
+    return RUNNER.nilm_cycles(max(1, min(int(n), 20000)))
+
+
+@app.post("/api/nilm/clear")
+async def clear_nilm() -> Dict[str, Any]:
+    n = RUNNER.clear_nilm()
+    RUNNER.broadcast({"type": "nilm_cleared", "data": {"removed": n}})
+    return {"ok": True, "removed": n, "summary": RUNNER.nilm_events(limit=1)["summary"]}
 
 
 @app.get("/api/result")

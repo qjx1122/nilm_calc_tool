@@ -638,6 +638,108 @@ class EventConfig:
         return cls(**{k: v for k, v in d.items() if k in cls.__dataclass_fields__})
 
 
+# ---------------------------------------------------------------- 负荷辨识（第 12 轮）
+NILM_CHANNELS = ("total", "A", "B", "C")
+
+# 各事件检测算法的默认参数（单位：W＝有功功率；cycles＝周波数）。键名即界面/配置里的参数名。
+NILM_ALGO_DEFAULTS: Dict[str, Dict[str, Any]] = {
+    # 阈值差分：相邻周波有功之差超过门槛即判为事件起点，之后连续 settle_cycles 个周波波动 < tol 即为终点
+    "threshold":    {"enabled": True, "min_delta_w": 50.0, "settle_cycles": 5, "settle_tol_w": 20.0, "max_rise_cycles": 40},
+    # 双滑窗均值差：|mean(后窗) − mean(前窗)| 的局部极大值 ≥ min_delta_w 且 ≥ k_sigma×前窗标准差
+    "two_window":   {"enabled": True, "pre_cycles": 10, "post_cycles": 10, "min_delta_w": 50.0, "k_sigma": 3.0},
+    # CUSUM 累积和（双侧）：相对参考均值的累积偏差超过 threshold_w 触发；drift_w 为允许漂移（k）
+    "cusum":        {"enabled": True, "drift_w": 10.0, "threshold_w": 200.0, "min_delta_w": 50.0, "settle_cycles": 5},
+    # GLR 广义似然比（高斯均值突变）：窗内各候选点的对数似然比 ≥ threshold 且幅值 ≥ min_delta_w；noise_w 为噪声 σ 下限
+    "glr":          {"enabled": True, "window_cycles": 15, "threshold": 25.0, "min_delta_w": 50.0, "noise_w": 10.0, "settle_cycles": 5},
+    # 稳态分段（Hart 1992）：连续 ≥ min_steady_cycles 个周波极差 ≤ tol_w 为一个稳态；相邻稳态均值差 ≥ min_delta_w 即事件
+    "steady_state": {"enabled": True, "tol_w": 30.0, "min_steady_cycles": 10, "min_delta_w": 50.0, "max_transient_cycles": 100},
+    # 中值滤波差分：先 median_cycles 点中值滤波去尖峰，再按阈值差分法检测（对暂态尖峰/缺口不敏感）
+    "median_diff":  {"enabled": True, "median_cycles": 5, "min_delta_w": 50.0, "settle_cycles": 5, "settle_tol_w": 20.0, "max_rise_cycles": 40},
+}
+NILM_ALGO_NAMES = {"threshold": "阈值差分", "two_window": "双滑窗均值差", "cusum": "CUSUM 累积和",
+                   "glr": "GLR 广义似然比", "steady_state": "稳态分段(Hart)", "median_diff": "中值滤波差分"}
+
+
+@dataclass
+class NilmConfig:
+    """负荷辨识 · 事件检测（第 12 轮）。对**逐周波**有功/无功/电流序列做突变检测。
+
+    ``channels``：检测对象，total＝三相总有功，A/B/C＝分相有功；``window_cycles``：参与检测与界面显示的周波窗长；
+    ``min_gap_cycles``：同一算法同一对象两次事件之间的最小间隔（去重）；``algorithms``：各算法参数（见 NILM_ALGO_DEFAULTS）。
+    事件落盘 ``nilm_dir/nilm_events_<数据日期>.csv``。阈值单位为 W，按**计算口径**（启用 PT/CT 时为一次侧）填写。
+    """
+
+    enabled: bool = True
+    save: bool = True
+    nilm_dir: str = "output/nilm"
+    max_log: int = 5000
+    channels: List[str] = field(default_factory=lambda: ["total"])
+    window_cycles: int = 300
+    min_gap_cycles: int = 10
+    # 相对门槛（按窗内 |P| 中位数的百分比，与各算法的绝对 W 值取较大者）：
+    #   rel_tol_pct 作用于「容差/噪声/漂移」类参数（settle_tol_w / tol_w / drift_w / noise_w / threshold_w），
+    #   min_delta_pct 作用于各算法的 min_delta_w。这样同一套默认值在二次侧（W 级）和一次侧（MW 级）都能用。
+    rel_tol_pct: float = 1.0
+    min_delta_pct: float = 0.0
+    algorithms: Dict[str, Dict[str, Any]] = field(default_factory=lambda: {k: dict(v) for k, v in NILM_ALGO_DEFAULTS.items()})
+
+    def params(self, algo: str) -> Dict[str, Any]:
+        base = dict(NILM_ALGO_DEFAULTS[algo])
+        base.update({k: v for k, v in (self.algorithms.get(algo) or {}).items() if k in base})
+        return base
+
+    def validate(self) -> None:
+        if not self.channels or any(c not in NILM_CHANNELS for c in self.channels):
+            raise ConfigError(f"nilm.channels 必须是 {NILM_CHANNELS} 的非空子集（当前 {self.channels}）")
+        if int(self.window_cycles) < 30:
+            raise ConfigError(f"nilm.window_cycles 必须 ≥ 30（当前 {self.window_cycles}）")
+        if int(self.min_gap_cycles) < 0:
+            raise ConfigError("nilm.min_gap_cycles 必须 ≥ 0")
+        if int(self.max_log) < 10:
+            raise ConfigError("nilm.max_log 必须 ≥ 10")
+        if not (0 <= float(self.rel_tol_pct) <= 50):
+            raise ConfigError("nilm.rel_tol_pct 必须在 0~50")
+        if not (0 <= float(self.min_delta_pct) <= 100):
+            raise ConfigError("nilm.min_delta_pct 必须在 0~100")
+        if not str(self.nilm_dir).strip():
+            raise ConfigError("nilm.nilm_dir 不能为空")
+        unknown = [a for a in self.algorithms if a not in NILM_ALGO_DEFAULTS]
+        if unknown:
+            raise ConfigError(f"nilm.algorithms 含未知算法 {unknown}；可用：{list(NILM_ALGO_DEFAULTS)}")
+        for a in NILM_ALGO_DEFAULTS:
+            prm = self.params(a)
+            for k, v in prm.items():
+                if k == "enabled":
+                    continue
+                try:
+                    fv = float(v)
+                except (TypeError, ValueError):
+                    raise ConfigError(f"nilm.algorithms.{a}.{k} 必须是数值（当前 {v!r}）")
+                if fv <= 0:
+                    raise ConfigError(f"nilm.algorithms.{a}.{k} 必须 > 0（当前 {v}）")
+                if k.endswith("cycles") and int(fv) != fv:
+                    raise ConfigError(f"nilm.algorithms.{a}.{k} 必须是整数周波数（当前 {v}）")
+            if a in ("threshold", "median_diff") and int(prm["max_rise_cycles"]) < int(prm["settle_cycles"]):
+                raise ConfigError(f"nilm.algorithms.{a}.max_rise_cycles 必须 ≥ settle_cycles")
+        need = max(int(self.params("glr")["window_cycles"]) * 2 + 2,
+                   int(self.params("two_window")["pre_cycles"]) + int(self.params("two_window")["post_cycles"]) + 2,
+                   int(self.params("steady_state")["min_steady_cycles"]) * 2 + 2)
+        if int(self.window_cycles) < need:
+            raise ConfigError(f"nilm.window_cycles={self.window_cycles} 小于算法所需的最小窗长 {need}（GLR 2×window / 双滑窗 pre+post / 稳态 2×min_steady）")
+
+    @classmethod
+    def from_dict(cls, d: Dict[str, Any]) -> "NilmConfig":
+        obj = cls(**{k: v for k, v in d.items() if k in cls.__dataclass_fields__ and k != "algorithms"})
+        algos = d.get("algorithms")
+        if isinstance(algos, dict):
+            merged = {k: dict(v) for k, v in NILM_ALGO_DEFAULTS.items()}
+            for a, prm in algos.items():
+                if a in merged and isinstance(prm, dict):
+                    merged[a].update({k: v for k, v in prm.items() if k in merged[a]})
+            obj.algorithms = merged
+        return obj
+
+
 @dataclass
 class AppConfig:
     """顶层配置。持久化为 JSON（configs/default.json）。"""
@@ -651,6 +753,7 @@ class AppConfig:
     source: SourceConfig = field(default_factory=SourceConfig)
     output: OutputConfig = field(default_factory=OutputConfig)
     events: EventConfig = field(default_factory=EventConfig)
+    nilm: NilmConfig = field(default_factory=NilmConfig)
     windows: Dict[str, WindowSpec] = field(default_factory=default_windows)
 
     # ---------- 派生量 ----------
@@ -677,6 +780,7 @@ class AppConfig:
         self.columns.validate()
         self.output.validate()
         self.events.validate()
+        self.nilm.validate()
         for name, spec in self.windows.items():
             spec.validate(name, self.sampling.fs)
         missing = [k for k in QUANTITY_KEYS if k not in self.windows]
@@ -703,7 +807,7 @@ class AppConfig:
         for key, klass in (
             ("sampling", SamplingConfig), ("transform", TransformConfig), ("harmonic", HarmonicConfig),
             ("power", PowerConfig), ("columns", ColumnMap), ("source", SourceConfig),
-            ("events", EventConfig),
+            ("events", EventConfig), ("nilm", NilmConfig),
         ):
             if isinstance(d.get(key), dict):
                 setattr(cfg, key, klass.from_dict(d[key]))

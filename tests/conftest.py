@@ -33,6 +33,7 @@ def _isolate_realtime_dir(tmp_path, monkeypatch):
     """实时落盘（output.realtime_save 默认开）在测试里一律写到临时目录，不污染仓库 output/。"""
     monkeypatch.setenv("ELEC_TOOL_REALTIME_DIR", str(tmp_path / "realtime"))
     monkeypatch.setenv("ELEC_TOOL_EVENTS_DIR", str(tmp_path / "events"))      # 第 9 轮：事件 CSV 同样隔离
+    monkeypatch.setenv("ELEC_TOOL_NILM_DIR", str(tmp_path / "nilm"))          # 第 12 轮：负荷事件 CSV 隔离
     yield
 
 

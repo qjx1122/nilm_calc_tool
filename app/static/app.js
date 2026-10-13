@@ -352,6 +352,21 @@ function drawLine(cv, series, opt = {}) {
     });
     ctx.stroke();
   });
+  if (opt.marks && opt.marks.length) {
+    ctx.save();
+    opt.marks.forEach(mk => {
+      if (!isNum(mk.x) || mk.x < xmin || mk.x > xmax) return;
+      const px = X(mk.x);
+      ctx.strokeStyle = mk.color || '#ff6b6b'; ctx.lineWidth = 1; ctx.setLineDash([4, 3]);
+      ctx.beginPath(); ctx.moveTo(px, pad.t); ctx.lineTo(px, h - pad.b); ctx.stroke();
+      if (mk.label) {
+        ctx.setLineDash([]); ctx.fillStyle = mk.color || '#ff6b6b'; ctx.font = '10px sans-serif';
+        ctx.textAlign = 'left'; ctx.textBaseline = 'top';
+        ctx.fillText(mk.label, px + 3, pad.t + 16 + (mk.row || 0) * 12);
+      }
+    });
+    ctx.restore();
+  }
   if (opt.legend !== false) {
     let lx = pad.l + 8;
     ctx.font = '11px sans-serif'; ctx.textAlign = 'left'; ctx.textBaseline = 'top';
@@ -454,6 +469,8 @@ function connectWS() {
     else if (m.type === 'error') { toast('服务端错误：' + m.message, 'err'); }
     else if (m.type === 'event') { onEventPush(m.data || []); }
     else if (m.type === 'events_cleared') { S.events = []; S.evSummary = null; if (S.view === 'events') refreshEvents(); }
+    else if (m.type === 'nilm_event') { onNilmPush(m.data || []); }
+    else if (m.type === 'nilm_cleared') { NL.events = []; NL.summary = null; if (S.view === 'nilm') refreshNilm(); }
   };
   S.ws.onerror = () => { S.wsOk = false; };
   S.ws.onclose = () => {
@@ -1243,6 +1260,7 @@ function render() {
       case 'interharmonic': renderInterharmonic(); break;
       case 'dc': renderDC(); break;
       case 'events': renderEvents(); break;
+      case 'nilm': renderNilm(); break;
       case 'spectrum': renderSpectrum(); break;
       case 'windows': renderWindows(); break;
       case 'source': renderSource(); break;
@@ -1562,13 +1580,177 @@ function bind() {
   $('#ev-filter').addEventListener('change', refreshEvents);
   $('#ev-only-active').addEventListener('change', refreshEvents);
   $$('#ev-form input').forEach(el => { const mark = () => { S.evDirty = true; }; el.addEventListener('input', mark); el.addEventListener('change', mark); });
+  bindNilm();
   window.addEventListener('resize', () => { clearTimeout(window._rz); window._rz = setTimeout(render, 180); });
   setInterval(() => {
     if (['overview', 'power_factor', 'fundamental', 'interharmonic', 'dc'].includes(S.view)) refreshHistory();
     if (S.view === 'events') refreshEvents();          // 摘要（计数/振荡评估/落盘行数）随数据刷新
+    if (S.view === 'nilm') refreshNilm();              // 周波窗与事件随数据刷新
   }, 3000);
 }
 
+
+
+/* ------------------------------------------------------------------ 负荷辨识（第 12 轮） */
+
+const NL = { events: [], summary: null, cycles: null, loaded: false, dirty: false, formBuilt: false };
+const NILM_ALGOS = {
+  threshold:    { name: '阈值差分', desc: '相邻周波 ΔP ≥ 门槛为起点；随后 settle 个周波极差 ≤ 容差为终点',
+                  params: { min_delta_w: '最小幅值 (W)', settle_cycles: '稳定周波数', settle_tol_w: '稳定容差 (W)', max_rise_cycles: '最长暂态 (周波)' } },
+  two_window:   { name: '双滑窗均值差', desc: '|mean(后窗) − mean(前窗)| 的局部极大值 ≥ 门槛且 ≥ k×前窗σ',
+                  params: { pre_cycles: '前窗 (周波)', post_cycles: '后窗 (周波)', min_delta_w: '最小幅值 (W)', k_sigma: 'k×σ 倍数' } },
+  cusum:        { name: 'CUSUM 累积和', desc: '双侧 Page CUSUM：相对参考均值的累积偏差 > h 触发；起点＝累积量最后归零处',
+                  params: { drift_w: '允许漂移 k (W)', threshold_w: '触发门限 h (W)', min_delta_w: '最小幅值 (W)', settle_cycles: '稳定周波数' } },
+  glr:          { name: 'GLR 广义似然比', desc: '高斯均值突变的对数似然比 n/4·(m1−m0)²/σ² ≥ 门限',
+                  params: { window_cycles: '单侧窗 (周波)', threshold: '似然比门限', min_delta_w: '最小幅值 (W)', noise_w: '噪声 σ 下限 (W)', settle_cycles: '终点偏移 (周波)' } },
+  steady_state: { name: '稳态分段 (Hart)', desc: '连续 ≥ N 个周波极差 ≤ 容差为稳态；相邻稳态均值差 ≥ 门槛即事件',
+                  params: { tol_w: '稳态容差 (W)', min_steady_cycles: '最少稳态周波', min_delta_w: '最小幅值 (W)', max_transient_cycles: '最长暂态 (周波)' } },
+  median_diff:  { name: '中值滤波差分', desc: '先 N 点中值滤波去尖峰，再做阈值差分（对单周波尖峰/缺口不敏感）',
+                  params: { median_cycles: '中值窗 (周波)', min_delta_w: '最小幅值 (W)', settle_cycles: '稳定周波数', settle_tol_w: '稳定容差 (W)', max_rise_cycles: '最长暂态 (周波)' } },
+};
+const NILM_COLORS = { threshold: '#ff6b6b', two_window: '#ffa94d', cusum: '#ffd43b', glr: '#69db7c', steady_state: '#4dabf7', median_diff: '#da77f2' };
+const NILM_FIELDS = ['enabled', 'save', 'window_cycles', 'min_gap_cycles', 'rel_tol_pct', 'min_delta_pct'];
+const NILM_CH = ['total', 'A', 'B', 'C'];
+
+function buildNilmForm() {
+  if (NL.formBuilt) return;
+  NL.formBuilt = true;
+  const host = $('#nilm-algos');
+  host.innerHTML = Object.keys(NILM_ALGOS).map(a => {
+    const sp = NILM_ALGOS[a];
+    const inputs = Object.keys(sp.params).map(k =>
+      `<label>${sp.params[k]}<input type="number" step="any" min="0" id="nilm-${a}-${k}"></label>`).join('');
+    return `<div class="panel" style="margin-top:8px"><h3 class="curvehdr"><span style="color:${NILM_COLORS[a]}">■</span>
+      <label class="check"><input type="checkbox" id="nilm-${a}-enabled"> ${sp.name}</label><span class="mut" style="font-weight:normal">${sp.desc}</span></h3>
+      <div class="row2">${inputs}</div></div>`;
+  }).join('');
+  const opts = Object.keys(NILM_ALGOS).map(a => `<option value="${a}">${NILM_ALGOS[a].name}</option>`).join('');
+  $('#nilm-filter').insertAdjacentHTML('beforeend', opts);
+  $('#nilm-mark').insertAdjacentHTML('beforeend', opts);
+  $$('#nilm-form input, #nilm-algos input').forEach(el => { const mark = () => { NL.dirty = true; }; el.addEventListener('input', mark); el.addEventListener('change', mark); });
+}
+
+function fillNilmForm(nc) {
+  if (!nc || NL.dirty) return;
+  NILM_FIELDS.forEach(f => {
+    const el = document.getElementById(`nilm-${f}`); if (!el) return;
+    if (el.type === 'checkbox') el.checked = !!nc[f]; else el.value = nc[f];
+  });
+  NILM_CH.forEach(c => { const el = document.getElementById(`nilm-ch-${c}`); if (el) el.checked = (nc.channels || []).includes(c); });
+  const algos = nc.algorithms || {};
+  Object.keys(NILM_ALGOS).forEach(a => {
+    const prm = algos[a] || {};
+    const en = document.getElementById(`nilm-${a}-enabled`); if (en) en.checked = prm.enabled !== false;
+    Object.keys(NILM_ALGOS[a].params).forEach(k => { const el = document.getElementById(`nilm-${a}-${k}`); if (el && prm[k] !== undefined) el.value = prm[k]; });
+  });
+}
+
+function collectNilmPayload() {
+  const p = { algorithms: {} };
+  NILM_FIELDS.forEach(f => { const el = document.getElementById(`nilm-${f}`); if (!el) return; p[f] = el.type === 'checkbox' ? el.checked : +el.value; });
+  p.channels = NILM_CH.filter(c => { const el = document.getElementById(`nilm-ch-${c}`); return el && el.checked; });
+  Object.keys(NILM_ALGOS).forEach(a => {
+    const prm = { enabled: !!document.getElementById(`nilm-${a}-enabled`).checked };
+    Object.keys(NILM_ALGOS[a].params).forEach(k => { const v = parseFloat(document.getElementById(`nilm-${a}-${k}`).value); if (Number.isFinite(v)) prm[k] = v; });
+    p.algorithms[a] = prm;
+  });
+  return p;
+}
+
+async function saveNilmConfig() {
+  const payload = collectNilmPayload();
+  if (!payload.channels.length) { toast('至少勾选一个检测对象', 'err'); return; }
+  try {
+    const d = await api('/api/config', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ nilm: payload }) });
+    NL.dirty = false; $('#nilm-form-note').textContent = '已保存并热生效 ' + new Date().toLocaleTimeString();
+    toast('负荷辨识参数已保存', 'ok');
+    if (d && d.config && S.state) { S.state.config = d.config; fillNilmForm(d.config.nilm); }
+    refreshNilm();
+  } catch (e) { $('#nilm-form-note').textContent = '保存失败：' + e.message; toast(e.message, 'err'); }
+}
+
+function onNilmPush(list) {
+  list.forEach(e => { if (!NL.events.some(x => x.id === e.id)) NL.events.unshift(e); });
+  if (NL.events.length > 5000) NL.events.length = 5000;
+  setNilmBadge(NL.summary ? (NL.summary.total || 0) + list.length : NL.events.length);
+  if (S.view === 'nilm') renderNilm();
+}
+
+function setNilmBadge(n) {
+  const b = $('#nav-nilm-badge'); if (!b) return;
+  b.textContent = String(n); b.style.display = n > 0 ? '' : 'none';
+}
+
+async function refreshNilm() {
+  try {
+    const algo = $('#nilm-filter').value, ch = $('#nilm-chfilter').value;
+    const [d, c] = await Promise.all([
+      api(`/api/nilm/events?limit=1000${algo ? '&algos=' + algo : ''}${ch ? '&channel=' + ch : ''}`),
+      api('/api/nilm/cycles?n=2000'),
+    ]);
+    NL.events = d.events || []; NL.summary = d.summary || null; NL.cycles = c; NL.loaded = true;
+  } catch (e) { toast('负荷辨识数据获取失败：' + e.message, 'err'); }
+  if (S.view === 'nilm') renderNilm();
+}
+
+async function clearNilm() {
+  try { await api('/api/nilm/clear', { method: 'POST' }); toast('负荷事件列表已清空', 'ok'); NL.events = []; await refreshNilm(); }
+  catch (e) { toast(e.message, 'err'); }
+}
+
+function nilmRow(e) {
+  const dir = e.direction === 'up' ? '<span class="badge bad">↑ 投入</span>' : '<span class="badge">↓ 切除</span>';
+  return [e.id, `<span style="color:${NILM_COLORS[e.algorithm] || '#fff'}">■</span> ${esc(e.algorithm_name || e.algorithm)}`, esc(e.channel),
+          ts(e.t_start), ts(e.t_end), fmtDur(e.duration_s || 0) + `（${e.cycles} 周波）`, dir,
+          si(e.magnitude_w, 'W'), si(e.delta_q_var, 'var'), si(e.delta_i_a, 'A'),
+          `${si(e.pre_p_w, 'W')} → ${si(e.post_p_w, 'W')}`, isNum(e.score) ? num(e.score, 3) : ''];
+}
+
+function renderNilm() {
+  buildNilmForm();
+  if (!NL.loaded) { NL.loaded = true; refreshNilm(); return; }
+  const sm = NL.summary || {};
+  const counts = sm.counts || {};
+  const names = sm.algorithm_names || {};
+  const cards = [card('负荷辨识', sm.enabled === false ? '已禁用' : '启用', '', `累计 ${sm.total || 0} 条 · ↑${(sm.by_direction || {}).up || 0} / ↓${(sm.by_direction || {}).down || 0}`)];
+  Object.keys(NILM_ALGOS).forEach(a => cards.push(card(names[a] || NILM_ALGOS[a].name, String(counts[a] || 0), '次',
+    (sm.algorithms_enabled || []).includes(a) ? '启用' : '<span class="bad">已停用</span>')));
+  cards.push(card('周波窗', `${sm.window_fill || 0} / ${sm.window_cycles || 0}`, '周波', `每周波 ${sm.n_cycle_samples || 0} 点 · 累计 ${sm.cycles_total || 0} 周波 · 对象 ${(sm.channels || []).join('/')}`));
+  const w = sm.writer || {};
+  cards.push(card('事件落盘', w.enabled ? '开' : '关', '', w.current_file ? `${w.rows_written} 行 → ${w.current_file.split(/[\\/]/).pop()}` : (w.dir || '')));
+  $('#nilm-cards').innerHTML = cards.join('');
+  if (isNum(sm.total)) setNilmBadge(sm.total);
+  // 周波窗曲线 + 事件竖线
+  const c = NL.cycles || {}; const chn = $('#nilm-ch').value, qty = $('#nilm-qty').value, mk = $('#nilm-mark').value;
+  const chd = ((c.channels || {})[chn] || {})[qty] || [];
+  const tt = c.t || []; const t0 = tt.length ? tt[0] : 0;
+  $('#nilm-win-n').textContent = String(tt.length);
+  const unit = qty === 'p' ? 'W' : qty === 'q' ? 'var' : 'A';
+  const marks = NL.events.filter(e => e.channel === chn && (!mk || e.algorithm === mk) && e.t_start >= t0 && tt.length && e.t_start <= tt[tt.length - 1])
+    .map((e, i) => ({ x: e.t_start - t0, color: NILM_COLORS[e.algorithm], row: Object.keys(NILM_ALGOS).indexOf(e.algorithm),
+                     label: `${e.direction === 'up' ? '↑' : '↓'}${si(e.magnitude_w, 'W', 3)}` }));
+  drawLine($('#nilm-chart'), [{ name: `${chn === 'total' ? '三相总' : chn + ' 相'} ${qty.toUpperCase()}（逐周波）`, color: '#4ea1ff', data: tt.map((x, i) => [x - t0, chd[i]]) }],
+           { ylabel: unit, fmtX: x => ts(x + t0), fmtTip: x => ts(x + t0), height: 240, marks, empty: '暂无周波数据（启动数据源后显示）' });
+  const hdr = ['#', '算法', '对象', '开始（数据时间）', '结束', '持续', '方向', '幅值 |ΔP|', 'ΔQ', 'ΔI', '前 → 后', '检验量'];
+  $('#nilm-total').textContent = String(sm.total || NL.events.length);
+  $('#nilm-table').innerHTML = NL.events.length ? table(hdr, NL.events.map(nilmRow)) : '<div class="notes">暂无事件</div>';
+  const cfg = (S.state || {}).config || {};
+  fillNilmForm(cfg.nilm);
+  $('#nilm-notes').innerHTML = notes((sm.notes || []).concat(sm.errors || []), [
+    '口径：每周波 P=mean(u·i)，Q=基波单频 DFT 无功，I=周波有效值；各算法在最近 window_cycles 个周波的窗上评估，同算法同对象按终点序号去重，终点之后需再看到足够周波才确认（所以事件会滞后几个周波出现）。',
+    '阈值单位为 W，按计算口径（启用 PT/CT 时为一次侧）填写；rel_tol_pct / min_delta_pct 把门槛按窗内 |P| 中位数折算成相对值，同一套默认值在 W 级与 MW 级都能用。',
+    '双滑窗均值差与 CUSUM 对单周波尖峰较敏感（会按均值摊成小事件）；需要抗尖峰请看中值滤波差分 / 稳态分段，或抬高 min_delta_pct。',
+  ]);
+}
+
+function bindNilm() {
+  $('#btn-nilm-refresh').addEventListener('click', refreshNilm);
+  $('#btn-nilm-clear').addEventListener('click', clearNilm);
+  $('#btn-nilm-save').addEventListener('click', saveNilmConfig);
+  $('#nilm-filter').addEventListener('change', refreshNilm);
+  $('#nilm-chfilter').addEventListener('change', refreshNilm);
+  ['nilm-ch', 'nilm-qty', 'nilm-mark'].forEach(id => $('#' + id).addEventListener('change', renderNilm));
+}
 
 /* ------------------------------------------------------------------ 数据处理：离线 CSV 重采样 */
 

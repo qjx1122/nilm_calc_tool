@@ -1,7 +1,7 @@
 # README.md — nilm_calc_tool（电力系统各类电气量计算工具）
 
 > 台账文件（BOOTSTRAP.md v2.2）：安装与环境 / 运行命令 / 数据目录 / 配置结构 / 输出产物 / 生产推荐流程。
-> **当前状态：v0.10（2026-10-13）**——软件已实现并在沙盒跑通（算法核心 + 4 类数据源 + 计算引擎 + 事件检测 + 离线重采样 + 离线列映射 / 时标时区开关 + CLI + Web 界面 + 249 项测试 + 10 项验证工具）。
+> **当前状态：v0.11（2026-10-13）**——软件已实现并在沙盒跑通（算法核心 + 4 类数据源 + 计算引擎 + 电能质量事件 + **负荷辨识事件检测（6 算法）** + 离线重采样 + 列映射 / 时标时区开关 + CLI + Web 界面 + 257 项测试 + 11 项验证工具）。
 > 状态标注：✅已确认（有代码 / 实录 / 官方来源佐证）｜🔶待确认（占位或推断，需用户回填）｜❌已废弃（不删行，只翻状态）
 > **本文所有 ✅ 均为沙盒实录：Linux 6.1.158+ / CPython 3.11.2 / numpy 2.4.6，采集时间 2026-10-10。**
 > **Windows 命令、真实现场数据、生产部署三项尚未在用户环境验证，一律标 🔶，请按 `REPORT_TEST.md`「T-002 本地部署与验收执行包」逐条回填。**
@@ -416,6 +416,26 @@ CLI 同等能力：`.venv/bin/python cli.py resample "data/波形_农业排灌_�
 
 **注意**：`linear` 降采样无抗混叠（高于新 Nyquist 的谐波会折叠到低频），要做谐波分析请用 `fft`；`fft` 的输出点数 = round(N·fs_new/fs_src)（周期语义），比例非整时实际采样率略有偏差并写入 notes；重采样后播放时请把「配置采样率 fs」改成目标值。
 
+
+#### 负荷辨识子界面：逐周波事件检测（v0.11）
+
+> 导航「🧩 负荷辨识」。对**逐周波**的 P / Q / I 序列（每周波＝fs/f_nom＝128 点：P=mean(u·i)，Q=基波单频 DFT 无功，I=周波有效值；对象 total/A/B/C）在最近 `nilm.window_cycles` 个周波的滚动窗上并行运行 6 种突变检测算法；每条事件给出**算法、对象、开始/结束时刻（数据时间）、方向（up 投入 / down 切除）、幅值 |ΔP| 与带符号 ΔP / ΔQ / ΔI、事件前后稳态值、算法检验量**，并落盘 `output/nilm/nilm_events_<数据日期>.csv`（每事件一行，UTF-8-BOM，逐行 flush，`ELEC_TOOL_NILM_DIR` 可改）。
+
+| 算法键 | 名称 | 原理 | 参数（`nilm.algorithms.<键>`，W＝有功，周波＝cycles） |
+|---|---|---|---|
+| `threshold` | 阈值差分 | 相邻周波 ΔP ≥ max(min_delta/2, 容差) 为起点；随后 settle 个周波极差 ≤ 容差为终点；起点精修到越过 Δ/2 中线的周波 | `min_delta_w` 50, `settle_cycles` 5, `settle_tol_w` 20, `max_rise_cycles` 40 |
+| `two_window` | 双滑窗均值差 | \|mean(后窗)−mean(前窗)\| 的局部极大值 ≥ min_delta 且 ≥ k·σ(前窗) | `pre_cycles` 10, `post_cycles` 10, `min_delta_w` 50, `k_sigma` 3 |
+| `cusum` | CUSUM 累积和 | 双侧 Page CUSUM：相对参考均值累积偏差 > h 触发，起点＝累积量最后归零处，触发后重置参考均值 | `drift_w` 10, `threshold_w` 200, `min_delta_w` 50, `settle_cycles` 5 |
+| `glr` | GLR 广义似然比 | 高斯均值突变：n/4·(m1−m0)²/σ² 的局部极大值 ≥ 门限（σ² 取两侧方差均值，不低于 noise_w²） | `window_cycles` 15, `threshold` 25, `min_delta_w` 50, `noise_w` 10, `settle_cycles` 5 |
+| `steady_state` | 稳态分段（Hart 1992） | 连续 ≥ N 个周波极差 ≤ 容差为稳态；相邻稳态均值差 ≥ min_delta 即事件（起点＝前稳态结束，终点＝后稳态开始） | `tol_w` 30, `min_steady_cycles` 10, `min_delta_w` 50, `max_transient_cycles` 100 |
+| `median_diff` | 中值滤波差分 | N 点中值滤波去尖峰后再做阈值差分（单周波尖峰/缺口不触发） | `median_cycles` 5, `min_delta_w` 50, `settle_cycles` 5, `settle_tol_w` 20, `max_rise_cycles` 40 |
+
+- 通用参数：`nilm.enabled`、`save`、`channels`（默认 `["total"]`）、`window_cycles` 300、`min_gap_cycles` 10（同算法同对象去重间隔）、**`rel_tol_pct` 1.0**（容差/漂移/噪声/CUSUM 门限按窗内 |P| 中位数折算，与绝对值取大）、**`min_delta_pct` 0**（最小幅值的相对版本）。阈值单位为 W、按计算口径（启用 PT/CT 时为一次侧）；相对门槛让同一套默认值在 W 级（二次侧）与 MW 级（一次侧）都可用。全部在界面「检测参数」表单热更新（`PUT /api/config {"nilm": …}` 深合并）。
+- 去重/确认：每个算法都在整窗上重新评估，只对「终点全局周波序号 > 上次已报终点 + min_gap」且「终点之后已再看到 confirm 个周波」的候选报事件，所以事件会滞后几个周波（≤ 后窗/GLR 窗）出现，且**不随块边界重复**。
+- 接口：`GET /api/nilm/events?limit&algos&channel&since_id`、`GET /api/nilm/cycles?n`（最近 n 周波 P/Q/I）、`POST /api/nilm/clear`；WS `type=nilm_event` 推送；`/api/state.engine.nilm_events_total/nilm_cycles`。
+- 样例：`.venv/bin/python tools/gen_nilm_sample.py` 生成 `data/nilm_steps.csv`（1000 W → 2.0 s +500 W → 4.4 s −300 W，3.0 s 单周波尖峰）；默认 PT/CT 下 6 种算法均在 **2.000 s ↑750 kW、4.400 s ↓450 kW** 报出（起点误差 ≤1 周波，幅值误差 <1%）。
+- **假设与已知特性（可改）**：① 周波按额定频率定长切分（不随频率自适应）；② 事件＝稳态间阶跃，不做负荷类型识别/聚类（辨识的「特征提取 + 事件库」已就位，分类留后续）；③ 双滑窗与 CUSUM 对单周波尖峰会按均值摊成小事件（样例中 60 kW），需要抗尖峰请看中值滤波差分/稳态分段或抬高 `min_delta_pct`；④ 幅值取事件后 settle 均值 − 事件前 settle 均值，暂态（电机启动冲击）期间不计入。
+- 验证：`tests/test_r12_nilm.py` 8 项；`tools/ui_r12_check.cjs` 16 项；全量 **257 passed**。
 
 #### 离线文件时标的 UTC 开关（v0.10）
 
@@ -1123,7 +1143,7 @@ python cli.py selftest                            # 实测：44/44，worst_rel_e
 
 - **沙盒已验证（Linux / CPython 3.11.2，2026-10-10 实录）**
   - 安装：venv + `pip install -r requirements.txt`；离线安装（Linux 29 包 / Windows 目标 24 包下载）；最小安装报错提示
-  - 算法：`selftest` 44/44（最差 1.508e-05）；`pytest tests/ -q` **249 passed, 1 skipped**（v0.10，UTC / Asia/Shanghai 双时区）
+  - 算法：`selftest` 44/44（最差 1.508e-05）；`pytest tests/ -q` **257 passed, 1 skipped**（v0.11）
   - CLI：7 个子命令逐条实跑（含 `--set-window`、`--format csv/json/table`、`--pace`、`--ts-format`）
   - Web：页面与静态资源 200、12 个子界面、REST 12 组端点、WebSocket 推送与降级、配置热更新与持久化分离、导出 34.6 万行 CSV
   - 实时：模拟器 6400 点/s 稳定摄入（实测 6398–6400 点/s），各量按独立窗长输出（0.2s 量 5 次/s、1s 量 1 次/s）
@@ -1153,6 +1173,7 @@ python cli.py selftest                            # 实测：44/44，worst_rel_e
 ---
 
 ## 🗒 变更记录
+- **v0.11（2026-10-13，第 12 轮）**：新增 **「负荷辨识」子界面**：`elec_tool/nilm.py`（逐周波 P/Q/I 特征 + 6 种突变检测算法：阈值差分 / 双滑窗均值差 / CUSUM / GLR / 稳态分段(Hart) / 中值滤波差分；事件含算法、对象、起止时刻、方向、幅值 ΔP/ΔQ/ΔI；跨块去重与确认；`output/nilm/nilm_events_<日期>.csv` 落盘）；`NilmConfig` 全参数可配（含相对门槛 `rel_tol_pct/min_delta_pct`）；引擎逐块摄入；REST `/api/nilm/events|cycles|clear` + WS `nilm_event`；界面：卡片、周波窗曲线（事件竖线标注）、事件表（算法/对象过滤）、按算法生成的参数表单。`tests/test_r12_nilm.py` 8 项、`tools/ui_r12_check.cjs` 16 项、`tools/gen_nilm_sample.py`；全量 **257 passed**。
 - **v0.10（2026-10-13，第 11 轮）**：新增 **离线文件时标 UTC 开关** `source.file_time_utc`（默认 false）：未启用自定义播放时间时，文件里的日期时间 / `0/00/00 HH:MM:SS` 文本时标按本机本地时间解释，**曲线、落盘 CSV、事件时间与文件中的时间一致**；true 则视为 UTC 换算显示（旧行为）。`create_source/LiveEngine` 的 `tz_offset_h` 默认改为按配置推导；`/api/probe` 增 `file_time_utc/tz_offset_h/t_first_local`；`/api/engine/start` 白名单放行；CLI `--file-time-utc`；界面勾选框随「自定义播放时间」联动。`tests/test_r11_file_time.py` 6 项、`tools/ui_r11_check.cjs` 11 项；全量 **249 passed**（UTC 与 Asia/Shanghai 双时区）。
 - **v0.9（2026-10-13，第 10 轮）**：新增 **离线文件列映射开关** `columns.mapping_enabled` / `columns.mapping`：未启用＝默认列序「时间,A相电压,A相电流,B相电压,B相电流,C相电压,C相电流」（可识别表头仍按表头）；启用＝只播放有映射的列（列号或表头名），未映射通道按 0 并提示，时间戳未映射按 fs 合成连续时间轴。`ColumnMap.layout()/looks_like_header()/validate()` 成为离线取列唯一规则（parsing / probe / CLI probe / 重采样预扫描共用）；界面「数据源」页新增面板（开关 + 7 字段 + 默认列序 / 按探查表头填入）；`/api/probe` 增 `mapping_enabled/unmapped/ncols`。`tests/test_r10_colmap.py` 8 项、`tools/ui_r10_check.cjs` 15 项；全量 **243 passed**。
 - **v0.8.1（2026-10-13，F-32 热修）**：去掉事件告警的右下角弹出提示（事件多时刷屏）；活动事件数仍显示在导航徽标，明细在「事件」页。

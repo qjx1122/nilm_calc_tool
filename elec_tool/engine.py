@@ -19,6 +19,7 @@ from .config import AppConfig, QUANTITY_KEYS
 from .metrics import MetricsCalculator, MetricsResult
 from .realtime_writer import RealtimeCurveWriter
 from .events import EventDetector
+from .nilm import NilmDetector
 from .scaling import scale_block
 from .sources import create_source
 from .sources.base import DataSource
@@ -46,6 +47,8 @@ class EngineState:
     rate_samples_per_s: float = 0.0
     events_total: int = 0
     events_active: int = 0
+    nilm_events_total: int = 0
+    nilm_cycles: int = 0
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -60,6 +63,7 @@ class EngineState:
             "errors": list(self.errors[-10:]), "started_at": self.started_at,
             "last_poll_at": self.last_poll_at, "rate_samples_per_s": self.rate_samples_per_s,
             "events_total": self.events_total, "events_active": self.events_active,
+            "nilm_events_total": self.nilm_events_total, "nilm_cycles": self.nilm_cycles,
         }
 
 
@@ -85,6 +89,9 @@ class LiveEngine:
         # 事件检测（第 9 轮）：每次 compute 后评估；on_event 供 Web 层推送
         self.detector = EventDetector(self.cfg, root=output_root)
         self.on_event: Optional[Callable[[List[Dict[str, Any]]], None]] = None
+        # 负荷辨识事件检测（第 12 轮）：逐块摄入时按周波评估；on_nilm_event 供 Web 层推送
+        self.nilm = NilmDetector(self.cfg, root=output_root)
+        self.on_nilm_event: Optional[Callable[[List[Dict[str, Any]]], None]] = None
 
     # ---------------- 生命周期 ----------------
     def start(self) -> EngineState:
@@ -103,6 +110,7 @@ class LiveEngine:
         try:
             self.writer.close()
             self.detector.close()
+            self.nilm.close()
         except Exception:
             pass
         try:
@@ -130,6 +138,7 @@ class LiveEngine:
             pass
         self.writer = RealtimeCurveWriter(new_cfg, root=self._output_root)
         self.detector.update_config(new_cfg)
+        self.nilm.update_config(new_cfg)
         fs = new_cfg.sampling.fs
         cap = int(np.ceil(new_cfg.max_window_s * fs * 1.5)) + max(int(new_cfg.source.block_samples), 64)
         self.buffer = FrameBuffer(capacity=max(cap, int(fs)))
@@ -257,6 +266,18 @@ class LiveEngine:
             if msg not in self.state.errors:
                 self.state.errors.append(msg)
 
+    def _detect_nilm(self, scaled: SampleBlock) -> None:
+        try:
+            new = self.nilm.ingest(scaled)
+            self.state.nilm_events_total = len(self.nilm._log)
+            self.state.nilm_cycles = int(self.nilm.cycles_total)
+            if new and self.on_nilm_event is not None:
+                self.on_nilm_event(new)
+        except Exception as exc:
+            msg = f"负荷辨识检测异常：{type(exc).__name__}: {exc}"
+            if msg not in self.state.errors:
+                self.state.errors.append(msg)
+
     def _ingest(self, block: SampleBlock) -> None:
         scaled = scale_block(block, self.cfg.transform)
         # 数据连续性检查（时间跳变 → 记为 gap，对应数据质量规则 Q-01/Q-02）
@@ -272,6 +293,7 @@ class LiveEngine:
                 self.state.gaps = self.state.gaps[-50:]
                 self.state.notes = self.state.notes[-20:]
         self.buffer.append(scaled)
+        self._detect_nilm(scaled)
         if scaled.n:
             self._last_t = float(scaled.t[-1])
             self.state.data_t_start = self.state.data_t_start or float(scaled.t[0])
@@ -325,4 +347,5 @@ class LiveEngine:
             "last_emit": dict(self._last_emit),
             "realtime": self.writer.info(),
             "events": self.detector.summary(),
+            "nilm": self.nilm.summary(),
         }

@@ -47,6 +47,7 @@
     <button class="navitem" data-view="dc">➖ 直流偏置</button>
     <button class="navitem" data-view="spectrum">🌈 频谱</button>
     <button class="navitem" data-view="events">🚨 事件 <span class="badge" id="nav-ev-badge" style="display:none">0</span></button>
+    <button class="navitem" data-view="nilm">🧩 负荷辨识 <span class="badge" id="nav-nilm-badge" style="display:none">0</span></button>
     <div class="navgroup">配置与运维</div>
     <button class="navitem" data-view="windows">⏱ 窗口配置（需求⑥）</button>
     <button class="navitem" data-view="export">💾 导出与日志</button>
@@ -394,6 +395,50 @@
         </div>
         <div class="row" style="margin-top:10px"><button id="btn-ev-save">保存阈值</button><span id="ev-form-note" class="mut"></span></div>
         <div id="ev-notes" class="notes"></div>
+      </div>
+    </section>
+
+    <!-- 负荷辨识（第 12 轮） -->
+    <section class="view" id="view-nilm">
+      <h2>负荷辨识 · 事件检测（逐周波 P/Q/I 突变：阈值差分 / 双滑窗 / CUSUM / GLR / 稳态分段 / 中值滤波差分）</h2>
+      <div class="cards" id="nilm-cards"></div>
+      <div class="panel">
+        <h3 class="curvehdr"><span>周波窗（最近 <span id="nilm-win-n">0</span> 个周波，竖线＝检测到的事件起点）</span>
+          <span class="toggle">
+            <label>对象 <select id="nilm-ch"><option value="total">三相总</option><option value="A">A 相</option><option value="B">B 相</option><option value="C">C 相</option></select></label>
+            <label>量 <select id="nilm-qty"><option value="p">有功 P</option><option value="q">无功 Q</option><option value="i">电流 I</option></select></label>
+            <label>标注算法 <select id="nilm-mark"><option value="">全部</option></select></label>
+          </span></h3>
+        <canvas id="nilm-chart" height="240"></canvas>
+      </div>
+      <div class="panel">
+        <h3 class="curvehdr"><span>事件列表（最近 <span id="nilm-total">0</span> 条；时刻＝数据时间，方向 ↑投入 / ↓切除，幅值＝事件后稳态 − 事件前稳态）</span>
+          <span class="toggle">
+            <label>算法 <select id="nilm-filter"><option value="">全部</option></select></label>
+            <label>对象 <select id="nilm-chfilter"><option value="">全部</option><option value="total">三相总</option><option value="A">A</option><option value="B">B</option><option value="C">C</option></select></label>
+            <button id="btn-nilm-refresh">刷新</button>
+            <button id="btn-nilm-clear" title="清空内存中的事件列表（不删除已落盘的 CSV）">清空</button>
+          </span></h3>
+        <div id="nilm-table" class="tablewrap scroll"></div>
+      </div>
+      <div class="panel">
+        <h3>检测参数（保存后立即热生效；算法说明与参数含义见 README §负荷辨识）</h3>
+        <div class="row2" id="nilm-form">
+          <label class="check"><input type="checkbox" id="nilm-enabled"> 启用负荷辨识事件检测</label>
+          <label class="check"><input type="checkbox" id="nilm-save"> 事件落盘 CSV（output/nilm/nilm_events_&lt;日期&gt;.csv）</label>
+          <label>检测对象 <span class="toggle">
+            <label><input type="checkbox" id="nilm-ch-total"> 三相总</label>
+            <label><input type="checkbox" id="nilm-ch-A"> A 相</label>
+            <label><input type="checkbox" id="nilm-ch-B"> B 相</label>
+            <label><input type="checkbox" id="nilm-ch-C"> C 相</label></span></label>
+          <label>周波窗长（周波数，≥30）<input type="number" step="1" min="30" id="nilm-window_cycles"></label>
+          <label>同算法同对象最小事件间隔（周波）<input type="number" step="1" min="0" id="nilm-min_gap_cycles"></label>
+          <label>相对容差 rel_tol_pct（% 窗内 |P| 中位数；作用于容差/漂移/噪声类参数）<input type="number" step="0.1" min="0" max="50" id="nilm-rel_tol_pct"></label>
+          <label>相对最小幅值 min_delta_pct（% 窗内 |P| 中位数；0＝只用各算法绝对值）<input type="number" step="0.1" min="0" max="100" id="nilm-min_delta_pct"></label>
+        </div>
+        <div id="nilm-algos"></div>
+        <div class="row" style="margin-top:10px"><button id="btn-nilm-save">保存参数</button><span id="nilm-form-note" class="mut"></span></div>
+        <div id="nilm-notes" class="notes"></div>
       </div>
     </section>
 
