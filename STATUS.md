@@ -1,7 +1,7 @@
 # STATUS.md
 
 > 续接文件（BOOTSTRAP.md v2.2 台账）。每次收尾必更新；只改本文件，不另建同类文件。
-> 最后更新：2026-10-12（第 7 次收尾 + F-22 热修：IP 访问页面纵向拉伸＝画布高度按 dpr 复利放大）
+> 最后更新：2026-10-12（第 7 次收尾 + F-22/F-23 热修：IP 访问页面纵向拉伸；离线播放顶栏样本汇总不自动更新）
 
 ## 当前角色
 - 角色：**资深电力算法专家**（`ROLE.md` v1.4 指定的默认当前角色）
@@ -13,8 +13,8 @@
 ## 当前目标
 - **本任务（2026-10-12 第 7 轮，已交付、沙盒侧✅实录）**：用户 3 点需求——① 计算的曲线数据实时保存到 `output/realtime` 目录 CSV ② 离线文件可指定位置播放 ③ 鼠标移到曲线上显示该位置数据
   - 实现：`elec_tool/realtime_writer.py`（每点追加＋flush、按数据日期分文件、续写不重表头、受 `curve_save` 过滤、`ELEC_TOOL_REALTIME_DIR` 优先）＋ `metrics.curve_record()` 抽成三出口共用；`output.realtime_save/realtime_dir`、`GET /api/realtime`、导出页面板、CLI `--realtime-save/--realtime-dir`；`source.play_start_mode/value`（begin/row/seconds/percent/time）＋ `iter_csv_blocks(skip_rows/start_percent/start_time)` ＋ 超范围 `ParseError` ＋ 界面下拉框联动 ＋ start 白名单 ＋ CLI `--play-from`；`app.js` `bindHover/hoverInfo/drawHover`（所有 canvas，吸附最近点，重绘不丢）
-  - 验证：`tests/test_r7_features.py` **18 项**；`tools/ui_r7_check.cjs` **PASS 39 / FAIL 0**（连跑 3 次稳定）；旧 harness 复跑 30/0、74/0；全量 **205 passed, 1 skipped**
-  - 问题 **F-17~F-22**（F-22 为用户真实环境回报：IP 访问页面纵向拉伸，已修）（超范围静默 0 样本 / 默认落盘污染仓库目录 / finished≠flush 完成的测试竞争 / 常驻模拟器污染测试目录 / begin 模式送空值）
+  - 验证：`tests/test_r7_features.py` **18 项**；`tools/ui_r7_check.cjs` **PASS 39 / FAIL 0**（连跑 3 次稳定）；旧 harness 复跑 30/0、74/0；全量 **206 passed, 1 skipped**
+  - 问题 **F-17~F-23**（F-22/F-23 为用户真实环境回报，均已修＋回归）（超范围静默 0 样本 / 默认落盘污染仓库目录 / finished≠flush 完成的测试竞争 / 常驻模拟器污染测试目录 / begin 模式送空值）
   - 文档：`README.md` v0.6（§3.1 新小节、§3.4 `/api/realtime`、§4.2 字段＋CLI 示例、§6/§7/§8/§11、变更记录）；`REPORT_TEST.md` v0.6 **T-005**；`REPORT.md` v0.6 **C-16/C-17**＋1 条教训
   - 验收状态：沙盒侧 ✅；**用户侧 🔶 待回报**（T-005 U7 组）
   - 假设（已在 README 标注）：实时落盘默认**开**；「曲线数据」＝6 条趋势曲线标量点；按数据日期分文件；受「保存曲线」勾选过滤；悬停吸附最近点不插值
@@ -107,6 +107,7 @@
 - 2026-10-10｜**踩坑 F-06~F-10（界面层，本轮 jsdom 端到端检查发现）**：① **F-06** `#src-kind`/`#src-frame` 在 `bind()` 里**没有任何 change 监听**（只有频谱 3 个下拉框有）→ 选了界面毫无变化、4 种源的字段全部平铺可编辑、填了不生效也无提示；修法＝新增 `syncSourceForm()` 按 kind/frame 决定 10 个字段的 `disabled` 并写 `#src-hint` 逐源说明（`SRC_HINT` 单一事实来源）。② **F-07** `collectSourcePayload()` 全字段平铺 → 选 simulator 仍带 `path/host/frame`、TCP 切回 text_csv 仍带旧 `struct_fmt`；实测空 `path` 被服务端 **400 拒**「source.kind=csv_file 需要 source.path」，空 `host` 被 **静默存成 ''**；修法＝按 kind 裁剪 + 「非空/有限才送」。③ **F-08** 空数字框经 `+$('#cfg-fs').value` 变 `0` 送出，而 `PUT /api/config` 是深合并 → **全新加载页面第一次点「保存配置」必 400**「sampling.fs 必须 > 0（当前 0）」且用户看不出是哪个框；修法＝只送「有限且 >0」，被跳过的字段名写进成功提示。④ **F-09（最隐蔽）** 快量 0.2 s 一次的推送 → `render()` → `renderSource()` **无条件回填** → 停在数据源页时「刚选的下拉框被改回服务端 kind、输入一半的路径被清空」；修法＝拆出 `fillSourceForm()`、`S.formDirty` 脏值保护 + `#src-formnote` 提示、「刷新」＝丢弃修改重新回填。⑤ **F-10** `startEngine()` 夹带 `collectConfigPayload()`，而 `/api/engine/start` 只取 source 白名单 + `windows` → 改完 PT/CT 点「启动数据源」被**静默忽略**；修法＝启动只送 source，提示指向「保存配置（热更新）」
 - 2026-10-10｜**方法论：界面缺陷需要「双层可复现验证」**：`node --check`（只验语法）与 `pytest`（不碰前端）全绿的情况下，上述 5 个缺陷全部隐身；最隐蔽的 F-09 只在「停在数据源页 + 引擎在跑」时每 0.2 s 复现一次。对策＝① `tools/ui_dropdown_check.cjs`（jsdom 驱动**真实页面**打**真实服务端**，可断言请求载荷原文、服务端回显、推送后的 DOM 值）② `tests/test_web_ui.py`（前端契约静态测试：下拉框选项 ↔ 后端枚举集合相等、`$('#id')` 引用的元素必须存在、四道闸门在位；不需 node，随 pytest 跑）。**踩坑**：断言「字段不可编辑」要用 `.disabled`，不能用 `offsetParent`（jsdom 无布局，恒为 null → 假 PASS）；捕获请求要同时过滤 PUT 与 POST，否则漏掉 `saveConfig`；`const` 声明在 `window.eval` 后不可见，需在同一次 eval 里用闭包导出（`window.__S=()=>S`）
 - 2026-10-12｜**决策（第 6 轮）**：① 无日期时标基准＝1970-01-01（保持 epoch 秒语义，界面时:分:秒正确），真实日期交给「自定义播放时间」而不是猜今天的日期（猜错比显示 1970 更危险）；② 24 h 按**数据时间**而非墙钟（离线回放同样成立，且与「不足 24 h 显示全部」自洽）；③ 「保存曲线」勾选＝配置项（`output.curve_save`，`PUT /api/config` 即时持久化），面板与导出页共用一份，而不是导出时临时勾选——用户要的是「配置功能」；④ 保存给两个入口：服务端写 `output/curves_<ts>/<曲线>.csv`（每曲线一文件，UTF-8-BOM 供 Excel）+ 浏览器下载合并长表；⑤ 热更新一律保留趋势历史与最近结果（含已结束的离线引擎），只有「重新启动数据源」清空
+- 2026-10-12｜**踩坑 F-23（用户回报）**：离线播放时顶栏「样本」/数据源汇总冻结需手动刷新。根因 `/ws` 只在队列空闲 1s 才发 state，连续 result 流下永不触发；修为单调时钟每 1s 必发（`WS_STATE_INTERVAL_S`）；教训：周期性状态推送需独立时间判据，测试要在连续流下断言
 - 2026-10-12｜**踩坑 F-22（用户回报，首个来自真实环境的缺陷）**：127.0.0.1 正常、局域网 IP 访问页面纵向无限拉伸。根因 `prep()` 每次回读 `getAttribute('height')`，而 `cv.height = h*dpr` 会改写该属性 → dpr≠1 时复利放大；两个地址差异＝浏览器按主机名记忆的缩放级别。修法缓存 `data-h`；教训：jsdom 默认 dpr=1，界面测试需显式覆盖 dpr≠1
 - 2026-10-12｜**决策（第 7 轮）**：① 实时落盘**默认开**（用户明确要这个功能；关掉只需一个开关），目录 `output/realtime`，`ELEC_TOOL_REALTIME_DIR` 环境变量优先（测试隔离/现场指到数据盘）；② 落盘与界面趋势、手工保存**共用 `curve_record()` 与 `curve_save`**，三处数字必须对得上；③ 按**数据时间**日期分文件（与 24h 曲线按数据时间同一口径；0/00/00 文件落到 1970 文件名，真实日期靠自定义播放时间）；④ 播放起点给四种定位而不是只给行号：现场最常用的是「跳过前 N 秒」和「从某时刻开始」，percent 给大文件 O(1) 跳转；⑤ 悬停吸附最近点、不插值（显示的必须是真实算出的点）
 - 2026-10-12｜**踩坑 F-19（状态位≠工作完成）**：`finished=true` 后运行线程还要 `flush_all`（收尾强算＋入历史＋落盘），测试立刻数行就偶发 `4 == 3`，只在全量跑时复现。等待条件要对准最后一个副作用；本轮在 r6/r7 的 `_wait_finished` 与 jsdom 脚本里置位后再等一拍并重读

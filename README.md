@@ -575,6 +575,7 @@ curl -s "http://127.0.0.1:8000/api/export?fmt=csv" -o output/result.csv
 
 | 现象 | 原因 | 处理 | 状态 |
 | --- | --- | --- | --- |
+| 离线文件播放中顶栏「样本」、「数据源状态」汇总停在启动瞬间，点「刷新」才变 | v0.6.1 及更早：WS 只在队列空闲 1s 时发 state，连续 result 流下永不触发 | 升级到 v0.6.2（F-23 已修，state 每 1s 必发） |
 | 用 IP（如 192.168.x.x）访问时页面每次刷新纵向变长、滚动条不断增加；127.0.0.1 正常 | v0.6 及更早：画布高度按 `devicePixelRatio` 复利放大；浏览器按主机名记忆缩放级别，故两个地址表现不同 | 升级到 v0.6.1（F-22 已修）；临时规避：在该页面按 **Ctrl+0** 把缩放恢复 100%（系统缩放也须 100%） |
 | `[Errno 98] Address already in use` | 端口被占 | 换端口 `--port 8001`；查占用：Linux `ss -lntp \| grep 8000`，Windows `netstat -ano \| findstr :8000` | Linux ✅ / Windows 🔶 |
 | 页面能打开但没有数据 | 引擎未启动（默认不自动跑） | 界面「数据源与控制」→ 点「启动数据源」；或启动服务时带 `ELEC_TOOL_AUTOSTART=1` | ✅沙盒实录 |
@@ -1072,6 +1073,7 @@ python cli.py selftest                            # 实测：44/44，worst_rel_e
 ---
 
 ## 🗒 变更记录
+- **v0.6.2（2026-10-12）**：修复 **F-23**——离线文件播放时顶栏「样本」/「数据源状态」汇总不自动更新：`/ws` 改为每 1 s 定期推送 `state`（`WS_STATE_INTERVAL_S`），不再依赖队列空闲。测试 **206 passed**。
 - **v0.6.1（2026-10-12）**：修复 **F-22**——用局域网 IP 访问（或浏览器缩放≠100% / Windows 125% 缩放）时页面每次刷新纵向拉伸：`prep()` 不再回读被 `canvas.height` 改写的 `height` 属性，逻辑高度缓存于 `data-h`。测试 204→**205 passed**。
 - **v0.6（2026-10-12）**：三项功能。① **实时落盘**：新增 `elec_tool/realtime_writer.py`，引擎每算出一个曲线点就追加到 `output/realtime/<曲线>_<数据日期>.csv`（与趋势曲线/手工保存同一提取规则 `metrics.curve_record`；按数据时间日期分文件；追加不重复表头；每次 flush；受 `output.curve_save` 过滤；配置 `output.realtime_save/realtime_dir`，环境变量 `ELEC_TOOL_REALTIME_DIR` 优先；热更新重建写入器）；`GET /api/realtime`；「导出与日志」页新增面板；CLI `--realtime-save on|off --realtime-dir`，收尾诊断打印落盘行数。② **离线播放起点**：`source.play_start_mode/play_start_value`（`begin/row/seconds/percent/time`），`iter_csv_blocks` 新增 `skip_rows/start_percent/start_time`（percent 按字节定位对齐行首；time 分块顺序扫描时标列，支持只填 `HH:MM:SS` 与当天时刻比较）；超出文件范围抛可诊断 `ParseError`；界面下拉框＋取值框（csv_file 下可用、begin 时取值框置灰、占位说明随模式变化），启动白名单放行，状态摘要显示跳过行数；CLI `--play-from 模式:值`。③ **曲线悬停取值**：`drawLine` 挂 `cv.__chart`、只绑定一次 `mousemove/mouseleave`、重绘末尾叠加十字线＋圆点＋浮框（趋势图提示含毫秒，频谱为 Hz），实时推送重绘不丢。新增 `tests/test_r7_features.py`（18 项）与 `tools/ui_r7_check.cjs`（PASS 39/FAIL 0）；修 r6 Web 测试「finished 后 flush_all 尚未完成」的等待竞争。测试 186→**204 passed, 1 skipped**。取证见 `REPORT_TEST.md` T-005。
 
