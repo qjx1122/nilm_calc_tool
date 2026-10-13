@@ -20,7 +20,8 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 import numpy as np
 
 from .blocks import SampleBlock
-from .config import AppConfig, HarmonicConfig, PowerConfig, SamplingConfig, TransformConfig, WindowSpec
+from .config import (QUANTITY_KEYS, AppConfig, HarmonicConfig, PowerConfig, SamplingConfig, TransformConfig,
+                     WindowSpec)
 from .metrics import MetricsCalculator
 
 BETA = (0.0, -2 * math.pi / 3, 2 * math.pi / 3)
@@ -164,8 +165,7 @@ def run_selftest(fs: float = 6400.0, f: float = 50.0, pt: float = 100.0, ct: flo
         transform=TransformConfig(pt_ratio=pt, ct_ratio=ct),
         harmonic=HarmonicConfig(order_min=2, order_max=50),
         power=PowerConfig(apparent="arithmetic", reactive="harmonic_sum"),
-        windows={k: WindowSpec(length_s=duration_s) for k in
-                 ("voltage", "current", "power", "power_factor", "fundamental", "harmonic", "spectrum")},
+        windows={k: WindowSpec(length_s=duration_s) for k in QUANTITY_KEYS},
     ).validate()
     exp = expected_values(specs, cfg.transform, fs, f, cfg.harmonic.order_max)
 

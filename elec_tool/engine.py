@@ -18,6 +18,7 @@ from .blocks import FrameBuffer, SampleBlock
 from .config import AppConfig, QUANTITY_KEYS
 from .metrics import MetricsCalculator, MetricsResult
 from .realtime_writer import RealtimeCurveWriter
+from .events import EventDetector
 from .scaling import scale_block
 from .sources import create_source
 from .sources.base import DataSource
@@ -43,6 +44,8 @@ class EngineState:
     started_at: Optional[float] = None
     last_poll_at: Optional[float] = None
     rate_samples_per_s: float = 0.0
+    events_total: int = 0
+    events_active: int = 0
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -56,6 +59,7 @@ class EngineState:
             "n_gaps": len(self.gaps), "notes": list(self.notes[-20:]),
             "errors": list(self.errors[-10:]), "started_at": self.started_at,
             "last_poll_at": self.last_poll_at, "rate_samples_per_s": self.rate_samples_per_s,
+            "events_total": self.events_total, "events_active": self.events_active,
         }
 
 
@@ -78,6 +82,9 @@ class LiveEngine:
         # 曲线点实时落盘（output.realtime_save）：与趋势历史共用同一提取规则
         self.writer = RealtimeCurveWriter(self.cfg, root=output_root)
         self._output_root = output_root
+        # 事件检测（第 9 轮）：每次 compute 后评估；on_event 供 Web 层推送
+        self.detector = EventDetector(self.cfg, root=output_root)
+        self.on_event: Optional[Callable[[List[Dict[str, Any]]], None]] = None
 
     # ---------------- 生命周期 ----------------
     def start(self) -> EngineState:
@@ -95,6 +102,7 @@ class LiveEngine:
         self.state.running = False
         try:
             self.writer.close()
+            self.detector.close()
         except Exception:
             pass
         try:
@@ -121,6 +129,7 @@ class LiveEngine:
         except Exception:
             pass
         self.writer = RealtimeCurveWriter(new_cfg, root=self._output_root)
+        self.detector.update_config(new_cfg)
         fs = new_cfg.sampling.fs
         cap = int(np.ceil(new_cfg.max_window_s * fs * 1.5)) + max(int(new_cfg.source.block_samples), 64)
         self.buffer = FrameBuffer(capacity=max(cap, int(fs)))
@@ -233,6 +242,20 @@ class LiveEngine:
             msg = f"实时落盘异常：{type(exc).__name__}: {exc}"
             if msg not in self.state.errors:
                 self.state.errors.append(msg)
+        self._detect_events(result)
+
+    def _detect_events(self, result: MetricsResult) -> None:
+        try:
+            changed = self.detector.process(result)
+            summ = self.detector.summary()
+            self.state.events_total = int(summ["total"])
+            self.state.events_active = int(summ["active"])
+            if changed and self.on_event is not None:
+                self.on_event(changed)
+        except Exception as exc:
+            msg = f"事件检测异常：{type(exc).__name__}: {exc}"
+            if msg not in self.state.errors:
+                self.state.errors.append(msg)
 
     def _ingest(self, block: SampleBlock) -> None:
         scaled = scale_block(block, self.cfg.transform)
@@ -301,4 +324,5 @@ class LiveEngine:
                         for k, w in self.cfg.windows.items()},
             "last_emit": dict(self._last_emit),
             "realtime": self.writer.info(),
+            "events": self.detector.summary(),
         }

@@ -22,7 +22,8 @@ import numpy as np
 
 from .blocks import SampleBlock, FrameBuffer
 from .config import AppConfig, QUANTITY_KEYS, WindowSpec
-from .analysis.harmonic import dft_harmonic_phasors, harmonic_analysis_3phase, spectrum_analysis
+from .analysis.harmonic import (dc_analysis, dft_harmonic_phasors, harmonic_analysis_3phase,
+                                interharmonic_analysis_3phase, spectrum_analysis)
 from .analysis.power import power_analysis
 from .analysis.rms import (line_voltages_rms, rms, rms_per_cycle, symmetrical_components,
                            three_phase_rms, unbalance_ratio)
@@ -160,6 +161,12 @@ _EXTRACTORS: Dict[str, Any] = {
                                  "unbalance_pct": _pick(q, "unbalance_u_pct"),
                                  "phiA_deg": _pick(q, "phi_deg", "A")},
     "harmonic": lambda r, q: {"THD_U": _pick(q, "thd_u_worst_pct"), "THD_I": _pick(q, "thd_i_worst_pct")},
+    "interharmonic": lambda r, q: {"TIHD_U": _pick(q, "tihd_u_worst_pct"), "TIHD_I": _pick(q, "tihd_i_worst_pct"),
+                                   "IHmax_U_pct": _pick(q, "max_group_u", "pct"),
+                                   "IHmax_I_pct": _pick(q, "max_group_i", "pct")},
+    "dc": lambda r, q: {"Ua_dc": _pick(q, "u_dc", "A"), "Ub_dc": _pick(q, "u_dc", "B"), "Uc_dc": _pick(q, "u_dc", "C"),
+                        "Ia_dc": _pick(q, "i_dc", "A"), "Ib_dc": _pick(q, "i_dc", "B"), "Ic_dc": _pick(q, "i_dc", "C"),
+                        "In_dc": _pick(q, "in_dc")},
     "spectrum": lambda r, q: {"peak_hz": _pick(q, "peak", "freq_hz"),
                               "peak_amp": _pick(q, "peak", "amp_rms")},
 }
@@ -461,6 +468,10 @@ class MetricsCalculator:
                 values, units, series = self._q_fundamental(seg, f_used, cut)
             elif key == "harmonic":
                 values, units, series = self._q_harmonic(seg, f_used, cut, eff_spec)
+            elif key == "interharmonic":
+                values, units, series = self._q_interharmonic(seg, f_used, cut, eff_spec)
+            elif key == "dc":
+                values, units, series = self._q_dc(seg, f_used, cut)
             elif key == "spectrum":
                 values, units, series = self._q_spectrum(seg, f_used, eff_spec)
             else:
@@ -620,6 +631,76 @@ class MetricsCalculator:
             "rms_u": {p: [hu["per_phase"][p]["orders_rms"][str(h)] for h in series_orders(cfg)] for p in PHASES},
             "rms_i": {p: [hi["per_phase"][p]["orders_rms"][str(h)] for h in series_orders(cfg)] for p in PHASES},
         }
+        return values, units, series
+
+    def _q_interharmonic(self, seg: SampleBlock, f_used: float, cut, spec: WindowSpec) -> Tuple[Dict, Dict, Dict]:
+        cfg = self.cfg
+        hmax = int(cfg.harmonic.order_max)
+        iu = interharmonic_analysis_3phase(seg.u, cfg.sampling.fs, f_used, hmax, cut.n_cycles, spec.remove_dc)
+        ii = interharmonic_analysis_3phase(seg.i, cfg.sampling.fs, f_used, hmax, cut.n_cycles, spec.remove_dc)
+        pa = iu["per_phase"]["A"]
+
+        def worst_group(res: Dict) -> Optional[Dict]:
+            cands = [dict(res["per_phase"][p]["max_group"], phase=p) for p in PHASES if res["per_phase"][p].get("max_group")]
+            return max(cands, key=lambda d: d["rms"]) if cands else None
+
+        values = {
+            "tihd_u_pct": iu["tihd_pct"], "tihd_i_pct": ii["tihd_pct"],
+            "tihd_u_worst_pct": iu["worst_tihd_pct"], "tihd_i_worst_pct": ii["worst_tihd_pct"],
+            "worst_phase_u": iu["worst_phase"], "worst_phase_i": ii["worst_phase"],
+            "max_group_u": worst_group(iu), "max_group_i": worst_group(ii),
+            "top_u": {p: iu["per_phase"][p]["top"] for p in PHASES},
+            "top_i": {p: ii["per_phase"][p]["top"] for p in PHASES},
+            "u1_rms": {p: iu["per_phase"][p]["fundamental_rms"] for p in PHASES},
+            "i1_rms": {p: ii["per_phase"][p]["fundamental_rms"] for p in PHASES},
+            "n_cycles": cut.n_cycles, "freq_resolution_hz": pa.get("freq_resolution_hz"),
+            "n_bins_per_group": pa.get("n_bins_per_group"), "n_groups": pa.get("n_groups"),
+            "notes": list(pa.get("notes", [])),
+        }
+        units = {"tihd_u_pct": "%", "tihd_i_pct": "%", "tihd_u_worst_pct": "%", "tihd_i_worst_pct": "%",
+                 "freq_resolution_hz": "Hz", "u1_rms": "V", "i1_rms": "A"}
+        series = {
+            "groups": [g["h"] for g in pa["groups"]],
+            "f_center": [0.5 * (g["f_lo"] + g["f_hi"]) for g in pa["groups"]],
+            "rms_u": {p: [g["rms"] for g in iu["per_phase"][p]["groups"]] for p in PHASES},
+            "rms_i": {p: [g["rms"] for g in ii["per_phase"][p]["groups"]] for p in PHASES},
+            "pct_u": {p: [g["pct"] for g in iu["per_phase"][p]["groups"]] for p in PHASES},
+            "pct_i": {p: [g["pct"] for g in ii["per_phase"][p]["groups"]] for p in PHASES},
+            "dom_freq_u": {p: [g["dom_freq_hz"] for g in iu["per_phase"][p]["groups"]] for p in PHASES},
+            "dom_freq_i": {p: [g["dom_freq_hz"] for g in ii["per_phase"][p]["groups"]] for p in PHASES},
+            "dom_angle_u": {p: [g["dom_angle_deg"] for g in iu["per_phase"][p]["groups"]] for p in PHASES},
+            "dom_angle_i": {p: [g["dom_angle_deg"] for g in ii["per_phase"][p]["groups"]] for p in PHASES},
+        }
+        return values, units, series
+
+    def _q_dc(self, seg: SampleBlock, f_used: float, cut) -> Tuple[Dict, Dict, Dict]:
+        cfg = self.cfg
+        fs = cfg.sampling.fs
+        u1 = {PHASES[k]: float(abs(dft_harmonic_phasors(seg.u[k], fs, f_used, [1], "rect", True)[0].get(1, 0j))) for k in range(3)}
+        i1 = {PHASES[k]: float(abs(dft_harmonic_phasors(seg.i[k], fs, f_used, [1], "rect", True)[0].get(1, 0j))) for k in range(3)}
+        du = {PHASES[k]: dc_analysis(seg.u[k], fs, f_used, u1[PHASES[k]], cut.n_cycles) for k in range(3)}
+        di = {PHASES[k]: dc_analysis(seg.i[k], fs, f_used, i1[PHASES[k]], cut.n_cycles) for k in range(3)}
+        i_sum = seg.i[0] + seg.i[1] + seg.i[2]
+        dn = dc_analysis(i_sum, fs, f_used, None, cut.n_cycles)
+        u_dc = {p: du[p]["dc"] for p in PHASES}
+        i_dc = {p: di[p]["dc"] for p in PHASES}
+        values = {
+            "u_dc": u_dc, "i_dc": i_dc, "in_dc": dn["dc"],
+            "u_dc_pct": {p: du[p]["dc_pct"] for p in PHASES}, "i_dc_pct": {p: di[p]["dc_pct"] for p in PHASES},
+            "u_dc_max_abs": float(max(abs(v) for v in u_dc.values())),
+            "i_dc_max_abs": float(max(abs(v) for v in i_dc.values())),
+            "u_dc_drift": {p: {"max": du[p]["per_cycle_max"], "min": du[p]["per_cycle_min"], "std": du[p]["per_cycle_std"]} for p in PHASES},
+            "i_dc_drift": {p: {"max": di[p]["per_cycle_max"], "min": di[p]["per_cycle_min"], "std": di[p]["per_cycle_std"]} for p in PHASES},
+            "u1_rms": u1, "i1_rms": i1,
+            "n_cycles": cut.n_cycles,
+            "notes": ["直流＝整数周期窗算术均值（整周期上交流分量均值为 0，无偏）；百分比＝DC / 基波有效值"],
+        }
+        units = {"u_dc": "V", "i_dc": "A", "in_dc": "A", "u_dc_pct": "%", "i_dc_pct": "%",
+                 "u_dc_max_abs": "V", "i_dc_max_abs": "A", "u1_rms": "V", "i1_rms": "A"}
+        series = {"cycle": list(range(int(dn["n_cycles"]))),
+                  "u_per_cycle": {p: du[p]["per_cycle"] for p in PHASES},
+                  "i_per_cycle": {p: di[p]["per_cycle"] for p in PHASES},
+                  "in_per_cycle": dn["per_cycle"]}
         return values, units, series
 
     def _q_spectrum(self, seg: SampleBlock, f_used: float, spec: WindowSpec) -> Tuple[Dict, Dict, Dict]:

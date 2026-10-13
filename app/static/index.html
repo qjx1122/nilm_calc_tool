@@ -43,7 +43,10 @@
     <button class="navitem" data-view="power_factor">📐 功率因数</button>
     <button class="navitem" data-view="fundamental">〰️ 基波</button>
     <button class="navitem" data-view="harmonic">📶 谐波 (2–50 次)</button>
+    <button class="navitem" data-view="interharmonic">🎚 间谐波</button>
+    <button class="navitem" data-view="dc">➖ 直流偏置</button>
     <button class="navitem" data-view="spectrum">🌈 频谱</button>
+    <button class="navitem" data-view="events">🚨 事件 <span class="badge" id="nav-ev-badge" style="display:none">0</span></button>
     <div class="navgroup">配置与运维</div>
     <button class="navitem" data-view="windows">⏱ 窗口配置（需求⑥）</button>
     <button class="navitem" data-view="export">💾 导出与日志</button>
@@ -247,6 +250,54 @@
       <div class="panel"><h3>窗口与口径</h3><div id="h-win" class="notes"></div></div>
     </section>
 
+
+    <!-- 间谐波 -->
+    <section class="view" id="view-interharmonic">
+      <h2>间谐波（IEC 61000-4-7 分组：0~50 次之间的 50 个间谐波组）</h2>
+      <div class="cards" id="ih-cards"></div>
+      <div class="panel">
+        <h3>电压间谐波组
+          <span class="toggle">
+            <label><input type="radio" name="ihmode-u" value="pct" checked> 含有率 %（相对 U1）</label>
+            <label><input type="radio" name="ihmode-u" value="rms"> 组有效值 V</label>
+          </span>
+        </h3>
+        <canvas id="ih-bar-u" height="230"></canvas>
+      </div>
+      <div class="panel">
+        <h3>电流间谐波组
+          <span class="toggle">
+            <label><input type="radio" name="ihmode-i" value="pct" checked> 含有率 %（相对 I1）</label>
+            <label><input type="radio" name="ihmode-i" value="rms"> 组有效值 A</label>
+          </span>
+        </h3>
+        <canvas id="ih-bar-i" height="230"></canvas>
+      </div>
+      <div class="grid2">
+        <div class="panel"><h3>电压间谐波相量（各相最大的前 10 组：组号 / 频带 / 主导频率 / 幅值 / 相角）</h3><div id="ih-table-u" class="tablewrap scroll"></div></div>
+        <div class="panel"><h3>电流间谐波相量（各相最大的前 10 组）</h3><div id="ih-table-i" class="tablewrap scroll"></div></div>
+      </div>
+      <div class="panel"><h3 class="curvehdr"><span>TIHD 趋势（总间谐波畸变率，最劣相）</span><label class="curvesave" title="勾选＝「保存曲线数据」时包含本曲线；不勾选＝保存时跳过本曲线"><input type="checkbox" class="curve-save" data-curve="interharmonic"> 保存曲线</label><span class="curvespan" data-curve="interharmonic"></span></h3><canvas id="ih-trend" height="200"></canvas></div>
+      <div class="panel"><h3>窗口与口径</h3><div id="ih-win" class="notes"></div></div>
+    </section>
+
+    <!-- 直流偏置 -->
+    <section class="view" id="view-dc">
+      <h2>直流偏置（三相电压 / 电流直流分量）</h2>
+      <div class="cards" id="dc-cards"></div>
+      <div class="grid2">
+        <div class="panel"><h3>电压直流分量</h3><div id="dc-table-u" class="tablewrap"></div></div>
+        <div class="panel"><h3>电流直流分量（含中性线 Ia+Ib+Ic 的直流）</h3><div id="dc-table-i" class="tablewrap"></div></div>
+      </div>
+      <div class="grid2">
+        <div class="panel"><h3>窗内逐周期电压均值（直流漂移）</h3><canvas id="dc-cyc-u" height="200"></canvas></div>
+        <div class="panel"><h3>窗内逐周期电流均值（直流漂移）</h3><canvas id="dc-cyc-i" height="200"></canvas></div>
+      </div>
+      <div class="panel"><h3 class="curvehdr"><span>直流分量趋势</span><label class="curvesave" title="勾选＝「保存曲线数据」时包含本曲线；不勾选＝保存时跳过本曲线"><input type="checkbox" class="curve-save" data-curve="dc"> 保存曲线</label><span class="curvespan" data-curve="dc"></span>
+        <span class="toggle"><label><input type="radio" name="dcmode" value="u" checked> 电压</label><label><input type="radio" name="dcmode" value="i"> 电流</label></span></h3><canvas id="dc-trend" height="200"></canvas></div>
+      <div class="panel"><h3>窗口与口径</h3><div id="dc-win" class="notes"></div></div>
+    </section>
+
     <!-- 频谱 -->
     <section class="view" id="view-spectrum">
       <h2>频谱（0 ~ Nyquist）</h2>
@@ -263,6 +314,65 @@
       </div>
       <div class="panel"><h3>幅值谱</h3><canvas id="sp-chart" height="300"></canvas></div>
       <div class="panel"><h3>峰值与口径</h3><div id="sp-info" class="tablewrap"></div><div id="sp-notes" class="notes"></div></div>
+    </section>
+
+
+    <!-- 事件 -->
+    <section class="view" id="view-events">
+      <h2>事件（基波相量 / 谐波相量 / 间谐波相量 / 频率 / 频率变化率 超限 · 功率振荡）</h2>
+      <div class="cards" id="ev-cards"></div>
+      <div class="panel">
+        <h3>活动事件（判据仍满足、尚未复归）</h3>
+        <div id="ev-active" class="tablewrap scroll"></div>
+      </div>
+      <div class="panel">
+        <h3 class="curvehdr"><span>事件历史（最近 <span id="ev-total">0</span> 条，起止时刻均为数据时间）</span>
+          <span class="toggle">
+            <label>类型 <select id="ev-filter">
+              <option value="">全部</option>
+              <option value="fund_phasor">基波相量超限</option>
+              <option value="harm_phasor">谐波相量超限</option>
+              <option value="interharm">间谐波相量超限</option>
+              <option value="freq">频率超限</option>
+              <option value="rocof">频率变化率超限</option>
+              <option value="power_osc">功率振荡</option>
+            </select></label>
+            <label><input type="checkbox" id="ev-only-active"> 只看活动</label>
+            <button id="btn-ev-refresh">刷新</button>
+            <button id="btn-ev-clear" title="清空内存中的事件列表与活动状态（不删除已落盘的 CSV）">清空</button>
+          </span></h3>
+        <div id="ev-table" class="tablewrap scroll"></div>
+      </div>
+      <div class="panel">
+        <h3>阈值配置（保存后立即热生效；判据与口径见 README §事件）</h3>
+        <div class="row2" id="ev-form">
+          <label class="check"><input type="checkbox" id="ev-enabled"> 启用事件检测</label>
+          <label class="check"><input type="checkbox" id="ev-save"> 事件落盘 CSV（output/events/events_&lt;日期&gt;.csv）</label>
+          <label>复归滞回系数（越上限事件回到 limit×系数 以下才结束）<input type="number" step="0.01" min="0.5" max="1" id="ev-hysteresis"></label>
+          <label class="check"><input type="checkbox" id="ev-limits_secondary"> U_nom / I1 上限按二次侧填写（启用 PT/CT 时自动折算到一次侧）</label>
+          <label>额定相电压 U_nom (V)<input type="number" step="0.01" id="ev-u_nom"></label>
+          <label>基波电压上限 (% U_nom)<input type="number" step="0.1" id="ev-u1_high_pct"></label>
+          <label>基波电压下限 (% U_nom)<input type="number" step="0.1" id="ev-u1_low_pct"></label>
+          <label>基波电流上限 (A)<input type="number" step="0.1" id="ev-i1_high"></label>
+          <label>单次谐波电压含有率上限 HR_U (%)<input type="number" step="0.1" id="ev-hr_u_limit_pct"></label>
+          <label>单次谐波电流含有率上限 HR_I (%)<input type="number" step="0.1" id="ev-hr_i_limit_pct"></label>
+          <label>THD_U 上限 (%)<input type="number" step="0.1" id="ev-thd_u_limit_pct"></label>
+          <label>THD_I 上限 (%)<input type="number" step="0.1" id="ev-thd_i_limit_pct"></label>
+          <label>间谐波组电压含有率上限 (% U1)<input type="number" step="0.1" id="ev-ih_u_limit_pct"></label>
+          <label>间谐波组电流含有率上限 (% I1)<input type="number" step="0.1" id="ev-ih_i_limit_pct"></label>
+          <label>频率下限 (Hz)<input type="number" step="0.01" id="ev-f_low"></label>
+          <label>频率上限 (Hz)<input type="number" step="0.01" id="ev-f_high"></label>
+          <label>频率变化率上限 |df/dt| (Hz/s)<input type="number" step="0.1" id="ev-rocof_limit"></label>
+          <label>功率振荡评估窗 (s)<input type="number" step="1" min="2" id="ev-osc_window_s"></label>
+          <label>功率振荡频带下限 (Hz)<input type="number" step="0.05" id="ev-osc_f_min"></label>
+          <label>功率振荡频带上限 (Hz)<input type="number" step="0.05" id="ev-osc_f_max"></label>
+          <label>功率振荡幅度门槛（峰峰值 % |P̄|）<input type="number" step="0.5" id="ev-osc_limit_pct"></label>
+          <label>功率振荡绝对门槛（峰峰值 W）<input type="number" step="0.5" id="ev-osc_min_w"></label>
+          <label>功率振荡最少点数<input type="number" step="1" min="4" id="ev-osc_min_points"></label>
+        </div>
+        <div class="row" style="margin-top:10px"><button id="btn-ev-save">保存阈值</button><span id="ev-form-note" class="mut"></span></div>
+        <div id="ev-notes" class="notes"></div>
+      </div>
     </section>
 
     <!-- 窗口配置 -->

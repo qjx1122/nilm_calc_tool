@@ -101,7 +101,30 @@ class EngineRunner:
                 self.engine.update_config(cfg)
             else:
                 self.engine = LiveEngine(cfg, output_root=ROOT)
+                self.engine.on_event = self._on_event
                 self.latest = None
+
+    # ---------- 事件 ----------
+    def _on_event(self, changed: List[Dict[str, Any]]) -> None:
+        """引擎线程回调：新开始 / 刚结束的事件 → WS 推送。"""
+        self.broadcast({"type": "event", "data": changed})
+
+    def events(self, active: bool = False, limit: int = 200, types: Optional[List[str]] = None,
+               since_id: int = 0) -> Dict[str, Any]:
+        with self.lock:
+            eng = self.engine
+        if eng is None:
+            from elec_tool.events import EVENT_TYPES
+            return {"ok": True, "events": [], "summary": {"enabled": True, "active": 0, "total": 0,
+                                                          "counts": {k: 0 for k in EVENT_TYPES},
+                                                          "types": EVENT_TYPES, "notes": ["引擎尚未启动"]}}
+        return {"ok": True, "events": eng.detector.list(active_only=active, limit=limit, types=types, since_id=since_id),
+                "summary": eng.detector.summary()}
+
+    def clear_events(self) -> int:
+        with self.lock:
+            eng = self.engine
+        return eng.detector.clear() if eng is not None else 0
 
     # ---------- 生命周期 ----------
     def start(self, cfg: AppConfig, duration_s: Optional[float] = None) -> Dict[str, Any]:
@@ -120,6 +143,7 @@ class EngineRunner:
             # 不同数据源、不同窗长的结果混在一张表里（误导性极强）。
             self.store.clear()
             self.engine = LiveEngine(cfg, output_root=ROOT)
+            self.engine.on_event = self._on_event
             self.started_at = time.time()
             # 引擎与停止事件按值传给线程：线程内绝不重读 self.engine
             self.thread = threading.Thread(target=self._run,
@@ -383,6 +407,21 @@ async def engine_start(payload: Optional[Dict[str, Any]] = None) -> Any:
 async def engine_stop() -> Dict[str, Any]:
     RUNNER.stop()
     return {"ok": True, "state": RUNNER.state()}
+
+
+@app.get("/api/events")
+async def get_events(active: bool = False, limit: int = 200, types: Optional[str] = None,
+                     since_id: int = 0) -> Dict[str, Any]:
+    """事件列表：active=1 只看活动事件；types=逗号分隔类型；since_id 增量拉取。"""
+    tl = [t.strip() for t in types.split(",") if t.strip()] if types else None
+    return RUNNER.events(active=active, limit=max(1, min(int(limit), 5000)), types=tl, since_id=int(since_id))
+
+
+@app.post("/api/events/clear")
+async def clear_events() -> Dict[str, Any]:
+    n = RUNNER.clear_events()
+    RUNNER.broadcast({"type": "events_cleared", "data": {"removed": n}})
+    return {"ok": True, "removed": n, "summary": RUNNER.events(limit=1)["summary"]}
 
 
 @app.get("/api/result")

@@ -112,7 +112,7 @@ async function main() {
   click($('btn-rt-refresh')); await sleep(600);
   let rt = await getJson('/api/realtime');
   const files = fs.existsSync(rtDir) ? fs.readdirSync(rtDir).filter((f) => f.endsWith('.csv')) : [];
-  check('目录下出现 <曲线>_<日期>.csv（6 条曲线各 1 个）', files.length === 6 && files.every((f) => /^(voltage|current|power|power_factor|fundamental|harmonic)_\d{8}\.csv$/.test(f)), files.join(','));
+  check('目录下出现 <曲线>_<日期>.csv（8 条曲线各 1 个）', files.length === 8 && files.every((f) => /^(voltage|current|power|power_factor|fundamental|harmonic|interharmonic|dc)_\d{8}\.csv$/.test(f)), files.join(','));
   const vFile = files.find((f) => f.startsWith('voltage_'));
   const vRows = vFile ? csvLines(path.join(rtDir, vFile)) - 1 : -1;
   check('voltage 文件行数 == 本次写入行数（含 flush）', rt.rows_written && rt.rows_written.voltage > 0 && vRows === rt.rows_written.voltage, `file=${vRows} written=${rt.rows_written && rt.rows_written.voltage}`);
@@ -140,7 +140,7 @@ async function main() {
   st = await waitFinished();
   check('关闭后再跑一遍：文件行数不变', csvLines(path.join(rtDir, vFile)) - 1 === after.v, `rows=${csvLines(path.join(rtDir, vFile)) - 1}`);
   rt = await getJson('/api/realtime');
-  check('/api/realtime 回显 enabled=false、仍列出目录现有文件', rt.enabled === false && rt.dir_files.length === 6, JSON.stringify({ enabled: rt.enabled, n: rt.dir_files.length }));
+  check('/api/realtime 回显 enabled=false、仍列出目录现有文件', rt.enabled === false && rt.dir_files.length === 8, JSON.stringify({ enabled: rt.enabled, n: rt.dir_files.length }));
   await putCfg({ output: { realtime_save: true } });
 
   console.log('\n=== E2. 离线文件：播放起点 ===');

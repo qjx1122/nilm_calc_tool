@@ -340,7 +340,7 @@ def test_web_curves_save_skips_unchecked(client):
     assert r.status_code == 200, r.text
     d = r.json()
     saved = {f["quantity"] for f in d["files"]}
-    assert saved == {"voltage", "power", "power_factor", "fundamental"}
+    assert saved == {"voltage", "power", "power_factor", "fundamental", "interharmonic", "dc"}   # R9：八条曲线
     assert set(d["skipped"]) == {"current", "harmonic"}
     out = Path(d["dir"]) if os.path.isabs(d["dir"]) else ROOT / d["dir"]
     assert out.is_relative_to(client.out_dir)                   # 写到了 export_dir，而不是仓库 output/
@@ -358,7 +358,7 @@ def test_web_curves_export_respects_selection(client):
     assert r.status_code == 200 and r.headers["content-type"].startswith("text/csv")
     merged = client.get("/api/curves/export").text
     kinds = {ln.split(",")[2] for ln in merged.splitlines()[1:] if ln}
-    assert kinds == {"voltage", "power", "power_factor", "fundamental"}
+    assert kinds == {"voltage", "power", "power_factor", "fundamental", "interharmonic", "dc"}
     client.put("/api/config", json={"output": {"curve_save": {k: False for k in CURVE_KEYS}}})
     assert client.post("/api/curves/save", json={}).status_code == 400
     client.put("/api/config", json={"output": {"curve_save": {k: True for k in CURVE_KEYS}}})

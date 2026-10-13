@@ -159,7 +159,7 @@ async function main() {
   console.log('\n=== D2. 「保存曲线」勾选 ===');
   const panelBoxes = () => [...document.querySelectorAll('.panel h3 .curve-save')];
   const listBoxes = () => [...document.querySelectorAll('#curve-save-list .curve-save')];
-  check('6 条趋势曲线面板各有一个「保存曲线」勾选框', panelBoxes().length === 6 && new Set(panelBoxes().map((b) => b.dataset.curve)).size === 6,
+  check('8 条趋势曲线面板各有一个「保存曲线」勾选框（R9 起 6→8）', panelBoxes().length === 8 && new Set(panelBoxes().map((b) => b.dataset.curve)).size === 8,
     panelBoxes().map((b) => b.dataset.curve).join(','));
   check('初始全部勾选（与服务端 curve_save 一致）', panelBoxes().every((b) => b.checked));
   // 在概览页取消「三相电流」
@@ -183,10 +183,10 @@ async function main() {
   check('PF 取消后服务端 power_factor=false', cfg.output.curve_save.power_factor === false);
   // 导出页列表同步 + 保存
   await nav('export');
-  check('导出页列表 6 项且与面板勾选同步（current/power_factor 未选）', listBoxes().length === 6
+  check('导出页列表 8 项且与面板勾选同步（current/power_factor 未选）', listBoxes().length === 8
     && !listBoxes().find((b) => b.dataset.curve === 'current').checked && !listBoxes().find((b) => b.dataset.curve === 'power_factor').checked
     && listBoxes().find((b) => b.dataset.curve === 'voltage').checked);
-  check('下载链接文案显示勾选数 4/6', /4\/6/.test($('lnk-curves-dl').textContent || ''), $('lnk-curves-dl').textContent);
+  check('下载链接文案显示勾选数 6/8', /6\/8/.test($('lnk-curves-dl').textContent || ''), $('lnk-curves-dl').textContent);
   calls.length = 0; click($('btn-save-curves')); await sleep(1500);
   const saveCall = calls.find((c) => c.url === '/api/curves/save');
   check('点「保存曲线数据」→ POST /api/curves/save 200', saveCall && saveCall.status === 200, `status=${saveCall && saveCall.status}`);

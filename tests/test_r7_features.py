@@ -55,7 +55,7 @@ def test_realtime_writer_appends_one_row_per_curve_point(csv_factory, tmp_path, 
     cfg.source.kind, cfg.source.path, cfg.source.block_samples = "csv_file", d["path"], 1280
     eng, _ = _run_engine(cfg)
     files = sorted(p.name for p in rt.glob("*.csv"))
-    assert len(files) == 6 and all(re.fullmatch(r"(voltage|current|power|power_factor|fundamental|harmonic)_\d{8}\.csv", f) for f in files), files
+    assert len(files) == 8 and all(re.fullmatch(r"(voltage|current|power|power_factor|fundamental|harmonic|interharmonic|dc)_\d{8}\.csv", f) for f in files), files
     for key in CURVE_KEYS:
         fp = next(rt.glob(f"{key}_*.csv"))
         rows = _rows(fp)
@@ -405,7 +405,7 @@ def test_frontend_hover_tooltip_contract():
     assert "cv.addEventListener('mousemove'" in APP_JS and "cv.addEventListener('mouseleave'" in APP_JS
     assert "if (cv.__hoverBound) return;" in APP_JS
     # 趋势图的提示用完整时刻（含毫秒），而不是刻度上的 HH:MM:SS
-    assert APP_JS.count("fmtTip: x => ts(x + ") == 6
+    assert APP_JS.count("fmtTip: x => ts(x + ") == 8                      # 6 条原趋势 + R9 的 TIHD / 直流趋势
     assert "fmtTip: x => x.toFixed(2) + ' Hz'" in APP_JS
     # 最近点查找：有序二分
     assert "function nearestIdx(data, x)" in APP_JS and "while (hi - lo > 1)" in APP_JS

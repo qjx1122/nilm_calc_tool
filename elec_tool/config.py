@@ -21,6 +21,8 @@ QUANTITY_KEYS: Tuple[str, ...] = (
     "power_factor",   # 功率因数（总 / 分相 / 基波位移因数）
     "fundamental",    # 基波（幅值 / 相位 / 频率 / 序分量 / 不平衡度）
     "harmonic",       # 谐波 2~50 次（含有率 / THD）
+    "interharmonic",  # 间谐波（IEC 61000-4-7 分组：各次谐波之间的非整数次成分 / TIHD / 主导间谐波相量）
+    "dc",             # 直流偏置（各相电压/电流直流分量、相对基波百分比、中性线直流）
     "spectrum",       # 频谱（0 ~ Nyquist）
 )
 
@@ -31,7 +33,7 @@ APPARENT_MODES = ("arithmetic", "vector")
 REACTIVE_MODES = ("harmonic_sum", "quadrature")
 VOLTAGE_INPUT_MODES = ("phase", "line")
 # 有「趋势曲线」的电气量（spectrum 是瞬时频谱，不是时间趋势，不在此列）
-CURVE_KEYS = ("voltage", "current", "power", "power_factor", "fundamental", "harmonic")
+CURVE_KEYS = ("voltage", "current", "power", "power_factor", "fundamental", "harmonic", "interharmonic", "dc")
 
 
 class ConfigError(ValueError):
@@ -122,6 +124,8 @@ def default_windows() -> Dict[str, WindowSpec]:
         "power_factor": WindowSpec(length_s=1.0),
         "fundamental": WindowSpec(length_s=0.2),
         "harmonic": WindowSpec(length_s=0.2),
+        "interharmonic": WindowSpec(length_s=0.2),              # IEC 61000-4-7：10 周波 → 5 Hz 分辨率（每组 9 个间谐波 bin）
+        "dc": WindowSpec(length_s=1.0, remove_dc=False),        # 直流量：整周期均值（remove_dc 对本量无意义，固定按原始值）
         "spectrum": WindowSpec(length_s=1.0, window_fn="rect"),
     }
 
@@ -461,8 +465,77 @@ class OutputConfig:
         unknown = [k for k in self.curve_save if k not in CURVE_KEYS]
         if unknown:
             raise ConfigError(f"output.curve_save 含未知曲线 {unknown}；可用：{list(CURVE_KEYS)}")
-        # 缺省键补齐为 True，界面与导出按完整六键工作
+        # 缺省键补齐为 True，界面与导出按完整八键工作
         self.curve_save = {k: bool(self.curve_save.get(k, True)) for k in CURVE_KEYS}
+
+
+@dataclass
+class EventConfig:
+    """事件判据（第 9 轮）。全部阈值可在「事件」子界面热更新；单位见各字段注释。
+
+    通用：``enabled`` 总开关；``hysteresis`` 复归系数（越限后值回落到 limit×hysteresis 以下才算结束，防抖）；
+    ``save`` 事件落盘到 ``events_dir/events_<数据日期>.csv``（开始/结束各一行）；``max_log`` 内存保留条数。
+    """
+
+    enabled: bool = True
+    hysteresis: float = 0.95
+    save: bool = True
+    events_dir: str = "output/events"
+    max_log: int = 2000
+    # 基波相量超限：电压按相对额定相电压 u_nom（V）的百分比，电流按绝对值（A）。
+    # limits_secondary=True（默认）：u_nom / i1_high 按**二次侧**填写（数据字典口径 57.74 V / 5 A），
+    # 若 transform.enabled 则检测时自动乘 PT/CT 折算到一次侧，与计算结果同口径比较；False＝直接按计算结果的单位填。
+    limits_secondary: bool = True
+    u_nom: float = 57.74                    # 100/√3：二次侧额定相电压；接线电压口径请改 100
+    u1_high_pct: float = 110.0
+    u1_low_pct: float = 90.0
+    i1_high: float = 6.0                    # 二次侧 5 A 额定 → 120%
+    # 谐波相量超限：任一相任一次含有率 HR_h（% of 基波）或 THD 超过
+    hr_u_limit_pct: float = 5.0
+    hr_i_limit_pct: float = 10.0
+    thd_u_limit_pct: float = 5.0
+    thd_i_limit_pct: float = 10.0
+    # 间谐波相量超限：任一相任一间谐波组有效值相对基波的百分比
+    ih_u_limit_pct: float = 1.0
+    ih_i_limit_pct: float = 2.0
+    # 频率超限（Hz）与频率变化率超限（Hz/s，取相邻两次基波频率估计的差分）
+    f_low: float = 49.5
+    f_high: float = 50.5
+    rocof_limit: float = 1.0
+    # 功率振荡：对最近 osc_window_s 内的总有功 P 序列去趋势后谱分析，
+    # 在 [osc_f_min, osc_f_max] Hz 内主导分量峰峰值 ≥ osc_limit_pct（% of |P 均值|）且 ≥ osc_min_w（W）判为振荡
+    osc_window_s: float = 10.0
+    osc_f_min: float = 0.1
+    osc_f_max: float = 2.5
+    osc_limit_pct: float = 5.0
+    osc_min_w: float = 1.0
+    osc_min_points: int = 8
+
+    def validate(self) -> None:
+        if not (0.5 <= self.hysteresis <= 1.0):
+            raise ConfigError(f"events.hysteresis 必须在 0.5~1.0（当前 {self.hysteresis}）")
+        if self.u_nom <= 0:
+            raise ConfigError("events.u_nom 必须 > 0")
+        if self.u1_low_pct >= self.u1_high_pct:
+            raise ConfigError("events.u1_low_pct 必须小于 u1_high_pct")
+        if self.f_low >= self.f_high:
+            raise ConfigError("events.f_low 必须小于 f_high")
+        for k in ("i1_high", "hr_u_limit_pct", "hr_i_limit_pct", "thd_u_limit_pct", "thd_i_limit_pct",
+                  "ih_u_limit_pct", "ih_i_limit_pct", "rocof_limit", "osc_window_s", "osc_limit_pct", "osc_min_w"):
+            if float(getattr(self, k)) <= 0:
+                raise ConfigError(f"events.{k} 必须 > 0（当前 {getattr(self, k)}）")
+        if not (0 < self.osc_f_min < self.osc_f_max):
+            raise ConfigError("events.osc_f_min / osc_f_max 必须满足 0 < f_min < f_max")
+        if self.osc_min_points < 4:
+            raise ConfigError("events.osc_min_points 必须 ≥ 4")
+        if self.max_log < 10:
+            raise ConfigError("events.max_log 必须 ≥ 10")
+        if not str(self.events_dir).strip():
+            raise ConfigError("events.events_dir 不能为空")
+
+    @classmethod
+    def from_dict(cls, d: Dict[str, Any]) -> "EventConfig":
+        return cls(**{k: v for k, v in d.items() if k in cls.__dataclass_fields__})
 
 
 @dataclass
@@ -477,6 +550,7 @@ class AppConfig:
     columns: ColumnMap = field(default_factory=ColumnMap)
     source: SourceConfig = field(default_factory=SourceConfig)
     output: OutputConfig = field(default_factory=OutputConfig)
+    events: EventConfig = field(default_factory=EventConfig)
     windows: Dict[str, WindowSpec] = field(default_factory=default_windows)
 
     # ---------- 派生量 ----------
@@ -501,6 +575,7 @@ class AppConfig:
         self.power.validate()
         self.source.validate()
         self.output.validate()
+        self.events.validate()
         for name, spec in self.windows.items():
             spec.validate(name, self.sampling.fs)
         missing = [k for k in QUANTITY_KEYS if k not in self.windows]
@@ -527,6 +602,7 @@ class AppConfig:
         for key, klass in (
             ("sampling", SamplingConfig), ("transform", TransformConfig), ("harmonic", HarmonicConfig),
             ("power", PowerConfig), ("columns", ColumnMap), ("source", SourceConfig),
+            ("events", EventConfig),
         ):
             if isinstance(d.get(key), dict):
                 setattr(cfg, key, klass.from_dict(d[key]))

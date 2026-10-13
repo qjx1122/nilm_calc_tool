@@ -228,3 +228,116 @@ def spectrum_analysis(x: np.ndarray, fs: float, f_used: float, window_fn: str = 
         "total_ac_rms": float(meta.get("total_ac_rms", float("nan"))),
         "notes": notes,
     }
+
+
+# ---------------------------------------------------------------------- 间谐波（IEC 61000-4-7 分组）
+
+def interharmonic_analysis(x: np.ndarray, fs: float, f_used: float, order_max: int,
+                           n_cycles: Optional[int] = None, remove_dc: bool = True,
+                           top_n: int = 10) -> Dict[str, object]:
+    """单通道间谐波分析（IEC 61000-4-7 的「间谐波组 / 中心间谐波子组」口径）。
+
+    整周期窗（n_cycles 个周波）下频率分辨率 Δf = f_used / n_cycles，h 次谐波落在 bin k_h = h·n_cycles。
+    第 h 个间谐波组（h = 0 … order_max−1，介于 h 次与 h+1 次之间）：
+        组有效值   IHG_h  = sqrt( Σ_{k = k_h+1 … k_{h+1}−1} C_k² )          （不含两端谐波 bin）
+        中心子组   IHSG_h = sqrt( Σ_{k = k_h+2 … k_{h+1}−2} C_k² )          （再去掉紧邻谐波的各 1 个 bin，抗泄漏）
+        主导间谐波 = 组内幅值最大的 bin：频率 / RMS 幅值 / 相角（cos 参考）—— 即「间谐波相量」
+    总间谐波畸变率 TIHD = sqrt(Σ_h IHG_h²) / C_1 × 100%；各组含有率 IHG_h / C_1 × 100%。
+    n_cycles=1（Δf = f）时组内没有 bin，全部为 0 并给出提示；IEC 推荐 10 周波（Δf=5 Hz，每组 9 个 bin）。
+    """
+    freqs, amp, phasor, meta = bin_spectrum(x, fs, "rect", remove_dc)
+    n = int(meta["n"])
+    out: Dict[str, object] = {"groups": [], "notes": []}
+    if n < 2 or amp.size < 3:
+        out.update({"tihd_pct": float("nan"), "fundamental_rms": float("nan"), "freq_resolution_hz": float("nan"),
+                    "n_bins_per_group": 0, "max_group": None, "top": []})
+        out["notes"].append("样本不足，间谐波未计算")
+        return out
+    if n_cycles is None or n_cycles < 1:
+        n_cycles = max(1, int(round(n * f_used / fs)))
+    nc = int(n_cycles)
+    delta_f = float(fs / n)
+    k1 = nc
+    u1 = float(amp[k1]) if k1 < amp.size else float("nan")
+    nyq_bin = amp.size - 1
+    groups: List[Dict[str, object]] = []
+    sq_sum = 0.0
+    for h in range(0, int(order_max)):
+        ka, kb = h * nc, (h + 1) * nc
+        if kb > nyq_bin:
+            break
+        lo, hi = ka + 1, kb                       # [lo, hi) 不含两端谐波 bin
+        if hi <= lo:
+            groups.append({"h": h, "f_lo": float(ka * delta_f), "f_hi": float(kb * delta_f), "rms": 0.0,
+                           "subgroup_rms": 0.0, "pct": 0.0, "dom_freq_hz": None, "dom_rms": 0.0,
+                           "dom_angle_deg": None, "n_bins": 0})
+            continue
+        seg = amp[lo:hi]
+        g = float(np.sqrt(np.sum(seg ** 2)))
+        sg = float(np.sqrt(np.sum(amp[lo + 1:hi - 1] ** 2))) if hi - 1 > lo + 1 else 0.0
+        j = int(np.argmax(seg))
+        kd = lo + j
+        groups.append({
+            "h": h, "f_lo": float(ka * delta_f), "f_hi": float(kb * delta_f),
+            "rms": g, "subgroup_rms": sg,
+            "pct": float(100.0 * g / u1) if (np.isfinite(u1) and u1 > 0) else float("nan"),
+            "dom_freq_hz": float(freqs[kd]), "dom_rms": float(amp[kd]),
+            "dom_angle_deg": float(np.degrees(np.angle(phasor[kd]))), "n_bins": int(hi - lo),
+        })
+        sq_sum += g * g
+    tihd = float(100.0 * np.sqrt(sq_sum) / u1) if (np.isfinite(u1) and u1 > 0) else float("nan")
+    max_group = max(groups, key=lambda d: d["rms"]) if groups else None
+    top = sorted(groups, key=lambda d: d["rms"], reverse=True)[:top_n]
+    out.update({
+        "fundamental_rms": u1, "tihd_pct": tihd, "freq_resolution_hz": delta_f, "n_cycles": nc,
+        "n_bins_per_group": max(0, nc - 1), "n_groups": len(groups),
+        "max_group": max_group, "top": top, "groups": groups,
+        "total_interharmonic_rms": float(np.sqrt(sq_sum)),
+    })
+    if nc < 2:
+        out["notes"].append("窗长仅 1 个周波：频率分辨率等于基波频率，谐波之间没有可分辨的间谐波 bin；"
+                            "请把 interharmonic 窗长设为 ≥0.2 s（10 周波，IEC 61000-4-7）")
+    return out
+
+
+def interharmonic_analysis_3phase(x3: np.ndarray, fs: float, f_used: float, order_max: int,
+                                  n_cycles: Optional[int] = None, remove_dc: bool = True) -> Dict[str, object]:
+    x3 = np.asarray(x3, dtype=np.float64)
+    per = {p: interharmonic_analysis(x3[k], fs, f_used, order_max, n_cycles, remove_dc) for k, p in enumerate(("A", "B", "C"))}
+    tihd = {p: per[p]["tihd_pct"] for p in per}
+    finite = {p: v for p, v in tihd.items() if isinstance(v, float) and np.isfinite(v)}
+    worst = max(finite, key=finite.get) if finite else None
+    return {"per_phase": per, "tihd_pct": tihd, "worst_phase": worst,
+            "worst_tihd_pct": finite.get(worst, float("nan")) if worst else float("nan")}
+
+
+# ---------------------------------------------------------------------- 直流偏置
+
+def dc_analysis(x: np.ndarray, fs: float, f_used: float, fundamental_rms: Optional[float] = None,
+                n_cycles: Optional[int] = None) -> Dict[str, object]:
+    """单通道直流分量。
+
+    直流 = 整数周期窗内的算术均值（整周期上基波及各次谐波的均值恰为 0，均值即直流，无偏）；
+    同时给逐周期均值序列（观察直流漂移）与相对基波有效值的百分比 DC/X1×100%。
+    """
+    x = np.asarray(x, dtype=np.float64).ravel()
+    n = x.size
+    if n == 0:
+        return {"dc": float("nan"), "dc_pct": float("nan"), "per_cycle": [], "per_cycle_max": float("nan"),
+                "per_cycle_min": float("nan"), "per_cycle_std": float("nan"), "n_cycles": 0}
+    dc = float(x.mean())
+    spc = fs / f_used if f_used > 0 else n
+    nc = int(n_cycles) if n_cycles else int(np.floor(n / spc))
+    cyc: List[float] = []
+    for c in range(max(nc, 0)):
+        a, b = int(round(c * spc)), int(round((c + 1) * spc))
+        if b > n or b <= a:
+            break
+        cyc.append(float(x[a:b].mean()))
+    arr = np.asarray(cyc, dtype=np.float64)
+    pct = float(100.0 * dc / fundamental_rms) if (fundamental_rms and np.isfinite(fundamental_rms) and fundamental_rms > 0) else float("nan")
+    return {"dc": dc, "dc_pct": pct, "per_cycle": cyc,
+            "per_cycle_max": float(arr.max()) if arr.size else float("nan"),
+            "per_cycle_min": float(arr.min()) if arr.size else float("nan"),
+            "per_cycle_std": float(arr.std()) if arr.size else float("nan"),
+            "n_cycles": int(arr.size)}

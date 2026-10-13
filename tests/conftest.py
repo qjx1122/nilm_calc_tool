@@ -15,7 +15,7 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from elec_tool.config import (AppConfig, ColumnMap, HarmonicConfig, PowerConfig,  # noqa: E402
+from elec_tool.config import (AppConfig, ColumnMap, HarmonicConfig, PowerConfig, QUANTITY_KEYS,  # noqa: E402
                               SamplingConfig, SourceConfig, TransformConfig, WindowSpec)
 from elec_tool.selftest import HarmSpec, build_signal, expected_values  # noqa: E402
 
@@ -32,6 +32,7 @@ HEADER_EN = ["timestamp", "Ua", "Ia", "Ub", "Ib", "Uc", "Ic"]
 def _isolate_realtime_dir(tmp_path, monkeypatch):
     """实时落盘（output.realtime_save 默认开）在测试里一律写到临时目录，不污染仓库 output/。"""
     monkeypatch.setenv("ELEC_TOOL_REALTIME_DIR", str(tmp_path / "realtime"))
+    monkeypatch.setenv("ELEC_TOOL_EVENTS_DIR", str(tmp_path / "events"))      # 第 9 轮：事件 CSV 同样隔离
     yield
 
 
@@ -44,7 +45,7 @@ def base_cfg() -> AppConfig:
         harmonic=HarmonicConfig(order_min=2, order_max=50),
         power=PowerConfig(),
         windows={k: WindowSpec(length_s=1.0) for k in
-                 ("voltage", "current", "power", "power_factor", "fundamental", "harmonic", "spectrum")},
+                 QUANTITY_KEYS},
     ).validate()
 
 

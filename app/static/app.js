@@ -21,9 +21,17 @@ const S = {
   histMeta: {}, curveLocal: null, curvePending: false,
   // 实时落盘面板（/api/realtime 快照 + 表单脏标记）
   realtime: null, rtDirty: false,
+  // 事件子界面：列表缓存 / 摘要 / 阈值表单脏标记
+  events: [], evSummary: null, evDirty: false, evLoaded: false,
 };
-const CURVE_KEYS = ['voltage', 'current', 'power', 'power_factor', 'fundamental', 'harmonic'];
-const CURVE_NAME = { voltage: '三相电压', current: '三相电流', power: 'P/Q/S', power_factor: 'PF/DPF', fundamental: '频率', harmonic: 'THD' };
+const CURVE_KEYS = ['voltage', 'current', 'power', 'power_factor', 'fundamental', 'harmonic', 'interharmonic', 'dc'];
+const CURVE_NAME = { voltage: '三相电压', current: '三相电流', power: 'P/Q/S', power_factor: 'PF/DPF', fundamental: '频率', harmonic: 'THD',
+                     interharmonic: 'TIHD', dc: '直流分量' };
+const EVENT_NAME = { fund_phasor: '基波相量超限', harm_phasor: '谐波相量超限', interharm: '间谐波相量超限',
+                     freq: '频率超限', rocof: '频率变化率超限', power_osc: '功率振荡' };
+const EV_FIELDS = ['enabled', 'save', 'hysteresis', 'limits_secondary', 'u_nom', 'u1_high_pct', 'u1_low_pct', 'i1_high', 'hr_u_limit_pct', 'hr_i_limit_pct',
+                   'thd_u_limit_pct', 'thd_i_limit_pct', 'ih_u_limit_pct', 'ih_i_limit_pct', 'f_low', 'f_high', 'rocof_limit',
+                   'osc_window_s', 'osc_f_min', 'osc_f_max', 'osc_limit_pct', 'osc_min_w', 'osc_min_points'];
 const HIST_MAX_POINTS = 1500;   // 浏览器侧每条曲线最多接收的点数（服务端按峰谷保形抽稀）
 
 /* 数据源表单：每种源的填写说明与「哪些字段该启用」的单一事实来源 */
@@ -444,6 +452,8 @@ function connectWS() {
     if (m.type === 'hello' || m.type === 'state') { S.state = m.data; renderTop(); if (S.view === 'source' || S.view === 'export') render(); }
     else if (m.type === 'result' || m.type === 'snapshot') { S.result = mergeResult(S.result, m.data); renderTop(); render(); }
     else if (m.type === 'error') { toast('服务端错误：' + m.message, 'err'); }
+    else if (m.type === 'event') { onEventPush(m.data || []); }
+    else if (m.type === 'events_cleared') { S.events = []; S.evSummary = null; if (S.view === 'events') refreshEvents(); }
   };
   S.ws.onerror = () => { S.wsOk = false; };
   S.ws.onclose = () => {
@@ -494,6 +504,13 @@ function renderTop() {
   $('#subtitle').textContent = `elec_tool v${st.version || '?'} · ${S.wsOk ? 'WebSocket 实时' : '轮询'} · 缓冲 ${eng.buffer_fill || 0}/${eng.buffer_capacity || 0}`;
   $('#btn-start').disabled = !!eng.running;
   $('#btn-stop').disabled = !eng.running;
+  setEventBadge(eng.events_active || 0);
+}
+
+function setEventBadge(n) {
+  const badge = $('#nav-ev-badge');
+  if (!badge) return;
+  badge.textContent = String(n); badge.style.display = n ? '' : 'none'; badge.className = 'badge' + (n ? ' bad' : '');
 }
 
 function switchView(v) {
@@ -501,14 +518,14 @@ function switchView(v) {
   $$('.navitem').forEach(b => b.classList.toggle('active', b.dataset.view === v));
   $$('.view').forEach(s => s.classList.toggle('active', s.id === 'view-' + v));
   render();
-  if (['overview', 'power_factor', 'fundamental'].includes(v)) refreshHistory();
+  if (['overview', 'power_factor', 'fundamental', 'interharmonic', 'dc'].includes(v)) refreshHistory();
+  if (v === 'events') refreshEvents();
 }
 
 /* ------------------------------------------------------------------ 历史曲线 */
 
 async function refreshHistory() {
-  const keys = ['voltage', 'current', 'power', 'power_factor', 'fundamental', 'harmonic'];
-  await Promise.all(keys.map(async k => {
+  await Promise.all(CURVE_KEYS.map(async k => {
     try {
       // 不再传 n=400：服务端默认返回「最近 output.history_hours（24h）内全部点」，超过 max_points 按峰谷抽稀
       const d = await api(`/api/history/${k}?max_points=${HIST_MAX_POINTS}`);
@@ -851,7 +868,7 @@ function renderWindows() {
   if (!cfg) { $('#w-table').innerHTML = ''; return; }
   const rows = Object.keys(cfg.windows).map(k => {
     const w = cfg.windows[k];
-    const fft = ['fundamental', 'harmonic', 'spectrum'].includes(k);
+    const fft = ['fundamental', 'harmonic', 'interharmonic', 'dc', 'spectrum'].includes(k);
     return `<tr><td>${k}</td>
       <td><input type="number" step="0.05" min="0.02" data-w="${k}" data-f="length_s" value="${w.length_s}"></td>
       <td><input type="number" step="0.05" min="0.02" data-w="${k}" data-f="step_s" value="${w.step_s === null ? w.length_s : w.step_s}"></td>
@@ -1041,6 +1058,168 @@ function renderExport() {
   $('#ex-json').textContent = S.result ? JSON.stringify(S.result, null, 1).split('\n').slice(0, 200).join('\n') : '（无结果）';
 }
 
+/* ------------------------------------------------------------------ 间谐波 / 直流偏置 / 事件（第 9 轮） */
+
+function renderInterharmonic() {
+  const h = q('interharmonic');
+  const cards = [];
+  if (h) {
+    const v = h.values;
+    PH.forEach(k => cards.push(card(`TIHD_U ${k} 相`, num(v.tihd_u_pct[k], 3), '%', `最劣相 ${v.worst_phase_u || '—'}`)));
+    PH.forEach(k => cards.push(card(`TIHD_I ${k} 相`, num(v.tihd_i_pct[k], 3), '%', `最劣相 ${v.worst_phase_i || '—'}`)));
+    const gu = v.max_group_u, gi = v.max_group_i;
+    cards.push(card('最大电压间谐波组', gu ? `${gu.phase} 相 第${gu.h}组` : '—', '', gu ? `${num(gu.f_lo, 0)}~${num(gu.f_hi, 0)}Hz · 主导 ${num(gu.dom_freq_hz, 1)}Hz · ${num(gu.pct, 3)}%` : ''));
+    cards.push(card('最大电流间谐波组', gi ? `${gi.phase} 相 第${gi.h}组` : '—', '', gi ? `${num(gi.f_lo, 0)}~${num(gi.f_hi, 0)}Hz · 主导 ${num(gi.dom_freq_hz, 1)}Hz · ${num(gi.pct, 3)}%` : ''));
+    cards.push(card('频率分辨率', num(v.freq_resolution_hz, 3), 'Hz', `整数周期 ${num(v.n_cycles, 0)} 个 · 每组 ${v.n_bins_per_group} 个谱线`));
+  }
+  $('#ih-cards').innerHTML = cards.join('') || card('状态', '尚无结果', '', '请先启动数据源');
+  if (h && h.series) {
+    const groups = h.series.groups || [];
+    const modeU = (document.querySelector('input[name=ihmode-u]:checked') || {}).value || 'pct';
+    const modeI = (document.querySelector('input[name=ihmode-i]:checked') || {}).value || 'pct';
+    const srcU = modeU === 'pct' ? h.series.pct_u : h.series.rms_u;
+    const srcI = modeI === 'pct' ? h.series.pct_i : h.series.rms_i;
+    drawBars($('#ih-bar-u'), groups, PH.map(k => ({ name: k + ' 相', color: COLORS[k], data: srcU[k] || [] })),
+             { xlabel: '间谐波组号（第 h 组 = h 次与 h+1 次谐波之间）', ylabel: modeU === 'pct' ? '含有率 %' : '组有效值 V', height: 230 });
+    drawBars($('#ih-bar-i'), groups, PH.map(k => ({ name: k + ' 相', color: COLORS[k], data: srcI[k] || [] })),
+             { xlabel: '间谐波组号', ylabel: modeI === 'pct' ? '含有率 %' : '组有效值 A', height: 230 });
+    const rows = (top, unit) => {
+      const out = [];
+      PH.forEach(k => (top[k] || []).forEach(g => out.push([k, `第 ${g.h} 组`, `${num(g.f_lo, 0)}~${num(g.f_hi, 0)}`,
+        num(g.dom_freq_hz, 1), si(g.dom_rms, unit), num(g.dom_angle_deg, 2), si(g.rms, unit), si(g.subgroup_rms, unit), num(g.pct, 3)])));
+      return out;
+    };
+    const hdr = (unit) => ['相', '组', '频带 (Hz)', '主导频率 (Hz)', `主导幅值 (${unit} RMS)`, '主导相角 (°)', `组有效值 (${unit})`, `中心子组 (${unit})`, '含有率 (%)'];
+    $('#ih-table-u').innerHTML = table(hdr('V'), rows(h.values.top_u || {}, 'V'));
+    $('#ih-table-i').innerHTML = table(hdr('A'), rows(h.values.top_i || {}, 'A'));
+  }
+  const hh = S.histCache.interharmonic || [];
+  const t0 = hh.length ? hh[0].t : 0;
+  drawLine($('#ih-trend'), [{ name: 'TIHD_U (%)', color: COLORS.A, data: hh.map(x => [x.t - t0, x.TIHD_U]) },
+                            { name: 'TIHD_I (%)', color: COLORS.B, data: hh.map(x => [x.t - t0, x.TIHD_I]) }],
+           { ylabel: '%', fmtX: x => tsX(x + t0, spanOf('interharmonic')), fmtTip: x => ts(x + t0), height: 200, legend: true });
+  renderCurveSave();
+  $('#ih-win').innerHTML = winNotes('interharmonic');
+}
+
+function renderDC() {
+  const d = q('dc');
+  const cards = [];
+  if (d) {
+    const v = d.values;
+    PH.forEach(k => cards.push(card(`${k} 相电压直流`, si(v.u_dc[k], 'V'), '', `${num(v.u_dc_pct[k], 3)}% of U1=${si(v.u1_rms[k], 'V')}`)));
+    PH.forEach(k => cards.push(card(`${k} 相电流直流`, si(v.i_dc[k], 'A'), '', `${num(v.i_dc_pct[k], 3)}% of I1=${si(v.i1_rms[k], 'A')}`)));
+    cards.push(card('中性线直流 (Ia+Ib+Ic)', si(v.in_dc, 'A'), '', '三相电流直流之和'));
+    cards.push(card('最大 |DC|', `${si(v.u_dc_max_abs, 'V')} / ${si(v.i_dc_max_abs, 'A')}`, '', '电压 / 电流'));
+  }
+  $('#dc-cards').innerHTML = cards.join('') || card('状态', '尚无结果', '', '请先启动数据源');
+  if (d) {
+    const v = d.values;
+    const drift = (o) => `${si(o.min)} ~ ${si(o.max)}（σ ${si(o.std)}）`;
+    $('#dc-table-u').innerHTML = table(['相', 'DC (V)', '相对 U1 (%)', 'U1 (V)', '逐周期均值范围'],
+      PH.map(k => [k, si(v.u_dc[k], 'V'), num(v.u_dc_pct[k], 3), si(v.u1_rms[k], 'V'), drift(v.u_dc_drift[k])]));
+    $('#dc-table-i').innerHTML = table(['相', 'DC (A)', '相对 I1 (%)', 'I1 (A)', '逐周期均值范围'],
+      [...PH.map(k => [k, si(v.i_dc[k], 'A'), num(v.i_dc_pct[k], 3), si(v.i1_rms[k], 'A'), drift(v.i_dc_drift[k])]),
+       ['N (Ia+Ib+Ic)', si(v.in_dc, 'A'), '—', '—', '—']]);
+    const cyc = (d.series && d.series.cycle) || [];
+    drawLine($('#dc-cyc-u'), PH.map(k => ({ name: k + ' 相', color: COLORS[k], data: cyc.map((c, i) => [c, (d.series.u_per_cycle[k] || [])[i]]) })),
+             { ylabel: 'V', fmtX: x => '#' + x.toFixed(0), fmtTip: x => '第 ' + x.toFixed(0) + ' 周期', height: 200, legend: true });
+    drawLine($('#dc-cyc-i'), PH.map(k => ({ name: k + ' 相', color: COLORS[k], data: cyc.map((c, i) => [c, (d.series.i_per_cycle[k] || [])[i]]) })),
+             { ylabel: 'A', fmtX: x => '#' + x.toFixed(0), fmtTip: x => '第 ' + x.toFixed(0) + ' 周期', height: 200, legend: true });
+  }
+  const mode = (document.querySelector('input[name=dcmode]:checked') || {}).value || 'u';
+  const hh = S.histCache.dc || [];
+  const t0 = hh.length ? hh[0].t : 0;
+  const pre = mode === 'u' ? 'U' : 'I';
+  drawLine($('#dc-trend'), PH.map(k => ({ name: `${pre}${k.toLowerCase()} DC`, color: COLORS[k], data: hh.map(x => [x.t - t0, x[`${pre}${k.toLowerCase()}_dc`]]) })),
+           { ylabel: mode === 'u' ? 'V' : 'A', fmtX: x => tsX(x + t0, spanOf('dc')), fmtTip: x => ts(x + t0), height: 200, legend: true });
+  renderCurveSave();
+  $('#dc-win').innerHTML = winNotes('dc');
+}
+
+function onEventPush(list) {
+  list.forEach(e => {
+    const idx = S.events.findIndex(x => x.id === e.id);
+    if (idx >= 0) S.events[idx] = e; else S.events.unshift(e);
+    if (e.active) toast(`🚨 ${e.type_name}：${e.subject}（${fmtVal(e.value_start)}${e.unit} / 限 ${fmtVal(e.limit)}${e.unit}）`, 'err');
+  });
+  if (S.events.length > 2000) S.events.length = 2000;
+  if (S.view === 'events') renderEvents();
+}
+
+async function refreshEvents() {
+  try {
+    const typ = $('#ev-filter').value;
+    const act = $('#ev-only-active').checked;
+    const d = await api(`/api/events?limit=1000${act ? '&active=1' : ''}${typ ? '&types=' + typ : ''}`);
+    S.events = d.events || []; S.evSummary = d.summary || null; S.evLoaded = true;
+  } catch (e) { toast('事件列表获取失败：' + e.message, 'err'); }
+  if (S.view === 'events') renderEvents();
+}
+
+async function clearEvents() {
+  try { await api('/api/events/clear', { method: 'POST' }); toast('事件列表已清空', 'ok'); S.events = []; await refreshEvents(); }
+  catch (e) { toast(e.message, 'err'); }
+}
+
+function fillEventForm(ev) {
+  if (!ev || S.evDirty) return;
+  EV_FIELDS.forEach(f => {
+    const el = document.getElementById(`ev-${f}`); if (!el) return;
+    if (el.type === 'checkbox') el.checked = !!ev[f]; else el.value = ev[f];
+  });
+}
+
+async function saveEventConfig() {
+  const payload = {};
+  EV_FIELDS.forEach(f => { const el = document.getElementById(`ev-${f}`); if (!el) return; payload[f] = el.type === 'checkbox' ? el.checked : +el.value; });
+  try {
+    const d = await api('/api/config', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ events: payload }) });
+    S.evDirty = false; $('#ev-form-note').textContent = '已保存并热生效 ' + new Date().toLocaleTimeString();
+    toast('事件阈值已保存', 'ok');
+    if (d && d.config && S.state) { S.state.config = d.config; }
+    refreshEvents();
+  } catch (e) { $('#ev-form-note').textContent = '保存失败：' + e.message; toast(e.message, 'err'); }
+}
+
+function evRow(e) {
+  const dur = e.duration_s === null || e.duration_s === undefined ? '进行中' : fmtDur(e.duration_s);
+  return [e.id, `<span class="badge ${e.active ? 'bad' : ''}">${e.active ? '活动' : '已结束'}</span>`, EVENT_NAME[e.type] || e.type, esc(e.subject),
+          ts(e.start_t), e.end_t ? ts(e.end_t) : '—', dur,
+          `${fmtVal(e.value_start)} ${esc(e.unit)}`, `${fmtVal(e.value_peak)} ${esc(e.unit)}`,
+          `${e.direction === 'low' ? '<' : '>'} ${fmtVal(e.limit)} ${esc(e.unit)}`, esc(e.detail || '')];
+}
+
+function renderEvents() {
+  if (!S.evLoaded) { S.evLoaded = true; refreshEvents(); return; }
+  const sm = S.evSummary || {};
+  const counts = sm.counts || {};
+  const abt = sm.active_by_type || {};
+  const cards = Object.keys(EVENT_NAME).map(k => card(EVENT_NAME[k], String(counts[k] || 0), '次', `活动 ${abt[k] || 0}`));
+  cards.unshift(card('事件检测', sm.enabled === false ? '已禁用' : '启用', '', `活动 ${sm.active || 0} / 累计 ${sm.total || 0}`));
+  const el = sm.effective_limits;
+  if (el) cards.push(card('基波有效阈值', `${si(el.u1_low_v, 'V')} ~ ${si(el.u1_high_v, 'V')}`, '', `I1 ≤ ${si(el.i1_high_a, 'A')}（折算 ×${sm.limit_scale.u}/×${sm.limit_scale.i}）`));
+  const w = sm.writer || {};
+  cards.push(card('事件落盘', w.enabled ? '开' : '关', '', w.current_file ? `${w.rows_written} 行 → ${w.current_file.split(/[\\/]/).pop()}` : (w.dir || '')));
+  const osc = sm.osc || {};
+  cards.push(card('功率振荡评估', isNum(osc.amp_pp_pct) ? num(osc.amp_pp_pct, 2) : '—', isNum(osc.amp_pp_pct) ? '%' : '',
+                  isNum(osc.dom_freq_hz) ? `主导 ${num(osc.dom_freq_hz, 3)} Hz · 峰峰 ${si(osc.amp_pp, 'W')} · ${osc.points} 点` : (osc.note || `${osc.points || 0} 点`)));
+  $('#ev-cards').innerHTML = cards.join('');
+  if (isNum(sm.active)) setEventBadge(sm.active);
+  const hdr = ['#', '状态', '类型', '对象', '开始（数据时间）', '结束', '持续', '触发值', '峰值', '阈值', '说明'];
+  const active = S.events.filter(e => e.active);
+  $('#ev-active').innerHTML = active.length ? table(hdr, active.map(evRow)) : '<div class="notes ok">当前无活动事件</div>';
+  $('#ev-total').textContent = String(sm.total || S.events.length);
+  $('#ev-table').innerHTML = table(hdr, S.events.map(evRow));
+  const cfg = (S.state || {}).config || {};
+  fillEventForm(cfg.events);
+  $('#ev-notes').innerHTML = notes(sm.notes || [], [
+    '口径：基波相量＝U1 相对 U_nom 的百分比上下限、I1 绝对上限；谐波相量＝单次含有率 HR_h 或 THD；间谐波相量＝IEC 61000-4-7 间谐波组含有率；' +
+    '频率＝fundamental 窗所估频率；ROCOF＝相邻两次频率之差 / 数据时间差；功率振荡＝最近评估窗内 P 总的去趋势频谱主导分量（峰峰值 / |P̄|）。',
+    '所有时刻均为数据时间（离线回放同样成立）；同一类型同一对象只保留一个活动事件，回到滞回带内才结束。',
+  ]);
+}
+
 function render() {
   try {
     switch (S.view) {
@@ -1051,6 +1230,9 @@ function render() {
       case 'power_factor': renderPF(); break;
       case 'fundamental': renderFundamental(); break;
       case 'harmonic': renderHarmonic(); break;
+      case 'interharmonic': renderInterharmonic(); break;
+      case 'dc': renderDC(); break;
+      case 'events': renderEvents(); break;
       case 'spectrum': renderSpectrum(); break;
       case 'windows': renderWindows(); break;
       case 'source': renderSource(); break;
@@ -1314,8 +1496,20 @@ function bind() {
     el.addEventListener('change', mark);
   });
   $$('input[name=hmode-u],input[name=hmode-i]').forEach(el => el.addEventListener('change', renderHarmonic));
+  $$('input[name=ihmode-u],input[name=ihmode-i]').forEach(el => el.addEventListener('change', renderInterharmonic));
+  $$('input[name=dcmode]').forEach(el => el.addEventListener('change', renderDC));
+  // 事件子界面
+  $('#btn-ev-refresh').addEventListener('click', refreshEvents);
+  $('#btn-ev-clear').addEventListener('click', clearEvents);
+  $('#btn-ev-save').addEventListener('click', saveEventConfig);
+  $('#ev-filter').addEventListener('change', refreshEvents);
+  $('#ev-only-active').addEventListener('change', refreshEvents);
+  $$('#ev-form input').forEach(el => { const mark = () => { S.evDirty = true; }; el.addEventListener('input', mark); el.addEventListener('change', mark); });
   window.addEventListener('resize', () => { clearTimeout(window._rz); window._rz = setTimeout(render, 180); });
-  setInterval(() => { if (S.view === 'overview' || S.view === 'power_factor' || S.view === 'fundamental') refreshHistory(); }, 3000);
+  setInterval(() => {
+    if (['overview', 'power_factor', 'fundamental', 'interharmonic', 'dc'].includes(S.view)) refreshHistory();
+    if (S.view === 'events') refreshEvents();          // 摘要（计数/振荡评估/落盘行数）随数据刷新
+  }, 3000);
 }
 
 

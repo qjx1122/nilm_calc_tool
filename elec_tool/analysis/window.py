@@ -265,4 +265,5 @@ def plan_window(available: int, spec: WindowSpec, quantity: str, fs: float,
 
 def is_fft_quantity(quantity: str) -> bool:
     """哪些量必须整周期截断（FFT 类）。"""
-    return quantity in ("fundamental", "harmonic", "spectrum")
+    # dc 不是 FFT，但直流均值只有在整数周期上才无基波泄漏偏置，同样强制整周期
+    return quantity in ("fundamental", "harmonic", "interharmonic", "dc", "spectrum")

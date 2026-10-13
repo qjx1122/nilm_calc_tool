@@ -108,7 +108,7 @@ def test_health_reports_version_and_running_flag(client):
 def test_state_lists_all_seven_quantities(client):
     d = client.get("/api/state").json()
     assert set(d["quantities"]) == set(QUANTITY_KEYS)
-    assert len(QUANTITY_KEYS) == 7                      # 需求⑤：七类电气量
+    assert len(QUANTITY_KEYS) == 9                      # 需求⑤：七类电气量 + 第 9 轮间谐波/直流偏置
     assert d["config"]["sampling"]["fs"] == FS
     assert d["config"]["transform"]["pt_ratio"] == PT
     assert d["config"]["transform"]["ct_ratio"] == CT
