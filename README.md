@@ -1,7 +1,7 @@
 # README.md — nilm_calc_tool（电力系统各类电气量计算工具）
 
 > 台账文件（BOOTSTRAP.md v2.2）：安装与环境 / 运行命令 / 数据目录 / 配置结构 / 输出产物 / 生产推荐流程。
-> **当前状态：v0.6（2026-10-12）**——软件已实现并在沙盒跑通（算法核心 + 4 类数据源 + 计算引擎 + CLI + Web 界面 + 205 项测试 + 6 项验证工具）。
+> **当前状态：v0.7（2026-10-12）**——软件已实现并在沙盒跑通（算法核心 + 4 类数据源 + 计算引擎 + 离线重采样 + CLI + Web 界面 + 222 项测试 + 7 项验证工具）。
 > 状态标注：✅已确认（有代码 / 实录 / 官方来源佐证）｜🔶待确认（占位或推断，需用户回填）｜❌已废弃（不删行，只翻状态）
 > **本文所有 ✅ 均为沙盒实录：Linux 6.1.158+ / CPython 3.11.2 / numpy 2.4.6，采集时间 2026-10-10。**
 > **Windows 命令、真实现场数据、生产部署三项尚未在用户环境验证，一律标 🔶，请按 `REPORT_TEST.md`「T-002 本地部署与验收执行包」逐条回填。**
@@ -392,10 +392,34 @@ nohup .venv/bin/python cli.py serve --port 8000 > logs/serve.log 2>&1 &
 
 手工点检（浏览器）：① 「导出与日志」→「实时落盘」开关为勾选、目录 `output/realtime` → 启动模拟器 10 s → 点「刷新状态」→ 列出 6 个 `<曲线>_<今天>.csv` 与行数，用 Excel 打开 `voltage_<今天>.csv` 行数应随时间增长；取消概览页「三相电流」的「保存曲线」→ 再刷新 → `current_*.csv` 行数不再增长；② 数据源页选 csv_file、「播放起点」选「跳过开头 N 秒」填 `2` → 启动 → 摘要「已摄入」比全量少 2×fs 点、告警「播放起点：跳过开头 2 s…实际跳过 12800 行」；选「指定时刻」填 `23:59:59` → 启动 → 状态「✗ 播放起点超出文件范围」；③ 概览页把鼠标移到电压趋势上 → 出现虚线＋三色圆点＋浮框 `HH:MM:SS.mmm / Ua: … / Ub: … / Uc: …`，移到 y 轴刻度区浮框消失。jsdom 自动版：`JSDOM_DIR=/tmp/uitest node tools/ui_r7_check.cjs http://127.0.0.1:8000` 期望 **PASS 39 / FAIL 0**。
 
-### 3.2 方式二：CLI（7 个子命令，全部实测）
+#### 数据处理子界面：离线波形 CSV 重采样（v0.7）
+
+左侧导航 **「🧮 数据处理」**。把指定路径的离线波形 CSV 按指定采样频率重采样，结果写入 `data/`，文件名＝**原文件名 + `_re_` + 目标采样率**：
+`波形_农业排灌_大水泵_80_1.csv` → 6400 Hz → `波形_农业排灌_大水泵_80_1_re_6400.csv`。
+
+| 项 | 行为 | 依据 |
+| --- | --- | --- |
+| 源文件 | 下拉框列出 `data/` 下 CSV（选中即填路径），也可手填仓库相对路径或绝对路径；「探查源文件」显示行数 / 编码 / 首个时间戳 / 推算采样率 | `tools/ui_r8_check.cjs` E1/E2 |
+| 目标采样率 | 任意 >0 的数；输出名即时预览，已存在会提示（需勾「覆盖」） | E1/E4 |
+| 原采样率 | 留空＝由时间戳列前 20000 行线性拟合推算（贴近整数则取整）；可手填覆盖（与推算偏差 >5% 会提示） | `test_r8_resample.py` |
+| 插值方法 | `linear` 线性插值（**流式分块，内存 O(块)**，默认）/ `nearest` 最近邻 / `fft` 频域（等价 `scipy.signal.resample`，**降采样自带理想低通抗混叠**，但整文件载入） | 同上 |
+| 时间轴 | 按**等间隔**原采样率重建：第 i 行＝起点 + i/fs_src，输出第 k 行＝起点 + k/fs_new（不逐行用原时标，避免 0.1 ms 量化抖动放大）；不外推 | 同上 |
+| 时间戳写法 | 与源一致：epoch 数值→同单位（小数位自动加足到 ≤步长/10）；`0/00/00 HH:MM:SS.ffff`→原日期段原样、小数位 = max(原位数, 覆盖 1/fs_new 所需)；ISO→`YYYY-MM-DD HH:MM:SS.ffffff` | 同上 |
+| 保留项 | 表头、列顺序、分隔符、编码（含 BOM 有无）；数值 6 位小数（CLI `--decimals`） | 同上 |
+| 进度与取消 | 后台线程 + 进度条（按已读字节）+ 「取消」；失败/取消不留 `.part` 半成品 | E3/E4 |
+| 衔接播放 | 完成后「用重采样文件作为离线播放源 →」一键切到数据源页并填入路径 | E5 |
+
+手工点检：① 「数据处理」下拉选 `data/sample_6400hz.csv`，目标 3200 → 开始 → 进度条到 100%，结果区显示 `data/sample_6400hz_re_3200.csv`、行数 32000 → 16000；② 再点开始 → 提示「已存在」；勾「覆盖」选 `fft` 再点 → 成功；③ 「用重采样文件作为离线播放源」→ 数据源页 `csv_file` 路径已填 → 把配置采样率改为 3200 后启动。
+
+CLI 同等能力：`.venv/bin/python cli.py resample "data/波形_农业排灌_大水泵_80_1.csv" --fs 6400 [--fs-src 3200] [--method fft] [--overwrite] [--format json]`。
+库：`from elec_tool.resample import resample_csv; resample_csv(path, 6400, out_dir="data")`。
+
+**注意**：`linear` 降采样无抗混叠（高于新 Nyquist 的谐波会折叠到低频），要做谐波分析请用 `fft`；`fft` 的输出点数 = round(N·fs_new/fs_src)（周期语义），比例非整时实际采样率略有偏差并写入 notes；重采样后播放时请把「配置采样率 fs」改成目标值。
+
+### 3.2 方式二：CLI（8 个子命令，全部实测）
 
 ```
-.venv/bin/python cli.py --help      # 实录：init-config / gen-sample / selftest / sources / compute / live / serve
+.venv/bin/python cli.py --help      # 实录：init-config / gen-sample / selftest / sources / compute / live / resample / serve
 ```
 
 **(1) `init-config` — 生成配置文件**
@@ -558,6 +582,10 @@ THDu(A)  = 10.593 %   5次 = 346.4 V
 | `GET /api/selftest?fs=&freq=&pt=&ct=&window=` | 一键 44 项解析解自检 + 运行环境 |
 | `GET /api/probe?path=` | 数据体检（表头/编码/行数/时间戳模式/推算 fs/偏差） |
 | `GET /api/files?sub=data` | 列目录下的 CSV |
+| `POST /api/process/resample` | 启动离线 CSV 重采样后台任务（`path, fs_new, [fs_src], [method], [overwrite], [out_dir=data]`） |
+| `GET /api/process/resample` | 任务进度/结果/错误（`running, progress, stage, rows_in, rows_out, result, error`） |
+| `POST /api/process/resample/cancel` | 取消运行中的重采样 |
+| `GET /api/process/resample/preview?path&fs_new` | 只算输出文件名与是否已存在 |
 | `GET /` `/static/*` | 界面与静态资源 |
 | `WS /ws` | 实时推送：连上即发 `hello`(状态) + `snapshot`(结果)，之后按 `result`/`state`/`error` 推送。**注意推送是「分量子集」**（只含本次到期的电气量），客户端必须按键合并——`app.js:mergeResult()` 已实现 |
 
@@ -1073,6 +1101,7 @@ python cli.py selftest                            # 实测：44/44，worst_rel_e
 ---
 
 ## 🗒 变更记录
+- **v0.7（2026-10-12，第 8 轮）**：新增 **「数据处理」子界面**——离线波形 CSV 按指定采样率重采样到 `data/<原名>_re_<fs>.csv`（`elec_tool/resample.py`：linear 流式 / nearest / fft 抗混叠；时间戳按源写法重生成；表头/编码/BOM 保留；后台任务＋进度＋取消）；REST 4 个接口；CLI `resample`；`tests/test_r8_resample.py` 16 项、`tools/ui_r8_check.cjs` 29 项。测试 **222 passed**。
 - **v0.6.2（2026-10-12）**：修复 **F-23**——离线文件播放时顶栏「样本」/「数据源状态」汇总不自动更新：`/ws` 改为每 1 s 定期推送 `state`（`WS_STATE_INTERVAL_S`），不再依赖队列空闲。测试 **206 passed**。
 - **v0.6.1（2026-10-12）**：修复 **F-22**——用局域网 IP 访问（或浏览器缩放≠100% / Windows 125% 缩放）时页面每次刷新纵向拉伸：`prep()` 不再回读被 `canvas.height` 改写的 `height` 属性，逻辑高度缓存于 `data-h`。测试 204→**205 passed**。
 - **v0.6（2026-10-12）**：三项功能。① **实时落盘**：新增 `elec_tool/realtime_writer.py`，引擎每算出一个曲线点就追加到 `output/realtime/<曲线>_<数据日期>.csv`（与趋势曲线/手工保存同一提取规则 `metrics.curve_record`；按数据时间日期分文件；追加不重复表头；每次 flush；受 `output.curve_save` 过滤；配置 `output.realtime_save/realtime_dir`，环境变量 `ELEC_TOOL_REALTIME_DIR` 优先；热更新重建写入器）；`GET /api/realtime`；「导出与日志」页新增面板；CLI `--realtime-save on|off --realtime-dir`，收尾诊断打印落盘行数。② **离线播放起点**：`source.play_start_mode/play_start_value`（`begin/row/seconds/percent/time`），`iter_csv_blocks` 新增 `skip_rows/start_percent/start_time`（percent 按字节定位对齐行首；time 分块顺序扫描时标列，支持只填 `HH:MM:SS` 与当天时刻比较）；超出文件范围抛可诊断 `ParseError`；界面下拉框＋取值框（csv_file 下可用、begin 时取值框置灰、占位说明随模式变化），启动白名单放行，状态摘要显示跳过行数；CLI `--play-from 模式:值`。③ **曲线悬停取值**：`drawLine` 挂 `cv.__chart`、只绑定一次 `mousemove/mouseleave`、重绘末尾叠加十字线＋圆点＋浮框（趋势图提示含毫秒，频谱为 Hz），实时推送重绘不丢。新增 `tests/test_r7_features.py`（18 项）与 `tools/ui_r7_check.cjs`（PASS 39/FAIL 0）；修 r6 Web 测试「finished 后 flush_all 尚未完成」的等待竞争。测试 186→**204 passed, 1 skipped**。取证见 `REPORT_TEST.md` T-005。
