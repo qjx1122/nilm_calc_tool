@@ -943,7 +943,7 @@ U9-5 真实文件：事件分布=____
 ## [2026-10-13] 专题 T-008：第 10 轮 离线文件列映射开关
 - 类型：用户专题（实现＋验证）
 - 目标与假设：用户原话「修改代码，增加是否启用离线文件数据映射关系配置功能。如果没有启用，默认依次为时间,A相电压,A相电流,B相电压,B相电流,C相电压,C相电流；否则，只播放有有映射关系的列数据」。假设（用户未另行澄清）：未映射通道按 0 播放而非剔除；未启用时可识别表头仍按表头（兼容既有文件）；时间戳未映射按 fs 合成时间轴；TCP 源不在范围。
-- 方法 / 数据 / 参数：`ColumnMap` 新增 `mapping_enabled/mapping` + `layout()/looks_like_header()/validate()/unmapped()`，`parsing._rows_to_block/_assemble/iter_csv_blocks/_seek_time`、`server /api/probe`、`cli probe`、`resample._prescan` 全部改走 `layout()`；前端「数据源」页新面板。合成 CSV（U 57.7 V，I 5/6/7 A 区分三相）做解析解断言。
+- 方法 / 数据 / 参数：`ColumnMap` 新增 `mapping_enabled/mapping` + `layout()/looks_like_header()/validate()/unmapped()`，`parsing._rows_to_block/_assemble/iter_csv_blocks/_seek_time`、`server /api/probe`、`cli sources --file`、`resample._prescan` 全部改走 `layout()`；前端「数据源」页新面板。合成 CSV（U 57.7 V，I 5/6/7 A 区分三相）做解析解断言。
 - 执行模式：混合——沙盒侧（A）✅已实录；用户侧（B）＝U10 组浏览器点检 🔶待回报。
 
 ### 沙盒侧实录（三件套：命令 + 输出 + 判读）✅
