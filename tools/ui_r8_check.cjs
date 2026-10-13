@@ -1,0 +1,167 @@
+#!/usr/bin/env node
+/* 第 8 轮界面功能端到端检查：「数据处理」子界面（离线 CSV 重采样）。
+ * jsdom 驱动真实 index.html + app.js，打真实服务端。
+ *
+ *   E1 导航有「数据处理」项；切入后文件下拉从 /api/files 填充、选中即填路径、输出名预览正确
+ *   E2 探查源文件 → 显示行数/推算采样率
+ *   E3 开始重采样（用户命名样例「波形_农业排灌_大水泵_80_1.csv」3200Hz→6400）：
+ *      POST 载荷无空值；轮询至完成；结果区显示输出名 *_re_6400.csv、行数 N→2N；
+ *      文件真实存在于 data/、表头保留、时间戳仍为 0/00/00 写法；文件列表自动刷新含新文件
+ *   E4 已存在且未勾选覆盖 → 任务失败并显示错误；勾选覆盖 → 成功
+ *   E5 「用重采样文件作为离线播放源」→ 切到数据源页、kind=csv_file、path=输出文件
+ *   E6 非法参数（fs<=0 / 路径不存在）→ 服务端 ok:false 且界面显示错误
+ *
+ * 用法：JSDOM_DIR=/tmp/uitest node tools/ui_r8_check.cjs [baseUrl]
+ */
+const fs = require('fs');
+const path = require('path');
+const { JSDOM } = require(path.join(process.env.JSDOM_DIR || '/tmp/uitest', 'node_modules/jsdom'));
+
+const BASE = process.argv[2] || 'http://127.0.0.1:8000';
+const ROOT = path.resolve(__dirname, '..');
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+let pass = 0, fail = 0; const fails = [];
+function check(name, ok, detail = '') {
+  if (ok) { pass++; console.log(`  ✓ ${name}${detail ? '　' + detail : ''}`); }
+  else { fail++; fails.push(name); console.log(`  ✗ ${name}　${detail}`); }
+}
+
+const SRC_NAME = '波形_农业排灌_大水泵_80_1.csv';
+const OUT_NAME = '波形_农业排灌_大水泵_80_1_re_6400.csv';
+function makeCsv() {
+  const fp = path.join(ROOT, 'data', SRC_NAME);
+  const fsrc = 3200, n = fsrc * 3, lines = ['时间戳,A相电压,A相电流,B相电压,B相电流,C相电压,C相电流'];
+  for (let k = 0; k < n; k++) {
+    const tsec = 12 * 3600 + 40 * 60 + k / fsrc;
+    const hh = Math.floor(tsec / 3600), mm = Math.floor((tsec % 3600) / 60), ss = tsec % 60;
+    const frac = Math.round((ss - Math.floor(ss)) * 10000) % 10000;
+    const stamp = `0/00/00 ${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}:${String(Math.floor(ss)).padStart(2, '0')}.${String(frac).padStart(4, '0')}`;
+    const w = 2 * Math.PI * 50 * k / fsrc;
+    lines.push([stamp, ...[100 * Math.sin(w), 5 * Math.sin(w - 0.5), 100 * Math.sin(w - 2.094), 5 * Math.sin(w - 2.594),
+      100 * Math.sin(w + 2.094), 5 * Math.sin(w + 1.594)].map((x) => x.toFixed(6))].join(','));
+  }
+  fs.writeFileSync(fp, lines.join('\r\n') + '\r\n');
+  return { fp, rows: n };
+}
+
+async function main() {
+  const outPath = path.join(ROOT, 'data', OUT_NAME);
+  try { fs.unlinkSync(outPath); } catch (e) { /* none */ }
+  const { rows: N } = makeCsv();
+  const html = fs.readFileSync(path.join(ROOT, 'app/static/index.html'), 'utf8');
+  const js = fs.readFileSync(path.join(ROOT, 'app/static/app.js'), 'utf8');
+  const calls = [];
+  const dom = new JSDOM(html, {
+    url: BASE + '/', runScripts: 'dangerously', pretendToBeVisual: true,
+    beforeParse(window) {
+      window.HTMLCanvasElement.prototype.getContext = () => new Proxy({}, {
+        get: (t, p) => (p === 'measureText' ? () => ({ width: 8 }) : p === 'createLinearGradient' ? () => ({ addColorStop() {} }) : () => {}),
+        set: () => true,
+      });
+      window.WebSocket = class { constructor() { this.readyState = 0; } close() {} send() {} };
+      window.fetch = async (url, opts = {}) => {
+        const abs = String(url).startsWith('http') ? String(url) : BASE + url;
+        const r = await fetch(abs, opts);
+        calls.push({ url: String(url), method: opts.method || 'GET', status: r.status, body: opts.body || null });
+        return r;
+      };
+      window.alert = () => {};
+    },
+  });
+  const { window } = dom, { document } = window;
+  window.eval(js + '\n;window.__S = () => S;');
+  if (typeof window.init === 'function') window.init();
+  await sleep(1500);
+  const $ = (id) => document.getElementById(id);
+  const click = (el) => el.dispatchEvent(new window.Event('click', { bubbles: true }));
+  const change = (el) => el.dispatchEvent(new window.Event('change', { bubbles: true }));
+  const input = (el) => el.dispatchEvent(new window.Event('input', { bubbles: true }));
+  const nav = async (v) => { click(document.querySelector(`.navitem[data-view="${v}"]`)); await sleep(600); };
+  let lastStart = null;
+  const waitDone = async (ms = 20000) => {
+    const t0 = Date.now(); let st;
+    while (Date.now() - t0 < ms) {
+      st = await (await fetch(BASE + '/api/process/resample')).json();
+      if (st.started_at && st.started_at !== lastStart && !st.running && (st.result || st.error)) break;   // 必须是**本次**任务的终态
+      await sleep(200);
+    }
+    lastStart = st && st.started_at;
+    await sleep(900);                                  // 让界面轮询再跑一拍
+    return st;
+  };
+  const bodies = (u, m) => calls.filter((c) => c.url.includes(u) && c.method === m && c.body).map((c) => JSON.parse(c.body));
+
+  console.log('\n=== E1. 导航与文件下拉 ===');
+  const navBtn = document.querySelector('.navitem[data-view="process"]');
+  check('左侧导航有「数据处理」', !!navBtn && /数据处理/.test(navBtn.textContent));
+  await nav('process'); await sleep(800);
+  check('view-process 激活', $('view-process').classList.contains('active'));
+  const opts = [...$('rs-files').options].map((o) => o.value);
+  check('下拉框列出 data/ 下 CSV（含样例源）', opts.includes('data/' + SRC_NAME), opts.join(' | '));
+  $('rs-files').value = 'data/' + SRC_NAME; change($('rs-files'));
+  await sleep(700);
+  check('选中即填路径', $('rs-path').value === 'data/' + SRC_NAME, $('rs-path').value);
+  check('输出名预览 = 原名_re_6400.csv', $('rs-preview').textContent.includes(OUT_NAME) && !/已存在/.test($('rs-preview').textContent), $('rs-preview').textContent.trim().slice(0, 120));
+
+  console.log('\n=== E2. 探查 ===');
+  click($('btn-rs-probe')); await sleep(1500);
+  check('探查显示行数与推算采样率≈3200', new RegExp(`${N} 行`).test($('rs-status').textContent) && /3200\.0/.test($('rs-status').textContent), $('rs-status').textContent.trim().slice(0, 160));
+
+  console.log('\n=== E3. 重采样 3200→6400 ===');
+  $('rs-fs').value = '6400'; input($('rs-fs'));
+  $('rs-method').value = 'linear'; $('rs-overwrite').checked = false;
+  click($('btn-rs-run'));
+  await sleep(300);
+  const b = bodies('/api/process/resample', 'POST').pop();
+  check('POST 载荷正确且无空值', b && b.path === 'data/' + SRC_NAME && b.fs_new === 6400 && b.method === 'linear' && !('fs_src' in b), JSON.stringify(b));
+  let st = await waitDone();
+  check('任务完成无错误', st && st.result && !st.error, st && (st.error || ''));
+  const r = st.result || {};
+  check('结果：输出名正确', r.out_name === OUT_NAME, r.out_name);
+  check('结果：行数 N→2N-1', r.rows_in === N && r.rows_out === 2 * N - 1, `${r.rows_in}→${r.rows_out}`);
+  check('结果：原采样率推算 3200、来源 estimated', r.fs_src === 3200 && r.fs_src_source === 'estimated', `${r.fs_src} ${r.fs_src_source}`);
+  check('界面结果区显示输出名与行数', $('rs-result').textContent.includes(OUT_NAME) && $('rs-result').textContent.includes(String(2 * N - 1)));
+  check('进度条 100% 且 done', $('rs-bar').style.width === '100%' && $('rs-bar').classList.contains('done'), $('rs-bar').style.width);
+  check('文件真实写入 data/', fs.existsSync(outPath));
+  const lines = fs.readFileSync(outPath, 'utf8').split(/\r?\n/).filter((l) => l.trim());
+  check('表头原样保留', lines[0] === '时间戳,A相电压,A相电流,B相电压,B相电流,C相电压,C相电流', lines[0]);
+  check('行数 = 表头 + 2N-1', lines.length === 2 * N, String(lines.length));
+  check('时间戳保持 0/00/00 HH:MM:SS.ffff 写法且从 12:40:00.0000 起', /^0\/00\/00 12:40:00\.0000,/.test(lines[1]) && /^0\/00\/00 12:40:00\.000[12],/.test(lines[2]), lines[1].slice(0, 30) + ' / ' + lines[2].slice(0, 30));
+  // 数值：第 2 行（t=1/6400）Ua 应 ≈ 线性插值 (0+100 sin(2π50/3200))/2
+  const ua2 = +lines[2].split(',')[1];
+  check('插值数值正确（Ua@1/6400 ≈ 中点值）', Math.abs(ua2 - 50 * Math.sin(2 * Math.PI * 50 / 3200)) < 1e-4, String(ua2));
+  await sleep(600);
+  check('文件下拉自动刷新含新文件', [...$('rs-files').options].some((o) => o.value === 'data/' + OUT_NAME));
+  check('预览提示输出已存在', /已存在/.test($('rs-preview').textContent));
+
+  console.log('\n=== E4. 覆盖保护 ===');
+  click($('btn-rs-run')); st = await waitDone();
+  check('未勾选覆盖 → 失败且界面显示「已存在」', st.error && /已存在/.test(st.error) && /已存在/.test($('rs-status').textContent), st.error);
+  check('失败时进度条标红', $('rs-bar').classList.contains('err'));
+  $('rs-overwrite').checked = true; $('rs-method').value = 'fft';
+  click($('btn-rs-run')); st = await waitDone();
+  check('勾选覆盖 + fft → 成功，行数 2N（周期语义）', st.result && !st.error && st.result.rows_out === 2 * N && st.result.method === 'fft', st.error || (st.result && st.result.rows_out));
+
+  console.log('\n=== E5. 用作离线播放源 ===');
+  check('按钮可用', !$('btn-rs-use').disabled);
+  click($('btn-rs-use')); await sleep(500);
+  check('切到数据源页、kind=csv_file、path=输出文件', $('view-source').classList.contains('active') && $('src-kind').value === 'csv_file' && $('src-path').value === 'data/' + OUT_NAME, `${$('src-kind').value} ${$('src-path').value}`);
+
+  console.log('\n=== E6. 非法参数 ===');
+  const bad1 = await (await fetch(BASE + '/api/process/resample', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ path: 'data/' + SRC_NAME, fs_new: 0 }) })).json();
+  check('fs_new=0 → ok:false', bad1.ok === false && /> 0/.test(bad1.error), bad1.error);
+  const bad2 = await (await fetch(BASE + '/api/process/resample', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ path: 'data/不存在.csv', fs_new: 6400 }) })).json();
+  check('路径不存在 → ok:false', bad2.ok === false && /不存在/.test(bad2.error), bad2.error);
+  const bad3 = await (await fetch(BASE + '/api/process/resample', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ path: 'data/' + SRC_NAME, fs_new: 6400, out_dir: '../..' }) })).json();
+  check('输出目录越界 → ok:false', bad3.ok === false && /越界/.test(bad3.error), bad3.error);
+  await nav('process');
+  $('rs-path').value = 'data/不存在.csv'; input($('rs-path')); await sleep(600);
+  check('界面预览提示源文件不存在', /不存在/.test($('rs-preview').textContent));
+
+  // 收尾：删除测试文件
+  try { fs.unlinkSync(outPath); fs.unlinkSync(path.join(ROOT, 'data', SRC_NAME)); } catch (e) { /* ignore */ }
+  console.log(`\n=== 结果：PASS ${pass} / FAIL ${fail} ===`);
+  if (fails.length) { console.log('失败项：'); fails.forEach((f) => console.log('  - ' + f)); }
+  process.exit(fail ? 1 : 0);
+}
+main().catch((e) => { console.error('脚本异常：', e); process.exit(2); });

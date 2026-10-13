@@ -48,6 +48,7 @@
     <button class="navitem" data-view="windows">⏱ 窗口配置（需求⑥）</button>
     <button class="navitem" data-view="export">💾 导出与日志</button>
     <button class="navitem" data-view="selftest">✅ 算法自检</button>
+    <button class="navitem" data-view="process">🧮 数据处理</button>
     <div class="navfoot" id="nav-foot">—</div>
   </nav>
 
@@ -341,6 +342,56 @@
         </div>
         <div id="self-summary" class="notes"></div>
         <div id="self-table" class="tablewrap scroll"></div>
+      </div>
+    </section>
+
+    <section id="view-process" class="view">
+      <h2>数据处理 · 离线波形重采样</h2>
+      <div class="grid2">
+        <div class="panel">
+          <h3>重采样参数</h3>
+          <div class="form">
+            <label>源文件（data 目录下拉或手填路径）
+              <select id="rs-files"><option value="">— 选择 data/ 下的 CSV —</option></select>
+            </label>
+            <label>源文件路径 <input id="rs-path" placeholder="data/波形_农业排灌_大水泵_80_1.csv 或绝对路径"></label>
+            <div class="row2">
+              <label>目标采样率 (Hz) <input id="rs-fs" type="number" min="1" step="1" value="6400"></label>
+              <label>原采样率 (Hz，留空＝由时间戳自动推算) <input id="rs-fssrc" type="number" min="1" step="1" placeholder="自动"></label>
+            </div>
+            <div class="row2">
+              <label>插值方法
+                <select id="rs-method">
+                  <option value="linear">linear 线性插值（流式，默认）</option>
+                  <option value="nearest">nearest 最近邻</option>
+                  <option value="fft">fft 频域（抗混叠，整文件载入）</option>
+                </select>
+              </label>
+              <label class="check"><input id="rs-overwrite" type="checkbox"> 输出已存在时覆盖</label>
+            </div>
+            <div id="rs-preview" class="notes"></div>
+            <div class="btnrow">
+              <button id="btn-rs-probe">探查源文件</button>
+              <button id="btn-rs-run" class="primary">开始重采样</button>
+              <button id="btn-rs-cancel" disabled>取消</button>
+              <button id="btn-rs-refresh">刷新文件列表</button>
+            </div>
+            <div id="rs-hint" class="notes">
+              <div>输出写入 <code>data/</code>，文件名＝原文件名 + <code>_re_</code> + 目标采样率，如
+                <code>波形_农业排灌_大水泵_80_1.csv</code> → <code>波形_农业排灌_大水泵_80_1_re_6400.csv</code>；表头、列顺序、编码、时间戳写法原样保留。</div>
+              <div>时间轴按等间隔原采样率重建（第 i 行 = 起点 + i/fs_src），不逐行使用原时标，避免 0.1 ms 量化抖动被放大。</div>
+              <div>降采样请优先选 <b>fft</b>（自带理想低通抗混叠）；linear 降采样会把高次谐波折叠到低频。</div>
+            </div>
+          </div>
+        </div>
+        <div class="panel">
+          <h3>任务进度与结果</h3>
+          <div class="progress"><div id="rs-bar" class="progress-bar" style="width:0%"></div></div>
+          <div id="rs-status" class="notes"></div>
+          <div id="rs-result" class="notes"></div>
+          <div class="btnrow"><button id="btn-rs-use" disabled>用重采样文件作为离线播放源 →</button></div>
+          <details><summary>原始结果 JSON</summary><pre id="rs-json" class="pre"></pre></details>
+        </div>
       </div>
     </section>
   </main>

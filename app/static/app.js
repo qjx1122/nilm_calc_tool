@@ -1055,6 +1055,7 @@ function render() {
       case 'windows': renderWindows(); break;
       case 'source': renderSource(); break;
       case 'export': renderExport(); break;
+      case 'process': renderProcess(); break;
       default: break;
     }
   } catch (e) {
@@ -1268,6 +1269,7 @@ async function saveCfgFile() {
 /* ------------------------------------------------------------------ 初始化 */
 
 function bind() {
+  bindProcess();
   $$('.navitem').forEach(b => b.addEventListener('click', () => switchView(b.dataset.view)));
   $('#btn-start').addEventListener('click', () => startEngine());
   $('#btn-stop').addEventListener('click', stopEngine);
@@ -1314,6 +1316,146 @@ function bind() {
   $$('input[name=hmode-u],input[name=hmode-i]').forEach(el => el.addEventListener('change', renderHarmonic));
   window.addEventListener('resize', () => { clearTimeout(window._rz); window._rz = setTimeout(render, 180); });
   setInterval(() => { if (S.view === 'overview' || S.view === 'power_factor' || S.view === 'fundamental') refreshHistory(); }, 3000);
+}
+
+
+/* ------------------------------------------------------------------ 数据处理：离线 CSV 重采样 */
+
+const RS = { files: [], status: null, timer: null, loaded: false };
+
+function renderProcess() {
+  if (!RS.loaded) { RS.loaded = true; rsListFiles(); rsPoll(); }
+  rsPreview();
+}
+
+async function rsListFiles() {
+  const sel = $('#rs-files');
+  if (!sel) return;
+  try {
+    const r = await api('/api/files?sub=data');
+    RS.files = (r.files || []).filter(f => !f.dir && f.name.toLowerCase().endsWith('.csv'));
+    const cur = sel.value;
+    sel.innerHTML = '<option value="">— 选择 data/ 下的 CSV —</option>' +
+      RS.files.map(f => `<option value="${esc(f.name)}">${esc(f.name)} (${f.size_mb} MB)</option>`).join('');
+    if (cur && RS.files.some(f => f.name === cur)) sel.value = cur;
+  } catch (e) { toast('读取文件列表失败：' + e.message, 'err'); }
+}
+
+let _rsPrevT = null;
+function rsPreview() {
+  clearTimeout(_rsPrevT);
+  _rsPrevT = setTimeout(async () => {
+    const out = $('#rs-preview'); if (!out) return;
+    const path = $('#rs-path').value.trim(), fs = +$('#rs-fs').value;
+    if (!path || !(fs > 0)) { out.innerHTML = ''; return; }
+    try {
+      const r = await api('/api/process/resample/preview?' + new URLSearchParams({ path, fs_new: fs }));
+      out.innerHTML = notes([
+        (r.src_exists ? '✓ 源文件存在' : '✗ 源文件不存在：' + esc(path)),
+        `输出：<code>${esc(r.out_path)}</code>` + (r.exists ? '　<b>（已存在，需勾选覆盖）</b>' : ''),
+      ]);
+    } catch (e) { out.innerHTML = notes(['✗ ' + e.message]); }
+  }, 250);
+}
+
+async function rsProbe() {
+  const path = $('#rs-path').value.trim();
+  if (!path) { toast('请先填写源文件路径', 'err'); return; }
+  $('#rs-status').innerHTML = '<div>探查中…</div>';
+  try {
+    const r = await api('/api/probe?path=' + encodeURIComponent(path));
+    if (!r.ok) { $('#rs-status').innerHTML = notes(['✗ ' + r.error]); return; }
+    $('#rs-status').innerHTML = notes([
+      `文件 ${esc(r.path)}（${r.size_mb} MB，编码 ${r.encoding}，${r.has_header ? '有表头' : '无表头'}，${r.rows} 行，约 ${num(r.duration_s, 2)}s）`,
+      `首个时间戳 ${esc(r.t_first_text || '')}（模式 ${r.ts_mode}）· 推算采样率 <b>${num(r.fs_est, 3)} Hz</b>（配置 ${r.fs_configured} Hz）`,
+      ...(r.notes || []),
+    ]);
+    if (isNum(r.fs_est) && !$('#rs-fssrc').value) $('#rs-fssrc').placeholder = '自动 ≈ ' + num(r.fs_est, 2);
+  } catch (e) { $('#rs-status').innerHTML = notes(['✗ ' + e.message]); }
+}
+
+function rsPayload() {
+  const p = { path: $('#rs-path').value.trim(), fs_new: +$('#rs-fs').value, method: $('#rs-method').value,
+              overwrite: $('#rs-overwrite').checked };
+  const fsrc = $('#rs-fssrc').value.trim();
+  if (fsrc) p.fs_src = +fsrc;                       // 留空不送 → 服务端自动推算（载荷无空值纪律）
+  return p;
+}
+
+async function rsRun() {
+  const p = rsPayload();
+  if (!p.path) { toast('请填写源文件路径', 'err'); return; }
+  if (!(p.fs_new > 0)) { toast('目标采样率必须 > 0', 'err'); return; }
+  try {
+    const r = await api('/api/process/resample', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(p) });
+    if (!r.ok) { toast(r.error, 'err'); $('#rs-status').innerHTML = notes(['✗ ' + esc(r.error)]); return; }
+    toast('重采样任务已启动');
+    $('#rs-result').innerHTML = ''; $('#rs-json').textContent = ''; $('#btn-rs-use').disabled = true;
+    rsPoll(true);
+  } catch (e) { toast(e.message, 'err'); }
+}
+
+async function rsCancel() {
+  try { await api('/api/process/resample/cancel', { method: 'POST' }); toast('已请求取消'); } catch (e) { toast(e.message, 'err'); }
+}
+
+async function rsPoll(loop) {
+  clearTimeout(RS.timer);
+  try {
+    const st = await api('/api/process/resample');
+    RS.status = st; rsRenderStatus(st);
+    if (st.running || loop) RS.timer = setTimeout(() => rsPoll(st.running), 500);
+  } catch (e) { $('#rs-status').innerHTML = notes(['✗ ' + e.message]); }
+}
+
+function rsRenderStatus(st) {
+  const bar = $('#rs-bar'); if (!bar) return;
+  const pct = Math.round((st.progress || 0) * 100);
+  bar.style.width = pct + '%';
+  bar.className = 'progress-bar' + (st.error ? ' err' : (st.result ? ' done' : ''));
+  $('#btn-rs-run').disabled = !!st.running;
+  $('#btn-rs-cancel').disabled = !st.running;
+  const p = st.params || {};
+  if (st.running) {
+    $('#rs-status').innerHTML = notes([`运行中 · 阶段 ${esc(st.stage)} · ${pct}% · 已读 ${num(st.rows_in, 0)} 行 → 已写 ${num(st.rows_out, 0)} 行 · ${num(st.elapsed_s, 1)}s`,
+      `源 ${esc(p.path || '')} → ${p.fs_new} Hz（${esc(p.method || 'linear')}）`]);
+    return;
+  }
+  if (st.error) {
+    $('#rs-status').innerHTML = notes([`✗ 失败：${esc(st.error)}`]);
+    return;
+  }
+  const r = st.result;
+  if (!r) { if (!st.params || !st.params.path) $('#rs-status').innerHTML = notes(['尚未运行任务']); return; }
+  $('#rs-status').innerHTML = notes([`✓ 完成 · 耗时 ${r.elapsed_s}s`]);
+  $('#rs-result').innerHTML = notes([
+    `输出文件：<b><code>${esc(r.out_path)}</code></b>（${r.out_size_mb} MB）`,
+    `行数 ${num(r.rows_in, 0)} → <b>${num(r.rows_out, 0)}</b>；原采样率 <b>${num(r.fs_src, 4)} Hz</b>（${r.fs_src_source === 'user' ? '用户指定' : '时间戳推算'}）→ 目标 <b>${num(r.fs_new, 4)} Hz</b>；方法 ${esc(r.method)}；数据时长 ${num(r.duration_s, 3)}s`,
+    `时间戳：输入首 <code>${esc(r.ts_first_in)}</code> → 输出首 <code>${esc(r.ts_first_out)}</code> / 末 <code>${esc(r.ts_last_out)}</code>（模式 ${esc(r.ts_mode)}，${r.header_kept ? '表头保留' : '无表头'}，编码 ${esc(r.encoding)}）`,
+    ...(r.notes || []),
+  ]);
+  $('#rs-json').textContent = JSON.stringify(r, null, 2);
+  const useBtn = $('#btn-rs-use'); useBtn.disabled = false; useBtn.dataset.path = r.out_path; useBtn.dataset.fs = r.fs_new;
+  rsListFiles(); rsPreview();
+}
+
+function rsUseAsSource() {
+  const b = $('#btn-rs-use'); const path = b.dataset.path; if (!path) return;
+  switchView('source');
+  $('#src-kind').value = 'csv_file'; $('#src-path').value = path;
+  S.srcDirty = true; S.formDirty = true; syncSourceForm();
+  toast(`已填入离线源 ${path}；请确认配置采样率 fs=${b.dataset.fs} 后点「启动」`);
+}
+
+function bindProcess() {
+  if (!$('#view-process')) return;
+  $('#rs-files').addEventListener('change', () => { if ($('#rs-files').value) { $('#rs-path').value = $('#rs-files').value; rsPreview(); } });
+  ['rs-path', 'rs-fs'].forEach(id => $('#' + id).addEventListener('input', rsPreview));
+  $('#btn-rs-probe').addEventListener('click', rsProbe);
+  $('#btn-rs-run').addEventListener('click', rsRun);
+  $('#btn-rs-cancel').addEventListener('click', rsCancel);
+  $('#btn-rs-refresh').addEventListener('click', rsListFiles);
+  $('#btn-rs-use').addEventListener('click', rsUseAsSource);
 }
 
 async function init() {

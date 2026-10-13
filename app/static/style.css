@@ -88,3 +88,10 @@ input:disabled, select:disabled { cursor: not-allowed; }
 .curvesave input{margin:0}
 .curvespan{font-weight:400;font-size:11px;color:var(--mut)}
 #curve-save-list label{display:inline-flex;align-items:center;gap:4px;padding:4px 8px;border:1px solid var(--line);border-radius:6px;cursor:pointer}
+
+/* 数据处理：重采样进度条 */
+.progress { height: 10px; background: #1b2540; border-radius: 6px; overflow: hidden; margin: 6px 0 10px; }
+.progress-bar { height: 100%; width: 0; background: linear-gradient(90deg, #3b82f6, #22d3ee); transition: width .3s; }
+.progress-bar.err { background: #ef4444; }
+.progress-bar.done { background: #22c55e; }
+.btnrow { display: flex; gap: 8px; flex-wrap: wrap; margin: 8px 0; }

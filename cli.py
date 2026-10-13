@@ -442,6 +442,39 @@ def cmd_live(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_resample(args: argparse.Namespace) -> int:
+    """离线波形 CSV 重采样 → data/<原名>_re_<fs>.csv（与 Web「数据处理」子界面同一实现）。"""
+    from elec_tool.resample import ResampleError, ResampleJob, resample_csv
+    cfg = load_or_default(args.config)
+    last = {"p": -1}
+
+    def on_progress(j: ResampleJob) -> None:
+        pct = int(j.progress * 100)
+        if pct // 5 != last["p"] // 5 and sys.stderr.isatty():
+            last["p"] = pct
+            print(f"\r  {j.stage:<9} {pct:3d}%", end="", file=sys.stderr, flush=True)
+
+    job = ResampleJob(on_progress=on_progress)
+    try:
+        r = resample_csv(args.file, args.fs, args.out_dir, cfg=cfg, fs_src=args.fs_src, method=args.method,
+                         overwrite=args.overwrite, decimals=args.decimals, job=job, root=os.getcwd())
+    except ResampleError as exc:
+        print(f"\n✗ 重采样失败：{exc}", file=sys.stderr)
+        return 2
+    if sys.stderr.isatty():
+        print("", file=sys.stderr)
+    if args.format == "json":
+        print(json.dumps(r, ensure_ascii=False, indent=2))
+        return 0
+    print(f"✓ 已写出 {r['out_path']}（{r['out_size_mb']} MB）")
+    print(f"  行数 {r['rows_in']} → {r['rows_out']}；原采样率 {r['fs_src']:g} Hz（{r['fs_src_source']}）→ 目标 {r['fs_new']:g} Hz；"
+          f"方法 {r['method']}；耗时 {r['elapsed_s']}s")
+    print(f"  时间戳 {r['ts_first_in']!r} → 输出首/末 {r['ts_first_out']!r} / {r['ts_last_out']!r}（模式 {r['ts_mode']}）")
+    for n in r["notes"]:
+        print("  · " + n)
+    return 0
+
+
 def cmd_serve(args: argparse.Namespace) -> int:
     """启动 Web 界面（导航条 + 各电气量子界面 + 实时推送）。"""
     try:
@@ -613,6 +646,19 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--quantities", default="voltage,current,power")
     sp.add_argument("--max-ticks", type=int, dest="max_ticks")
     sp.set_defaults(func=cmd_live)
+
+    sp = sub.add_parser("resample", help="离线波形 CSV 重采样 → data/<原名>_re_<fs>.csv")
+    sp.add_argument("--config", default=DEFAULT_CONFIG, help="配置文件路径（取列映射/编码/分隔符）")
+    sp.add_argument("file", help="源 CSV 路径")
+    sp.add_argument("--fs", type=float, required=True, help="目标采样率 Hz（如 6400）")
+    sp.add_argument("--fs-src", type=float, dest="fs_src", help="原采样率 Hz（默认由时间戳推算）")
+    sp.add_argument("--method", choices=["linear", "nearest", "fft"], default="linear",
+                    help="linear 线性插值（流式，默认）/ nearest 最近邻 / fft 频域（抗混叠，整文件载入）")
+    sp.add_argument("--out-dir", dest="out_dir", default="data", help="输出目录（默认 data）")
+    sp.add_argument("--overwrite", action="store_true", help="输出已存在时覆盖")
+    sp.add_argument("--decimals", type=int, default=6, help="数值列小数位（默认 6）")
+    sp.add_argument("--format", choices=["table", "json"], default="table")
+    sp.set_defaults(func=cmd_resample)
 
     sp = sub.add_parser("serve", help="启动 Web 界面")
     common(sp)

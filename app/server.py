@@ -35,6 +35,8 @@ from elec_tool.config import (AppConfig, ConfigError, CURVE_KEYS, QUANTITY_KEYS,
                               load_or_default)
 from elec_tool.engine import LiveEngine
 from elec_tool.metrics import MetricsResult
+from elec_tool.resample import METHODS as RESAMPLE_METHODS, ResampleError, ResampleJob, resample_csv
+from elec_tool.resample import output_name as resample_output_name
 from elec_tool.selftest import run_selftest, summarize
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -695,6 +697,129 @@ async def list_files(sub: str = "data") -> Dict[str, Any]:
             elif os.path.isdir(fp):
                 out.append({"name": os.path.relpath(fp, ROOT) + "/", "dir": True})
     return {"ok": True, "base": os.path.relpath(base, ROOT), "files": out}
+
+
+# ------------------------------------------------------------------ 数据处理：离线 CSV 重采样
+
+class _ResampleJobs:
+    """单任务后台重采样：POST 启动（线程），GET 轮询进度/结果，POST cancel 取消。"""
+
+    def __init__(self) -> None:
+        self.lock = threading.Lock()
+        self.job: Optional[ResampleJob] = None
+        self.thread: Optional[threading.Thread] = None
+        self.result: Optional[Dict[str, Any]] = None
+        self.error: Optional[str] = None
+        self.params: Dict[str, Any] = {}
+        self.started_at: Optional[float] = None
+        self.finished_at: Optional[float] = None
+
+    def running(self) -> bool:
+        return bool(self.thread and self.thread.is_alive())
+
+    def start(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        with self.lock:
+            if self.running():
+                return {"ok": False, "error": "已有重采样任务在运行，请等待完成或先取消"}
+            self.job = ResampleJob()
+            self.result, self.error = None, None
+            self.params = dict(params)
+            self.started_at, self.finished_at = time.time(), None
+            job = self.job
+
+            def run() -> None:
+                try:
+                    res = resample_csv(params["path"], params["fs_new"], params.get("out_dir") or "data",
+                                       cfg=RUNNER.cfg, fs_src=params.get("fs_src") or None,
+                                       method=params.get("method") or "linear",
+                                       overwrite=bool(params.get("overwrite")), job=job, root=ROOT)
+                    with self.lock:
+                        self.result = res
+                except Exception as exc:                    # 线程内异常必须回收给界面
+                    with self.lock:
+                        self.error = f"{type(exc).__name__}: {exc}" if not isinstance(exc, ResampleError) else str(exc)
+                finally:
+                    with self.lock:
+                        self.finished_at = time.time()
+
+            self.thread = threading.Thread(target=run, daemon=True, name="elec-resample")
+            self.thread.start()
+        return {"ok": True, "status": self.status()}
+
+    def cancel(self) -> Dict[str, Any]:
+        with self.lock:
+            if self.job and self.running():
+                self.job.cancel.set()
+                return {"ok": True, "cancelling": True}
+        return {"ok": True, "cancelling": False}
+
+    def status(self) -> Dict[str, Any]:
+        with self.lock:
+            j = self.job
+            return {
+                "running": self.running(), "params": self.params,
+                "progress": (j.progress if j else 0.0), "stage": (j.stage if j else "idle"),
+                "rows_in": (j.rows_in if j else 0), "rows_out": (j.rows_out if j else 0),
+                "result": self.result, "error": self.error,
+                "started_at": self.started_at, "finished_at": self.finished_at,
+                "elapsed_s": (round((self.finished_at or time.time()) - self.started_at, 2) if self.started_at else None),
+            }
+
+
+RESAMPLE = _ResampleJobs()
+
+
+@app.post("/api/process/resample")
+async def process_resample(payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    payload = payload or {}
+    """启动离线 CSV 重采样后台任务。payload：path, fs_new, [fs_src], [method=linear|nearest|fft],
+    [overwrite], [out_dir=data]。输出文件名 = 原名_re_<fs_new>.csv。"""
+    path = str(payload.get("path") or "").strip()
+    if not path:
+        return {"ok": False, "error": "请填写源文件路径"}
+    try:
+        fs_new = float(payload.get("fs_new"))
+    except (TypeError, ValueError):
+        return {"ok": False, "error": "目标采样率必须是数字"}
+    if not fs_new > 0:
+        return {"ok": False, "error": "目标采样率必须 > 0"}
+    method = str(payload.get("method") or "linear")
+    if method not in RESAMPLE_METHODS:
+        return {"ok": False, "error": f"method 必须是 {RESAMPLE_METHODS} 之一"}
+    fs_src = payload.get("fs_src")
+    try:
+        fs_src = float(fs_src) if fs_src not in (None, "", 0, "0") else None
+    except (TypeError, ValueError):
+        return {"ok": False, "error": "原采样率必须是数字或留空（自动推算）"}
+    out_dir = str(payload.get("out_dir") or "data")
+    out_abs = os.path.normpath(out_dir if os.path.isabs(out_dir) else os.path.join(ROOT, out_dir))
+    if not out_abs.startswith(os.path.normpath(ROOT)):
+        return {"ok": False, "error": "输出目录越界：只允许仓库内目录（默认 data）"}
+    src_abs = path if os.path.isabs(path) else os.path.join(ROOT, path)
+    if not os.path.isfile(src_abs):
+        return {"ok": False, "error": f"文件不存在：{path}"}
+    return RESAMPLE.start({"path": path, "fs_new": fs_new, "fs_src": fs_src, "method": method,
+                           "overwrite": bool(payload.get("overwrite")), "out_dir": out_dir})
+
+
+@app.get("/api/process/resample")
+async def process_resample_status() -> Dict[str, Any]:
+    return {"ok": True, **RESAMPLE.status()}
+
+
+@app.post("/api/process/resample/cancel")
+async def process_resample_cancel() -> Dict[str, Any]:
+    return RESAMPLE.cancel()
+
+
+@app.get("/api/process/resample/preview")
+async def process_resample_preview(path: str, fs_new: float) -> Dict[str, Any]:
+    """只算输出文件名与是否已存在（界面即时提示用），不读数据。"""
+    src_abs = path if os.path.isabs(path) else os.path.join(ROOT, path)
+    name = resample_output_name(src_abs, fs_new)
+    out = os.path.join(ROOT, "data", name)
+    return {"ok": True, "out_name": name, "out_path": os.path.relpath(out, ROOT), "exists": os.path.exists(out),
+            "src_exists": os.path.isfile(src_abs)}
 
 
 # ------------------------------------------------------------------ WebSocket
