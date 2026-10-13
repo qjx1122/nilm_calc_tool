@@ -166,6 +166,6 @@ def test_canvas_prep_does_not_reread_scaled_height_attribute():
     body = js.split("function prep(")[1].split("\nfunction ")[0]
     assert "cv.dataset.h" in body, "prep() 必须把逻辑高度缓存在 data-h"
     # 回读属性只允许出现在「首次缓存」那一行里
-    reads = [ln for ln in body.splitlines() if "getAttribute('height')" in ln]
+    reads = [ln for ln in body.splitlines() if "getAttribute('height')" in ln and not ln.strip().startswith("//")]
     assert len(reads) == 1 and "if (!cv.dataset.h)" in reads[0], reads
     assert not re.search(r"const height = h \|\| cv\.getAttribute", body)

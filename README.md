@@ -575,6 +575,7 @@ curl -s "http://127.0.0.1:8000/api/export?fmt=csv" -o output/result.csv
 
 | 现象 | 原因 | 处理 | 状态 |
 | --- | --- | --- | --- |
+| 用 IP（如 192.168.x.x）访问时页面每次刷新纵向变长、滚动条不断增加；127.0.0.1 正常 | v0.6 及更早：画布高度按 `devicePixelRatio` 复利放大；浏览器按主机名记忆缩放级别，故两个地址表现不同 | 升级到 v0.6.1（F-22 已修）；临时规避：在该页面按 **Ctrl+0** 把缩放恢复 100%（系统缩放也须 100%） |
 | `[Errno 98] Address already in use` | 端口被占 | 换端口 `--port 8001`；查占用：Linux `ss -lntp \| grep 8000`，Windows `netstat -ano \| findstr :8000` | Linux ✅ / Windows 🔶 |
 | 页面能打开但没有数据 | 引擎未启动（默认不自动跑） | 界面「数据源与控制」→ 点「启动数据源」；或启动服务时带 `ELEC_TOOL_AUTOSTART=1` | ✅沙盒实录 |
 | 界面右下角显示「推送断开 → 已降级为轮询」 | WebSocket 被反代/防火墙拦 | 功能正常但实时性降为 1.5 s；按 §3.1 配置反代升级头 | ✅（降级逻辑实录） |
@@ -1071,6 +1072,7 @@ python cli.py selftest                            # 实测：44/44，worst_rel_e
 ---
 
 ## 🗒 变更记录
+- **v0.6.1（2026-10-12）**：修复 **F-22**——用局域网 IP 访问（或浏览器缩放≠100% / Windows 125% 缩放）时页面每次刷新纵向拉伸：`prep()` 不再回读被 `canvas.height` 改写的 `height` 属性，逻辑高度缓存于 `data-h`。测试 204→**205 passed**。
 - **v0.6（2026-10-12）**：三项功能。① **实时落盘**：新增 `elec_tool/realtime_writer.py`，引擎每算出一个曲线点就追加到 `output/realtime/<曲线>_<数据日期>.csv`（与趋势曲线/手工保存同一提取规则 `metrics.curve_record`；按数据时间日期分文件；追加不重复表头；每次 flush；受 `output.curve_save` 过滤；配置 `output.realtime_save/realtime_dir`，环境变量 `ELEC_TOOL_REALTIME_DIR` 优先；热更新重建写入器）；`GET /api/realtime`；「导出与日志」页新增面板；CLI `--realtime-save on|off --realtime-dir`，收尾诊断打印落盘行数。② **离线播放起点**：`source.play_start_mode/play_start_value`（`begin/row/seconds/percent/time`），`iter_csv_blocks` 新增 `skip_rows/start_percent/start_time`（percent 按字节定位对齐行首；time 分块顺序扫描时标列，支持只填 `HH:MM:SS` 与当天时刻比较）；超出文件范围抛可诊断 `ParseError`；界面下拉框＋取值框（csv_file 下可用、begin 时取值框置灰、占位说明随模式变化），启动白名单放行，状态摘要显示跳过行数；CLI `--play-from 模式:值`。③ **曲线悬停取值**：`drawLine` 挂 `cv.__chart`、只绑定一次 `mousemove/mouseleave`、重绘末尾叠加十字线＋圆点＋浮框（趋势图提示含毫秒，频谱为 Hz），实时推送重绘不丢。新增 `tests/test_r7_features.py`（18 项）与 `tools/ui_r7_check.cjs`（PASS 39/FAIL 0）；修 r6 Web 测试「finished 后 flush_all 尚未完成」的等待竞争。测试 186→**204 passed, 1 skipped**。取证见 `REPORT_TEST.md` T-005。
 
 - **v0.5（2026-10-12）**：四项功能。① 离线 CSV 支持用户采集器时标 `0/00/00 00:12:40.0000`（日期段全 0 → 当天时刻、跨午夜自动展开、0.1 ms 截断下 fs 仍按线性拟合推算；无表头文件在 `/api/probe`、CLI、Web 三处都正确识别；顺带修复无表头文件把时间戳列记为「非数值单元格」的噪声告警）。② 所有趋势曲线改为**最近 24 h（按数据时间，不足则全部）**：`History` 改为按时间修剪的紧凑列存储（`array('d')`、线程安全、50 万点上限），`/api/history` 新增 `hours/max_points` 与峰谷保形抽稀，前端不再固定取 400 点，横轴跨度 >1 h 自动省略毫秒，面板标题标注跨度/点数；热更新（含已结束的离线引擎）不再清空历史与结果。③ 每条曲线可单独勾选「保存曲线数据」（`output.curve_save`，面板右上角与导出页同一份配置），新增 `POST /api/curves/save`（写 `output/curves_<ts>/<曲线>.csv`）与 `GET /api/curves/export`，未勾选项严格跳过。④ 离线播放「自定义播放时间」（`source.custom_time/custom_time_start`，CLI `--custom-time[-start]`，界面勾选框＋起始时间框只在 csv_file 下可用）。新增 `tests/test_r6_features.py`（25 项）与 `tools/ui_r6_check.cjs`（PASS 30/FAIL 0）。测试 161→**186 passed, 1 skipped**。取证见 `REPORT_TEST.md` T-004。

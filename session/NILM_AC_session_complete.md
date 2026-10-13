@@ -191,3 +191,5 @@
 - **踩坑**：F-17 超范围静默 0 样本→可诊断错误；F-18 默认落盘污染仓库目录→env＋autouse 夹具；F-19 `finished` 置位≠`flush_all` 完成→等待对准最后副作用；F-20 常驻模拟器污染测试目录→脚本先 stop；F-21 begin 模式送空值违反载荷纪律→只在非 begin 送
 - **未决问题**：U7 组待回报；落盘无轮转；percent 跳过行数未知；播放起点只对 csv_file；悬停不插值；此前 T-001~T-004 用户侧仍未回报
 - **相关文件/分支**：`elec_tool/{realtime_writer,engine,metrics,config}.py`、`elec_tool/sources/{parsing,csv_file}.py`、`app/server.py`、`app/static/*`、`cli.py`、`tests/{conftest,test_r6_features,test_r7_features}.py`、`tools/{ui_r6_check,ui_r7_check}.cjs`、四份台账｜分支 `arena/82e34fb8-nilm-calc-tool`（`f0fdea6`/`341fc9e`/docs）｜live preview 8000 端口
+
+- **[2026-10-12 补记] F-22 热修**（用户回报：127.0.0.1 正常，用局域网 IP 访问时每次刷新页面纵向拉伸）：根因 `app.js prep()` 每次重绘回读 `getAttribute('height')`，而 `cv.height = h*dpr` 会同步改写该属性 → `devicePixelRatio≠1` 时高度按 dpr 复利放大（沙盒复现 dpr=1.25：200→250→312→390→487）；两个地址表现不同是因为浏览器按主机名记忆缩放级别（或另一台机 Windows 125% 缩放）。修法：逻辑高度首次读取后缓存 `data-h`；回归 `test_canvas_prep_does_not_reread_scaled_height_attribute`；全量 205 passed、三套 jsdom 39/30/74 全绿；提交 `fc5c688`＋docs。本轮沙盒又被回收两次（venv/.git 丢、工作树在），均按 `fetch + reset --mixed FETCH_HEAD` 接回，零丢失。
