@@ -436,6 +436,7 @@ CLI 同等能力：`.venv/bin/python cli.py resample "data/波形_农业排灌_�
 - 样例：`.venv/bin/python tools/gen_nilm_sample.py` 生成 `data/nilm_steps.csv`（1000 W → 2.0 s +500 W → 4.4 s −300 W，3.0 s 单周波尖峰）；默认 PT/CT 下 6 种算法均在 **2.000 s ↑750 kW、4.400 s ↓450 kW** 报出（起点误差 ≤1 周波，幅值误差 <1%）。
 - **假设与已知特性（可改）**：① 周波按额定频率定长切分（不随频率自适应）；② 事件＝稳态间阶跃，不做负荷类型识别/聚类（辨识的「特征提取 + 事件库」已就位，分类留后续）；③ 双滑窗与 CUSUM 对单周波尖峰会按均值摊成小事件（样例中 60 kW），需要抗尖峰请看中值滤波差分/稳态分段或抬高 `min_delta_pct`；④ 幅值取事件后 settle 均值 − 事件前 settle 均值，暂态（电机启动冲击）期间不计入。
 - 验证：`tests/test_r12_nilm.py` 8 项；`tools/ui_r12_check.cjs` 16 项；全量 **257 passed**。
+- **调参**：运维向手册 **[`NILM_TUNING_GUIDE.md`](NILM_TUNING_GUIDE.md)**（每个参数管什么 / 先量 σ 与最小关心负荷 / 推荐公式 / 现象→对策 / 典型现场套路 / 验证流程）；配套 `python tools/nilm_tune.py --file <背景.csv> [--min-load-w N] [--json]` 自动量噪声并给 6 算法起点参数（`tests/test_nilm_tune_tool.py` 证明建议参数在同噪声下检出恰为最小负荷的阶跃、纯噪声 0 误报）。
 
 #### 离线文件时标的 UTC 开关（v0.10）
 
@@ -1173,6 +1174,7 @@ python cli.py selftest                            # 实测：44/44，worst_rel_e
 ---
 
 ## 🗒 变更记录
+- **v0.11.2（2026-10-14）**：新增 `NILM_TUNING_GUIDE.md`（负荷辨识 6 算法调参手册，运维版）与 `tools/nilm_tune.py`（噪声统计 + 参数建议）+ 2 项自检用例。
 - **v0.11.1（2026-10-13，F-40 热修）**：Windows 下离线文件（`0/00/00` 时标）启动后负荷辨识/事件接口 500（`localtime` 不接受负 epoch）：无日期时标基准改为 **1970-01-02**（按本地时间解释后恒为正）；新增 `elec_tool/timefmt.py` 作为所有「epoch → 本地时间文本」的统一安全出口（localtime 失败自动手工换算），nilm / events / 实时落盘 / 导出 / probe / CLI 全部改走。回归 `tests/test_f40_negative_epoch.py`。
 - **v0.11（2026-10-13，第 12 轮）**：新增 **「负荷辨识」子界面**：`elec_tool/nilm.py`（逐周波 P/Q/I 特征 + 6 种突变检测算法：阈值差分 / 双滑窗均值差 / CUSUM / GLR / 稳态分段(Hart) / 中值滤波差分；事件含算法、对象、起止时刻、方向、幅值 ΔP/ΔQ/ΔI；跨块去重与确认；`output/nilm/nilm_events_<日期>.csv` 落盘）；`NilmConfig` 全参数可配（含相对门槛 `rel_tol_pct/min_delta_pct`）；引擎逐块摄入；REST `/api/nilm/events|cycles|clear` + WS `nilm_event`；界面：卡片、周波窗曲线（事件竖线标注）、事件表（算法/对象过滤）、按算法生成的参数表单。`tests/test_r12_nilm.py` 8 项、`tools/ui_r12_check.cjs` 16 项、`tools/gen_nilm_sample.py`；全量 **257 passed**。
 - **v0.10（2026-10-13，第 11 轮）**：新增 **离线文件时标 UTC 开关** `source.file_time_utc`（默认 false）：未启用自定义播放时间时，文件里的日期时间 / `0/00/00 HH:MM:SS` 文本时标按本机本地时间解释，**曲线、落盘 CSV、事件时间与文件中的时间一致**；true 则视为 UTC 换算显示（旧行为）。`create_source/LiveEngine` 的 `tz_offset_h` 默认改为按配置推导；`/api/probe` 增 `file_time_utc/tz_offset_h/t_first_local`；`/api/engine/start` 白名单放行；CLI `--file-time-utc`；界面勾选框随「自定义播放时间」联动。`tests/test_r11_file_time.py` 6 项、`tools/ui_r11_check.cjs` 11 项；全量 **249 passed**（UTC 与 Asia/Shanghai 双时区）。
