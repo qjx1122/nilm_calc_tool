@@ -143,20 +143,24 @@
           <div class="form" id="branch-form">
             <label class="chk"><input id="br-enabled" type="checkbox">
               启用分路侧设备数据源：总线侧「启动」时同时启动分路侧；「停止 / 暂停 / 恢复」联动</label>
-            <label>分路侧输入方式
-              <select id="br-kind">
-                <option value="csv_file">csv_file · 离线文件</option>
-                <option value="csv_tail">csv_tail · 实时追加文件</option>
-                <option value="tcp">tcp · 实时 TCP</option>
-                <option value="simulator">simulator · 模拟器</option>
-              </select></label>
-            <label>分路侧文件路径 <input id="br-path" placeholder="data/branch.csv"></label>
+            <div class="notes" id="br-mode-note" style="display:none">⚠ 分路侧设备数据源仅在<b>离线文件（csv_file）</b>输入方式下与总线侧同时播放；当前总线侧不是离线文件，启动时不会带起分路侧。</div>
+            <label>分路侧输入方式 <input value="csv_file · 离线文件（固定）" disabled></label>
+            <label>分路侧离线文件路径 <input id="br-path" placeholder="data/branch.csv（相对仓库根或绝对路径）"></label>
+            <div class="row">
+              <button id="btn-br-probe">探查分路侧文件</button>
+              <button id="btn-br-pick">从 data/ 选择…</button>
+            </div>
+            <div id="br-probe-out"></div>
             <label>分路侧播放倍速 <select id="br-file-speed">
                 <option value="1">1×（真实速率）</option><option value="2">2×</option><option value="5">5×</option>
                 <option value="10">10×</option><option value="0">不限速（最快）</option></select></label>
+            <label class="chk"><input id="br-customtime" type="checkbox"> 自定义播放时间（时间轴＝起始时间 + 样本序号/fs）</label>
+            <label>自定义起始时间 <input id="br-customstart" placeholder="留空＝文件第 1 条时间；如 2026-10-14 08:00:00"></label>
+            <label class="chk"><input id="br-utc" type="checkbox"> 文件时标按 UTC 解释（默认按本地时间）</label>
+            <label>每块样本数 <input id="br-block" type="number" value="640"></label>
             <div class="row">
               <button id="btn-br-save" class="primary">保存分路侧数据源</button>
-              <button id="btn-br-goto">切换到分路侧 →（完整配置 / 电气量子界面）</button>
+              <button id="btn-br-goto">切换到分路侧 →（采样率 / PT-CT / 窗口 / 阈值等完整配置与电气量子界面）</button>
             </div>
             <div class="notes" id="br-status"></div>
             <div class="notes muted">分路侧是一份<b>完全独立</b>的配置（采样率、PT/CT、窗口、事件阈值、负荷辨识参数…），

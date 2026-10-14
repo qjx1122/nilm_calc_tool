@@ -64,13 +64,21 @@ async function main() {
   check('总线侧页面显示分路侧面板', $('branch-form').style.display !== 'none' && !!$('br-enabled'));
   console.log('L2 配置分路侧并启用 → 总线侧启动 → 两侧同时播放');
   $('br-enabled').checked = true; change($('br-enabled'));
-  $('br-kind').value = 'csv_file'; change($('br-kind'));
   $('br-path').value = 'data/nilm_steps.csv'; change($('br-path'));
+  click($('btn-br-probe')); await sleep(1200);
+  check('分路侧文件探查输出', /行数 \d+/.test($('br-probe-out').textContent), $('br-probe-out').textContent.slice(0, 60));
   $('br-file-speed').value = '1'; change($('br-file-speed'));
   click($('btn-br-save')); await sleep(900);
   const bcfg = await api('/api/branch/config');
   check('分路侧 source 已保存', bcfg.source.kind === 'csv_file' && bcfg.source.path.endsWith('nilm_steps.csv') && bcfg.source.file_speed === 1, JSON.stringify(bcfg.source.path));
   check('总线侧 branch.enabled 已保存', (await api('/api/config')).branch.enabled === true);
+  check('分路侧固定为离线文件且块大小已存', bcfg.source.kind === 'csv_file' && bcfg.source.block_samples === 640);
+  // 总线侧不是离线文件 → 提示 + 启动不联动
+  $('src-kind').value = 'simulator'; change($('src-kind')); await sleep(300);
+  check('总线侧非离线文件时显示提示', $('br-mode-note').style.display !== 'none');
+  const rs = await api('/api/engine/start', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ kind: 'simulator' }) });
+  check('模拟器模式启动不带起分路侧', rs.branch && rs.branch.skipped === true, JSON.stringify(rs.branch));
+  await api('/api/engine/stop', { method: 'POST' }); await sleep(300);
   $('src-kind').value = 'csv_file'; change($('src-kind'));
   $('src-path').value = 'data/sample_6400hz.csv'; $('src-file-speed').value = '1';
   click($('btn-start2')); await sleep(2500);

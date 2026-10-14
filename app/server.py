@@ -540,9 +540,15 @@ def _start_branch_if_enabled(bus_cfg: AppConfig) -> Optional[Dict[str, Any]]:
     """总线侧启动后联动分路侧（仅 enabled 时）。返回分路侧启动结果；失败只记录、不影响总线侧。"""
     if not bus_cfg.branch.enabled:
         return {"ok": False, "skipped": True, "reason": "分路侧未启用"}
+    if bus_cfg.source.kind != "csv_file":
+        return {"ok": False, "skipped": True, "reason": f"分路侧仅在离线文件输入方式下同时播放（总线侧当前为 {bus_cfg.source.kind}）"}
     br = RUNNERS["branch"]
     try:
         cfg = AppConfig.from_dict(br.cfg.to_dict())
+        if cfg.source.kind != "csv_file":
+            raise ConfigError(f"分路侧数据源必须是离线文件 csv_file（当前 {cfg.source.kind}）")
+        if not cfg.source.path:
+            raise ConfigError("分路侧离线文件路径未配置")
         if cfg.source.kind in ("csv_file", "csv_tail") and cfg.source.path and not os.path.isabs(cfg.source.path):
             cand = os.path.join(ROOT, cfg.source.path)
             if os.path.exists(cand):

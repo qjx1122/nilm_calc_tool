@@ -86,6 +86,17 @@ def test_coupled_start_pause_resume_stop(client):
     bus_p = _csv(client.dir / "bus.csv", 6.0, amp_i=7.07)
     br_p = _csv(client.dir / "br.csv", 6.0, amp_i=1.414)
     client.post("/api/engine/stop")
+    # 离线文件限定：总线侧为模拟器时即使启用也不联动
+    client.put("/api/branch/config", json={"source": {"kind": "csv_file", "path": br_p, "file_speed": 1}})
+    client.put("/api/config", json={"branch": {"enabled": True}})
+    r = client.post("/api/engine/start", json={"kind": "simulator"})
+    assert r.status_code == 200 and r.json()["branch"]["skipped"] and "离线文件" in r.json()["branch"]["reason"]
+    client.post("/api/engine/stop")
+    # 分路侧路径未配置 → 启动时报错、不影响总线
+    client.put("/api/branch/config", json={"source": {"kind": "simulator", "path": ""}})
+    r = client.post("/api/engine/start", json={"kind": "csv_file", "path": bus_p, "file_speed": 0})
+    assert r.status_code == 200 and r.json()["branch"]["ok"] is False and "csv_file" in r.json()["branch"]["error"]
+    client.post("/api/engine/stop")
     # 未启用：总线启动不带动分路侧
     client.put("/api/config", json={"branch": {"enabled": False}})
     r = client.post("/api/engine/start", json={"kind": "csv_file", "path": bus_p, "file_speed": 1})
@@ -162,7 +173,8 @@ def test_branch_websocket_and_outputs(client):
 def test_frontend_wiring():
     html = (ROOT / "app" / "static" / "index.html").read_text(encoding="utf-8")
     js = (ROOT / "app" / "static" / "app.js").read_text(encoding="utf-8")
-    for s in ('id="side-bus"', 'id="side-branch"', 'id="branch-panel"', 'id="br-enabled"', 'id="br-path"', 'id="st-branch"'):
+    for s in ('id="side-bus"', 'id="side-branch"', 'id="branch-panel"', 'id="br-enabled"', 'id="br-path"', 'id="st-branch"',
+              'id="br-customtime"', 'id="br-utc"', 'id="btn-br-probe"', 'id="br-mode-note"'):
         assert s in html, s
     for s in ("function apiUrl", "async function setSide", "/ws/branch", "'/api/branch/' + path.slice(5)",
               "function renderBranchChip", "async function saveBranchSource", "localStorage.setItem('elec_side'"):

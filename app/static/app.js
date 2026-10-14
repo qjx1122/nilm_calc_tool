@@ -1110,8 +1110,12 @@ async function loadBranchForm(force) {
     const cfg = await (await fetch('/api/branch/config')).json();
     BR.cfg = cfg; BR.loaded = true;
     if (!BR.dirty) {
-      $('#br-kind').value = cfg.source.kind; $('#br-path').value = cfg.source.path || '';
+      $('#br-path').value = cfg.source.path || '';
       $('#br-file-speed').value = String(cfg.source.file_speed > 0 ? cfg.source.file_speed : (cfg.source.kind === 'csv_file' && cfg.source.file_speed === 0 && BR.touchedSpeed ? 0 : 1));
+      $('#br-customtime').checked = !!cfg.source.custom_time;
+      $('#br-customstart').value = cfg.source.custom_time_start || '';
+      $('#br-utc').checked = !!cfg.source.file_time_utc;
+      $('#br-block').value = cfg.source.block_samples || 640;
     }
   } catch (e) { /* 分路侧不可用 */ }
 }
@@ -1120,6 +1124,9 @@ function renderBranchPanel(st) {
   const cfg = st.config || {}, br = st.branch || {};
   if (!BR.dirty && cfg.branch) $('#br-enabled').checked = !!cfg.branch.enabled;
   loadBranchForm(false);
+  // 仅离线文件模式：总线侧不是 csv_file 时给出提示（表单仍可编辑保存，但启动不联动）
+  const busKind = $('#src-kind').value || (cfg.source && cfg.source.kind);
+  $('#br-mode-note').style.display = busKind === 'csv_file' ? 'none' : '';
   const lines = [];
   lines.push(`状态：<b>${br.error ? '错误' : br.paused ? '已暂停' : br.running ? '运行中' : br.finished ? '已完成' : (br.enabled ? '已启用·未启动' : '未启用')}</b>` +
     (br.running || br.finished ? `　样本 ${br.samples_in || 0}　数据时刻 ${br.data_t_end ? ts(br.data_t_end) : '—'}　事件 ${br.events_total || 0}　负荷事件 ${br.nilm_events_total || 0}` : ''));
@@ -1132,13 +1139,47 @@ async function saveBranchSource() {
     const enabled = $('#br-enabled').checked;
     const r1 = await fetch('/api/config', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ branch: { enabled } }) });
     if (!r1.ok) throw new Error((await r1.json()).error || 'HTTP ' + r1.status);
-    const src = { kind: $('#br-kind').value, path: $('#br-path').value.trim(), file_speed: parseFloat($('#br-file-speed').value) || 0 };
+    const src = { kind: 'csv_file', path: $('#br-path').value.trim(), file_speed: parseFloat($('#br-file-speed').value) || 0,
+      custom_time: $('#br-customtime').checked, custom_time_start: $('#br-customstart').value.trim(),
+      file_time_utc: $('#br-utc').checked, block_samples: parseInt($('#br-block').value, 10) || 640 };
+    if (enabled && !src.path) throw new Error('启用分路侧时必须填写分路侧离线文件路径');
     const r2 = await fetch('/api/branch/config', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ source: src }) });
     if (!r2.ok) throw new Error('分路侧：' + ((await r2.json()).error || 'HTTP ' + r2.status));
     BR.dirty = false; BR.loaded = false;
     toast(enabled ? '分路侧数据源已保存并启用：总线侧「启动」时将同时播放' : '分路侧数据源已保存（未启用）', 'ok');
     S.state = await api('/api/state'); renderTop(); render();
   } catch (e) { toast('保存分路侧失败：' + e.message, 'err'); }
+}
+
+async function probeBranch() {
+  const p = $('#br-path').value.trim();
+  if (!p) { toast('请先填写分路侧文件路径', 'err'); return; }
+  $('#br-probe-out').innerHTML = '<div class="notes">探查中…</div>';
+  try {
+    const r = await (await fetch('/api/branch/probe?path=' + encodeURIComponent(p))).json();
+    if (!r.ok) { $('#br-probe-out').innerHTML = notes(['✗ ' + r.error]); return; }
+    const cols = r.header || r.first_row || [];
+    $('#br-probe-out').innerHTML = notes([
+      `✓ ${r.path}`, `大小 ${r.size_mb} MB · 编码 ${r.encoding} · 行数 ${r.rows} · 时长约 ${num(r.duration_s, 2)}s`,
+      `${r.header ? '表头' : '首行即数据'}（${cols.length} 列）：` + cols.map((h, i) => `[${i + 1}] ${h}`).join('  '),
+      `时间戳模式 ${r.ts_mode} · 推算 fs ${num(r.fs_est, 3)} Hz（分路侧配置 ${r.fs_configured} Hz，偏差 ${num(r.fs_deviation_pct, 4)}%）` +
+        (Math.abs(r.fs_deviation_pct || 0) > 1 ? '　⚠ 请切到分路侧把采样率改成文件实际值' : ''),
+      ...(r.notes || []),
+    ]);
+  } catch (e) { $('#br-probe-out').innerHTML = notes(['✗ ' + e.message]); }
+}
+
+async function pickBranchFile() {
+  try {
+    const r = await (await fetch('/api/files?sub=data')).json();
+    const files = (r.files || []).filter(f => /\.csv$/i.test(f.name || f));
+    if (!files.length) { toast('data/ 下没有 CSV 文件', 'err'); return; }
+    const names = files.map(f => f.path || f.name || f);
+    const pick = window.prompt('选择分路侧离线文件（输入序号）：\n' + names.map((n, i) => `${i + 1}. ${n}`).join('\n'), '1');
+    const idx = parseInt(pick, 10) - 1;
+    if (!(idx >= 0 && idx < names.length)) return;
+    $('#br-path').value = names[idx]; BR.dirty = true;
+  } catch (e) { toast('读取 data/ 失败：' + e.message, 'err'); }
 }
 
 function renderSource() {
@@ -1697,7 +1738,9 @@ function bind() {
   $('#side-branch').addEventListener('click', () => setSide('branch'));
   $('#btn-br-save').addEventListener('click', saveBranchSource);
   $('#btn-br-goto').addEventListener('click', () => setSide('branch'));
-  ['br-enabled', 'br-kind', 'br-path', 'br-file-speed'].forEach((id) => {
+  $('#btn-br-probe').addEventListener('click', probeBranch);
+  $('#btn-br-pick').addEventListener('click', pickBranchFile);
+  ['br-enabled', 'br-path', 'br-file-speed', 'br-customtime', 'br-customstart', 'br-utc', 'br-block'].forEach((id) => {
     const el = $('#' + id); if (!el) return;
     const mark = () => { BR.dirty = true; if (id === 'br-file-speed') BR.touchedSpeed = true; };
     el.addEventListener('input', mark); el.addEventListener('change', mark);
