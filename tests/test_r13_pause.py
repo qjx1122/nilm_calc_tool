@@ -125,3 +125,25 @@ def test_frontend_wiring():
               "st.paused", "st.pausable", "'已暂停'"):
         assert s in js, s
     assert ".pill.warn" in (ROOT / "app" / "static" / "style.css").read_text(encoding="utf-8")
+
+
+def test_final_state_broadcast_after_playback_reports_not_running(client):
+    """F-41：播完后的终态 `state` 推送必须已是 running=false / finished=true（之前推送早于 engine.stop()，界面停在「运行中」）。"""
+    import json
+    p = _write_csv(client.dir / "f.csv", dur=2.0)
+    client.post("/api/engine/stop")
+    with client.websocket_connect("/ws") as ws:
+        ws.receive_text()                                     # hello
+        client.post("/api/engine/start", json={"kind": "csv_file", "path": p, "block_samples": 640})
+        first_finished = None
+        deadline = time.time() + 20
+        while time.time() < deadline:
+            m = json.loads(ws.receive_text())
+            if m["type"] == "state" and m["data"].get("finished"):
+                first_finished = m["data"]                     # 第一条带 finished 的 state 就必须是终态
+                break
+        assert first_finished is not None
+        assert not first_finished["running"] and not first_finished["engine"]["running"], first_finished["engine"]
+        assert first_finished["engine"]["samples_in"] == 2 * FS
+    st = client.get("/api/state").json()
+    assert st["finished"] and not st["running"] and not st["paused"]

@@ -1184,6 +1184,7 @@ python cli.py selftest                            # 实测：44/44，worst_rel_e
 ---
 
 ## 🗒 变更记录
+- **v0.12.1（2026-10-14，F-41）**：离线文件播完界面不自动翻「已完成」——终态 state 推送移到引擎停止之后、WS 状态推送抗异常、前端 2 s 状态看门狗；回归用例 1 项，全量 266 passed。
 - **v0.12（2026-10-14，第 13 轮）**：离线文件源**暂停 / 恢复播放**（`POST /api/engine/pause|resume`、顶栏与数据源页按钮、状态 `paused/pausable/paused_total_s`）；`tests/test_r13_pause.py` 3 项，全量 265 passed。
 - **v0.11.2（2026-10-14）**：新增 `NILM_TUNING_GUIDE.md`（负荷辨识 6 算法调参手册，运维版）与 `tools/nilm_tune.py`（噪声统计 + 参数建议）+ 2 项自检用例。
 - **v0.11.1（2026-10-13，F-40 热修）**：Windows 下离线文件（`0/00/00` 时标）启动后负荷辨识/事件接口 500（`localtime` 不接受负 epoch）：无日期时标基准改为 **1970-01-02**（按本地时间解释后恒为正）；新增 `elec_tool/timefmt.py` 作为所有「epoch → 本地时间文本」的统一安全出口（localtime 失败自动手工换算），nilm / events / 实时落盘 / 导出 / probe / CLI 全部改走。回归 `tests/test_f40_negative_epoch.py`。

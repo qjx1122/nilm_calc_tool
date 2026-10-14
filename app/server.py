@@ -67,6 +67,14 @@ def _resolve_cfg_paths() -> Tuple[str, str]:
 
 # ------------------------------------------------------------------ 引擎运行器
 
+def _safe(fn, default):
+    """状态汇总里的单项失败不应拖垮整个 /api/state（F-41：界面靠它翻到终态）。"""
+    try:
+        return fn()
+    except Exception as exc:
+        return {"error": f"{type(exc).__name__}: {exc}"} if isinstance(default, dict) else default
+
+
 class EngineRunner:
     """在后台线程跑引擎，把结果广播给 WebSocket 客户端。"""
 
@@ -76,6 +84,7 @@ class EngineRunner:
         self.thread: Optional[threading.Thread] = None
         self.stop_event = threading.Event()
         self.pause_event = threading.Event()      # set＝暂停（仅离线文件源；每轮运行一个新对象）
+        self._thread_done = False                 # 引擎线程已走完（终态广播时线程对象可能仍 alive）
         self.paused_at: Optional[float] = None
         self.paused_total_s = 0.0
         self.latest: Optional[MetricsResult] = None
@@ -174,6 +183,7 @@ class EngineRunner:
             self.pause_event = threading.Event()
             self.paused_at = None
             self.paused_total_s = 0.0
+            self._thread_done = False
             self.error = None
             self.latest = None
             self.latest_full = None
@@ -228,7 +238,6 @@ class EngineRunner:
                     time.sleep(max(0.01, min(engine.cfg.source.poll_interval_s, 0.2)))
                 if duration_s and (time.time() - (self.started_at or time.time()) - self.paused_total_s) > duration_s:
                     break
-            self.broadcast({"type": "state", "data": self.state()})
         except Exception as exc:                                # 线程内异常必须回收，不能静默
             msg = f"{type(exc).__name__}: {exc}"
             with self.lock:
@@ -240,6 +249,14 @@ class EngineRunner:
                 engine.stop()          # 只停自己的引擎，绝不动 self.engine
             except Exception:
                 pass
+            # 终态广播必须在 engine.stop() **之后**（F-41：之前在循环结束处广播时 engine.running 仍为 True、
+            # 线程也还活着，界面收到的是「运行中」，播完后只能手动刷新才变「已完成」）
+            with self.lock:
+                mine = self.engine is engine
+                if mine:
+                    self._thread_done = True
+            if mine:
+                self.broadcast({"type": "state", "data": self.state()})
 
     # ---------- 暂停 / 恢复（离线文件源） ----------
     def _pausable(self) -> Optional[str]:
@@ -321,7 +338,7 @@ class EngineRunner:
         with self.lock:
             eng = self.engine
             cfg = self.cfg
-            st = eng.state.to_dict() if eng else {}
+            st = (_safe(lambda: eng.state.to_dict(), {"error": "state.to_dict 失败"}) if eng else {})
             st["config_path"] = self.cfg_path
             st["config_persist_path"] = self.persist_path
             src = {}
@@ -333,8 +350,8 @@ class EngineRunner:
             latest_keys = list(self.latest.quantities) if self.latest else []
             return {
                 "version": __version__,
-                "running": bool(self.thread and self.thread.is_alive() and not self.stop_event.is_set()),
-                "paused": bool(self.pause_event.is_set() and self.thread and self.thread.is_alive() and not self.stop_event.is_set()),
+                "running": bool(self.thread and self.thread.is_alive() and not self.stop_event.is_set() and not self._thread_done),
+                "paused": bool(self.pause_event.is_set() and self.thread and self.thread.is_alive() and not self.stop_event.is_set() and not self._thread_done),
                 "pausable": bool(eng is not None and eng.cfg.source.kind == "csv_file"),
                 "paused_total_s": round(self.paused_total_s + ((time.time() - self.paused_at) if self.paused_at else 0.0), 3),
                 "finished": bool(st.get("finished")),
@@ -346,7 +363,7 @@ class EngineRunner:
                 "latest_keys": latest_keys,
                 "latest_t_ref": self.latest.t_ref if self.latest else None,
                 "stored_results": len(self.store),
-                "history": (eng.calc.history.stats() if eng else {}),
+                "history": (_safe(lambda: eng.calc.history.stats(), {}) if eng else {}),
                 "clients": len(self.clients),
                 "server_time": time.time(),
             }
@@ -1018,7 +1035,11 @@ async def ws_endpoint(ws: WebSocket) -> None:
             now = time.monotonic()
             if now - last_state >= WS_STATE_INTERVAL_S:
                 last_state = now
-                await ws.send_text(json.dumps({"type": "state", "data": RUNNER.state()}, ensure_ascii=False))
+                try:
+                    payload = json.dumps({"type": "state", "data": RUNNER.state()}, ensure_ascii=False)
+                except Exception as exc:          # state() 出错不能让推送通道静默断掉（界面会停在旧状态）
+                    payload = json.dumps({"type": "error", "message": f"state: {type(exc).__name__}: {exc}"}, ensure_ascii=False)
+                await ws.send_text(payload)
     except (WebSocketDisconnect, RuntimeError):
         pass
     except Exception:

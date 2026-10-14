@@ -461,7 +461,7 @@ function connectWS() {
     const proto = location.protocol === 'https:' ? 'wss://' : 'ws://';
     S.ws = new WebSocket(proto + location.host + '/ws');
   } catch (e) { startPolling(); return; }
-  S.ws.onopen = () => { S.wsOk = true; if (S.poll) { clearInterval(S.poll); S.poll = null; } setNavFoot('实时推送已连接'); };
+  S.ws.onopen = () => { S.wsOk = true; if (S.poll) { clearInterval(S.poll); S.poll = null; } setNavFoot('实时推送已连接'); startStateWatch(); };
   S.ws.onmessage = (ev) => {
     let m; try { m = JSON.parse(ev.data); } catch (e) { return; }
     if (m.type === 'hello' || m.type === 'state') { S.state = m.data; renderTop(); if (S.view === 'source' || S.view === 'export') render(); }
@@ -547,6 +547,25 @@ async function togglePause() {
     toast(paused ? '已恢复播放' : '已暂停播放（数据时刻停在 ' + ($('#st-time').textContent || '—') + '）', 'ok');
   } catch (e) { toast((paused ? '恢复' : '暂停') + '失败：' + e.message, 'err'); S.state = await api('/api/state'); }
   renderTop(); if (S.view === 'source') render();
+}
+
+/* 运行状态看门狗（F-41 兜底）：引擎运行/暂停期间每 2 s 校对一次 /api/state，
+   推送丢失或断线也能自动翻到「已完成 / 已停止」；空闲时不请求。 */
+function startStateWatch() {
+  if (S.stateWatch) return;
+  S.stateWatch = setInterval(async () => {
+    const st = S.state || {}, eng = st.engine || {};
+    if (!(st.running || eng.running || st.paused)) return;
+    try {
+      const fresh = await api('/api/state');
+      const was = !!(st.running || eng.running), now = !!(fresh.running || (fresh.engine || {}).running);
+      S.state = fresh;
+      if (was !== now || !!st.paused !== !!fresh.paused || !!st.finished !== !!fresh.finished) {
+        renderTop(); if (S.view === 'source' || S.view === 'export') render();
+        if (was && !now && fresh.finished) toast('离线文件播放完毕', 'ok');
+      } else renderTop();
+    } catch (e) { /* 服务不可达时由 WS onclose 处理 */ }
+  }, 2000);
 }
 
 function setEventBadge(n) {
@@ -1927,7 +1946,7 @@ async function init() {
     const r = await fetch('/api/result?full=true');
     if (r.ok) S.result = await r.json();
   } catch (e) { /* 尚无结果 */ }
-  connectWS();
+  connectWS(); startStateWatch();
   renderTop(); render();
   setNavFoot('就绪 · 左侧导航切换子界面');
   setTimeout(refreshHistory, 500);
