@@ -207,4 +207,6 @@ def test_frontend_colmap_panel():
     for k in ColumnMap.FIELDS:
         assert f'id="cfg-map-{k}"' in html, k
     assert "collectColumnsPayload" in js and "columns: collectColumnsPayload()" in js
-    assert re.search(r"cfg\.columns\.mapping_enabled", js) and "syncColmapForm" in js
+    assert "fillColumnsForm('bus', cfg.columns)" in js and "syncColmapForm" in js      # R15：两侧列映射共用一套按前缀寻址的表单函数
+    for k in ColumnMap.FIELDS:
+        assert f'id="br-map-{k}"' in html, k                                               # 分路侧独立列映射

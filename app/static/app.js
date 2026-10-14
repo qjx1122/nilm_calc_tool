@@ -1190,8 +1190,7 @@ function fillSourceForm(cfg) {
   }
 
   if (cfg.columns) {
-    $('#cfg-mapen').checked = !!cfg.columns.mapping_enabled;
-    MAP_FIELDS.forEach(k => { document.getElementById(`cfg-map-${k}`).value = (cfg.columns.mapping || {})[k] || ''; });
+    fillColumnsForm('bus', cfg.columns);
     syncColmapForm();
   }
   if (cfg.transform) {
@@ -1274,6 +1273,7 @@ async function loadBranchForm(force) {
       $('#br-fs').value = sp.fs ?? ''; $('#br-fnom').value = sp.f_nom ?? ''; $('#br-adaptive').checked = !!sp.adaptive_freq;
       $('#br-hmax').value = hm.order_max ?? '';
       $('#br-apparent').value = pw.apparent || 'arithmetic'; $('#br-reactive').value = pw.reactive || 'harmonic_sum';
+      fillColumnsForm('branch', cfg.columns);
       const bb = (S.state && S.state.config && S.state.config.branch) || {};
       $('#br-toffset').value = bb.time_offset_s ?? 0; $('#br-tol').value = bb.align_tol_s ?? 0;
     }
@@ -1311,7 +1311,8 @@ async function saveBranchSource() {
     const sampling = { adaptive_freq: $('#br-adaptive').checked };
     const fs = posv('br-fs'), fnom = posv('br-fnom'); if (fs !== null) sampling.fs = fs; if (fnom !== null) sampling.f_nom = fnom;
     const harmonic = {}; const hmax = posv('br-hmax'); if (hmax !== null) harmonic.order_max = Math.max(2, Math.round(hmax));
-    const body = { source: src, transform, sampling, harmonic, power: { apparent: $('#br-apparent').value, reactive: $('#br-reactive').value } };
+    const body = { source: src, transform, sampling, harmonic, power: { apparent: $('#br-apparent').value, reactive: $('#br-reactive').value },
+                   columns: collectColumnsPayload('branch') };
     const r2 = await fetch('/api/branch/config', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
     if (!r2.ok) throw new Error('分路侧：' + ((await r2.json()).error || 'HTTP ' + r2.status));
     BR.dirty = false; BR.loaded = false;
@@ -1327,6 +1328,7 @@ async function probeBranch() {
   try {
     const r = await (await fetch('/api/branch/probe?path=' + encodeURIComponent(p))).json();
     if (!r.ok) { $('#br-probe-out').innerHTML = notes(['✗ ' + r.error]); return; }
+    BR.lastProbe = r;
     const cols = r.header || r.first_row || [];
     $('#br-probe-out').innerHTML = notes([
       `✓ ${r.path}`, `大小 ${r.size_mb} MB · 编码 ${r.encoding} · 行数 ${r.rows} · 时长约 ${num(r.duration_s, 2)}s`,
@@ -1694,35 +1696,64 @@ const MAP_ALIAS = { timestamp: ['时间戳', '时间', '时标', 'timestamp', 't
   ua: ['a相电压', 'ua', 'u_a', 'va'], ia: ['a相电流', 'ia', 'i_a'], ub: ['b相电压', 'ub', 'u_b', 'vb'],
   ib: ['b相电流', 'ib', 'i_b'], uc: ['c相电压', 'uc', 'u_c', 'vc'], ic: ['c相电流', 'ic', 'i_c'] };
 
-function syncColmapForm() {
-  const on = $('#cfg-mapen').checked;
-  MAP_FIELDS.forEach(k => { const el = document.getElementById(`cfg-map-${k}`); el.disabled = !on; const lab = el.closest('label'); if (lab) lab.classList.toggle('off', !on); });
-  ['btn-map-default', 'btn-map-fromprobe'].forEach(id => { $('#' + id).disabled = !on; });
+/* 列映射表单：总线侧 id 前缀 cfg-map / 分路侧 br-map（第 15 轮补充：两侧独立配置、独立保存） */
+const MAP_UI = {
+  bus:    { en: 'cfg-mapen', pre: 'cfg-map-', btns: ['btn-map-default', 'btn-map-fromprobe', 'btn-map-save'], probe: () => S.lastProbe },
+  branch: { en: 'br-mapen',  pre: 'br-map-',  btns: ['btn-br-map-default', 'btn-br-map-fromprobe', 'btn-br-map-save'], probe: () => BR.lastProbe },
+};
+function mapEl(side, k) { return document.getElementById(MAP_UI[side].pre + k); }
+
+function syncColmapForm(side) {
+  if (!side) { syncColmapForm('bus'); syncColmapForm('branch'); return; }
+  const u = MAP_UI[side], on = $('#' + u.en).checked;
+  MAP_FIELDS.forEach(k => { const el = mapEl(side, k); el.disabled = !on; const lab = el.closest('label'); if (lab) lab.classList.toggle('off', !on); });
+  u.btns.slice(0, 2).forEach(id => { $('#' + id).disabled = !on; });
 }
 
-function collectColumnsPayload() {
+function collectColumnsPayload(side = 'bus') {
   const mapping = {};
-  MAP_FIELDS.forEach(k => { mapping[k] = document.getElementById(`cfg-map-${k}`).value.trim(); });
-  return { mapping_enabled: $('#cfg-mapen').checked, mapping };
+  MAP_FIELDS.forEach(k => { mapping[k] = mapEl(side, k).value.trim(); });
+  return { mapping_enabled: $('#' + MAP_UI[side].en).checked, mapping };
 }
 
-function fillColmapDefault() {
-  MAP_FIELDS.forEach((k, i) => { document.getElementById(`cfg-map-${k}`).value = String(i + 1); });
-  S.formDirty = true; S.cfgDirty = true;
+function fillColumnsForm(side, columns) {
+  columns = columns || {};
+  $('#' + MAP_UI[side].en).checked = !!columns.mapping_enabled;
+  MAP_FIELDS.forEach(k => { mapEl(side, k).value = (columns.mapping || {})[k] || ''; });
+  syncColmapForm(side);
 }
 
-function fillColmapFromProbe() {
-  const hdr = S.lastProbe && S.lastProbe.header;
-  if (!hdr || !hdr.length) { toast('请先「探查数据」且文件需有表头', 'err'); return; }
+function markMapDirty(side) { if (side === 'branch') BR.dirty = true; else { S.formDirty = true; S.cfgDirty = true; } }
+
+function fillColmapDefault(side = 'bus') {
+  MAP_FIELDS.forEach((k, i) => { mapEl(side, k).value = String(i + 1); });
+  markMapDirty(side);
+}
+
+function fillColmapFromProbe(side = 'bus') {
+  const pr = MAP_UI[side].probe();
+  const hdr = pr && pr.header;
+  if (!hdr || !hdr.length) { toast(side === 'branch' ? '请先「探查分路侧文件」且文件需有表头' : '请先「探查数据」且文件需有表头', 'err'); return; }
   const norm = (x) => String(x).replace(/[\s_\-]/g, '').toLowerCase();
   const found = [];
   MAP_FIELDS.forEach(k => {
     const i = hdr.findIndex(h => MAP_ALIAS[k].includes(norm(h)));
-    document.getElementById(`cfg-map-${k}`).value = i >= 0 ? hdr[i] : '';
+    mapEl(side, k).value = i >= 0 ? hdr[i] : '';
     if (i >= 0) found.push(k);
   });
-  S.formDirty = true; S.cfgDirty = true;
-  toast(`已按表头填入 ${found.length}/7 个字段${found.length < 7 ? '，其余留空＝不播放' : ''}`, 'ok');
+  markMapDirty(side);
+  toast(`已按${side === 'branch' ? '分路侧' : '总线侧'}表头填入 ${found.length}/7 个字段${found.length < 7 ? '，其余留空＝不播放' : ''}`, 'ok');
+}
+
+async function saveColumns(side) {
+  try {
+    const url = side === 'branch' ? '/api/branch/config' : '/api/config';
+    const r = await fetch(url, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ columns: collectColumnsPayload(side) }) });
+    if (!r.ok) throw new Error((await r.json()).error || 'HTTP ' + r.status);
+    if (side === 'branch') { BR.dirty = false; BR.loaded = false; } else { S.formDirty = false; S.cfgDirty = false; }
+    toast(`${side === 'branch' ? '分路侧' : '总线侧'}列映射已保存（下一块数据 / 下次启动生效）`, 'ok');
+    S.state = await api('/api/state'); renderTop(); render();
+  } catch (e) { toast('保存列映射失败：' + e.message, 'err'); }
 }
 
 function collectConfigPayload() {
@@ -1928,9 +1959,15 @@ function bind() {
   $('#btn-probe').addEventListener('click', probe);
   $('#btn-listfiles').addEventListener('click', listFiles);
   $('#btn-savecfg').addEventListener('click', saveConfig);
-  $('#cfg-mapen').addEventListener('change', syncColmapForm);
-  $('#btn-map-default').addEventListener('click', fillColmapDefault);
-  $('#btn-map-fromprobe').addEventListener('click', fillColmapFromProbe);
+  $('#cfg-mapen').addEventListener('change', () => { syncColmapForm('bus'); markMapDirty('bus'); });
+  $('#btn-map-default').addEventListener('click', () => fillColmapDefault('bus'));
+  $('#btn-map-fromprobe').addEventListener('click', () => fillColmapFromProbe('bus'));
+  $('#btn-map-save').addEventListener('click', () => saveColumns('bus'));
+  $('#br-mapen').addEventListener('change', () => { syncColmapForm('branch'); BR.dirty = true; });
+  MAP_FIELDS.forEach(k => mapEl('branch', k).addEventListener('input', () => { BR.dirty = true; }));
+  $('#btn-br-map-default').addEventListener('click', () => fillColmapDefault('branch'));
+  $('#btn-br-map-fromprobe').addEventListener('click', () => fillColmapFromProbe('branch'));
+  $('#btn-br-map-save').addEventListener('click', () => saveColumns('branch'));
   $('#btn-save-win').addEventListener('click', saveWindows);
   $('#btn-preset-fast').addEventListener('click', () => applyPreset(0.2));
   $('#btn-preset-std').addEventListener('click', () => applyPreset(1));

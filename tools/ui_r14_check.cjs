@@ -73,6 +73,12 @@ async function main() {
   $('br-pt').value = '110'; change($('br-pt')); $('br-ct').value = '20'; change($('br-ct')); $('br-toffset').value = '0'; change($('br-toffset'));
   click($('btn-br-save')); await sleep(900);
   const bcfg = await api('/api/branch/config'), buscfg0 = await api('/api/config');
+  // 列映射：两侧独立
+  $('br-mapen').checked = true; change($('br-mapen'));
+  click($('btn-br-map-fromprobe')); await sleep(200);
+  click($('btn-br-map-save')); await sleep(800);
+  const bcfg2 = await api('/api/branch/config'), buscfg2 = await api('/api/config');
+  check('分路侧列映射独立保存（启用 + 按表头填入），总线侧列映射不受影响', bcfg2.columns.mapping_enabled === true && !!bcfg2.columns.mapping.ua && buscfg2.columns.mapping_enabled === false, JSON.stringify(bcfg2.columns.mapping));
   check('分路侧 PT/CT 单独保存，总线侧不受影响', bcfg.transform.pt_ratio === 110 && bcfg.transform.ct_ratio === 20 && buscfg0.transform.pt_ratio !== 110, `${bcfg.transform.pt_ratio}/${bcfg.transform.ct_ratio} bus=${buscfg0.transform.pt_ratio}`);
   check('分路侧 source 已保存', bcfg.source.kind === 'csv_file' && bcfg.source.path.endsWith('nilm_steps.csv') && bcfg.source.file_speed === 1, JSON.stringify(bcfg.source.path));
   check('总线侧 branch.enabled 已保存', (await api('/api/config')).branch.enabled === true);
