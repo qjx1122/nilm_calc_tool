@@ -464,7 +464,17 @@ def _side_summary(side: str) -> Dict[str, Any]:
             src = eng.cfg.source if eng else None
         except Exception:
             src = None
+        try:
+            c = br.cfg
+            fs, pt, ct = float(c.sampling.fs), float(c.transform.pt_ratio), float(c.transform.ct_ratio)
+        except Exception:
+            fs = pt = ct = None
+        latest = br.latest
     return {
+        "fs": fs, "pt_ratio": pt, "ct_ratio": ct,
+        "f_used": (getattr(latest, "f_used", None) if latest else None),
+        "t_ref": (getattr(latest, "t_ref", None) if latest else None),
+        "data_duration_s": (float(getattr(st, "data_duration_s", 0) or 0) if st else 0.0),
         "side": side, "enabled": enabled, "label": SIDE_LABELS[side], "config_path": br.cfg_path,
         "running": running, "paused": bool(running and br.pause_event.is_set()),
         "finished": bool(st and st.finished), "error": br.error,

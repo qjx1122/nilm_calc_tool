@@ -228,3 +228,5 @@
 - **[2026-10-14] v0.14.2**（用户：列映射分总线侧/分路侧独立配置）：列映射表单函数改为按侧前缀寻址（`MAP_UI` 表：`cfg-map-*` / `br-map-*`），`fillColumnsForm/collectColumnsPayload/fillColmapDefault/fillColmapFromProbe/saveColumns(side)`；分路侧探查结果存 `BR.lastProbe` 供「按分路侧表头填入」；分路侧列映射既可单独保存也随分路侧配置整体保存。ui_r14 37/37；`test_r10_colmap` 的正则断言随实现改（`cfg.columns.mapping_enabled` 字面不再出现）。
 
 - **[2026-10-14] v0.14.3**（用户：总览增加分路侧数据与曲线）：`OVB` 缓存 + `refreshOverviewBranch()`（总览页、总线侧上下文下直接 fetch `/api/branch/result` 与 4 条 `/api/branch/history`，2 s 节流，随 WS state 触发）+ `renderOverviewBranch()`（卡片复用总线侧卡片逻辑 + P 差值/占比最新值 + 4 图）。`test_r7` 的 fmtTip 计数 11→15。
+
+- **[2026-10-14] v0.14.4**（用户：顶栏按总线侧/分路侧分开显示，分路侧只显示不切换）：`renderTop` 改为先构造 cur/peer 两份字段对象再按 `S.side` 分配到 `st-*`（总线行）/`st-br-*`（分路行）；服务端对侧摘要补 fs/PT/CT/频率/数据时刻/时长；删除可点击的 `renderBranchChip`。切侧入口只剩左侧导航。

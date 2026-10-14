@@ -61,7 +61,7 @@ async function main() {
   const navs = (side) => [...document.querySelectorAll(`.navitem[data-side="${side}"]`)].map(b => b.dataset.view);
   check('导航分三组：总览(overview,source,compare) / 总线侧 / 分路侧', navs('bus').includes('overview') && navs('bus').includes('source') && navs('bus').includes('compare') && navs('bus').includes('voltage') && navs('branch').includes('voltage') && navs('branch').includes('nilm') && !navs('branch').includes('overview') && !navs('branch').includes('source'));
   check('顶栏不再有侧别切换按钮', !$('side-bus') && !$('side-branch'));
-  check('顶栏分路侧状态胶囊', !!$('st-branch'));
+  check('顶栏分两行：总线侧 / 分路侧', !!$('topstats-bus') && !!$('topstats-branch') && !!$('st-br-running') && !$('st-branch'));
   await nav('source');
   check('总线侧页面显示分路侧面板', $('branch-form').style.display !== 'none' && !!$('br-enabled'));
   console.log('L2 配置分路侧并启用 → 总线侧启动 → 两侧同时播放');
@@ -97,7 +97,9 @@ async function main() {
   check('分路侧同时运行中', bst.running === true && bst.side === 'branch', `running=${bst.running}`);
   check('分路侧样本在增长', bst.engine.samples_in > 0, String(bst.engine.samples_in));
   check('两侧数据源不同', st.config.source.path !== bst.config.source.path);
-  check('顶栏分路侧胶囊=运行中', $('st-branch').textContent === '运行中' && $('st-peer-label').textContent === '分路侧', $('st-branch').textContent);
+  check('顶栏分路侧行=运行中且有 fs/PT-CT/样本', $('st-br-running').textContent === '运行中' && /Hz/.test($('st-br-fs').textContent) && /\//.test($('st-br-ptct').textContent) && /\d/.test($('st-br-samples').textContent), `${$('st-br-running').textContent} ${$('st-br-fs').textContent} ${$('st-br-samples').textContent}`);
+  check('顶栏总线侧行=运行中', $('st-running').textContent === '运行中');
+  check('分路侧行不可点击切侧', !$('st-br-running').onclick && !$('topstats-branch').onclick);
   console.log('L3 联动暂停/恢复/停止');
   click($('btn-pause')); await sleep(600);
   const p1 = await api('/api/branch/state'); await sleep(800); const p2 = await api('/api/branch/state');
@@ -109,7 +111,7 @@ async function main() {
   const S = window.__S();
   check('S.side=branch 且 state.side=branch', S.side === 'branch' && S.state && S.state.side === 'branch');
   check('顶栏数据源=分路侧文件', $('st-source').textContent === 'csv_file' && document.body.classList.contains('side-branch'));
-  check('分路侧时顶栏显示总线侧状态胶囊', $('st-peer-label').textContent === '总线侧' && $('st-branch-wrap').style.display !== 'none' && $('st-branch').textContent === '运行中', $('st-branch').textContent);
+  check('切到分路侧后顶栏两行仍各显各的（总线行来自摘要）', $('st-running').textContent === '运行中' && $('st-br-running').textContent === '运行中' && /Hz/.test($('st-fs').textContent), `${$('st-running').textContent}/${$('st-br-running').textContent}`);
   check('分路侧时总线侧徽标仍随摘要刷新（nilm 徽标元素存在且按对侧计数）', !!$('nav-nilm-badge') && !!$('nav-nilm-badge-br'));
   check('分路侧导航项高亮、总线侧同名项不高亮', document.querySelector('.navitem[data-view="voltage"][data-side="branch"]').classList.contains('active') && !document.querySelector('.navitem[data-view="voltage"][data-side="bus"]').classList.contains('active'));
   const bres = await api('/api/branch/result?full=false');

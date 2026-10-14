@@ -15,15 +15,27 @@
       <div class="sub" id="subtitle">nilm_calc_tool · elec_tool</div>
     </div>
   </div>
-  <div class="topstats">
-    <div class="stat"><label>状态</label><span id="st-running" class="pill">未启动</span></div>
-    <div class="stat"><label>数据源</label><span id="st-source">—</span></div>
-    <div class="stat" id="st-branch-wrap"><label id="st-peer-label">分路侧</label><span id="st-branch" class="pill">未启用</span></div>
-    <div class="stat"><label>数据时刻</label><span id="st-time">—</span></div>
-    <div class="stat"><label>频率</label><span id="st-freq">—</span></div>
-    <div class="stat"><label>fs</label><span id="st-fs">—</span></div>
-    <div class="stat"><label>PT / CT</label><span id="st-ptct">—</span></div>
-    <div class="stat"><label>样本</label><span id="st-samples">—</span></div>
+  <div class="topstats-wrap">
+    <div class="topstats" id="topstats-bus">
+      <div class="stat sidelbl"><label>侧别</label><span class="sidename bus">总线侧</span></div>
+      <div class="stat"><label>状态</label><span id="st-running" class="pill">未启动</span></div>
+      <div class="stat"><label>数据源</label><span id="st-source">—</span></div>
+      <div class="stat"><label>数据时刻</label><span id="st-time">—</span></div>
+      <div class="stat"><label>频率</label><span id="st-freq">—</span></div>
+      <div class="stat"><label>fs</label><span id="st-fs">—</span></div>
+      <div class="stat"><label>PT / CT</label><span id="st-ptct">—</span></div>
+      <div class="stat"><label>样本</label><span id="st-samples">—</span></div>
+    </div>
+    <div class="topstats" id="topstats-branch" title="分路侧设备运行状态（仅显示；查看分路侧电气量请用左侧「分路侧」分组）">
+      <div class="stat sidelbl"><label>侧别</label><span class="sidename branch">分路侧设备</span></div>
+      <div class="stat"><label>状态</label><span id="st-br-running" class="pill">未启用</span></div>
+      <div class="stat"><label>数据源</label><span id="st-br-source">—</span></div>
+      <div class="stat"><label>数据时刻</label><span id="st-br-time">—</span></div>
+      <div class="stat"><label>频率</label><span id="st-br-freq">—</span></div>
+      <div class="stat"><label>fs</label><span id="st-br-fs">—</span></div>
+      <div class="stat"><label>PT / CT</label><span id="st-br-ptct">—</span></div>
+      <div class="stat"><label>样本</label><span id="st-br-samples">—</span></div>
+    </div>
   </div>
   <div class="actions">
     <button id="btn-start" class="primary">启动</button>

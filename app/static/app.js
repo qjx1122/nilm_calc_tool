@@ -532,7 +532,6 @@ function applySideUI() {
   const bf = $('#branch-form'), bn = $('#branch-panel-note');
   if (bf) bf.style.display = S.side === 'bus' ? '' : 'none';
   if (bn) bn.style.display = S.side === 'bus' ? 'none' : '';
-  const pl = $('#st-peer-label'); if (pl) pl.textContent = S.side === 'bus' ? '分路侧' : '总线侧';
 }
 
 async function api(path, opt) {
@@ -550,23 +549,33 @@ function setNavFoot(t) { const el = $('#nav-foot'); if (el) el.textContent = t; 
 function renderTop() {
   const st = S.state || {}, r = S.result;
   const eng = st.engine || {}, cfg = st.config || {};
-  const pill = $('#st-running');
-  if (st.error) { pill.textContent = '错误'; pill.className = 'pill err'; }
-  else if (st.paused) { pill.textContent = '已暂停'; pill.className = 'pill warn'; }
-  else if (eng.running) { pill.textContent = '运行中'; pill.className = 'pill on'; }
-  else if (eng.finished) { pill.textContent = '已完成'; pill.className = 'pill off'; }
-  else { pill.textContent = '未启动'; pill.className = 'pill'; }
-  $('#st-source').textContent = (cfg.source && cfg.source.kind) || '—';
-  $('#st-time').textContent = r ? ts(r.t_ref) : '—';
-  $('#st-freq').textContent = r ? num(r.f_used, 3) + ' Hz' : '—';
-  $('#st-fs').textContent = cfg.sampling ? cfg.sampling.fs + ' Hz' : '—';
-  $('#st-ptct').textContent = cfg.transform ? `${cfg.transform.pt_ratio} / ${cfg.transform.ct_ratio}` : '—';
-  $('#st-samples').textContent = eng.samples_in !== undefined ? `${eng.samples_in} (${num(eng.data_duration_s, 1)}s)` : '—';
+  // 顶栏按总线侧 / 分路侧两行分开显示：当前侧用完整 state，对侧用 state 里的对侧摘要（每秒随 WS 刷新）
+  const cur = {
+    status: st.error ? ['错误', 'pill err'] : st.paused ? ['已暂停', 'pill warn'] : eng.running ? ['运行中', 'pill on'] : eng.finished ? ['已完成', 'pill off'] : ['未启动', 'pill'],
+    source: (cfg.source && cfg.source.kind) || '—', time: r ? ts(r.t_ref) : '—', freq: r ? num(r.f_used, 3) + ' Hz' : '—',
+    fs: cfg.sampling ? cfg.sampling.fs + ' Hz' : '—', ptct: cfg.transform ? `${cfg.transform.pt_ratio} / ${cfg.transform.ct_ratio}` : '—',
+    samples: eng.samples_in !== undefined ? `${eng.samples_in} (${num(eng.data_duration_s, 1)}s)` : '—', error: st.error,
+  };
+  const ps = peerSummary(st) || {};
+  const peer = {
+    status: ps.error ? ['错误', 'pill err'] : (ps.side === 'branch' && !ps.enabled && !ps.running && !ps.finished) ? ['未启用', 'pill']
+          : ps.paused ? ['已暂停', 'pill warn'] : ps.running ? ['运行中', 'pill on'] : ps.finished ? ['已完成', 'pill off'] : ['未启动', 'pill'],
+    source: ps.source_kind || '—', time: ps.t_ref ? ts(ps.t_ref) : '—', freq: isNum(ps.f_used) ? num(ps.f_used, 3) + ' Hz' : '—',
+    fs: isNum(ps.fs) ? ps.fs + ' Hz' : '—', ptct: isNum(ps.pt_ratio) ? `${ps.pt_ratio} / ${ps.ct_ratio}` : '—',
+    samples: ps.samples_in !== undefined ? `${ps.samples_in} (${num(ps.data_duration_s, 1)}s)` : '—', error: ps.error,
+  };
+  const bus = S.side === 'bus' ? cur : peer, br = S.side === 'bus' ? peer : cur;
+  const fill = (pre, d) => {
+    const pill = $('#' + pre + 'running'); pill.textContent = d.status[0]; pill.className = d.status[1]; pill.title = d.error || '';
+    $('#' + pre + 'source').textContent = d.source; $('#' + pre + 'time').textContent = d.time; $('#' + pre + 'freq').textContent = d.freq;
+    $('#' + pre + 'fs').textContent = d.fs; $('#' + pre + 'ptct').textContent = d.ptct; $('#' + pre + 'samples').textContent = d.samples;
+  };
+  fill('st-', bus); fill('st-br-', br);
   $('#subtitle').textContent = `elec_tool v${st.version || '?'} · ${S.wsOk ? 'WebSocket 实时' : '轮询'} · 缓冲 ${eng.buffer_fill || 0}/${eng.buffer_capacity || 0}`;
   $('#btn-start').disabled = !!eng.running;
   $('#btn-stop').disabled = !eng.running;
   renderPauseButtons(st, eng);
-  renderBranchChip(peerSummary(st));
+  renderNavBranchState(S.side === 'bus' ? st.branch : null);
   renderBadges(st);
 }
 
@@ -662,24 +671,6 @@ function renderOverviewSides() {
     card('分路侧设备数据源', brOn ? sideStatusText(br) : '未启用', '',
       brOn ? `${br.source_kind || 'csv_file'} ${brPath}　样本 ${br.samples_in || 0}　事件 ${br.events_total || 0}　负荷事件 ${br.nilm_events_total || 0}` : '在「数据源与控制」页启用并配置分路侧文件'),
   ].join('');
-}
-
-function renderBranchChip(br) {
-  renderNavBranchState(br);
-  const el = $('#st-branch'); if (!el) return;
-  if (!br) { el.textContent = '—'; el.className = 'pill'; el.title = ''; return; }
-  let txt, cls;
-  if (br.error) { txt = '错误'; cls = 'pill err'; }
-  else if (!br.enabled && !br.running) { txt = '未启用'; cls = 'pill'; }
-  else if (br.paused) { txt = '已暂停'; cls = 'pill warn'; }
-  else if (br.running) { txt = '运行中'; cls = 'pill on'; }
-  else if (br.finished) { txt = '已完成'; cls = 'pill off'; }
-  else { txt = '已启用·未启动'; cls = 'pill'; }
-  el.textContent = txt; el.className = cls;
-  el.title = (br.error ? br.error + '\n' : '') + `源：${br.source_kind || '—'} ${br.source_path || ''}\n样本：${br.samples_in || 0}　事件：${br.events_total || 0}　负荷事件：${br.nilm_events_total || 0}`;
-  el.style.cursor = 'pointer';
-  el.onclick = () => (S.side === 'bus' ? switchView(['overview', 'source', 'compare', 'selftest', 'process'].includes(S.view) ? 'voltage' : S.view, 'branch')
-                                        : switchView('overview', 'bus'));
 }
 
 function setEventBadge(n, side) {
