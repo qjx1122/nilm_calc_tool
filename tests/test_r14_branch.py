@@ -174,9 +174,40 @@ def test_frontend_wiring():
     html = (ROOT / "app" / "static" / "index.html").read_text(encoding="utf-8")
     js = (ROOT / "app" / "static" / "app.js").read_text(encoding="utf-8")
     assert 'id="side-bus"' not in html and html.count('data-side="branch"') >= 12 and 'id="ov-sides"' in html
-    for s in ('data-view="voltage" data-side="bus"', 'data-view="voltage" data-side="branch"', 'id="branch-panel"', 'id="br-enabled"', 'id="br-path"', 'id="st-branch"',
+    assert 'data-view="source" data-side="branch"' not in html      # 分路侧配置集中在总览的数据源页
+    for s in ('data-view="voltage" data-side="bus"', 'data-view="voltage" data-side="branch"', 'id="branch-panel"',
+              'data-view="compare"', 'id="view-compare"', 'id="br-pt"', 'id="br-fs"', 'id="br-toffset"', 'id="st-peer-label"', 'id="br-enabled"', 'id="br-path"', 'id="st-branch"',
               'id="br-customtime"', 'id="br-utc"', 'id="btn-br-probe"', 'id="br-mode-note"'):
         assert s in html, s
     for s in ("function apiUrl", "async function setSide", "/ws/branch", "'/api/branch/' + path.slice(5)",
-              "function renderBranchChip", "async function saveBranchSource", "async function switchView(v, side)", "function renderOverviewSides"):
+              "function renderBranchChip", "async function saveBranchSource", "async function switchView(v, side)", "function renderOverviewSides",
+              "function renderBadges", "function peerSummary", "async function refreshCompare", "/api/compare/"):
         assert s in js, s
+
+
+def test_r15_align_rows_and_compare_endpoint(client):
+    """第 15 轮：跨侧时间轴对齐与差值。纯函数 + 端点形状。"""
+    from app.server import _align_rows
+    bus = [{"t": 100.0 + i, "window_s": 1.0, "P": 1000.0 + i, "Q": 10.0} for i in range(5)]
+    br = [{"t": 90.05 + i, "window_s": 1.0, "P": 400.0, "Q": 4.0} for i in range(4)]   # 起点差 10 s，相位差 50 ms
+    r0 = _align_rows(bus, br, offset=0.0, tol=0.6, max_points=100)
+    assert r0["aligned_count"] == 0
+    r1 = _align_rows(bus, br, offset=10.0, tol=0.6, max_points=100)
+    assert r1["aligned_count"] == 4 and r1["unmatched_bus"] == 1
+    p = r1["points"][0]
+    assert abs(p["dt_s"] - 0.05) < 1e-9 and p["diff"]["P"] == 600.0 and abs(p["ratio_pct"]["P"] - 40.0) < 1e-9
+    assert "Q" in p["diff"] and "Q" in p["ratio_pct"]
+    # 容差太小 → 不配对
+    assert _align_rows(bus, br, offset=10.0, tol=0.01, max_points=100)["aligned_count"] == 0
+    # 端点：两侧无引擎时形状完整
+    d = client.get("/api/compare/power").json()
+    assert d["quantity"] == "power" and d["aligned_count"] >= 0 and "offset_s" in d and "tol_s" in d and "points" in d
+    assert client.get("/api/compare/nope").status_code == 400
+    sm = client.get("/api/compare").json()
+    assert set(sm["quantities"]) >= {"power", "current", "voltage"}
+    # 对齐参数随总线侧 config.branch 保存
+    r = client.put("/api/config", json={"branch": {"time_offset_s": 1.5, "align_tol_s": 0.2}})
+    assert r.status_code == 200
+    assert client.get("/api/config").json()["branch"]["time_offset_s"] == 1.5
+    assert client.get("/api/compare/power").json()["offset_s"] == 1.5
+    client.put("/api/config", json={"branch": {"time_offset_s": 0.0, "align_tol_s": 0.0}})

@@ -358,7 +358,8 @@ class EngineRunner:
                 "version": __version__,
                 "side": self.side,
                 "side_label": SIDE_LABELS.get(self.side, self.side),
-                "branch": (_branch_summary() if self.side == "bus" else None),
+                "branch": (_side_summary("branch") if self.side == "bus" else None),
+                "bus": (_side_summary("bus") if self.side == "branch" else None),       # 对侧摘要（徽标/顶栏用）
                 "running": bool(self.thread and self.thread.is_alive() and not self.stop_event.is_set() and not self._thread_done),
                 "paused": bool(self.pause_event.is_set() and self.thread and self.thread.is_alive() and not self.stop_event.is_set() and not self._thread_done),
                 "pausable": bool(eng is not None and eng.cfg.source.kind == "csv_file"),
@@ -441,13 +442,20 @@ class _SideRouter:
 
 
 def _branch_summary() -> Dict[str, Any]:
-    """总线侧 /api/state 里的分路侧摘要（界面顶栏与数据源页用）。"""
-    br = RUNNERS["branch"]
+    return _side_summary("branch")
+
+
+def _side_summary(side: str) -> Dict[str, Any]:
+    """某一侧的状态摘要（挂在对侧 /api/state 里：界面顶栏、导航徽标、数据源页用）。"""
+    br = RUNNERS[side]
     bus = RUNNERS["bus"]
-    try:
-        enabled = bool(bus.cfg.branch.enabled)
-    except Exception:
-        enabled = False
+    if side == "branch":
+        try:
+            enabled = bool(bus.cfg.branch.enabled)
+        except Exception:
+            enabled = False
+    else:
+        enabled = True
     with br.lock:
         eng = br.engine
         running = bool(br.thread and br.thread.is_alive() and not br.stop_event.is_set() and not br._thread_done)
@@ -457,13 +465,14 @@ def _branch_summary() -> Dict[str, Any]:
         except Exception:
             src = None
     return {
-        "enabled": enabled, "label": SIDE_LABELS["branch"], "config_path": br.cfg_path,
+        "side": side, "enabled": enabled, "label": SIDE_LABELS[side], "config_path": br.cfg_path,
         "running": running, "paused": bool(running and br.pause_event.is_set()),
         "finished": bool(st and st.finished), "error": br.error,
         "source_kind": (src.kind if src else None), "source_path": (src.path if src else None),
         "samples_in": int(st.samples_in) if st else 0,
         "data_t_end": (st.data_t_end if st else None),
         "events_total": int(getattr(st, "events_total", 0) or 0) if st else 0,
+        "events_active": int(getattr(st, "events_active", 0) or 0) if st else 0,
         "nilm_events_total": int(getattr(st, "nilm_events_total", 0) or 0) if st else 0,
     }
 
@@ -573,6 +582,120 @@ async def lifespan(_app: "FastAPI"):
 
 app = FastAPI(title="电力系统电气量计算工具", version=__version__, lifespan=lifespan)
 app.add_middleware(_SideRouter)
+
+
+# ------------------------------------------------------------------ 跨侧对齐与差值（第 15 轮）
+
+_RATIO_FIELDS = {"P", "Q", "S", "Ia", "Ib", "Ic", "In", "I1", "U1", "Ua", "Ub", "Uc"}
+
+
+def _compare_params(quantity: str, offset_s: Optional[float], tol_s: Optional[float]) -> Tuple[float, float, float]:
+    """返回 (offset, tol, step)。offset/tol 为空时取总线侧 config.branch 的设置；tol=0 → 自动。"""
+    bus = RUNNERS["bus"]; br = RUNNERS["branch"]
+    bcfg = bus.cfg.branch
+    off = float(offset_s) if offset_s is not None else float(bcfg.time_offset_s)
+    tol = float(tol_s) if tol_s is not None else float(bcfg.align_tol_s)
+    steps = []
+    for r in (bus, br):
+        try:
+            w = r.cfg.windows.get(quantity)
+            if w is not None:
+                steps.append(float(w.step_s if w.step_s else w.length_s))
+        except Exception:
+            pass
+    step = max(steps) if steps else 1.0
+    if tol <= 0:
+        tol = max(0.05, step * 0.6)
+    return off, tol, step
+
+
+def _rows_of(side: str, quantity: str, hours: Optional[float]) -> List[Dict[str, Any]]:
+    r = RUNNERS[side]
+    with r.lock:
+        eng = r.engine
+        use_hours = float(hours) if hours is not None else float(r.cfg.output.history_hours)
+        return eng.calc.history.get(quantity, hours=use_hours) if eng else []
+
+
+def _align_rows(bus_rows: List[Dict[str, Any]], br_rows: List[Dict[str, Any]], offset: float, tol: float,
+                max_points: int) -> Dict[str, Any]:
+    """按时间最近邻配对：分路侧时标 + offset 与总线侧时标之差 ≤ tol 才算同一时刻。差值＝总线 − 分路；占比＝分路/总线×100。"""
+    if not bus_rows or not br_rows:
+        return {"points": [], "aligned_count": 0, "unmatched_bus": len(bus_rows), "unmatched_branch": len(br_rows), "fields": []}
+    bt = np.array([r["t"] for r in bus_rows], dtype=np.float64)
+    rt = np.array([r["t"] for r in br_rows], dtype=np.float64) + offset
+    order = np.argsort(rt); rt_sorted = rt[order]
+    fields = [f for f in bus_rows[-1] if f not in ("t", "window_s") and f in br_rows[-1]]
+    pairs: List[Tuple[int, int, float]] = []
+    used: Set[int] = set()
+    for i, t in enumerate(bt):
+        j = int(np.searchsorted(rt_sorted, t))
+        cand = [k for k in (j - 1, j) if 0 <= k < rt_sorted.size]
+        if not cand:
+            continue
+        k = min(cand, key=lambda k: abs(rt_sorted[k] - t))
+        dt = float(rt_sorted[k] - t)
+        if abs(dt) <= tol and k not in used:
+            used.add(k); pairs.append((i, int(order[k]), dt))
+    pts: List[Dict[str, Any]] = []
+    for i, j, dt in pairs:
+        b, r = bus_rows[i], br_rows[j]
+        diff: Dict[str, Any] = {}; ratio: Dict[str, Any] = {}
+        for f in fields:
+            x, y = b.get(f), r.get(f)
+            if isinstance(x, (int, float)) and isinstance(y, (int, float)):
+                diff[f] = x - y
+                if f in _RATIO_FIELDS:
+                    ratio[f] = (y / x * 100.0) if abs(x) > 1e-12 else None
+            else:
+                diff[f] = None
+        pts.append({"t": float(b["t"]), "t_branch": float(r["t"]), "dt_s": round(dt, 6),
+                    "bus": {f: b.get(f) for f in fields}, "branch": {f: r.get(f) for f in fields},
+                    "diff": diff, "ratio_pct": ratio})
+    n = len(pts)
+    decimated = False
+    if max_points and n > max_points > 2:
+        idx = np.unique(np.concatenate([np.linspace(0, n - 1, max_points).astype(int), [n - 1]]))
+        pts = [pts[k] for k in idx]; decimated = True
+    return {"points": pts, "aligned_count": n, "decimated": decimated, "fields": fields,
+            "unmatched_bus": len(bus_rows) - n, "unmatched_branch": len(br_rows) - n,
+            "dt_abs_mean_s": (float(np.mean([abs(p[2]) for p in pairs])) if pairs else None)}
+
+
+@app.get("/api/compare/{quantity}")
+async def get_compare(quantity: str, offset_s: Optional[float] = None, tol_s: Optional[float] = None,
+                      hours: Optional[float] = None, max_points: int = 1500) -> Any:
+    """总线侧 vs 分路侧同一电气量的时间轴对齐与差值：diff＝总线−分路，ratio_pct＝分路/总线×100。
+
+    offset_s：分路侧时标偏移（默认 config.branch.time_offset_s）；tol_s：配对容差（默认自动＝输出步长×0.6）。
+    """
+    if quantity not in QUANTITY_KEYS:
+        return JSONResponse(status_code=400, content={"ok": False, "error": f"未知电气量 '{quantity}'"})
+    off, tol, step = _compare_params(quantity, offset_s, tol_s)
+    bus_rows = _rows_of("bus", quantity, hours); br_rows = _rows_of("branch", quantity, hours)
+    res = _align_rows(bus_rows, br_rows, off, tol, max_points)
+    span = lambda rows: (rows[0]["t"], rows[-1]["t"]) if rows else (None, None)
+    b0, b1 = span(bus_rows); r0, r1 = span(br_rows)
+    res.update({"quantity": quantity, "offset_s": off, "tol_s": tol, "step_s": step,
+                "bus_count": len(bus_rows), "branch_count": len(br_rows),
+                "bus_t_first": b0, "bus_t_last": b1, "branch_t_first": r0, "branch_t_last": r1,
+                "offset_suggest_s": ((b0 - r0) if (b0 is not None and r0 is not None) else None),
+                "latest": (res["points"][-1] if res["points"] else None)})
+    return res
+
+
+@app.get("/api/compare")
+async def get_compare_summary(offset_s: Optional[float] = None, tol_s: Optional[float] = None) -> Any:
+    """各曲线量的最新一组对齐值（表格用）。"""
+    out: Dict[str, Any] = {"quantities": {}}
+    for k in CURVE_KEYS:
+        off, tol, step = _compare_params(k, offset_s, tol_s)
+        res = _align_rows(_rows_of("bus", k, None), _rows_of("branch", k, None), off, tol, 1)
+        pts = res["points"]
+        out["quantities"][k] = {"latest": (pts[-1] if pts else None), "aligned_count": res["aligned_count"],
+                                "tol_s": tol, "offset_s": off}
+    out["offset_s"] = float(RUNNERS["bus"].cfg.branch.time_offset_s)
+    return out
 
 
 @app.get("/api/sides")

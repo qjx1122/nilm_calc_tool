@@ -18,7 +18,7 @@
   <div class="topstats">
     <div class="stat"><label>状态</label><span id="st-running" class="pill">未启动</span></div>
     <div class="stat"><label>数据源</label><span id="st-source">—</span></div>
-    <div class="stat" id="st-branch-wrap"><label>分路侧</label><span id="st-branch" class="pill">未启用</span></div>
+    <div class="stat" id="st-branch-wrap"><label id="st-peer-label">分路侧</label><span id="st-branch" class="pill">未启用</span></div>
     <div class="stat"><label>数据时刻</label><span id="st-time">—</span></div>
     <div class="stat"><label>频率</label><span id="st-freq">—</span></div>
     <div class="stat"><label>fs</label><span id="st-fs">—</span></div>
@@ -38,6 +38,7 @@
     <div class="navgroup">总览</div>
     <button class="navitem active" data-view="overview" data-side="bus">📊 总览面板</button>
     <button class="navitem" data-view="source" data-side="bus">🔌 数据源与控制</button>
+    <button class="navitem" data-view="compare" data-side="bus">⚖️ 跨侧对比（总线 − 分路）</button>
     <div class="navgroup navgroup-bus">总线侧 <span class="navhint">总线侧数据源计算的电气量</span></div>
     <button class="navitem" data-view="voltage" data-side="bus">🔆 三相电压</button>
     <button class="navitem" data-view="current" data-side="bus">🔌 三相电流</button>
@@ -64,7 +65,6 @@
     <button class="navitem" data-view="spectrum" data-side="branch">🌈 频谱</button>
     <button class="navitem" data-view="events" data-side="branch">🚨 事件 <span class="badge" id="nav-ev-badge-br" style="display:none">0</span></button>
     <button class="navitem" data-view="nilm" data-side="branch">🧩 负荷辨识 <span class="badge" id="nav-nilm-badge-br" style="display:none">0</span></button>
-    <button class="navitem" data-view="source" data-side="branch">🔧 分路侧数据源与口径</button>
     <button class="navitem" data-view="windows" data-side="branch">⏱ 窗口配置</button>
     <button class="navitem" data-view="export" data-side="branch">💾 导出与日志</button>
     <div class="navgroup">工具</div>
@@ -88,6 +88,32 @@
       </div>
       <div id="ov-histnote" class="notes"></div>
       <div class="panel"><h3>告警与提示</h3><div id="ov-notes" class="notes"></div></div>
+    </section>
+
+    <!-- 跨侧对比 -->
+    <section class="view" id="view-compare">
+      <h2>跨侧对比：总线侧 − 分路侧设备</h2>
+      <div class="panel">
+        <div class="form">
+          <div class="row">
+            <label>电气量 <select id="cmp-key"></select></label>
+            <label>曲线字段 <select id="cmp-field"></select></label>
+            <label>分路侧时标偏移 (s) <input id="cmp-offset" type="number" step="0.001" style="width:120px"></label>
+            <button id="btn-cmp-suggest" title="偏移 = 总线侧首点时刻 − 分路侧首点时刻">按起点对齐</button>
+            <button id="btn-cmp-save">保存偏移到配置</button>
+            <button id="btn-cmp-refresh" class="primary">刷新</button>
+            <label class="chk"><input id="cmp-ratio" type="checkbox"> 右图显示占比 %</label>
+          </div>
+          <div class="notes" id="cmp-meta">—</div>
+        </div>
+      </div>
+      <div class="panel"><h3>最新一组对齐值（各量）</h3><div id="cmp-table"></div></div>
+      <div class="grid2">
+        <div class="panel"><h3 id="cmp-title-abs">两侧曲线</h3><canvas id="cmp-abs" height="220"></canvas></div>
+        <div class="panel"><h3 id="cmp-title-diff">差值（总线 − 分路）与占比</h3><canvas id="cmp-diff" height="220"></canvas></div>
+      </div>
+      <div class="notes muted">对齐规则：分路侧时标加偏移后，与总线侧时标最近邻配对，时间差 ≤ 容差才算同一时刻（容差默认＝输出步长×0.6）。
+        差值＝总线 − 分路；占比＝分路 / 总线 × 100%（功率、电流、电压类字段）。两侧窗长/步长不同会导致配对率下降，建议在两侧「窗口配置」设成一致。</div>
     </section>
 
     <!-- 数据源与控制 -->
@@ -172,20 +198,43 @@
             <label>自定义起始时间 <input id="br-customstart" placeholder="留空＝文件第 1 条时间；如 2026-10-14 08:00:00"></label>
             <label class="chk"><input id="br-utc" type="checkbox"> 文件时标按 UTC 解释（默认按本地时间）</label>
             <label>每块样本数 <input id="br-block" type="number" value="640"></label>
+            <h4 class="subhdr">分路侧量纲与口径（独立于总线侧，单独保存）</h4>
+            <div class="row2">
+              <label>PT 电压变比 <input id="br-pt" type="number" step="0.1"></label>
+              <label>CT 电流变比 <input id="br-ct" type="number" step="0.1"></label>
+            </div>
+            <div class="row2">
+              <label>采样率 fs (Hz) <input id="br-fs" type="number" step="1"></label>
+              <label>额定频率 (Hz) <input id="br-fnom" type="number" step="0.1"></label>
+            </div>
+            <label class="check"><input id="br-adaptive" type="checkbox"> 频率自适应（估频后整周期截断）</label>
+            <label class="check"><input id="br-scale" type="checkbox"> 启用 PT/CT 变换（取消＝直接看二次值）</label>
+            <div class="row2">
+              <label>电压列含义 <select id="br-uin"><option value="phase">相电压</option><option value="line">线电压</option></select></label>
+              <label>最高谐波次数 <input id="br-hmax" type="number" min="2" max="63"></label>
+            </div>
+            <div class="row2">
+              <label>视在功率口径 <select id="br-apparent"><option value="arithmetic">算术 S=ΣU·I</option><option value="vector">几何 S=√(P²+Q²)</option></select></label>
+              <label>无功口径 <select id="br-reactive"><option value="harmonic_sum">Σ UₕIₕsinφₕ（严格）</option><option value="quadrature">√(S²−P²)（等效）</option></select></label>
+            </div>
+            <h4 class="subhdr">跨侧时间轴对齐</h4>
+            <div class="row2">
+              <label>分路侧时标偏移 (s) <input id="br-toffset" type="number" step="0.001" value="0" title="分路侧时标 + 偏移 ≈ 总线侧时标；两份文件起点不同步时填（可在「跨侧对比」页一键按起点对齐）"></label>
+              <label>配对容差 (s)，0＝自动 <input id="br-tol" type="number" step="0.01" min="0" value="0" title="自动＝两侧输出步长最大值×0.6"></label>
+            </div>
             <div class="row">
-              <button id="btn-br-save" class="primary">保存分路侧数据源</button>
-              <button id="btn-br-goto">去左侧「分路侧」分组查看电气量 →（采样率 / PT-CT 在「分路侧数据源与口径」页改，窗长在分路侧「窗口配置」页改）</button>
+              <button id="btn-br-save" class="primary">保存分路侧配置（数据源 + 量纲口径 + 对齐）</button>
+              <button id="btn-br-goto">去左侧「分路侧」分组查看电气量 →</button>
             </div>
             <div class="notes" id="br-status"></div>
-            <div class="notes muted">分路侧是一份<b>完全独立</b>的配置（采样率、PT/CT、窗口、事件阈值、负荷辨识参数…），
-              落盘到 <code>configs/branch_runtime.json</code>，输出到 <code>output/branch/</code>。
-              切到分路侧后，左侧所有子界面显示的都是分路侧的计算结果；需要改采样率/变比/窗口时也在分路侧页面改。</div>
+            <div class="notes muted">分路侧是一份<b>完全独立</b>的配置，落盘到 <code>configs/branch_runtime.json</code>，输出到 <code>output/branch/</code>；
+              本页集中配置分路侧的数据源与量纲口径（与上方总线侧的「总线侧量纲与口径」互不影响）。窗长 / 事件阈值 / 负荷辨识参数在「分路侧」分组对应子界面改。</div>
           </div>
           <div class="notes" id="branch-panel-note" style="display:none">当前正在查看<b>分路侧设备</b>的配置。
             「是否随总线侧同时播放」的开关在总线侧的本页面；这里的「启动数据源」只启动分路侧。</div>
         </div>
         <div class="panel">
-          <h3>量纲与口径</h3>
+          <h3>总线侧量纲与口径</h3>
           <div class="form">
             <div class="row2">
               <label>PT 电压变比 <input id="cfg-pt" type="number" step="0.1"></label>

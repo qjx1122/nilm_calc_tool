@@ -465,7 +465,10 @@ function connectWS() {
   S.ws.onopen = () => { S.wsOk = true; if (S.poll) { clearInterval(S.poll); S.poll = null; } setNavFoot('实时推送已连接'); startStateWatch(); };
   S.ws.onmessage = (ev) => {
     let m; try { m = JSON.parse(ev.data); } catch (e) { return; }
-    if (m.type === 'hello' || m.type === 'state') { S.state = m.data; renderTop(); if (S.view === 'source' || S.view === 'export') render(); }
+    if (m.type === 'hello' || m.type === 'state') {
+      S.state = m.data; renderTop(); if (S.view === 'source' || S.view === 'export') render();
+      if (S.view === 'compare' && Date.now() - CMP.at > 3000) refreshCompare();
+    }
     else if (m.type === 'result' || m.type === 'snapshot') { S.result = mergeResult(S.result, m.data); renderTop(); render(); }
     else if (m.type === 'error') { toast('服务端错误：' + m.message, 'err'); }
     else if (m.type === 'event') { onEventPush(m.data || []); }
@@ -528,7 +531,7 @@ function applySideUI() {
   const bf = $('#branch-form'), bn = $('#branch-panel-note');
   if (bf) bf.style.display = S.side === 'bus' ? '' : 'none';
   if (bn) bn.style.display = S.side === 'bus' ? 'none' : '';
-  const sw = $('#st-branch-wrap'); if (sw) sw.style.display = S.side === 'bus' ? '' : 'none';
+  const pl = $('#st-peer-label'); if (pl) pl.textContent = S.side === 'bus' ? '分路侧' : '总线侧';
 }
 
 async function api(path, opt) {
@@ -562,8 +565,20 @@ function renderTop() {
   $('#btn-start').disabled = !!eng.running;
   $('#btn-stop').disabled = !eng.running;
   renderPauseButtons(st, eng);
-  renderBranchChip(st.branch);
-  setEventBadge(eng.events_active || 0);
+  renderBranchChip(peerSummary(st));
+  renderBadges(st);
+}
+
+/* 对侧摘要：总线侧 state 带 branch，分路侧 state 带 bus */
+function peerSummary(st) { return S.side === 'bus' ? (st && st.branch) : (st && st.bus); }
+
+/* 两侧徽标都实时刷新：当前侧用 engine 计数，对侧用摘要里的计数（随每秒 state 推送更新） */
+function renderBadges(st) {
+  const eng = (st && st.engine) || {};
+  setEventBadge(eng.events_active || 0, S.side);
+  const peer = peerSummary(st), other = S.side === 'bus' ? 'branch' : 'bus';
+  setEventBadge(peer ? (peer.events_active || 0) : 0, other);
+  setNilmBadge(peer ? (peer.nilm_events_total || 0) : 0, other);
 }
 
 /* 暂停/恢复按钮：只在离线文件源运行且未播完时可用；文案随状态切换（v0.12） */
@@ -624,6 +639,7 @@ function sideStatusText(x) {
 
 function renderNavBranchState(br) {
   const b = $('#nav-br-state'); if (!b) return;
+  if (S.side === 'branch') { br = S.state || null; if (br) br = { error: br.error, paused: br.paused, running: br.running, finished: br.finished, enabled: true }; }
   if (!br) { b.style.display = 'none'; return; }
   const t = sideStatusText(br);
   b.textContent = t; b.style.display = '';
@@ -660,11 +676,13 @@ function renderBranchChip(br) {
   else { txt = '已启用·未启动'; cls = 'pill'; }
   el.textContent = txt; el.className = cls;
   el.title = (br.error ? br.error + '\n' : '') + `源：${br.source_kind || '—'} ${br.source_path || ''}\n样本：${br.samples_in || 0}　事件：${br.events_total || 0}　负荷事件：${br.nilm_events_total || 0}`;
-  el.style.cursor = 'pointer'; el.onclick = () => switchView(S.view === 'overview' || S.view === 'source' ? 'voltage' : S.view, 'branch');
+  el.style.cursor = 'pointer';
+  el.onclick = () => (S.side === 'bus' ? switchView(['overview', 'source', 'compare', 'selftest', 'process'].includes(S.view) ? 'voltage' : S.view, 'branch')
+                                        : switchView('overview', 'bus'));
 }
 
-function setEventBadge(n) {
-  const badge = $(S.side === 'branch' ? '#nav-ev-badge-br' : '#nav-ev-badge');
+function setEventBadge(n, side) {
+  const badge = $((side || S.side) === 'branch' ? '#nav-ev-badge-br' : '#nav-ev-badge');
   if (!badge) return;
   badge.textContent = String(n); badge.style.display = n ? '' : 'none'; badge.className = 'badge' + (n ? ' bad' : '');
 }
@@ -679,6 +697,7 @@ async function switchView(v, side) {
   render();
   if (['overview', 'power_factor', 'fundamental', 'interharmonic', 'dc'].includes(v)) refreshHistory();
   if (v === 'events') refreshEvents();
+  if (v === 'compare') refreshCompare();
 }
 
 /* ------------------------------------------------------------------ 历史曲线 */
@@ -761,6 +780,104 @@ function hseries(key, field) {
   const pts = S.histCache[key] || [];
   const t0 = pts.length ? pts[0].t : 0;
   return pts.filter(p => isNum(p.t)).map(p => [p.t - t0, p[field]]);
+}
+
+/* ------------------------------------------------------------------ 跨侧对比（第 15 轮） */
+
+const CMP = { key: 'power', field: 'P', data: null, summary: null, at: 0, busy: false };
+const CMP_UNIT = { P: 'W', Q: 'var', S: 'VA', Ia: 'A', Ib: 'A', Ic: 'A', In: 'A', I1: 'A', Ua: 'V', Ub: 'V', Uc: 'V', U1: 'V',
+                   Uab: 'V', Ubc: 'V', Uca: 'V', PF: '', DPF: '', f: 'Hz', THD_U: '%', THD_I: '%', TIHD_U: '%', TIHD_I: '%' };
+
+function cmpOffsetInput() {
+  const v = parseFloat($('#cmp-offset').value);
+  return Number.isFinite(v) ? v : null;
+}
+
+async function refreshCompare() {
+  if (CMP.busy) return; CMP.busy = true;
+  try {
+    const off = cmpOffsetInput();
+    const qs = off === null ? '' : `offset_s=${off}`;
+    const [d, sm] = await Promise.all([
+      api(`/api/compare/${CMP.key}?max_points=${HIST_MAX_POINTS}` + (qs ? '&' + qs : '')),
+      api('/api/compare' + (qs ? '?' + qs : '')),
+    ]);
+    CMP.data = d; CMP.summary = sm; CMP.at = Date.now();
+    if (off === null) $('#cmp-offset').value = d.offset_s;
+    renderCompare();
+  } catch (e) { $('#cmp-meta').innerHTML = notes(['✗ ' + e.message]); }
+  finally { CMP.busy = false; }
+}
+
+function renderCompare() {
+  const ks = $('#cmp-key');
+  if (!ks.options.length) {
+    ks.innerHTML = CURVE_KEYS.map(k => `<option value="${k}">${CURVE_NAME[k]}</option>`).join(''); ks.value = CMP.key;
+  }
+  const d = CMP.data;
+  if (!d) { $('#cmp-meta').textContent = '加载中…'; return; }
+  const fs = $('#cmp-field');
+  const fields = d.fields || [];
+  if (fs.dataset.key !== CMP.key || fs.options.length !== fields.length) {
+    fs.innerHTML = fields.map(f => `<option value="${f}">${f}</option>`).join(''); fs.dataset.key = CMP.key;
+    if (!fields.includes(CMP.field)) CMP.field = fields[0] || '';
+    fs.value = CMP.field;
+  }
+  const meta = [
+    `总线侧 ${d.bus_count} 点（${d.bus_t_first ? ts(d.bus_t_first) + ' → ' + ts(d.bus_t_last) : '—'}）　分路侧 ${d.branch_count} 点（${d.branch_t_first ? ts(d.branch_t_first) + ' → ' + ts(d.branch_t_last) : '—'}）`,
+    `已对齐 ${d.aligned_count} 对（未配对：总线 ${d.unmatched_bus} / 分路 ${d.unmatched_branch}）　偏移 ${num(d.offset_s, 3)} s　容差 ${num(d.tol_s, 3)} s（步长 ${num(d.step_s, 2)} s）` +
+      (d.dt_abs_mean_s !== null && d.dt_abs_mean_s !== undefined ? `　平均时差 ${num(d.dt_abs_mean_s * 1000, 1)} ms` : '') +
+      (d.offset_suggest_s !== null && d.offset_suggest_s !== undefined ? `　按起点对齐建议偏移 ${num(d.offset_suggest_s, 3)} s` : ''),
+  ];
+  if (!d.bus_count || !d.branch_count) meta.push('⚠ 某一侧尚无历史点：请在「数据源与控制」启用分路侧并启动总线侧（两侧同时播放）');
+  else if (!d.aligned_count) meta.push('⚠ 两侧时间轴没有交集或步长不一致：点「按起点对齐」试试，或把两侧窗口配置设成一致');
+  $('#cmp-meta').innerHTML = notes(meta);
+
+  // 表格：各量最新一组
+  const sm = CMP.summary;
+  if (sm) {
+    const rows = [];
+    CURVE_KEYS.forEach(k => {
+      const q = sm.quantities[k]; const L = q && q.latest;
+      if (!L) { rows.push(`<tr><td>${CURVE_NAME[k]}</td><td colspan="5" class="muted">无对齐点（已对齐 ${q ? q.aligned_count : 0}）</td></tr>`); return; }
+      Object.keys(L.bus).forEach(f => {
+        const u = CMP_UNIT[f] || '';
+        const b = L.bus[f], r = L.branch[f], df = L.diff[f], rt = L.ratio_pct ? L.ratio_pct[f] : undefined;
+        rows.push(`<tr><td>${CURVE_NAME[k]} · ${f}</td><td>${ts(L.t)}</td><td>${isNum(b) ? si(b, u) : '—'}</td><td>${isNum(r) ? si(r, u) : '—'}</td>` +
+          `<td>${isNum(df) ? si(df, u) : '—'}</td><td>${isNum(rt) ? num(rt, 2) + ' %' : ''}</td></tr>`);
+      });
+    });
+    $('#cmp-table').innerHTML = `<table class="cmptbl"><thead><tr><th>电气量</th><th>时刻（总线）</th><th>总线侧</th><th>分路侧</th><th>差值 总线−分路</th><th>占比 分路/总线</th></tr></thead><tbody>${rows.join('')}</tbody></table>`;
+  }
+
+  // 曲线
+  const f = CMP.field, u = CMP_UNIT[f] || '';
+  const pts = d.points || [];
+  const t0 = pts.length ? pts[0].t : 0;
+  $('#cmp-title-abs').textContent = `${CURVE_NAME[CMP.key]} · ${f}：两侧曲线`;
+  const hasRatio = !!(pts.length && pts[0].ratio_pct && f in pts[0].ratio_pct);
+  const showRatio = hasRatio && $('#cmp-ratio').checked;
+  $('#cmp-ratio').disabled = !hasRatio;
+  $('#cmp-title-diff').textContent = showRatio ? `${f}：占比（分路 / 总线 × 100%）` : `${f}：差值（总线 − 分路）`;
+  const span = pts.length ? pts[pts.length - 1].t - t0 : 0;
+  drawLine($('#cmp-abs'), [
+    { name: '总线侧', color: COLORS.A, data: pts.map(p => [p.t - t0, p.bus[f]]) },
+    { name: '分路侧', color: COLORS.C, data: pts.map(p => [p.t - t0, p.branch[f]]) },
+  ], { ylabel: u, fmtX: x => tsX(x + t0, span), fmtTip: x => ts(x + t0), empty: '暂无对齐点' });
+  drawLine($('#cmp-diff'), [showRatio
+    ? { name: '占比 %', color: COLORS.Q, data: pts.map(p => [p.t - t0, p.ratio_pct[f]]) }
+    : { name: '差值', color: COLORS.P, data: pts.map(p => [p.t - t0, p.diff[f]]) }],
+    { ylabel: showRatio ? '%' : u, fmtX: x => tsX(x + t0, span), fmtTip: x => ts(x + t0), empty: '暂无对齐点' });
+}
+
+async function saveCompareOffset() {
+  const off = cmpOffsetInput();
+  if (off === null) { toast('偏移必须是数字', 'err'); return; }
+  try {
+    await api('/api/config', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ branch: { time_offset_s: off } }) });
+    const tf = $('#br-toffset'); if (tf) tf.value = off;
+    toast(`分路侧时标偏移已保存：${off} s`, 'ok'); refreshCompare();
+  } catch (e) { toast('保存失败：' + e.message, 'err'); }
 }
 
 /* ------------------------------------------------------------------ 各子界面渲染 */
@@ -1151,6 +1268,14 @@ async function loadBranchForm(force) {
       $('#br-customstart').value = cfg.source.custom_time_start || '';
       $('#br-utc').checked = !!cfg.source.file_time_utc;
       $('#br-block').value = cfg.source.block_samples || 640;
+      const tr = cfg.transform || {}, sp = cfg.sampling || {}, hm = cfg.harmonic || {}, pw = cfg.power || {};
+      $('#br-pt').value = tr.pt_ratio ?? ''; $('#br-ct').value = tr.ct_ratio ?? '';
+      $('#br-scale').checked = tr.enabled !== false; $('#br-uin').value = tr.voltage_input || 'phase';
+      $('#br-fs').value = sp.fs ?? ''; $('#br-fnom').value = sp.f_nom ?? ''; $('#br-adaptive').checked = !!sp.adaptive_freq;
+      $('#br-hmax').value = hm.order_max ?? '';
+      $('#br-apparent').value = pw.apparent || 'arithmetic'; $('#br-reactive').value = pw.reactive || 'harmonic_sum';
+      const bb = (S.state && S.state.config && S.state.config.branch) || {};
+      $('#br-toffset').value = bb.time_offset_s ?? 0; $('#br-tol').value = bb.align_tol_s ?? 0;
     }
   } catch (e) { /* 分路侧不可用 */ }
 }
@@ -1172,16 +1297,25 @@ function renderBranchPanel(st) {
 async function saveBranchSource() {
   try {
     const enabled = $('#br-enabled').checked;
-    const r1 = await fetch('/api/config', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ branch: { enabled } }) });
+    const brTop = { enabled, time_offset_s: parseFloat($('#br-toffset').value) || 0, align_tol_s: Math.max(0, parseFloat($('#br-tol').value) || 0) };
+    const r1 = await fetch('/api/config', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ branch: brTop }) });
     if (!r1.ok) throw new Error((await r1.json()).error || 'HTTP ' + r1.status);
     const src = { kind: 'csv_file', path: $('#br-path').value.trim(), file_speed: parseFloat($('#br-file-speed').value) || 0,
       custom_time: $('#br-customtime').checked, custom_time_start: $('#br-customstart').value.trim(),
       file_time_utc: $('#br-utc').checked, block_samples: parseInt($('#br-block').value, 10) || 640 };
     if (enabled && !src.path) throw new Error('启用分路侧时必须填写分路侧离线文件路径');
-    const r2 = await fetch('/api/branch/config', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ source: src }) });
+    // 分路侧量纲与口径：空输入框跳过（保留服务端原值），与总线侧 collectConfigPayload 同规则
+    const posv = (id) => { const v = parseFloat($('#' + id).value); return Number.isFinite(v) && v > 0 ? v : null; };
+    const transform = { enabled: $('#br-scale').checked, voltage_input: $('#br-uin').value };
+    const pt = posv('br-pt'), ct = posv('br-ct'); if (pt !== null) transform.pt_ratio = pt; if (ct !== null) transform.ct_ratio = ct;
+    const sampling = { adaptive_freq: $('#br-adaptive').checked };
+    const fs = posv('br-fs'), fnom = posv('br-fnom'); if (fs !== null) sampling.fs = fs; if (fnom !== null) sampling.f_nom = fnom;
+    const harmonic = {}; const hmax = posv('br-hmax'); if (hmax !== null) harmonic.order_max = Math.max(2, Math.round(hmax));
+    const body = { source: src, transform, sampling, harmonic, power: { apparent: $('#br-apparent').value, reactive: $('#br-reactive').value } };
+    const r2 = await fetch('/api/branch/config', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
     if (!r2.ok) throw new Error('分路侧：' + ((await r2.json()).error || 'HTTP ' + r2.status));
     BR.dirty = false; BR.loaded = false;
-    toast(enabled ? '分路侧数据源已保存并启用：总线侧「启动」时将同时播放' : '分路侧数据源已保存（未启用）', 'ok');
+    toast((enabled ? '分路侧配置已保存并启用：总线侧「启动」时将同时播放' : '分路侧配置已保存（未启用）') + '（数据源 + 量纲口径 + 对齐参数）', 'ok');
     S.state = await api('/api/state'); renderTop(); render();
   } catch (e) { toast('保存分路侧失败：' + e.message, 'err'); }
 }
@@ -1198,7 +1332,7 @@ async function probeBranch() {
       `✓ ${r.path}`, `大小 ${r.size_mb} MB · 编码 ${r.encoding} · 行数 ${r.rows} · 时长约 ${num(r.duration_s, 2)}s`,
       `${r.header ? '表头' : '首行即数据'}（${cols.length} 列）：` + cols.map((h, i) => `[${i + 1}] ${h}`).join('  '),
       `时间戳模式 ${r.ts_mode} · 推算 fs ${num(r.fs_est, 3)} Hz（分路侧配置 ${r.fs_configured} Hz，偏差 ${num(r.fs_deviation_pct, 4)}%）` +
-        (Math.abs(r.fs_deviation_pct || 0) > 1 ? '　⚠ 请切到分路侧把采样率改成文件实际值' : ''),
+        (Math.abs(r.fs_deviation_pct || 0) > 1 ? '　⚠ 请把下方「分路侧采样率 fs」改成文件实际值' : ''),
       ...(r.notes || []),
     ]);
   } catch (e) { $('#br-probe-out').innerHTML = notes(['✗ ' + e.message]); }
@@ -1478,6 +1612,7 @@ function render() {
   try {
     switch (S.view) {
       case 'overview': renderOverview(); break;
+      case 'compare': renderCompare(); break;
       case 'voltage': renderVoltage(); break;
       case 'current': renderCurrent(); break;
       case 'power': renderPower(); break;
@@ -1771,6 +1906,17 @@ function bind() {
   $('#btn-pause2').addEventListener('click', togglePause);
 
   $('#btn-br-save').addEventListener('click', saveBranchSource);
+  ['br-pt', 'br-ct', 'br-fs', 'br-fnom', 'br-adaptive', 'br-scale', 'br-uin', 'br-hmax', 'br-apparent', 'br-reactive', 'br-toffset', 'br-tol']
+    .forEach(id => { const el = $('#' + id); if (el) el.addEventListener('input', () => { BR.dirty = true; }); });
+  $('#cmp-key').addEventListener('change', e => { CMP.key = e.target.value; CMP.data = null; refreshCompare(); });
+  $('#cmp-field').addEventListener('change', e => { CMP.field = e.target.value; renderCompare(); });
+  $('#btn-cmp-refresh').addEventListener('click', refreshCompare);
+  $('#cmp-ratio').addEventListener('change', renderCompare);
+  $('#btn-cmp-suggest').addEventListener('click', () => {
+    const d = CMP.data; if (!d || d.offset_suggest_s === null || d.offset_suggest_s === undefined) { toast('两侧都需要有历史点才能按起点对齐', 'err'); return; }
+    $('#cmp-offset').value = Math.round(d.offset_suggest_s * 1000) / 1000; refreshCompare();
+  });
+  $('#btn-cmp-save').addEventListener('click', saveCompareOffset);
   $('#btn-br-goto').addEventListener('click', () => switchView('voltage', 'branch'));
   $('#btn-br-probe').addEventListener('click', probeBranch);
   $('#btn-br-pick').addEventListener('click', pickBranchFile);
@@ -1793,7 +1939,10 @@ function bind() {
   $('#btn-save-cfgfile').addEventListener('click', saveCfgFile);
   ['sp-chan', 'sp-scale', 'sp-limit'].forEach(id => $('#' + id).addEventListener('change', renderSpectrum));
   // 数据源下拉框联动：选 kind 切换可用字段与填写说明；选 frame=binary 才放开 struct 两项
-  $('#src-kind').addEventListener('change', () => { S.srcDirty = true; S.formDirty = true; syncSourceForm(); });
+  $('#src-kind').addEventListener('change', () => {
+    S.srcDirty = true; S.formDirty = true; syncSourceForm();
+    const n = $('#br-mode-note'); if (n) n.style.display = $('#src-kind').value === 'csv_file' ? 'none' : '';   // 分路侧联动提示即时刷新
+  });
   $('#src-frame').addEventListener('change', () => { S.srcDirty = true; S.formDirty = true; syncSourceForm(); });
   $('#src-customtime').addEventListener('change', () => { S.srcDirty = true; S.formDirty = true; syncSourceForm(); });
   // 「保存曲线」勾选（面板标题处 + 导出页列表，动态生成 → 事件委托）
@@ -1920,8 +2069,8 @@ function onNilmPush(list) {
   if (S.view === 'nilm') renderNilm();
 }
 
-function setNilmBadge(n) {
-  const b = $(S.side === 'branch' ? '#nav-nilm-badge-br' : '#nav-nilm-badge'); if (!b) return;
+function setNilmBadge(n, side) {
+  const b = $((side || S.side) === 'branch' ? '#nav-nilm-badge-br' : '#nav-nilm-badge'); if (!b) return;
   b.textContent = String(n); b.style.display = n > 0 ? '' : 'none';
 }
 

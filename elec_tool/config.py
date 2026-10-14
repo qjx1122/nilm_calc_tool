@@ -759,10 +759,20 @@ class BranchConfig:
     enabled: bool = False
     config_path: str = "configs/branch.json"
     label: str = "分路侧设备"
+    # 第 15 轮：跨侧对齐参数（只影响 /api/compare 的时间轴对齐，不改任何一侧的计算）
+    time_offset_s: float = 0.0     # 分路侧时标 + offset ≈ 总线侧时标（两份文件起点不同步时用）
+    align_tol_s: float = 0.0       # 配对容差（秒）；0＝自动＝max(两侧输出步长)×0.6
 
     def validate(self) -> None:
         if not str(self.config_path).strip():
             raise ConfigError("branch.config_path 不能为空")
+        try:
+            self.time_offset_s = float(self.time_offset_s)
+            self.align_tol_s = float(self.align_tol_s)
+        except (TypeError, ValueError):
+            raise ConfigError("branch.time_offset_s / align_tol_s 必须是数字")
+        if self.align_tol_s < 0:
+            raise ConfigError("branch.align_tol_s 不能为负")
 
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> "BranchConfig":

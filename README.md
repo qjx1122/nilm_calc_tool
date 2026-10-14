@@ -663,6 +663,7 @@ THDu(A)  = 10.593 %   5次 = 346.4 V
 | `GET /api/config` | 读当前生效配置 |
 | `PUT /api/config` | **深合并**局部更新（只传要改的字段）并热更新到运行中的引擎；非法值返回 400 + 中文原因 |
 | `POST /api/engine/start` | 启动引擎；body 可覆盖 `kind/path/host/port/frame/block_samples/poll_interval_s/tail_from_end/sim_speed/watch_dir_newest/struct_fmt/struct_fields/custom_time/custom_time_start/play_start_mode/play_start_value/windows/duration_s` |
+| `GET /api/compare/{quantity}?offset_s&tol_s&hours&max_points`、`GET /api/compare` | **跨侧对齐与差值**（v0.14.1）：总线/分路最近邻配对，`diff`＝总线−分路、`ratio_pct`＝分路/总线×100；偏移/容差默认取总线侧 `config.branch.time_offset_s / align_tol_s` |
 | `/api/branch/<任意上述接口>`、`/ws/branch` | **分路侧设备**：与总线侧同名同语义的全套接口（v0.13）；`GET /api/sides` 两侧概览 |
 | `POST /api/engine/pause` / `resume` | **离线文件源**暂停 / 恢复播放（v0.12）：暂停＝不读文件、不计算、数据时刻原地不动，缓冲/历史/事件保留；恢复＝从暂停处继续。非 `csv_file`、未运行、已播完 → 400 `{error}`；`/api/state` 增 `paused` / `pausable` / `paused_total_s` |
 | `POST /api/engine/stop` | 停止引擎（结果仍可查询/导出） |
@@ -1203,6 +1204,7 @@ python cli.py selftest                            # 实测：44/44，worst_rel_e
 ---
 
 ## 🗒 变更记录
+- **v0.14.1（2026-10-14）**：按用户 5 条要求补齐双侧机制——①分路侧配置**全部集中**在总览的「数据源与控制」页（分路侧分组不再有数据源项）；②两侧导航徽标（事件 / 负荷辨识）都实时刷新：当前侧用引擎计数，对侧用 state 中的对侧摘要（`branch` / `bus`，含 `events_active`）；③**跨侧时间轴对齐与差值**：`GET /api/compare/{quantity}`（最近邻配对，`offset_s` 分路侧时标偏移、`tol_s` 容差默认＝输出步长×0.6；返回 `bus/branch/diff(总线−分路)/ratio_pct(分路/总线)`）与 `GET /api/compare`（各量最新一组），总览组新增「跨侧对比」页（表格 + 两侧曲线 + 差值/占比曲线 + 「按起点对齐」+ 保存偏移），偏移/容差存总线侧 `config.branch.time_offset_s / align_tol_s`；④顶栏**始终**显示对侧状态胶囊（总线侧看分路侧、分路侧看总线侧，标签随侧切换）；⑤总线侧与分路侧的**量纲与口径分别配置、分别保存**（PT/CT、fs、额定频率、频率自适应、电压列含义、最高谐波次数、S/Q 口径——分路侧写入 `configs/branch_runtime.json`）。ui_r14 36 项、全量 pytest 275。
 - **v0.14（2026-10-14）**：左侧导航按侧别重组为三组——①「总览」＝总览面板 + 数据源与控制（总线侧上下文，总览面板顶部新增两侧数据源状态卡）；②「总线侧」＝总线侧数据源计算的全部电气量子界面（电压…负荷辨识 + 窗口配置 / 导出）；③「分路侧」＝分路侧设备数据源计算的同一套子界面（另含「分路侧数据源与口径」用于改采样率 / PT-CT）。侧别由点击的导航分组决定（不再有顶栏切换按钮、不再记忆到 localStorage），分组标题徽标显示分路侧运行状态；「工具」组放算法自检 / 数据处理。ui_r14 27 项。
 - **v0.13.1（2026-10-14）**：分路侧限定离线文件模式——面板改为固定 csv_file + 文件参数（探查 / 选择 / 倍速 / 自定义时间 / UTC / 块大小），总线侧非离线文件时不联动并提示；ui_r14 23 项。
 - **v0.13（2026-10-14，第 14 轮）**：总线侧 + **分路侧设备**双数据源——独立配置/引擎/输出，`/api/branch/*` 与 `/ws/branch`，顶栏侧别切换，总线侧启动/停止/暂停/恢复联动分路侧；`tests/test_r14_branch.py` 4 项、`tools/ui_r14_check.cjs` 19 项，全量 274 passed。
