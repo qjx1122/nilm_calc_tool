@@ -28,6 +28,7 @@ from typing import Any, Deque, Dict, List, Optional, Tuple
 import numpy as np
 
 from .config import AppConfig, EventConfig
+from .timefmt import fmt_local, local_day
 from .metrics import MetricsResult, QuantityResult, _pick
 
 EVENT_TYPES: Dict[str, str] = {
@@ -76,7 +77,7 @@ class Event:
 def _ts(t: Optional[float]) -> str:
     if t is None or not math.isfinite(t):
         return ""
-    return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(t)) + f".{int((t % 1) * 1000):03d}"
+    return fmt_local(t)
 
 
 class EventWriter:
@@ -93,7 +94,7 @@ class EventWriter:
         self.errors: List[str] = []
 
     def _open_for(self, t: float) -> None:
-        day = time.strftime("%Y%m%d", time.localtime(t)) if math.isfinite(t) else "unknown"
+        day = local_day(t)
         path = os.path.join(self.dir, f"events_{day}.csv")
         if self._fh is not None and self._path == path:
             return

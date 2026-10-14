@@ -34,6 +34,7 @@ from elec_tool import __version__
 from elec_tool.config import (AppConfig, ConfigError, CURVE_KEYS, QUANTITY_KEYS, SourceConfig, WindowSpec,
                               load_or_default)
 from elec_tool.engine import LiveEngine
+from elec_tool.timefmt import fmt_local
 from elec_tool.metrics import MetricsResult
 from elec_tool.resample import METHODS as RESAMPLE_METHODS, ResampleError, ResampleJob, resample_csv
 from elec_tool.resample import output_name as resample_output_name
@@ -547,7 +548,7 @@ def _curve_csv(quantity: str, rows: List[Dict[str, Any]]) -> str:
     fields = _curve_fields(rows)
     w.writerow(["t_epoch_s", "time_local", "quantity"] + fields)
     for r in rows:
-        tl = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(r["t"])) + ".%03d" % int((r["t"] % 1.0) * 1000)
+        tl = fmt_local(r["t"])
         w.writerow([repr(float(r["t"])), tl, quantity] + [("" if r.get(f) is None else r.get(f)) for f in fields])
     return buf.getvalue()
 
@@ -656,7 +657,7 @@ async def curves_export(quantity: Optional[str] = None, hours: Optional[float] =
     n = 0
     for k in chosen:
         for r in _curve_rows(k, use_hours):
-            tl = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(r["t"]))
+            tl = fmt_local(r["t"], ms=False)
             for f, v in r.items():
                 if f in ("t", "window_s") or v is None:
                     continue
@@ -766,7 +767,7 @@ async def probe(path: str) -> Dict[str, Any]:
                 "t_first": (float(info.t[0]) if info.t.size else None),
                 "t_first_text": (ts[0] if ts else None),
                 "file_time_utc": bool(cfg.source.file_time_utc), "tz_offset_h": tz_h,
-                "t_first_local": (time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(float(info.t[0]))) if len(info.t) else None),
+                "t_first_local": (fmt_local(float(info.t[0]), ms=False) if len(info.t) else None),
                 "ts_mode": info.mode, "fs_est": info.fs_est, "fs_configured": cfg.sampling.fs,
                 "fs_deviation_pct": (abs(info.fs_est - cfg.sampling.fs) / cfg.sampling.fs * 100
                                      if info.fs_est == info.fs_est else None),

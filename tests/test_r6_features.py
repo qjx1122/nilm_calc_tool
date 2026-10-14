@@ -48,7 +48,7 @@ def test_user_clock_format_parses_to_time_of_day():
     """撤销 _parse_slash_clock → ParseError「时间戳 '0/00/00 00:12:40.0000' 无法解析」。"""
     info = parse_timestamps([ln.split(",")[0] for ln in USER_LINES])
     assert info.mode == "clock_time"
-    assert info.t[0] == pytest.approx(12 * 60 + 40.0)          # 00:12:40 → 760 s
+    assert info.t[0] == pytest.approx(86400 + 12 * 60 + 40.0)  # 00:12:40 → 基准 1970-01-02 + 760 s（F-40）
     assert np.allclose(np.diff(info.t), [0.0001, 0.0002], atol=1e-9)
     assert any("无日期" in n for n in info.notes)
 
@@ -116,7 +116,7 @@ def test_custom_time_off_keeps_file_timestamps(csv_factory, tmp_path):
     blocks, src = _blocks(cfg)
     t = np.concatenate([b.t for b in blocks])
     # v0.10：无日期时标按本地时间解释（source.file_time_utc=False 默认）→ epoch = 当天秒 − 本地时区偏移
-    assert t[0] == pytest.approx(float(d["t"][0]) % 86400.0 - _tz_s(), abs=1e-4)
+    assert t[0] == pytest.approx(86400.0 + float(d["t"][0]) % 86400.0 - _tz_s(), abs=1e-4)   # F-40：无日期基准 1970-01-02
     # 文件时标被 0.1ms 截断 → 间隔不是常数（这正是用户要「自定义时间」的原因）
     assert np.unique(np.round(np.diff(t), 5)).size > 1
     assert src.info()["custom_time"] is False
@@ -130,7 +130,7 @@ def test_custom_time_default_start_is_first_row_and_uniform(csv_factory, tmp_pat
     cfg.source.custom_time, cfg.source.custom_time_start = True, ""
     blocks, src = _blocks(cfg)
     t = np.concatenate([b.t for b in blocks])
-    first_file_t = float(d["t"][0]) % 86400.0 - _tz_s()
+    first_file_t = 86400.0 + float(d["t"][0]) % 86400.0 - _tz_s()
     assert t[0] == pytest.approx(math.floor(first_file_t * 10000) / 10000, abs=1e-9)   # 文件第 1 条（截断后）
     assert np.allclose(np.diff(t), 1.0 / FS, atol=1e-9)                                # 严格等间隔
     assert t[-1] - t[0] == pytest.approx((t.size - 1) / FS, abs=1e-7)                  # 跨块连续，不重置

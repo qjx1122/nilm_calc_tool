@@ -19,11 +19,12 @@ import time
 from typing import Any, Dict, List, Optional
 
 from .config import AppConfig, CURVE_KEYS
+from .timefmt import fmt_local, local_day
 from .metrics import MetricsResult, curve_record
 
 
 def _time_local(t: float) -> str:
-    return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(t)) + ".%03d" % int((t % 1.0) * 1000)
+    return fmt_local(t)
 
 
 class RealtimeCurveWriter:
@@ -82,7 +83,7 @@ class RealtimeCurveWriter:
 
     # ---------- 内部 ----------
     def _append(self, key: str, t: float, rec: Dict[str, Any]) -> None:
-        day = time.strftime("%Y%m%d", time.localtime(t))
+        day = local_day(t)
         f = self._files.get(key)
         if f is None or f["day"] != day:
             if f is not None:

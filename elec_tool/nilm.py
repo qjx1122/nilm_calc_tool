@@ -32,6 +32,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 
 from .blocks import SampleBlock
+from .timefmt import fmt_local, local_day
 from .config import AppConfig, NILM_ALGO_DEFAULTS, NILM_ALGO_NAMES, NILM_CHANNELS, NilmConfig
 
 __all__ = ["NilmEvent", "NilmDetector", "CycleFeatures", "detect_steps", "NILM_ALGO_NAMES"]
@@ -44,7 +45,7 @@ _CSV_FIELDS = ["id", "algorithm", "algorithm_name", "channel", "t_start", "t_sta
 def _ts(t: Optional[float]) -> str:
     if t is None or not math.isfinite(t):
         return ""
-    return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(t)) + f".{int((t % 1) * 1000):03d}"
+    return fmt_local(t)
 
 
 @dataclass
@@ -356,7 +357,7 @@ class NilmWriter:
         self.errors: List[str] = []
 
     def _open_for(self, t: float) -> None:
-        day = time.strftime("%Y%m%d", time.localtime(t)) if math.isfinite(t) else "unknown"
+        day = local_day(t)
         path = os.path.join(self.dir, f"nilm_events_{day}.csv")
         if self._fh is not None and self._path == path:
             return

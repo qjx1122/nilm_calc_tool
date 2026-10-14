@@ -30,6 +30,7 @@ import numpy as np
 from elec_tool import __version__
 from elec_tool.blocks import SampleBlock
 from elec_tool.config import AppConfig, ConfigError, QUANTITY_KEYS, WindowSpec, load_or_default
+from elec_tool.timefmt import fmt_local
 from elec_tool.engine import LiveEngine
 from elec_tool.metrics import MetricsResult
 from elec_tool.scaling import scale_block
@@ -92,7 +93,7 @@ def print_result_table(res: MetricsResult, keys: Optional[Sequence[str]] = None,
                        show_window: bool = True) -> None:
     """按子界面分组打印关键指标（对齐需求②③的分界面组织方式）。"""
     keys = list(keys or QUANTITY_KEYS)
-    t_str = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(res.t_ref)) if np.isfinite(res.t_ref) else "—"
+    t_str = fmt_local(res.t_ref, ms=False) if np.isfinite(res.t_ref) else "—"
     print("=" * 78)
     print(f"数据时刻 {t_str}   fs={res.fs:.0f}Hz   f={res.f_used:.4f}Hz({res.f_source})   "
           f"PT={res.meta.get('pt_ratio')} CT={res.meta.get('ct_ratio')}")
@@ -157,7 +158,7 @@ def _fmt_clock(t_ref: float) -> str:
     if not np.isfinite(t_ref):
         return "--"
     try:
-        return time.strftime("%H:%M:%S", time.localtime(float(t_ref)))
+        return fmt_local(float(t_ref), ms=False, date=False)
     except (OverflowError, OSError, ValueError):
         return f"t={t_ref:.6g}"      # 时间轴异常时原样显示，便于定位（如帧格式不匹配）
 

@@ -961,6 +961,7 @@ U9-5 真实文件：事件分布=____
 |---|---|---|---|
 | F-38 | 绝对 W 门槛在一次侧（MW 级）失效：threshold/steady_state 的 20/30 W 容差小于 1.5 MW 的周波噪声 → 0 事件；CUSUM 起点因 k=10 W 过小提前 13 周波；噪声触发的起点被「粘」到后面的阶跃 | 新增 `rel_tol_pct`（默认 1%）/`min_delta_pct`（默认 0）按窗内 \|P\| 中位数折算；阈值差分触发量取 max(min_delta/2, 容差)，起点精修到越过 Δ/2 的周波 | ✅ |
 | F-39 | 全量测试 4 次中 1 次 1 项失败，未捕获用例名，复跑未再现 | 观察；下轮全量加 `-rf` 输出 | 🔶 |
+| F-40 | （用户回报 2026-10-13，Windows）离线文件（自定义时间）启动后 `GET /api/nilm/events` 500：`time.localtime(t)` → `OSError: [Errno 22] Invalid argument` | 根因：无日期时标 `0/00/00 HH:MM:SS` 基准为 1970-01-01，v0.10 起按本地时间解释（UTC+8 减 8 h）→ **负 epoch**；Linux 的 localtime 接受负值而 Windows CRT 直接报错，沙盒因此没暴露。修法：① `_NO_DATE_BASE` 改 1970-01-02（任何时区偏移后仍为正）；② 新增 `elec_tool/timefmt.py`（`fmt_local/local_day/local_tod_s`：localtime 失败时用 datetime 手工换算），nilm / events / realtime_writer / server 导出与 probe / cli / `_tod_of` 全部出口改走它；③ `tests/test_f40_negative_epoch.py` 3 项用 monkeypatch 模拟 Windows localtime（负值抛 OSError）+ 东八区复现并回归；全量 **260 passed**（UTC 与 Asia/Shanghai） | ✅ |
 | — | `test_r7` 的 `fmtTip` 计数硬编码 8 → 9 | 已改 | ✅ |
 
 ### 用户执行命令（U12 组：浏览器手点，🔶待回报）
@@ -1073,6 +1074,7 @@ U10-4 B/C 相为 0：____  U10-5 列号交换：Ia≈____  U10-6 无时间戳：
 ---
 
 ## 🗒 变更记录
+- v0.11.1（2026-10-13）：T-010 追加 **F-40**（用户 Windows 回报：无日期时标按本地解释后为负 epoch → localtime OSError → 负荷辨识接口 500；基准改 1970-01-02 + 统一安全格式化出口 `timefmt`；全量 260 passed）。
 - v0.11（2026-10-13）：追加专题 **T-010**（第 12 轮：负荷辨识子界面·逐周波事件检测）：S1~S6 实录、F-38~F-39、U12 组执行包。
 - v0.10（2026-10-13）：追加专题 **T-009**（第 11 轮：离线文件时标 UTC 开关）：S1~S4 实录、F-36~F-37、U11 组执行包。
 - v0.9（2026-10-13）：追加专题 **T-008**（第 10 轮：离线文件列映射开关）：沙盒侧 S1~S4 实录、F-33~F-35、U10 组执行包。

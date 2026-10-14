@@ -46,7 +46,7 @@ _RE_SLASH_CLOCK = re.compile(
 # 无日期（日期段全 0）时的时间基准：epoch 日 0（1970-01-01 00:00:00 UTC）。
 # 这样 t 仍是「epoch 秒」语义（界面按 时:分:秒 显示正确），而绝对日期由
 # source.custom_time_start 指定（离线播放自定义时间功能）。
-_NO_DATE_BASE = 0.0
+_NO_DATE_BASE = 86400.0        # 1970-01-02：减去 UTC+14 以内的任何时区偏移仍为正 epoch（Windows localtime 不接受负值，F-40）
 
 
 def local_utc_offset_h(t: Optional[float] = None) -> float:
@@ -410,8 +410,8 @@ def _tod_of(t: float, mode: str, tz_offset_h: float = 0.0) -> float:
     """时标的「当天时刻」秒数：无日期写法（clock_time）按解释偏移还原文件时刻；带日期的按本地时间取时刻（与界面显示一致）。"""
     if mode == "clock_time":
         return (float(t) + tz_offset_h * 3600.0) % 86400.0
-    lt = time.localtime(t)
-    return lt.tm_hour * 3600.0 + lt.tm_min * 60.0 + lt.tm_sec + (float(t) % 1.0)
+    from ..timefmt import local_tod_s
+    return local_tod_s(t)
 
 
 def _seek_rows(reader, first_rows: List[List[str]], n_skip: int) -> Tuple[List[List[str]], int]:
