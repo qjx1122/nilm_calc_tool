@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import json
 import os
 import threading
@@ -47,6 +48,10 @@ DEFAULT_CONFIG_PATH = os.path.join(ROOT, "configs", "default.json")
 # 出厂模板 configs/default.json 必须保持干净（入库、可回溯）；用户在界面里改的
 # 配置与数据源选择落到 configs/runtime.json（gitignore），下次启动优先加载它。
 RUNTIME_CONFIG_PATH = os.path.join(ROOT, "configs", "runtime.json")
+BRANCH_CONFIG_PATH = os.path.join(ROOT, "configs", "branch.json")            # 分路侧出厂模板（可不存在）
+BRANCH_RUNTIME_CONFIG_PATH = os.path.join(ROOT, "configs", "branch_runtime.json")
+SIDES = ("bus", "branch")
+SIDE_LABELS = {"bus": "总线侧", "branch": "分路侧设备"}
 
 
 def _resolve_cfg_paths() -> Tuple[str, str]:
@@ -78,7 +83,8 @@ def _safe(fn, default):
 class EngineRunner:
     """在后台线程跑引擎，把结果广播给 WebSocket 客户端。"""
 
-    def __init__(self, maxlen: int = 2000):
+    def __init__(self, maxlen: int = 2000, side: str = "bus"):
+        self.side = side
         self.lock = threading.RLock()
         self.engine: Optional[LiveEngine] = None
         self.thread: Optional[threading.Thread] = None
@@ -350,6 +356,9 @@ class EngineRunner:
             latest_keys = list(self.latest.quantities) if self.latest else []
             return {
                 "version": __version__,
+                "side": self.side,
+                "side_label": SIDE_LABELS.get(self.side, self.side),
+                "branch": (_branch_summary() if self.side == "bus" else None),
                 "running": bool(self.thread and self.thread.is_alive() and not self.stop_event.is_set() and not self._thread_done),
                 "paused": bool(self.pause_event.is_set() and self.thread and self.thread.is_alive() and not self.stop_event.is_set() and not self._thread_done),
                 "pausable": bool(eng is not None and eng.cfg.source.kind == "csv_file"),
@@ -381,38 +390,200 @@ class EngineRunner:
             return self.latest.to_dict() if self.latest else None
 
 
-RUNNER = EngineRunner()
+# ------------------------------------------------------------------ 两侧数据源（第 14 轮）
+# 总线侧（bus）＝原有数据源；分路侧设备（branch）＝一份完全独立的配置 + 独立引擎。
+# 所有 REST/WS 接口按「当前侧」解析：`/api/branch/<同名接口>`、`/ws/branch` 由 _SideRouter 改写路径并设置
+# contextvar；`RUNNER` 是按 contextvar 取对应 EngineRunner 的代理，既有接口代码一行不改即可同时服务两侧。
+RUNNERS: Dict[str, EngineRunner] = {s: EngineRunner(side=s) for s in SIDES}
+_SIDE: contextvars.ContextVar[str] = contextvars.ContextVar("elec_side", default="bus")
+
+
+def current_side() -> str:
+    return _SIDE.get()
+
+
+class _RunnerProxy:
+    """RUNNER.xxx → RUNNERS[当前侧].xxx（属性读写都转发）。"""
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(RUNNERS[_SIDE.get()], name)
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        setattr(RUNNERS[_SIDE.get()], name, value)
+
+
+RUNNER: Any = _RunnerProxy()
+
+
+class _SideRouter:
+    """纯 ASGI 中间件：/api/branch/... → /api/...（side=branch）；/ws/branch → /ws。HTTP 与 WebSocket 都覆盖。"""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope.get("type") in ("http", "websocket"):
+            path = scope.get("path", "")
+            side = "bus"
+            if path.startswith("/api/branch/"):
+                scope = dict(scope); scope["path"] = "/api/" + path[len("/api/branch/"):]
+                scope["raw_path"] = scope["path"].encode()
+                side = "branch"
+            elif path == "/ws/branch":
+                scope = dict(scope); scope["path"] = "/ws"; scope["raw_path"] = b"/ws"
+                side = "branch"
+            token = _SIDE.set(side)
+            try:
+                return await self.app(scope, receive, send)
+            finally:
+                _SIDE.reset(token)
+        return await self.app(scope, receive, send)
+
+
+def _branch_summary() -> Dict[str, Any]:
+    """总线侧 /api/state 里的分路侧摘要（界面顶栏与数据源页用）。"""
+    br = RUNNERS["branch"]
+    bus = RUNNERS["bus"]
+    try:
+        enabled = bool(bus.cfg.branch.enabled)
+    except Exception:
+        enabled = False
+    with br.lock:
+        eng = br.engine
+        running = bool(br.thread and br.thread.is_alive() and not br.stop_event.is_set() and not br._thread_done)
+        st = eng.state if eng else None
+        try:
+            src = eng.cfg.source if eng else None
+        except Exception:
+            src = None
+    return {
+        "enabled": enabled, "label": SIDE_LABELS["branch"], "config_path": br.cfg_path,
+        "running": running, "paused": bool(running and br.pause_event.is_set()),
+        "finished": bool(st and st.finished), "error": br.error,
+        "source_kind": (src.kind if src else None), "source_path": (src.path if src else None),
+        "samples_in": int(st.samples_in) if st else 0,
+        "data_t_end": (st.data_t_end if st else None),
+        "events_total": int(getattr(st, "events_total", 0) or 0) if st else 0,
+        "nilm_events_total": int(getattr(st, "nilm_events_total", 0) or 0) if st else 0,
+    }
+
+
+def _default_branch_cfg() -> AppConfig:
+    """分路侧没有配置文件时的出厂值：与总线侧同模板，但输出目录分开、数据源留空。"""
+    cfg = AppConfig()
+    cfg.name = "分路侧设备电气量"
+    cfg.source.kind = "simulator"; cfg.source.path = ""        # 出厂占位：界面「数据源」页改成 csv_file + 路径
+    cfg.output.realtime_dir = "output/branch/realtime"; cfg.output.export_dir = "output/branch"
+    cfg.events.events_dir = "output/branch/events"; cfg.nilm.nilm_dir = "output/branch/nilm"
+    return cfg
+
+
+def _resolve_branch_cfg_paths(bus_cfg: Optional[AppConfig]) -> Tuple[str, str]:
+    env_path = os.environ.get("ELEC_TOOL_BRANCH_CONFIG_PATH", "").strip()
+    if env_path:
+        return env_path, env_path
+    tmpl = BRANCH_CONFIG_PATH
+    try:
+        if bus_cfg is not None and bus_cfg.branch.config_path:
+            p = bus_cfg.branch.config_path
+            tmpl = p if os.path.isabs(p) else os.path.join(ROOT, p)
+    except Exception:
+        pass
+    load_path = BRANCH_RUNTIME_CONFIG_PATH if os.path.exists(BRANCH_RUNTIME_CONFIG_PATH) else tmpl
+    return load_path, BRANCH_RUNTIME_CONFIG_PATH
+
+
+def _init_branch_runner(bus_cfg: Optional[AppConfig]) -> None:
+    br = RUNNERS["branch"]
+    cfg_path, persist_path = _resolve_branch_cfg_paths(bus_cfg)
+    br.cfg_path = cfg_path; br.persist_path = persist_path
+    try:
+        cfg = AppConfig.load(cfg_path) if os.path.isfile(cfg_path) else _default_branch_cfg().validate()
+        br.set_cfg(cfg)
+    except Exception as exc:
+        try:
+            br.set_cfg(_default_branch_cfg().validate())
+        except Exception:
+            pass
+        br.error = f"分路侧配置初始化失败：{type(exc).__name__}: {exc}"
 
 
 async def _startup() -> None:
-    RUNNER.bind_loop(asyncio.get_running_loop())
+    loop = asyncio.get_running_loop()
+    for r in RUNNERS.values():
+        r.bind_loop(loop)
+    bus = RUNNERS["bus"]
     cfg_path, persist_path = _resolve_cfg_paths()
-    RUNNER.cfg_path = cfg_path
-    RUNNER.persist_path = persist_path
+    bus.cfg_path = cfg_path
+    bus.persist_path = persist_path
     env_cfg = os.environ.get("ELEC_TOOL_CONFIG")
     try:
         if env_cfg:
-            RUNNER.set_cfg(AppConfig.from_dict(json.loads(env_cfg)))
+            bus.set_cfg(AppConfig.from_dict(json.loads(env_cfg)))
         else:
-            RUNNER.set_cfg(load_or_default(cfg_path))
+            bus.set_cfg(load_or_default(cfg_path))
     except Exception as exc:
-        RUNNER.error = f"配置初始化失败：{type(exc).__name__}: {exc}"
+        bus.error = f"配置初始化失败：{type(exc).__name__}: {exc}"
+    try:
+        _init_branch_runner(bus.cfg)
+    except Exception as exc:
+        RUNNERS["branch"].error = f"分路侧初始化失败：{type(exc).__name__}: {exc}"
     auto = os.environ.get("ELEC_TOOL_AUTOSTART", "").strip()
     if auto:
         try:
-            RUNNER.start(RUNNER.cfg)
+            bus.start(bus.cfg)
         except Exception as exc:
-            RUNNER.error = f"自动启动失败：{type(exc).__name__}: {exc}"
+            bus.error = f"自动启动失败：{type(exc).__name__}: {exc}"
+
+
+def _start_branch_if_enabled(bus_cfg: AppConfig) -> Optional[Dict[str, Any]]:
+    """总线侧启动后联动分路侧（仅 enabled 时）。返回分路侧启动结果；失败只记录、不影响总线侧。"""
+    if not bus_cfg.branch.enabled:
+        return {"ok": False, "skipped": True, "reason": "分路侧未启用"}
+    br = RUNNERS["branch"]
+    try:
+        cfg = AppConfig.from_dict(br.cfg.to_dict())
+        if cfg.source.kind in ("csv_file", "csv_tail") and cfg.source.path and not os.path.isabs(cfg.source.path):
+            cand = os.path.join(ROOT, cfg.source.path)
+            if os.path.exists(cand):
+                cfg.source.path = cand
+        br.start(cfg)
+        br.error = None
+        return {"ok": True, "source_kind": cfg.source.kind, "path": cfg.source.path}
+    except Exception as exc:
+        msg = f"{type(exc).__name__}: {exc}"
+        br.error = f"分路侧启动失败：{msg}"
+        br.broadcast({"type": "state", "data": br.state()})
+        return {"ok": False, "error": msg}
 
 
 @asynccontextmanager
 async def lifespan(_app: "FastAPI"):
     await _startup()
     yield
-    RUNNER.stop(quiet=True)
+    for r in RUNNERS.values():
+        r.stop(quiet=True)
 
 
 app = FastAPI(title="电力系统电气量计算工具", version=__version__, lifespan=lifespan)
+app.add_middleware(_SideRouter)
+
+
+@app.get("/api/sides")
+async def get_sides() -> Dict[str, Any]:
+    """两侧概览：标签、配置文件、运行状态（界面侧别切换器用）。"""
+    out = {}
+    for s, r in RUNNERS.items():
+        with r.lock:
+            eng = r.engine
+            running = bool(r.thread and r.thread.is_alive() and not r.stop_event.is_set() and not r._thread_done)
+            st = eng.state if eng else None
+        out[s] = {"label": SIDE_LABELS[s], "config_path": r.cfg_path, "running": running,
+                  "paused": bool(running and r.pause_event.is_set()), "finished": bool(st and st.finished),
+                  "error": r.error, "api_prefix": ("/api/branch" if s == "branch" else "/api"),
+                  "ws_path": ("/ws/branch" if s == "branch" else "/ws")}
+    out["bus"]["branch_enabled"] = bool(RUNNERS["bus"].cfg.branch.enabled) if RUNNERS["bus"].engine else False
+    return {"ok": True, "sides": out, "current": current_side()}
 
 
 # ------------------------------------------------------------------ REST
@@ -498,7 +669,10 @@ async def engine_start(payload: Optional[Dict[str, Any]] = None) -> Any:
             if os.path.exists(cand):
                 cfg.source.path = cand
         RUNNER.start(cfg, duration_s=payload.get("duration_s"))
-        return {"ok": True, "config": cfg.to_dict()}
+        out: Dict[str, Any] = {"ok": True, "side": current_side(), "config": cfg.to_dict()}
+        if current_side() == "bus" and payload.get("with_branch", True):
+            out["branch"] = _start_branch_if_enabled(cfg)
+        return out
     except ConfigError as exc:
         return JSONResponse(status_code=400, content={"ok": False, "error": str(exc)})
     except Exception as exc:
@@ -511,6 +685,8 @@ async def engine_pause() -> Any:
     r = RUNNER.pause()
     if not r["ok"]:
         return JSONResponse(status_code=400, content=r)
+    if current_side() == "bus":
+        r["branch"] = RUNNERS["branch"].pause()   # 联动；分路侧不可暂停（未运行/非文件源）只记结果
     r["state"] = RUNNER.state()
     return r
 
@@ -521,6 +697,8 @@ async def engine_resume() -> Any:
     r = RUNNER.resume()
     if not r["ok"]:
         return JSONResponse(status_code=400, content=r)
+    if current_side() == "bus":
+        r["branch"] = RUNNERS["branch"].resume()
     r["state"] = RUNNER.state()
     return r
 
@@ -528,6 +706,8 @@ async def engine_resume() -> Any:
 @app.post("/api/engine/stop")
 async def engine_stop() -> Dict[str, Any]:
     RUNNER.stop()
+    if current_side() == "bus":
+        RUNNERS["branch"].stop()                  # 总线侧停止 → 分路侧一并停止（未运行时无副作用）
     return {"ok": True, "state": RUNNER.state()}
 
 

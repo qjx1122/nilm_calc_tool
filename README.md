@@ -438,6 +438,23 @@ CLI 同等能力：`.venv/bin/python cli.py resample "data/波形_农业排灌_�
 - 验证：`tests/test_r12_nilm.py` 8 项；`tools/ui_r12_check.cjs` 16 项；全量 **257 passed**。
 - **调参**：运维向手册 **[`NILM_TUNING_GUIDE.md`](NILM_TUNING_GUIDE.md)**（每个参数管什么 / 先量 σ 与最小关心负荷 / 推荐公式 / 现象→对策 / 典型现场套路 / 验证流程）；配套 `python tools/nilm_tune.py --file <背景.csv> [--min-load-w N] [--json]` 自动量噪声并给 6 算法起点参数（`tests/test_nilm_tune_tool.py` 证明建议参数在同噪声下检出恰为最小负荷的阶跃、纯噪声 0 误报）。
 
+#### 总线侧 + 分路侧设备 双数据源（v0.13，第 14 轮）
+
+> 原有数据源即**总线侧**；新增**分路侧设备数据源**——一份完全独立的配置（数据源 / 采样 / PT-CT / 窗口 / 事件阈值 / 负荷辨识参数）+ 独立引擎，计算同一套电气量，所有子界面按「当前侧」显示。
+
+| 项 | 总线侧（bus） | 分路侧设备（branch） |
+|---|---|---|
+| 配置文件 | `configs/runtime.json`（模板 `default.json`） | `configs/branch_runtime.json`（模板 `configs/branch.json`；或 `ELEC_TOOL_BRANCH_CONFIG_PATH`） |
+| REST / WS | `/api/...`、`/ws` | **`/api/branch/...`（与总线侧同名同语义）**、`/ws/branch` |
+| 输出目录（出厂） | `output/realtime` `output/events` `output/nilm` | `output/branch/realtime` `output/branch/events` `output/branch/nilm` |
+| 概览接口 | `GET /api/sides`（两侧标签 / 配置文件 / 运行状态 / 前缀） | 同左 |
+
+- **界面**：顶栏「总线侧 | 分路侧设备」切换器（记忆在浏览器）；切换后左侧全部子界面（总览、电压/电流/功率、谐波、间谐波、直流、事件、负荷辨识、窗口配置、数据源…）显示并编辑**当前侧**的数据与配置；分路侧时页眉带橙色标识。顶栏新增「分路侧」状态胶囊（未启用 / 运行中 / 已暂停 / 已完成 / 错误，点击即切换）。
+- **启用与联动**：总线侧「数据源」页新增面板「分路侧设备数据源」：勾选 **启用** + 输入方式 / 路径 / 播放倍速 →「保存分路侧数据源」（开关存总线侧 `branch.enabled`，源参数存分路侧配置）。启用后总线侧**「启动」会同时启动分路侧；「停止 / 暂停 / 恢复」联动**（分路侧不可暂停时忽略）。分路侧也可单独控制：切到分路侧后点「启动 / 停止 / 暂停」只作用于分路侧（`/api/branch/engine/*`）。
+- 分路侧启动失败（如路径不存在）不影响总线侧：错误显示在胶囊与面板，`/api/state.branch.error`。
+- **假设（按此实现，可改）**：① 两侧时间轴独立，不做对齐/同步（各自按文件时标或自定义时间播放，倍速各自设置）；② 不做总线−分路差值/占比等跨侧计算（后续可加「分路对账」子界面）；③ CLI 不变（一次只跑一份配置，分路侧用 `--config configs/branch_runtime.json` 即可）；④ 测试环境变量 `ELEC_TOOL_*_DIR` 对两侧同时生效。
+- 验证：`tests/test_r14_branch.py` 4 项（两侧配置隔离与各自持久化 / 联动启动-暂停-恢复-停止与分路侧单独控制、两侧结果独立 / `/ws/branch` 与分路侧落盘 / 前端接线）；`tools/ui_r14_check.cjs` **19/19**（jsdom 走真实界面：配置分路侧 → 总线启动两侧同播 → 联动暂停 → 切侧后总览/负荷辨识显示分路侧数据 → 联动停止）；全量 **274 passed**。
+
 #### 离线文件的暂停 / 恢复播放（v0.12）
 
 > 顶栏「暂停」按钮与「数据源」页「暂停播放」按钮（同一功能），**只在离线文件（`csv_file`）源运行且未播完时可用**，其他源置灰并提示。
@@ -646,6 +663,7 @@ THDu(A)  = 10.593 %   5次 = 346.4 V
 | `GET /api/config` | 读当前生效配置 |
 | `PUT /api/config` | **深合并**局部更新（只传要改的字段）并热更新到运行中的引擎；非法值返回 400 + 中文原因 |
 | `POST /api/engine/start` | 启动引擎；body 可覆盖 `kind/path/host/port/frame/block_samples/poll_interval_s/tail_from_end/sim_speed/watch_dir_newest/struct_fmt/struct_fields/custom_time/custom_time_start/play_start_mode/play_start_value/windows/duration_s` |
+| `/api/branch/<任意上述接口>`、`/ws/branch` | **分路侧设备**：与总线侧同名同语义的全套接口（v0.13）；`GET /api/sides` 两侧概览 |
 | `POST /api/engine/pause` / `resume` | **离线文件源**暂停 / 恢复播放（v0.12）：暂停＝不读文件、不计算、数据时刻原地不动，缓冲/历史/事件保留；恢复＝从暂停处继续。非 `csv_file`、未运行、已播完 → 400 `{error}`；`/api/state` 增 `paused` / `pausable` / `paused_total_s` |
 | `POST /api/engine/stop` | 停止引擎（结果仍可查询/导出） |
 | `GET /api/result?full=true|false` | 最新结果；`full=true` 强制按当前缓冲把七类量都算一遍，`false` 取最近缓存；无结果返回 409 |
@@ -1185,6 +1203,7 @@ python cli.py selftest                            # 实测：44/44，worst_rel_e
 ---
 
 ## 🗒 变更记录
+- **v0.13（2026-10-14，第 14 轮）**：总线侧 + **分路侧设备**双数据源——独立配置/引擎/输出，`/api/branch/*` 与 `/ws/branch`，顶栏侧别切换，总线侧启动/停止/暂停/恢复联动分路侧；`tests/test_r14_branch.py` 4 项、`tools/ui_r14_check.cjs` 19 项，全量 274 passed。
 - **v0.12.2（2026-10-14，F-42）**：离线文件**播放倍速** `source.file_speed`（界面「离线文件播放倍速」默认 1× 真实速率；0＝不限速为配置/CLI 默认）——此前不限速导致几秒播完、暂停按钮点下去已结束（400）；静态资源版本号 + no-cache；状态看门狗无条件校对。`tests/test_r13b_file_speed.py` 4 项、`tools/ui_r13_check.cjs` 12 项，全量 270 passed。
 - **v0.12.1（2026-10-14，F-41）**：离线文件播完界面不自动翻「已完成」——终态 state 推送移到引擎停止之后、WS 状态推送抗异常、前端 2 s 状态看门狗；回归用例 1 项，全量 266 passed。
 - **v0.12（2026-10-14，第 13 轮）**：离线文件源**暂停 / 恢复播放**（`POST /api/engine/pause|resume`、顶栏与数据源页按钮、状态 `paused/pausable/paused_total_s`）；`tests/test_r13_pause.py` 3 项，全量 265 passed。

@@ -749,6 +749,28 @@ class NilmConfig:
 
 
 @dataclass
+class BranchConfig:
+    """分路侧设备数据源的挂接（第 14 轮）。只在**总线侧**配置里有意义。
+
+    分路侧本身是一份完整、独立的 AppConfig（数据源 / 采样 / 变比 / 窗口 / 事件 / 负荷辨识 全部独立），
+    存放在 ``config_path``；``enabled=True`` 时总线侧「启动播放」会同时启动分路侧。
+    """
+
+    enabled: bool = False
+    config_path: str = "configs/branch.json"
+    label: str = "分路侧设备"
+
+    def validate(self) -> None:
+        if not str(self.config_path).strip():
+            raise ConfigError("branch.config_path 不能为空")
+
+    @classmethod
+    def from_dict(cls, d: Dict[str, Any]) -> "BranchConfig":
+        keep = {k: v for k, v in d.items() if k in cls.__dataclass_fields__}
+        return cls(**keep)
+
+
+@dataclass
 class AppConfig:
     """顶层配置。持久化为 JSON（configs/default.json）。"""
 
@@ -762,6 +784,7 @@ class AppConfig:
     output: OutputConfig = field(default_factory=OutputConfig)
     events: EventConfig = field(default_factory=EventConfig)
     nilm: NilmConfig = field(default_factory=NilmConfig)
+    branch: BranchConfig = field(default_factory=BranchConfig)
     windows: Dict[str, WindowSpec] = field(default_factory=default_windows)
 
     # ---------- 派生量 ----------
@@ -789,6 +812,7 @@ class AppConfig:
         self.output.validate()
         self.events.validate()
         self.nilm.validate()
+        self.branch.validate()
         for name, spec in self.windows.items():
             spec.validate(name, self.sampling.fs)
         missing = [k for k in QUANTITY_KEYS if k not in self.windows]
@@ -815,7 +839,7 @@ class AppConfig:
         for key, klass in (
             ("sampling", SamplingConfig), ("transform", TransformConfig), ("harmonic", HarmonicConfig),
             ("power", PowerConfig), ("columns", ColumnMap), ("source", SourceConfig),
-            ("events", EventConfig), ("nilm", NilmConfig),
+            ("events", EventConfig), ("nilm", NilmConfig), ("branch", BranchConfig),
         ):
             if isinstance(d.get(key), dict):
                 setattr(cfg, key, klass.from_dict(d[key]))

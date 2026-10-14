@@ -96,3 +96,11 @@ input:disabled, select:disabled { cursor: not-allowed; }
 .progress-bar.err { background: #ef4444; }
 .progress-bar.done { background: #22c55e; }
 .btnrow { display: flex; gap: 8px; flex-wrap: wrap; margin: 8px 0; }
+/* 第 14 轮：侧别切换 */
+.sideswitch{display:inline-flex;margin-left:14px;border:1px solid #2b3a5c;border-radius:8px;overflow:hidden;vertical-align:middle}
+.sideswitch button{background:transparent;border:0;color:var(--mut);padding:4px 12px;font-size:12px;cursor:pointer}
+.sideswitch button.on{background:var(--acc);color:#0b1020;font-weight:600}
+.sidetag{font-size:12px;padding:1px 8px;border-radius:10px;background:#22304d;color:var(--mut);vertical-align:middle;margin-left:6px}
+body.side-branch .sidetag{background:#3a2a12;color:var(--warn)}
+body.side-branch header{box-shadow:inset 0 3px 0 var(--warn)}
+.notes.muted{color:var(--mut);font-size:12px}

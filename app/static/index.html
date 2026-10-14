@@ -11,13 +11,17 @@
   <div class="brand">
     <span class="logo">⚡</span>
     <div>
-      <h1>电力系统电气量计算工具</h1>
+      <h1>电力系统电气量计算工具 <span id="side-title" class="sidetag">总线侧</span></h1>
       <div class="sub" id="subtitle">nilm_calc_tool · elec_tool</div>
+    </div>
+    <div class="sideswitch" title="切换当前查看/配置的数据源侧别：两侧各自独立配置、独立计算；所有子界面都按当前侧显示">
+      <button id="side-bus" class="on">总线侧</button><button id="side-branch">分路侧设备</button>
     </div>
   </div>
   <div class="topstats">
     <div class="stat"><label>状态</label><span id="st-running" class="pill">未启动</span></div>
     <div class="stat"><label>数据源</label><span id="st-source">—</span></div>
+    <div class="stat" id="st-branch-wrap"><label>分路侧</label><span id="st-branch" class="pill">未启用</span></div>
     <div class="stat"><label>数据时刻</label><span id="st-time">—</span></div>
     <div class="stat"><label>频率</label><span id="st-freq">—</span></div>
     <div class="stat"><label>fs</label><span id="st-fs">—</span></div>
@@ -133,6 +137,34 @@
               <button id="btn-stop2" class="danger">停止</button>
             </div>
           </div>
+        </div>
+        <div class="panel" id="branch-panel">
+          <h3>分路侧设备数据源（与总线侧同时播放）</h3>
+          <div class="form" id="branch-form">
+            <label class="chk"><input id="br-enabled" type="checkbox">
+              启用分路侧设备数据源：总线侧「启动」时同时启动分路侧；「停止 / 暂停 / 恢复」联动</label>
+            <label>分路侧输入方式
+              <select id="br-kind">
+                <option value="csv_file">csv_file · 离线文件</option>
+                <option value="csv_tail">csv_tail · 实时追加文件</option>
+                <option value="tcp">tcp · 实时 TCP</option>
+                <option value="simulator">simulator · 模拟器</option>
+              </select></label>
+            <label>分路侧文件路径 <input id="br-path" placeholder="data/branch.csv"></label>
+            <label>分路侧播放倍速 <select id="br-file-speed">
+                <option value="1">1×（真实速率）</option><option value="2">2×</option><option value="5">5×</option>
+                <option value="10">10×</option><option value="0">不限速（最快）</option></select></label>
+            <div class="row">
+              <button id="btn-br-save" class="primary">保存分路侧数据源</button>
+              <button id="btn-br-goto">切换到分路侧 →（完整配置 / 电气量子界面）</button>
+            </div>
+            <div class="notes" id="br-status"></div>
+            <div class="notes muted">分路侧是一份<b>完全独立</b>的配置（采样率、PT/CT、窗口、事件阈值、负荷辨识参数…），
+              落盘到 <code>configs/branch_runtime.json</code>，输出到 <code>output/branch/</code>。
+              切到分路侧后，左侧所有子界面显示的都是分路侧的计算结果；需要改采样率/变比/窗口时也在分路侧页面改。</div>
+          </div>
+          <div class="notes" id="branch-panel-note" style="display:none">当前正在查看<b>分路侧设备</b>的配置。
+            「是否随总线侧同时播放」的开关在总线侧的本页面；这里的「启动数据源」只启动分路侧。</div>
         </div>
         <div class="panel">
           <h3>量纲与口径</h3>

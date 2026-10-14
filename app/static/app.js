@@ -11,6 +11,7 @@ const PH = ['A', 'B', 'C'];
 const COLORS = { A: '#4ea1ff', B: '#3ddc97', C: '#ffb648', P: '#ff7ac6', Q: '#9d7bff', S: '#5ee0d0' };
 
 const S = {
+  side: (function () { try { return localStorage.getItem('elec_side') === 'branch' ? 'branch' : 'bus'; } catch (e) { return 'bus'; } })(),
   state: null, result: null, view: 'overview',
   ws: null, wsOk: false, poll: null, histCache: {}, histAt: {},
   // 表单脏标记：用户一旦动手编辑，就暂停自动回填。
@@ -459,7 +460,7 @@ function drawQuadrant(cv, P, Q) {
 function connectWS() {
   try {
     const proto = location.protocol === 'https:' ? 'wss://' : 'ws://';
-    S.ws = new WebSocket(proto + location.host + '/ws');
+    S.ws = new WebSocket(proto + location.host + (S.side === 'branch' ? '/ws/branch' : '/ws'));
   } catch (e) { startPolling(); return; }
   S.ws.onopen = () => { S.wsOk = true; if (S.poll) { clearInterval(S.poll); S.poll = null; } setNavFoot('实时推送已连接'); startStateWatch(); };
   S.ws.onmessage = (ev) => {
@@ -484,16 +485,58 @@ function startPolling() {
   if (S.poll) return;
   S.poll = setInterval(async () => {
     try {
-      S.state = await (await fetch('/api/state')).json();
-      const r = await fetch('/api/result?full=false');
+      S.state = await (await fetch(apiUrl('/api/state'))).json();
+      const r = await fetch(apiUrl('/api/result?full=false'));
       if (r.ok) S.result = await r.json();
       renderTop(); render();
     } catch (e) { /* 服务未就绪，忽略本轮 */ }
   }, 1500);
 }
 
+/* 侧别前缀（第 14 轮）：分路侧时 /api/xxx → /api/branch/xxx、/ws → /ws/branch；其余代码不感知侧别 */
+function apiUrl(path) {
+  if (S.side === 'branch' && typeof path === 'string' && path.startsWith('/api/') && !path.startsWith('/api/branch/') && !path.startsWith('/api/sides')) {
+    return '/api/branch/' + path.slice(5);
+  }
+  return path;
+}
+
+async function setSide(side) {
+  side = side === 'branch' ? 'branch' : 'bus';
+  if (side === S.side) return;
+  S.side = side;
+  try { localStorage.setItem('elec_side', side); } catch (e) { /* ignore */ }
+  // 丢弃另一侧的所有缓存，重新连接推送
+  S.state = null; S.result = null; S.histCache = {}; S.histAt = {};
+  S.events = []; S.evSummary = null; S.evLoaded = false;
+  if (typeof NL !== 'undefined') { NL.events = []; NL.summary = null; NL.cycles = null; NL.loaded = false; NL.formBuilt = false; }
+  S.formDirty = false; S.srcDirty = false; S.cfgDirty = false;
+  if (S.ws) { try { S.ws.onclose = null; S.ws.close(); } catch (e) { /* ignore */ } S.ws = null; S.wsOk = false; }
+  applySideUI();
+  try { S.state = await api('/api/state'); } catch (e) { toast('无法获取' + sideLabel() + '状态：' + e.message, 'err'); }
+  try { const r = await fetch(apiUrl('/api/result?full=true')); if (r.ok) S.result = await r.json(); } catch (e) { /* 尚无结果 */ }
+  connectWS();
+  renderTop(); render();
+  setTimeout(refreshHistory, 300);
+  toast('已切换到' + sideLabel(), 'ok');
+}
+
+function sideLabel() { return S.side === 'branch' ? '分路侧设备' : '总线侧'; }
+
+function applySideUI() {
+  document.body.classList.toggle('side-branch', S.side === 'branch');
+  const t = $('#side-title'); if (t) t.textContent = sideLabel();
+  const b1 = $('#side-bus'), b2 = $('#side-branch');
+  if (b1) b1.className = S.side === 'bus' ? 'on' : '';
+  if (b2) b2.className = S.side === 'branch' ? 'on' : '';
+  const bf = $('#branch-form'), bn = $('#branch-panel-note');
+  if (bf) bf.style.display = S.side === 'bus' ? '' : 'none';
+  if (bn) bn.style.display = S.side === 'bus' ? 'none' : '';
+  const sw = $('#st-branch-wrap'); if (sw) sw.style.display = S.side === 'bus' ? '' : 'none';
+}
+
 async function api(path, opt) {
-  const res = await fetch(path, opt);
+  const res = await fetch(apiUrl(path), opt);
   let data = null;
   try { data = await res.json(); } catch (e) { data = { ok: false, error: 'HTTP ' + res.status }; }
   if (!res.ok) throw new Error((data && data.error) || ('HTTP ' + res.status));
@@ -523,6 +566,7 @@ function renderTop() {
   $('#btn-start').disabled = !!eng.running;
   $('#btn-stop').disabled = !eng.running;
   renderPauseButtons(st, eng);
+  renderBranchChip(st.branch);
   setEventBadge(eng.events_active || 0);
 }
 
@@ -571,6 +615,21 @@ function startStateWatch() {
       } else if (now || fresh.paused) renderTop();
     } catch (e) { /* 服务不可达时由 WS onclose 处理 */ }
   }, 2000);
+}
+
+function renderBranchChip(br) {
+  const el = $('#st-branch'); if (!el) return;
+  if (!br) { el.textContent = '—'; el.className = 'pill'; el.title = ''; return; }
+  let txt, cls;
+  if (br.error) { txt = '错误'; cls = 'pill err'; }
+  else if (!br.enabled && !br.running) { txt = '未启用'; cls = 'pill'; }
+  else if (br.paused) { txt = '已暂停'; cls = 'pill warn'; }
+  else if (br.running) { txt = '运行中'; cls = 'pill on'; }
+  else if (br.finished) { txt = '已完成'; cls = 'pill off'; }
+  else { txt = '已启用·未启动'; cls = 'pill'; }
+  el.textContent = txt; el.className = cls;
+  el.title = (br.error ? br.error + '\n' : '') + `源：${br.source_kind || '—'} ${br.source_path || ''}\n样本：${br.samples_in || 0}　事件：${br.events_total || 0}　负荷事件：${br.nilm_events_total || 0}`;
+  el.style.cursor = 'pointer'; el.onclick = () => setSide('branch');
 }
 
 function setEventBadge(n) {
@@ -1042,6 +1101,46 @@ function syncSourceForm() {
   if (pv) pv.placeholder = PLAY_PLACEHOLDER[$('#src-playmode').value] || '';
 }
 
+/* 分路侧面板（总线侧页面）：开关存总线侧 config.branch.enabled；类型/路径/倍速存分路侧 config.source */
+const BR = { loaded: false, dirty: false, cfg: null };
+async function loadBranchForm(force) {
+  if (S.side !== 'bus') return;
+  if (BR.loaded && !force) return;
+  try {
+    const cfg = await (await fetch('/api/branch/config')).json();
+    BR.cfg = cfg; BR.loaded = true;
+    if (!BR.dirty) {
+      $('#br-kind').value = cfg.source.kind; $('#br-path').value = cfg.source.path || '';
+      $('#br-file-speed').value = String(cfg.source.file_speed > 0 ? cfg.source.file_speed : (cfg.source.kind === 'csv_file' && cfg.source.file_speed === 0 && BR.touchedSpeed ? 0 : 1));
+    }
+  } catch (e) { /* 分路侧不可用 */ }
+}
+function renderBranchPanel(st) {
+  if (S.side !== 'bus') return;
+  const cfg = st.config || {}, br = st.branch || {};
+  if (!BR.dirty && cfg.branch) $('#br-enabled').checked = !!cfg.branch.enabled;
+  loadBranchForm(false);
+  const lines = [];
+  lines.push(`状态：<b>${br.error ? '错误' : br.paused ? '已暂停' : br.running ? '运行中' : br.finished ? '已完成' : (br.enabled ? '已启用·未启动' : '未启用')}</b>` +
+    (br.running || br.finished ? `　样本 ${br.samples_in || 0}　数据时刻 ${br.data_t_end ? ts(br.data_t_end) : '—'}　事件 ${br.events_total || 0}　负荷事件 ${br.nilm_events_total || 0}` : ''));
+  if (br.error) lines.push(`<span class="bad">${br.error}</span>`);
+  lines.push(`配置文件：<code>${br.config_path || '—'}</code>`);
+  $('#br-status').innerHTML = lines.join('<br>');
+}
+async function saveBranchSource() {
+  try {
+    const enabled = $('#br-enabled').checked;
+    const r1 = await fetch('/api/config', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ branch: { enabled } }) });
+    if (!r1.ok) throw new Error((await r1.json()).error || 'HTTP ' + r1.status);
+    const src = { kind: $('#br-kind').value, path: $('#br-path').value.trim(), file_speed: parseFloat($('#br-file-speed').value) || 0 };
+    const r2 = await fetch('/api/branch/config', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ source: src }) });
+    if (!r2.ok) throw new Error('分路侧：' + ((await r2.json()).error || 'HTTP ' + r2.status));
+    BR.dirty = false; BR.loaded = false;
+    toast(enabled ? '分路侧数据源已保存并启用：总线侧「启动」时将同时播放' : '分路侧数据源已保存（未启用）', 'ok');
+    S.state = await api('/api/state'); renderTop(); render();
+  } catch (e) { toast('保存分路侧失败：' + e.message, 'err'); }
+}
+
 function renderSource() {
   const st = S.state || {}, cfg = st.config || {};
   if (S.formDirty) {
@@ -1052,6 +1151,7 @@ function renderSource() {
     setFormNote('');
   }
   syncSourceForm();
+  renderBranchPanel(st);
   const e = st.engine || {}, src = st.source || {};
   const emits = e.emits || {};
   const summary = [
@@ -1468,8 +1568,10 @@ async function startEngine(payloadExtra = {}) {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
     });
     S.formDirty = false; S.srcDirty = false;
-    toast(`已启动数据源：${r.config.source.kind}` +
-      (S.cfgDirty ? '（提示：口径/变比的修改请点「保存配置（热更新）」）' : ''), 'ok');
+    let brMsg = '';
+    if (r.branch && !r.branch.skipped) brMsg = r.branch.ok ? `；分路侧已同时启动（${r.branch.source_kind}）` : `；⚠ 分路侧启动失败：${r.branch.error}`;
+    toast(`已启动${sideLabel()}数据源：${r.config.source.kind}` + brMsg +
+      (S.cfgDirty ? '（提示：口径/变比的修改请点「保存配置（热更新）」）' : ''), r.branch && r.branch.error ? 'err' : 'ok');
     S.cfgDirty = false;
     S.state = await api('/api/state');
     renderTop(); render();
@@ -1591,6 +1693,15 @@ function bind() {
   $('#btn-start2').addEventListener('click', () => startEngine());
   $('#btn-stop2').addEventListener('click', stopEngine);
   $('#btn-pause2').addEventListener('click', togglePause);
+  $('#side-bus').addEventListener('click', () => setSide('bus'));
+  $('#side-branch').addEventListener('click', () => setSide('branch'));
+  $('#btn-br-save').addEventListener('click', saveBranchSource);
+  $('#btn-br-goto').addEventListener('click', () => setSide('branch'));
+  ['br-enabled', 'br-kind', 'br-path', 'br-file-speed'].forEach((id) => {
+    const el = $('#' + id); if (!el) return;
+    const mark = () => { BR.dirty = true; if (id === 'br-file-speed') BR.touchedSpeed = true; };
+    el.addEventListener('input', mark); el.addEventListener('change', mark);
+  });
   $('#btn-probe').addEventListener('click', probe);
   $('#btn-listfiles').addEventListener('click', listFiles);
   $('#btn-savecfg').addEventListener('click', saveConfig);
@@ -1621,6 +1732,7 @@ function bind() {
   $('#src-file-speed').addEventListener('change', () => { S.fileSpeedChosen = parseFloat($('#src-file-speed').value) || 0; });
   // 任何用户输入都置脏：否则 0.2s 一次的推送会把正在编辑的字段改回服务端配置
   $$('#view-source input, #view-source select').forEach((el) => {
+    if (el.id.startsWith('br-')) return;                       // 分路侧面板有自己的脏标记（BR.dirty）
     const mark = () => { S.formDirty = true; if (el.id.startsWith('cfg-')) S.cfgDirty = true; else S.srcDirty = true; };
     el.addEventListener('input', mark);
     el.addEventListener('change', mark);
@@ -1952,9 +2064,10 @@ async function init() {
     S.state = await api('/api/state');
   } catch (e) { toast('无法获取服务状态：' + e.message, 'err'); }
   try {
-    const r = await fetch('/api/result?full=true');
+    const r = await fetch(apiUrl('/api/result?full=true'));
     if (r.ok) S.result = await r.json();
   } catch (e) { /* 尚无结果 */ }
+  applySideUI();
   connectWS(); startStateWatch();
   renderTop(); render();
   setNavFoot('就绪 · 左侧导航切换子界面');

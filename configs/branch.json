@@ -1,0 +1,334 @@
+{
+  "name": "分路侧设备电气量",
+  "sampling": {
+    "fs": 6400.0,
+    "f_nom": 50.0,
+    "f_min": 45.0,
+    "f_max": 65.0,
+    "adaptive_freq": false,
+    "fs_from_timestamps": true,
+    "fs_tolerance": 0.01
+  },
+  "transform": {
+    "pt_ratio": 100.0,
+    "ct_ratio": 15.0,
+    "voltage_input": "phase",
+    "enabled": true
+  },
+  "harmonic": {
+    "order_min": 2,
+    "order_max": 50,
+    "thd_order_max": 50,
+    "include_interharmonic": true
+  },
+  "power": {
+    "apparent": "arithmetic",
+    "reactive": "harmonic_sum",
+    "fundamental_power": true,
+    "three_phase_mode": "four_wire"
+  },
+  "columns": {
+    "timestamp": "时间戳",
+    "ua": "A相电压",
+    "ia": "A相电流",
+    "ub": "B相电压",
+    "ib": "B相电流",
+    "uc": "C相电压",
+    "ic": "C相电流",
+    "encoding": "auto",
+    "delimiter": ",",
+    "has_header": true,
+    "timestamp_unit": "auto",
+    "mapping_enabled": false,
+    "mapping": {
+      "timestamp": "1",
+      "ua": "2",
+      "ia": "3",
+      "ub": "4",
+      "ib": "5",
+      "uc": "6",
+      "ic": "7"
+    },
+    "ALIASES": {
+      "timestamp": [
+        "时间戳",
+        "时间",
+        "时标",
+        "timestamp",
+        "time",
+        "ts",
+        "datetime",
+        "date_time"
+      ],
+      "ua": [
+        "a相电压",
+        "ua",
+        "u_a",
+        "va",
+        "v_a",
+        "电压a",
+        "phasea_voltage",
+        "u_phase_a"
+      ],
+      "ia": [
+        "a相电流",
+        "ia",
+        "i_a",
+        "电流a",
+        "phasea_current",
+        "i_phase_a"
+      ],
+      "ub": [
+        "b相电压",
+        "ub",
+        "u_b",
+        "vb",
+        "v_b",
+        "电压b",
+        "phaseb_voltage",
+        "u_phase_b"
+      ],
+      "ib": [
+        "b相电流",
+        "ib",
+        "i_b",
+        "电流b",
+        "phaseb_current",
+        "i_phase_b"
+      ],
+      "uc": [
+        "c相电压",
+        "uc",
+        "u_c",
+        "vc",
+        "v_c",
+        "电压c",
+        "phasec_voltage",
+        "u_phase_c"
+      ],
+      "ic": [
+        "c相电流",
+        "ic",
+        "i_c",
+        "电流c",
+        "phasec_current",
+        "i_phase_c"
+      ]
+    }
+  },
+  "source": {
+    "kind": "simulator",
+    "path": "",
+    "poll_interval_s": 0.2,
+    "block_samples": 640,
+    "tail_from_end": false,
+    "watch_dir_newest": true,
+    "host": "127.0.0.1",
+    "port": 9000,
+    "frame": "text_csv",
+    "struct_fmt": "<7d",
+    "struct_fields": "t,ua,ia,ub,ib,uc,ic",
+    "struct_has_header": false,
+    "sim_f": 50.0,
+    "sim_harmonics": {
+      "3": 0.08,
+      "5": 0.06,
+      "7": 0.03,
+      "11": 0.015,
+      "13": 0.01
+    },
+    "sim_noise_ratio": 0.002,
+    "sim_unbalance": 0.02,
+    "sim_speed": 1.0,
+    "custom_time": false,
+    "custom_time_start": "",
+    "file_time_utc": false,
+    "play_start_mode": "begin",
+    "file_speed": 0.0,
+    "play_start_value": ""
+  },
+  "output": {
+    "history_len": 600,
+    "history_hours": 24.0,
+    "history_max_points": 500000,
+    "export_dir": "output/branch",
+    "spectrum_max_points": 1600,
+    "curve_save": {
+      "voltage": true,
+      "current": true,
+      "power": true,
+      "power_factor": true,
+      "fundamental": true,
+      "harmonic": true,
+      "interharmonic": true,
+      "dc": true
+    },
+    "realtime_save": true,
+    "realtime_dir": "output/branch/realtime"
+  },
+  "events": {
+    "enabled": true,
+    "hysteresis": 0.95,
+    "save": true,
+    "events_dir": "output/branch/events",
+    "max_log": 2000,
+    "limits_secondary": true,
+    "u_nom": 57.74,
+    "u1_high_pct": 110.0,
+    "u1_low_pct": 90.0,
+    "i1_high": 6.0,
+    "hr_u_limit_pct": 5.0,
+    "hr_i_limit_pct": 10.0,
+    "thd_u_limit_pct": 5.0,
+    "thd_i_limit_pct": 10.0,
+    "ih_u_limit_pct": 1.0,
+    "ih_i_limit_pct": 2.0,
+    "f_low": 49.5,
+    "f_high": 50.5,
+    "rocof_limit": 1.0,
+    "osc_window_s": 10.0,
+    "osc_f_min": 0.1,
+    "osc_f_max": 2.5,
+    "osc_limit_pct": 5.0,
+    "osc_min_w": 1.0,
+    "osc_min_points": 8
+  },
+  "nilm": {
+    "enabled": true,
+    "save": true,
+    "nilm_dir": "output/branch/nilm",
+    "max_log": 5000,
+    "channels": [
+      "total"
+    ],
+    "window_cycles": 300,
+    "min_gap_cycles": 10,
+    "rel_tol_pct": 1.0,
+    "min_delta_pct": 0.0,
+    "algorithms": {
+      "threshold": {
+        "enabled": true,
+        "min_delta_w": 50.0,
+        "settle_cycles": 5,
+        "settle_tol_w": 20.0,
+        "max_rise_cycles": 40
+      },
+      "two_window": {
+        "enabled": true,
+        "pre_cycles": 10,
+        "post_cycles": 10,
+        "min_delta_w": 50.0,
+        "k_sigma": 3.0
+      },
+      "cusum": {
+        "enabled": true,
+        "drift_w": 10.0,
+        "threshold_w": 200.0,
+        "min_delta_w": 50.0,
+        "settle_cycles": 5
+      },
+      "glr": {
+        "enabled": true,
+        "window_cycles": 15,
+        "threshold": 25.0,
+        "min_delta_w": 50.0,
+        "noise_w": 10.0,
+        "settle_cycles": 5
+      },
+      "steady_state": {
+        "enabled": true,
+        "tol_w": 30.0,
+        "min_steady_cycles": 10,
+        "min_delta_w": 50.0,
+        "max_transient_cycles": 100
+      },
+      "median_diff": {
+        "enabled": true,
+        "median_cycles": 5,
+        "min_delta_w": 50.0,
+        "settle_cycles": 5,
+        "settle_tol_w": 20.0,
+        "max_rise_cycles": 40
+      }
+    }
+  },
+  "branch": {
+    "enabled": false,
+    "config_path": "configs/branch.json",
+    "label": "分路侧设备"
+  },
+  "windows": {
+    "voltage": {
+      "length_s": 1.0,
+      "step_s": null,
+      "policy": "integer_cycles",
+      "window_fn": "rect",
+      "remove_dc": true,
+      "min_cycles": 1
+    },
+    "current": {
+      "length_s": 1.0,
+      "step_s": null,
+      "policy": "integer_cycles",
+      "window_fn": "rect",
+      "remove_dc": true,
+      "min_cycles": 1
+    },
+    "power": {
+      "length_s": 1.0,
+      "step_s": null,
+      "policy": "integer_cycles",
+      "window_fn": "rect",
+      "remove_dc": true,
+      "min_cycles": 1
+    },
+    "power_factor": {
+      "length_s": 1.0,
+      "step_s": null,
+      "policy": "integer_cycles",
+      "window_fn": "rect",
+      "remove_dc": true,
+      "min_cycles": 1
+    },
+    "fundamental": {
+      "length_s": 0.2,
+      "step_s": null,
+      "policy": "integer_cycles",
+      "window_fn": "rect",
+      "remove_dc": true,
+      "min_cycles": 1
+    },
+    "harmonic": {
+      "length_s": 0.2,
+      "step_s": null,
+      "policy": "integer_cycles",
+      "window_fn": "rect",
+      "remove_dc": true,
+      "min_cycles": 1
+    },
+    "interharmonic": {
+      "length_s": 0.2,
+      "step_s": null,
+      "policy": "integer_cycles",
+      "window_fn": "rect",
+      "remove_dc": true,
+      "min_cycles": 1
+    },
+    "dc": {
+      "length_s": 1.0,
+      "step_s": null,
+      "policy": "integer_cycles",
+      "window_fn": "rect",
+      "remove_dc": false,
+      "min_cycles": 1
+    },
+    "spectrum": {
+      "length_s": 1.0,
+      "step_s": null,
+      "policy": "integer_cycles",
+      "window_fn": "rect",
+      "remove_dc": true,
+      "min_cycles": 1
+    }
+  }
+}

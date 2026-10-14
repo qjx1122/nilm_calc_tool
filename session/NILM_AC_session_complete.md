@@ -217,3 +217,5 @@
 - **[2026-10-14] F-41**（用户：离线文件播放完界面运行状态不自动更新）：根因＝`_run` 在循环结束处广播 state，早于 `finally: engine.stop()`，终态推送仍是 running=True；沙盒里 WS 1 s 定时 state 掩盖了它（下一秒就对了），用户环境推送链路可能更脆弱。修三层：终态广播挪到 engine.stop() 后 + `_thread_done`；WS 定时 state 抗 state() 异常、state() 单项 `_safe`；前端 `startStateWatch` 2 s 校对。回归用例先在旧代码上确认失败再通过。教训：**"最后一条推送"要在所有状态落定之后发**，定时兜底不能替代正确的终态事件。
 
 - **[2026-10-14] F-42**（用户：界面暂停播放没有生效）：先看服务端日志——用户的 `POST /api/engine/pause` 全是 400，不是前端没发请求。根因＝离线文件不限速（2.6× 实时），样例几秒播完，按钮亮着但服务端已「播放完毕」。修：`source.file_speed`（csv_file 倍速，相邻块间隔限速，恢复不追赶）、界面默认 1×、配置默认 0 兼容 CLI/测试；看门狗无条件校对；`/` 注入资源版本号 + no-cache 杜绝旧 app.js。`tools/ui_r13_check.cjs` 用 jsdom 走真实界面 12/12；全量 270。教训：**用户说"没生效"先查服务端日志的状态码**；"播放"类功能没有速率概念就谈不上暂停。
+
+- **[2026-10-14] 第 14 轮：总线侧 + 分路侧设备双数据源**。设计取舍：不复制 30 多个端点，而是 `RUNNERS={bus,branch}` + contextvar `_SIDE` + `RUNNER` 属性代理 + 纯 ASGI 中间件把 `/api/branch/...`→`/api/...`、`/ws/branch`→`/ws`，既有端点代码零改动即服务两侧；前端同理只在 `api()` 入口加前缀、WS 路径按侧选择，所有子界面天然"按当前侧显示"。总线侧 `branch.enabled` 决定联动；分路侧是独立 AppConfig（`configs/branch_runtime.json`，输出 `output/branch/`）。联动点只在 start/stop/pause/resume 四个端点且仅 side==bus 时触发。测试 4 项 + jsdom 19 项 + 全量 274。沙盒开局未回收。教训：**横向复制功能时优先在"路由/上下文"层做乘法，不在"端点"层做加法。**

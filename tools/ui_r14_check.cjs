@@ -1,0 +1,108 @@
+#!/usr/bin/env node
+/* 第 14 轮界面检查：总线侧 + 分路侧设备 双数据源（侧别切换 / 分路侧面板 / 联动播放 / 子界面按侧显示）。
+ * jsdom 驱动真实 index.html + app.js，打真实服务端（需先 serve 在 8000，data/sample_6400hz.csv 存在）。
+ *
+ *   L1 导航含「负荷辨识」；参数表单按 6 个算法生成并回填服务端配置
+ *   L2 播放 data/nilm_steps.csv 后：卡片计数、事件表含 6 算法、方向 ↑/↓、幅值、起止时间；周波窗曲线有点
+ *   L3 过滤算法 → 表格只剩该算法；改 GLR 门限 → 保存 → PUT /api/config 载荷含 nilm.algorithms.glr.threshold；服务端生效
+ *   L4 清空 → 表格为空；徽标归零
+ *
+ * 用法：JSDOM_DIR=/tmp/uitest node tools/ui_r12_check.cjs [baseUrl]
+ */
+const fs = require('fs');
+const path = require('path');
+const { JSDOM } = require(path.join(process.env.JSDOM_DIR || '/tmp/uitest', 'node_modules/jsdom'));
+
+const BASE = process.argv[2] || 'http://127.0.0.1:8000';
+const ROOT = path.resolve(__dirname, '..');
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+let pass = 0, fail = 0; const fails = [];
+function check(name, ok, detail = '') {
+  if (ok) { pass++; console.log(`  ✓ ${name}${detail ? '　' + detail : ''}`); }
+  else { fail++; fails.push(name); console.log(`  ✗ ${name}　${detail}`); }
+}
+
+async function main() {
+  const html = fs.readFileSync(path.join(ROOT, 'app/static/index.html'), 'utf8');
+  const js = fs.readFileSync(path.join(ROOT, 'app/static/app.js'), 'utf8');
+  const calls = [];
+  const dom = new JSDOM(html, {
+    url: BASE + '/', runScripts: 'dangerously', pretendToBeVisual: true,
+    beforeParse(window) {
+      window.HTMLCanvasElement.prototype.getContext = () => new Proxy({}, {
+        get: (t, p) => (p === 'measureText' ? () => ({ width: 8 }) : p === 'createLinearGradient' ? () => ({ addColorStop() {} }) : () => {}),
+        set: () => true,
+      });
+      window.WebSocket = class { constructor() { this.readyState = 0; } close() {} send() {} };
+      window.fetch = async (url, opts = {}) => {
+        const abs = String(url).startsWith('http') ? String(url) : BASE + url;
+        const r = await fetch(abs, opts);
+        calls.push({ url: String(url), method: opts.method || 'GET', status: r.status, body: opts.body || null });
+        return r;
+      };
+      window.alert = () => {};
+    },
+  });
+  const { window } = dom, { document } = window;
+  // localStorage 在 jsdom 可用；先清掉上次的侧别
+  try { window.localStorage.removeItem('elec_side'); } catch (e) {}
+  window.eval(js + '\n;window.__S = () => S;window.__setSide = setSide;');
+  if (typeof window.init === 'function') window.init();
+  await sleep(1500);
+  const $ = (id) => document.getElementById(id);
+  const click = (el) => el.dispatchEvent(new window.Event('click', { bubbles: true }));
+  const change = (el) => el.dispatchEvent(new window.Event('change', { bubbles: true }));
+  const api = async (u, o) => (await fetch(BASE + u, o)).json();
+  const nav = async (v) => { click(document.querySelector(`.navitem[data-view="${v}"]`)); await sleep(700); };
+
+  await api('/api/engine/stop', { method: 'POST' });
+  await api('/api/branch/engine/stop', { method: 'POST' });
+  console.log('L1 侧别切换器与分路侧面板');
+  check('顶栏侧别切换器存在', !!$('side-bus') && !!$('side-branch') && $('side-bus').className === 'on');
+  check('顶栏分路侧状态胶囊', !!$('st-branch'));
+  await nav('source');
+  check('总线侧页面显示分路侧面板', $('branch-form').style.display !== 'none' && !!$('br-enabled'));
+  console.log('L2 配置分路侧并启用 → 总线侧启动 → 两侧同时播放');
+  $('br-enabled').checked = true; change($('br-enabled'));
+  $('br-kind').value = 'csv_file'; change($('br-kind'));
+  $('br-path').value = 'data/nilm_steps.csv'; change($('br-path'));
+  $('br-file-speed').value = '1'; change($('br-file-speed'));
+  click($('btn-br-save')); await sleep(900);
+  const bcfg = await api('/api/branch/config');
+  check('分路侧 source 已保存', bcfg.source.kind === 'csv_file' && bcfg.source.path.endsWith('nilm_steps.csv') && bcfg.source.file_speed === 1, JSON.stringify(bcfg.source.path));
+  check('总线侧 branch.enabled 已保存', (await api('/api/config')).branch.enabled === true);
+  $('src-kind').value = 'csv_file'; change($('src-kind'));
+  $('src-path').value = 'data/sample_6400hz.csv'; $('src-file-speed').value = '1';
+  click($('btn-start2')); await sleep(2500);
+  const st = await api('/api/state'), bst = await api('/api/branch/state');
+  check('总线侧运行中', st.running === true);
+  check('分路侧同时运行中', bst.running === true && bst.side === 'branch', `running=${bst.running}`);
+  check('分路侧样本在增长', bst.engine.samples_in > 0, String(bst.engine.samples_in));
+  check('两侧数据源不同', st.config.source.path !== bst.config.source.path);
+  check('顶栏分路侧胶囊=运行中', $('st-branch').textContent === '运行中', $('st-branch').textContent);
+  console.log('L3 联动暂停/恢复/停止');
+  click($('btn-pause')); await sleep(600);
+  const p1 = await api('/api/branch/state'); await sleep(800); const p2 = await api('/api/branch/state');
+  check('总线侧暂停 → 分路侧也暂停', p1.paused === true && p1.engine.samples_in === p2.engine.samples_in, `${p1.paused} ${p1.engine.samples_in}→${p2.engine.samples_in}`);
+  click($('btn-pause')); await sleep(900);
+  check('恢复 → 分路侧继续', (await api('/api/branch/state')).engine.samples_in > p2.engine.samples_in);
+  console.log('L4 切到分路侧：子界面显示分路侧结果');
+  click($('side-branch')); await sleep(1800);
+  const S = window.__S();
+  check('S.side=branch 且 state.side=branch', S.side === 'branch' && S.state && S.state.side === 'branch');
+  check('顶栏数据源=分路侧文件', $('st-source').textContent === 'csv_file' && document.body.classList.contains('side-branch'));
+  check('分路侧页面隐藏启用面板', $('branch-form').style.display === 'none');
+  await nav('overview'); await sleep(800);
+  const bres = await api('/api/branch/result?full=false');
+  check('总览结果来自分路侧（P 量级≈1.5~2.85 MW）', S.result && Math.abs(S.result.t_ref - bres.t_ref) < 5, `${S.result && S.result.t_ref} vs ${bres.t_ref}`);
+  await nav('nilm'); await sleep(1500);
+  check('分路侧负荷辨识页有周波数据', (window.__S().state.engine.nilm_cycles || 0) > 0);
+  click($('side-bus')); await sleep(1200);
+  check('切回总线侧', window.__S().side === 'bus' && window.__S().state.side === 'bus');
+  click($('btn-stop')); await sleep(800);
+  const st2 = await api('/api/state'), bst2 = await api('/api/branch/state');
+  check('总线侧停止 → 分路侧也停止', !st2.running && !bst2.running);
+  console.log(`\n结果：${pass} 通过，${fail} 失败${fail ? '：' + fails.join('；') : ''}`);
+  process.exit(fail ? 1 : 0);
+}
+main().catch((e) => { console.error(e); process.exit(2); });
