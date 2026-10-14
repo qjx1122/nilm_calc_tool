@@ -438,6 +438,15 @@ CLI 同等能力：`.venv/bin/python cli.py resample "data/波形_农业排灌_�
 - 验证：`tests/test_r12_nilm.py` 8 项；`tools/ui_r12_check.cjs` 16 项；全量 **257 passed**。
 - **调参**：运维向手册 **[`NILM_TUNING_GUIDE.md`](NILM_TUNING_GUIDE.md)**（每个参数管什么 / 先量 σ 与最小关心负荷 / 推荐公式 / 现象→对策 / 典型现场套路 / 验证流程）；配套 `python tools/nilm_tune.py --file <背景.csv> [--min-load-w N] [--json]` 自动量噪声并给 6 算法起点参数（`tests/test_nilm_tune_tool.py` 证明建议参数在同噪声下检出恰为最小负荷的阶跃、纯噪声 0 误报）。
 
+#### 离线文件的暂停 / 恢复播放（v0.12）
+
+> 顶栏「暂停」按钮与「数据源」页「暂停播放」按钮（同一功能），**只在离线文件（`csv_file`）源运行且未播完时可用**，其他源置灰并提示。
+
+- **暂停**：引擎线程停止读文件与计算，顶栏状态变「已暂停」，数据时刻、样本数、周波窗、事件表全部原地冻结；期间「刷新快照」、历史曲线、导出、负荷辨识/事件查询照常可用（看的是暂停时刻的缓冲）。
+- **恢复**：从暂停处的下一块继续，不重读、不跳过；`duration_s` 限时运行会扣除暂停时长（`/api/state.paused_total_s`）。
+- 暂停中点「停止」立即停止；重新「启动」从头（或所选播放起点）开始。对 `csv_tail`/`tcp`/`simulator` 不提供暂停（实时源暂停会丢数据或造成追赶突发，按设计拒绝）。
+- 验证：`tests/test_r13_pause.py` 3 项（暂停冻结样本数与数据时刻 / 恢复继续且单调 / 播完后拒绝 / 暂停中停止 <1.5 s / 模拟器源 400 / 前端接线）。
+
 #### 离线文件时标的 UTC 开关（v0.10）
 
 > 适用 `csv_file`（未启用「自定义播放时间」时）与 `csv_tail`；配置项 `source.file_time_utc`（默认 **false**），界面在「数据源」页「自定义播放时间」勾选框下方；启动数据源时随表单下发，也可 CLI `--file-time-utc`。
@@ -636,6 +645,7 @@ THDu(A)  = 10.593 %   5次 = 346.4 V
 | `GET /api/config` | 读当前生效配置 |
 | `PUT /api/config` | **深合并**局部更新（只传要改的字段）并热更新到运行中的引擎；非法值返回 400 + 中文原因 |
 | `POST /api/engine/start` | 启动引擎；body 可覆盖 `kind/path/host/port/frame/block_samples/poll_interval_s/tail_from_end/sim_speed/watch_dir_newest/struct_fmt/struct_fields/custom_time/custom_time_start/play_start_mode/play_start_value/windows/duration_s` |
+| `POST /api/engine/pause` / `resume` | **离线文件源**暂停 / 恢复播放（v0.12）：暂停＝不读文件、不计算、数据时刻原地不动，缓冲/历史/事件保留；恢复＝从暂停处继续。非 `csv_file`、未运行、已播完 → 400 `{error}`；`/api/state` 增 `paused` / `pausable` / `paused_total_s` |
 | `POST /api/engine/stop` | 停止引擎（结果仍可查询/导出） |
 | `GET /api/result?full=true|false` | 最新结果；`full=true` 强制按当前缓冲把七类量都算一遍，`false` 取最近缓存；无结果返回 409 |
 | `GET /api/history/{quantity}?max_points=1500&hours=&n=` | 某量趋势点：默认返回**最近 `output.history_hours`（24h）内全部**，超过 `max_points` 按峰谷抽稀；`hours` 覆盖时间窗、`n` 兼容旧用法（只取最后 n 条）；附 `count_total/span_s/t_first/t_last/decimated` |
@@ -1174,6 +1184,7 @@ python cli.py selftest                            # 实测：44/44，worst_rel_e
 ---
 
 ## 🗒 变更记录
+- **v0.12（2026-10-14，第 13 轮）**：离线文件源**暂停 / 恢复播放**（`POST /api/engine/pause|resume`、顶栏与数据源页按钮、状态 `paused/pausable/paused_total_s`）；`tests/test_r13_pause.py` 3 项，全量 265 passed。
 - **v0.11.2（2026-10-14）**：新增 `NILM_TUNING_GUIDE.md`（负荷辨识 6 算法调参手册，运维版）与 `tools/nilm_tune.py`（噪声统计 + 参数建议）+ 2 项自检用例。
 - **v0.11.1（2026-10-13，F-40 热修）**：Windows 下离线文件（`0/00/00` 时标）启动后负荷辨识/事件接口 500（`localtime` 不接受负 epoch）：无日期时标基准改为 **1970-01-02**（按本地时间解释后恒为正）；新增 `elec_tool/timefmt.py` 作为所有「epoch → 本地时间文本」的统一安全出口（localtime 失败自动手工换算），nilm / events / 实时落盘 / 导出 / probe / CLI 全部改走。回归 `tests/test_f40_negative_epoch.py`。
 - **v0.11（2026-10-13，第 12 轮）**：新增 **「负荷辨识」子界面**：`elec_tool/nilm.py`（逐周波 P/Q/I 特征 + 6 种突变检测算法：阈值差分 / 双滑窗均值差 / CUSUM / GLR / 稳态分段(Hart) / 中值滤波差分；事件含算法、对象、起止时刻、方向、幅值 ΔP/ΔQ/ΔI；跨块去重与确认；`output/nilm/nilm_events_<日期>.csv` 落盘）；`NilmConfig` 全参数可配（含相对门槛 `rel_tol_pct/min_delta_pct`）；引擎逐块摄入；REST `/api/nilm/events|cycles|clear` + WS `nilm_event`；界面：卡片、周波窗曲线（事件竖线标注）、事件表（算法/对象过滤）、按算法生成的参数表单。`tests/test_r12_nilm.py` 8 项、`tools/ui_r12_check.cjs` 16 项、`tools/gen_nilm_sample.py`；全量 **257 passed**。

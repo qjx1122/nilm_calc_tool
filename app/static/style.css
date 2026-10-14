@@ -20,6 +20,7 @@ h3{font-size:14px;margin:0 0 10px;color:var(--mut);font-weight:600;display:flex;
 .pill{padding:1px 8px;border-radius:10px;background:#22304d;font-size:12px}
 .pill.on{background:#123a2c;color:var(--ok)}
 .pill.off{background:#3a2a12;color:var(--warn)}
+.pill.warn{background:#3a2a12;color:var(--warn);outline:1px solid var(--warn)}
 .pill.err{background:#3a1414;color:var(--bad)}
 button,.btnlink{background:var(--panel2);color:var(--fg);border:1px solid var(--line);padding:6px 12px;border-radius:6px;cursor:pointer;font-size:13px;text-decoration:none;display:inline-block}
 button:hover,.btnlink:hover{border-color:var(--acc)}

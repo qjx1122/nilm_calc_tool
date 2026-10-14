@@ -75,6 +75,9 @@ class EngineRunner:
         self.engine: Optional[LiveEngine] = None
         self.thread: Optional[threading.Thread] = None
         self.stop_event = threading.Event()
+        self.pause_event = threading.Event()      # set＝暂停（仅离线文件源；每轮运行一个新对象）
+        self.paused_at: Optional[float] = None
+        self.paused_total_s = 0.0
         self.latest: Optional[MetricsResult] = None
         self.latest_full: Optional[MetricsResult] = None
         self.store: Deque[MetricsResult] = deque(maxlen=maxlen)
@@ -168,6 +171,9 @@ class EngineRunner:
         with self.lock:
             # 每轮用全新的 Event：旧线程只持有旧 Event，绝不会因新一轮 clear() 复活
             self.stop_event = threading.Event()
+            self.pause_event = threading.Event()
+            self.paused_at = None
+            self.paused_total_s = 0.0
             self.error = None
             self.latest = None
             self.latest_full = None
@@ -180,14 +186,15 @@ class EngineRunner:
             self.started_at = time.time()
             # 引擎与停止事件按值传给线程：线程内绝不重读 self.engine
             self.thread = threading.Thread(target=self._run,
-                                           args=(duration_s, self.engine, self.stop_event),
+                                           args=(duration_s, self.engine, self.stop_event, self.pause_event),
                                            daemon=True, name="elec-engine")
             self.thread.start()
         return {"ok": True, "source_kind": cfg.source.kind}
 
     def _run(self, duration_s: Optional[float], engine: LiveEngine,
-             stop_event: threading.Event) -> None:
-        """引擎线程。engine/stop_event 都是本轮私有对象，被取代后自行退场。"""
+             stop_event: threading.Event, pause_event: Optional[threading.Event] = None) -> None:
+        """引擎线程。engine/stop_event/pause_event 都是本轮私有对象，被取代后自行退场。"""
+        pause_event = pause_event or threading.Event()
         try:
             engine.start()
             while not stop_event.is_set():
@@ -195,6 +202,9 @@ class EngineRunner:
                     stale = self.engine is not engine
                 if stale:                       # 已被新一轮取代：立刻退场，不再产出
                     return
+                if pause_event.is_set():        # 暂停：不读源、不计算、不推进数据时间；缓冲与事件原地保留
+                    time.sleep(0.05)
+                    continue
                 res = engine.poll_once()
                 if res is not None:
                     with self.lock:
@@ -216,7 +226,7 @@ class EngineRunner:
                     break
                 else:
                     time.sleep(max(0.01, min(engine.cfg.source.poll_interval_s, 0.2)))
-                if duration_s and (time.time() - (self.started_at or time.time())) > duration_s:
+                if duration_s and (time.time() - (self.started_at or time.time()) - self.paused_total_s) > duration_s:
                     break
             self.broadcast({"type": "state", "data": self.state()})
         except Exception as exc:                                # 线程内异常必须回收，不能静默
@@ -231,9 +241,48 @@ class EngineRunner:
             except Exception:
                 pass
 
+    # ---------- 暂停 / 恢复（离线文件源） ----------
+    def _pausable(self) -> Optional[str]:
+        """可暂停则返回 None，否则返回原因。"""
+        with self.lock:
+            eng = self.engine
+            running = bool(self.thread and self.thread.is_alive() and not self.stop_event.is_set())
+        if eng is None or not running:
+            return "数据源未在运行"
+        if eng.state.finished:
+            return "离线文件已播放完毕"
+        if eng.cfg.source.kind != "csv_file":
+            return f"暂停/恢复仅支持离线文件（csv_file）源，当前为 {eng.cfg.source.kind}"
+        return None
+
+    def pause(self) -> Dict[str, Any]:
+        why = self._pausable()
+        if why:
+            return {"ok": False, "error": why, "paused": bool(self.pause_event.is_set())}
+        with self.lock:
+            if not self.pause_event.is_set():
+                self.pause_event.set()
+                self.paused_at = time.time()
+        self.broadcast({"type": "state", "data": self.state()})
+        return {"ok": True, "paused": True}
+
+    def resume(self) -> Dict[str, Any]:
+        why = self._pausable()
+        if why:
+            return {"ok": False, "error": why, "paused": bool(self.pause_event.is_set())}
+        with self.lock:
+            if self.pause_event.is_set():
+                self.pause_event.clear()
+                if self.paused_at is not None:
+                    self.paused_total_s += time.time() - self.paused_at
+                self.paused_at = None
+        self.broadcast({"type": "state", "data": self.state()})
+        return {"ok": True, "paused": False}
+
     def stop(self, quiet: bool = False) -> None:
         with self.lock:
             self.stop_event.set()
+            self.pause_event.clear()            # 暂停中停止：线程立刻退出等待
             th = self.thread
             self.thread = None
         if th and th.is_alive() and th is not threading.current_thread():
@@ -285,6 +334,9 @@ class EngineRunner:
             return {
                 "version": __version__,
                 "running": bool(self.thread and self.thread.is_alive() and not self.stop_event.is_set()),
+                "paused": bool(self.pause_event.is_set() and self.thread and self.thread.is_alive() and not self.stop_event.is_set()),
+                "pausable": bool(eng is not None and eng.cfg.source.kind == "csv_file"),
+                "paused_total_s": round(self.paused_total_s + ((time.time() - self.paused_at) if self.paused_at else 0.0), 3),
                 "finished": bool(st.get("finished")),
                 "error": self.error,
                 "engine": st,
@@ -434,6 +486,26 @@ async def engine_start(payload: Optional[Dict[str, Any]] = None) -> Any:
         return JSONResponse(status_code=400, content={"ok": False, "error": str(exc)})
     except Exception as exc:
         return JSONResponse(status_code=400, content={"ok": False, "error": f"{type(exc).__name__}: {exc}"})
+
+
+@app.post("/api/engine/pause")
+async def engine_pause() -> Any:
+    """暂停离线文件播放：停止读文件与计算，数据时间原地不动；缓冲/历史/事件保留。非 csv_file 源或未运行 → 400。"""
+    r = RUNNER.pause()
+    if not r["ok"]:
+        return JSONResponse(status_code=400, content=r)
+    r["state"] = RUNNER.state()
+    return r
+
+
+@app.post("/api/engine/resume")
+async def engine_resume() -> Any:
+    """从暂停处继续播放（接着上次读到的位置，不重读、不跳过）。"""
+    r = RUNNER.resume()
+    if not r["ok"]:
+        return JSONResponse(status_code=400, content=r)
+    r["state"] = RUNNER.state()
+    return r
 
 
 @app.post("/api/engine/stop")

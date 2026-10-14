@@ -509,6 +509,7 @@ function renderTop() {
   const eng = st.engine || {}, cfg = st.config || {};
   const pill = $('#st-running');
   if (st.error) { pill.textContent = '错误'; pill.className = 'pill err'; }
+  else if (st.paused) { pill.textContent = '已暂停'; pill.className = 'pill warn'; }
   else if (eng.running) { pill.textContent = '运行中'; pill.className = 'pill on'; }
   else if (eng.finished) { pill.textContent = '已完成'; pill.className = 'pill off'; }
   else { pill.textContent = '未启动'; pill.className = 'pill'; }
@@ -521,7 +522,31 @@ function renderTop() {
   $('#subtitle').textContent = `elec_tool v${st.version || '?'} · ${S.wsOk ? 'WebSocket 实时' : '轮询'} · 缓冲 ${eng.buffer_fill || 0}/${eng.buffer_capacity || 0}`;
   $('#btn-start').disabled = !!eng.running;
   $('#btn-stop').disabled = !eng.running;
+  renderPauseButtons(st, eng);
   setEventBadge(eng.events_active || 0);
+}
+
+/* 暂停/恢复按钮：只在离线文件源运行且未播完时可用；文案随状态切换（v0.12） */
+function renderPauseButtons(st, eng) {
+  const can = !!(st.pausable && eng.running && !eng.finished);
+  const label = st.paused ? '恢复播放' : '暂停播放';
+  [['#btn-pause', st.paused ? '恢复' : '暂停'], ['#btn-pause2', label]].forEach(([sel, txt]) => {
+    const b = $(sel); if (!b) return;
+    b.disabled = !can; b.textContent = txt;
+    b.className = st.paused ? 'primary' : '';
+    if (!can) b.title = st.pausable ? '离线文件未在播放' : '暂停/恢复仅支持离线文件（csv_file）源';
+    else b.title = st.paused ? '从暂停处继续播放（不重读、不跳过）' : '暂停：不再读文件、不计算，数据时刻原地不动';
+  });
+}
+
+async function togglePause() {
+  const paused = !!(S.state && S.state.paused);
+  try {
+    const r = await api(paused ? '/api/engine/resume' : '/api/engine/pause', { method: 'POST' });
+    S.state = r.state || S.state;
+    toast(paused ? '已恢复播放' : '已暂停播放（数据时刻停在 ' + ($('#st-time').textContent || '—') + '）', 'ok');
+  } catch (e) { toast((paused ? '恢复' : '暂停') + '失败：' + e.message, 'err'); S.state = await api('/api/state'); }
+  renderTop(); if (S.view === 'source') render();
 }
 
 function setEventBadge(n) {
@@ -1527,6 +1552,7 @@ function bind() {
   $$('.navitem').forEach(b => b.addEventListener('click', () => switchView(b.dataset.view)));
   $('#btn-start').addEventListener('click', () => startEngine());
   $('#btn-stop').addEventListener('click', stopEngine);
+  $('#btn-pause').addEventListener('click', togglePause);
   $('#btn-refresh').addEventListener('click', async () => {
     try {
       S.formDirty = false; S.srcDirty = false; S.cfgDirty = false;   // 刷新＝丢弃未保存修改并重新回填
@@ -1537,6 +1563,7 @@ function bind() {
   });
   $('#btn-start2').addEventListener('click', () => startEngine());
   $('#btn-stop2').addEventListener('click', stopEngine);
+  $('#btn-pause2').addEventListener('click', togglePause);
   $('#btn-probe').addEventListener('click', probe);
   $('#btn-listfiles').addEventListener('click', listFiles);
   $('#btn-savecfg').addEventListener('click', saveConfig);
