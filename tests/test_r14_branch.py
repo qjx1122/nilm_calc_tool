@@ -177,12 +177,12 @@ def test_frontend_wiring():
     assert 'data-view="source" data-side="branch"' not in html      # 分路侧配置集中在总览的数据源页
     for s in ('data-view="voltage" data-side="bus"', 'data-view="voltage" data-side="branch"', 'id="branch-panel"',
               'data-view="compare"', 'id="view-compare"', 'id="br-pt"', 'id="br-fs"', 'id="br-toffset"', 'id="st-peer-label"',
-              'id="br-mapen"', 'id="br-map-ua"', 'id="btn-br-map-save"', 'id="btn-map-save"', 'id="br-enabled"', 'id="br-path"', 'id="st-branch"',
+              'id="br-mapen"', 'id="br-map-ua"', 'id="ov-br-cards"', 'id="ov-br-u"', 'id="ov-br-thd"', 'id="btn-br-map-save"', 'id="btn-map-save"', 'id="br-enabled"', 'id="br-path"', 'id="st-branch"',
               'id="br-customtime"', 'id="br-utc"', 'id="btn-br-probe"', 'id="br-mode-note"'):
         assert s in html, s
     for s in ("function apiUrl", "async function setSide", "/ws/branch", "'/api/branch/' + path.slice(5)",
               "function renderBranchChip", "async function saveBranchSource", "async function switchView(v, side)", "function renderOverviewSides",
-              "function renderBadges", "function peerSummary", "async function refreshCompare", "/api/compare/", "async function saveColumns(side)"):
+              "function renderBadges", "function peerSummary", "async function refreshCompare", "/api/compare/", "async function saveColumns(side)", "async function refreshOverviewBranch", "function renderOverviewBranch"):
         assert s in js, s
 
 

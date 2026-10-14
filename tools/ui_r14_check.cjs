@@ -120,6 +120,8 @@ async function main() {
   check('点总览 → 回到总线侧', window.__S().side === 'bus' && window.__S().state.side === 'bus');
   check('总览有两侧状态卡', /总线侧数据源/.test($('ov-sides').textContent) && /分路侧设备数据源/.test($('ov-sides').textContent) && /运行中/.test($('ov-sides').textContent), $('ov-sides').textContent.slice(0, 80));
   check('分路侧分组标题徽标=运行中', $('nav-br-state').textContent === '运行中', $('nav-br-state').textContent);
+  await sleep(2500);
+  check('总览显示分路侧最新电气量卡片（含 P 总线−分路）', /A 相电压/.test($('ov-br-cards').textContent) && /总线 − 分路/.test($('ov-br-cards').textContent) && $('ov-br-charts').style.display !== 'none', $('ov-br-cards').textContent.slice(0, 80));
   console.log('L5 跨侧对比');
   const cmp0 = await api('/api/compare/power');
   check('两份样例文件起点不同 → 默认偏移 0 无对齐点，但给出建议偏移', cmp0.aligned_count === 0 && Math.abs(cmp0.offset_suggest_s) > 1000, `suggest=${cmp0.offset_suggest_s}`);

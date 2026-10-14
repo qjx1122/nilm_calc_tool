@@ -87,6 +87,14 @@
         <div class="panel"><h3 class="curvehdr"><span>THD 趋势</span><label class="curvesave" title="勾选＝「保存曲线数据」时包含本曲线；不勾选＝保存时跳过本曲线"><input type="checkbox" class="curve-save" data-curve="harmonic"> 保存曲线</label><span class="curvespan" data-curve="harmonic"></span></h3><canvas id="ov-thd" height="200"></canvas></div>
       </div>
       <div id="ov-histnote" class="notes"></div>
+      <h3 class="ovsub ovsub-branch">分路侧设备 · 最新电气量 <span class="navhint" id="ov-br-hint"></span></h3>
+      <div class="cards" id="ov-br-cards"></div>
+      <div class="grid2" id="ov-br-charts">
+        <div class="panel"><h3 class="curvehdr"><span>分路侧 三相电压趋势</span></h3><canvas id="ov-br-u" height="200"></canvas></div>
+        <div class="panel"><h3 class="curvehdr"><span>分路侧 三相电流趋势</span></h3><canvas id="ov-br-i" height="200"></canvas></div>
+        <div class="panel"><h3 class="curvehdr"><span>分路侧 P / Q / S 趋势</span></h3><canvas id="ov-br-p" height="200"></canvas></div>
+        <div class="panel"><h3 class="curvehdr"><span>分路侧 THD 趋势</span></h3><canvas id="ov-br-thd" height="200"></canvas></div>
+      </div>
       <div class="panel"><h3>告警与提示</h3><div id="ov-notes" class="notes"></div></div>
     </section>
 
