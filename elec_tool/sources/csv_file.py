@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import time
 from typing import Any, Dict, Iterator, Optional, Tuple
 
 import numpy as np
@@ -30,6 +31,8 @@ class CsvFileSource(DataSource):
         self._exhausted = False
         self._n_blocks = 0
         self._n_samples = 0
+        self.speed = float(getattr(cfg.source, "file_speed", 0.0) or 0.0)   # 0＝不限速
+        self._last_emit_wall: Optional[float] = None
         self._header: Optional[list] = None
         self._encoding: Optional[str] = None
         self._last_info: Dict[str, Any] = {}
@@ -105,6 +108,20 @@ class CsvFileSource(DataSource):
                 desc = f"时标 ≥ {self.cfg.source.play_start_value}"
             self._seek_notes = [f"播放起点：{desc}（之前的数据已跳过，不参与计算）"]
 
+    def _pace(self, block: SampleBlock) -> None:
+        """倍速限速：距上一块产出至少间隔 块时长/speed。只看相邻两块，暂停/卡顿后不追赶。"""
+        if self.speed <= 0 or block.n == 0:
+            return
+        now = time.monotonic()
+        if self._last_emit_wall is not None:
+            fs = float(self.cfg.sampling.fs) or 1.0
+            dur = block.n / fs
+            need = dur / self.speed - (now - self._last_emit_wall)
+            if need > 0:
+                time.sleep(min(need, 1.0))
+                now = time.monotonic()
+        self._last_emit_wall = now
+
     def read(self) -> Optional[SampleBlock]:
         if self._it is None:
             self.open()
@@ -121,6 +138,7 @@ class CsvFileSource(DataSource):
                        "无日期写法可只填 HH:MM:SS）"))
             return None
         block = self._apply_custom_time(block)
+        self._pace(block)
         if self._n_blocks == 0 and self._seek_info and self._seek_info.get("mode") in ("row", "time"):
             sk = self._seek_info.get("skipped_rows")
             if sk is not None and self._seek_notes:
@@ -152,7 +170,7 @@ class CsvFileSource(DataSource):
         return {
             "kind": self.kind, "path": self.path, "encoding": self._encoding,
             "header": self._header, "file_size_bytes": size,
-            "block_samples": self.block_samples, "blocks_read": self._n_blocks,
+            "block_samples": self.block_samples, "blocks_read": self._n_blocks, "file_speed": self.speed,
             "samples_read": self._n_samples, "exhausted": self._exhausted,
             "t_start": self._first_t, "t_end": self._last_t,
             "duration_s": (self._n_samples / self.cfg.sampling.fs) if self._n_samples else 0.0,

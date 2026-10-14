@@ -481,7 +481,7 @@ async def engine_start(payload: Optional[Dict[str, Any]] = None) -> Any:
                     if k in ("kind", "path", "host", "port", "frame", "block_samples",
                              "poll_interval_s", "tail_from_end", "sim_speed", "watch_dir_newest",
                              "struct_fmt", "struct_fields", "custom_time", "custom_time_start",
-                             "file_time_utc", "play_start_mode", "play_start_value")}
+                             "file_time_utc", "play_start_mode", "play_start_value", "file_speed")}
         if src_over:
             data["source"].update(src_over)
         if payload.get("windows"):
@@ -1050,9 +1050,38 @@ async def ws_endpoint(ws: WebSocket) -> None:
 
 # ------------------------------------------------------------------ 静态页面
 
+def _asset_version() -> str:
+    """前端资源版本号＝app.js/style.css/index.html 内容哈希前 10 位；文件一改 URL 就变，浏览器不可能再用旧缓存（F-42）。"""
+    import hashlib
+    h = hashlib.sha1()
+    for name in ("app.js", "style.css", "index.html"):
+        try:
+            with open(os.path.join(STATIC_DIR, name), "rb") as fh:
+                h.update(fh.read())
+        except OSError:
+            pass
+    return h.hexdigest()[:10]
+
+
 @app.get("/")
-async def index() -> FileResponse:
-    return FileResponse(os.path.join(STATIC_DIR, "index.html"))
+async def index() -> Response:
+    with open(os.path.join(STATIC_DIR, "index.html"), "r", encoding="utf-8") as fh:
+        html = fh.read()
+    v = _asset_version()
+    html = html.replace('href="/static/style.css"', f'href="/static/style.css?v={v}"') \
+               .replace('src="/static/app.js"', f'src="/static/app.js?v={v}"')
+    return Response(content=html, media_type="text/html",
+                    headers={"Cache-Control": "no-store, max-age=0", "X-Asset-Version": v})
+
+
+@app.middleware("http")
+async def _no_stale_static(request, call_next):
+    """静态资源一律 no-cache（每次向服务端校验 ETag）：F-42 用户浏览器拿着旧 app.js 点新按钮没有反应。"""
+    resp = await call_next(request)
+    p = request.url.path
+    if p.startswith("/static/") or p in ("/", "/index.html"):
+        resp.headers.setdefault("Cache-Control", "no-cache, max-age=0, must-revalidate")
+    return resp
 
 
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")

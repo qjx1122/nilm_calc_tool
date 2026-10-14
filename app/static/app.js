@@ -540,7 +540,11 @@ function renderPauseButtons(st, eng) {
 }
 
 async function togglePause() {
-  const paused = !!(S.state && S.state.paused);
+  const st = S.state || {}, eng = st.engine || {};
+  if (!(st.pausable && eng.running && !eng.finished)) {
+    toast(st.pausable ? '离线文件未在播放，无法暂停' : '暂停/恢复仅支持离线文件（csv_file）源', 'err'); return;
+  }
+  const paused = !!st.paused;
   try {
     const r = await api(paused ? '/api/engine/resume' : '/api/engine/pause', { method: 'POST' });
     S.state = r.state || S.state;
@@ -555,15 +559,16 @@ function startStateWatch() {
   if (S.stateWatch) return;
   S.stateWatch = setInterval(async () => {
     const st = S.state || {}, eng = st.engine || {};
-    if (!(st.running || eng.running || st.paused)) return;
+    // 不以本地认知的「是否运行」为前提（F-42：若本地状态是旧的/服务端被别处启动，永远不会开始校对）；
+    // /api/state 很小，2 s 一次可以接受。
     try {
       const fresh = await api('/api/state');
       const was = !!(st.running || eng.running), now = !!(fresh.running || (fresh.engine || {}).running);
       S.state = fresh;
-      if (was !== now || !!st.paused !== !!fresh.paused || !!st.finished !== !!fresh.finished) {
+      if (was !== now || !!st.paused !== !!fresh.paused || !!st.finished !== !!fresh.finished || !!st.pausable !== !!fresh.pausable) {
         renderTop(); if (S.view === 'source' || S.view === 'export') render();
         if (was && !now && fresh.finished) toast('离线文件播放完毕', 'ok');
-      } else renderTop();
+      } else if (now || fresh.paused) renderTop();
     } catch (e) { /* 服务不可达时由 WS onclose 处理 */ }
   }, 2000);
 }
@@ -962,6 +967,8 @@ function fillSourceForm(cfg) {
     $('#src-fields').value = cfg.source.struct_fields || '';
     $('#src-block').value = cfg.source.block_samples || 640;
     $('#src-speed').value = cfg.source.sim_speed !== undefined ? cfg.source.sim_speed : 1;
+    // 离线倍速：配置里 0（不限速）是 CLI/批处理默认；界面上默认按 1× 真实速率播放——这才是「播放/暂停」语义
+    if ($('#src-file-speed')) $('#src-file-speed').value = String(cfg.source.file_speed !== undefined && cfg.source.file_speed > 0 ? cfg.source.file_speed : (S.fileSpeedChosen === 0 ? 0 : 1));
     $('#src-tailend').checked = !!cfg.source.tail_from_end;
     $('#src-newest').checked = !!cfg.source.watch_dir_newest;
     $('#src-customtime').checked = !!cfg.source.custom_time;
@@ -1365,6 +1372,7 @@ function collectSourcePayload() {
     const sp = numOr('src-speed', null);
     if (sp !== null && sp > 0) p.sim_speed = sp;
   }
+  if (kind === 'csv_file' && $('#src-file-speed')) p.file_speed = parseFloat($('#src-file-speed').value) || 0;
   const bs = numOr('src-block', null);
   if (bs !== null && bs > 0) p.block_samples = bs;
   return p;
@@ -1610,6 +1618,7 @@ function bind() {
   $('#btn-rt-refresh').addEventListener('click', refreshRealtime);
   ['rt-enable', 'rt-dir'].forEach(id => { $('#' + id).addEventListener('input', () => { S.rtDirty = true; }); $('#' + id).addEventListener('change', () => { S.rtDirty = true; }); });
   $('#src-playmode').addEventListener('change', () => { S.srcDirty = true; S.formDirty = true; syncSourceForm(); });
+  $('#src-file-speed').addEventListener('change', () => { S.fileSpeedChosen = parseFloat($('#src-file-speed').value) || 0; });
   // 任何用户输入都置脏：否则 0.2s 一次的推送会把正在编辑的字段改回服务端配置
   $$('#view-source input, #view-source select').forEach((el) => {
     const mark = () => { S.formDirty = true; if (el.id.startsWith('cfg-')) S.cfgDirty = true; else S.srcDirty = true; };

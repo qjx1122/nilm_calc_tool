@@ -459,11 +459,19 @@ class SourceConfig:
     #                    time    从文件时标 ≥ 指定时刻的第一条数据开始：value="2026-10-12 08:00:00"
     #                            或只填时刻 "08:00:00"（与文件时标的当天时刻比较，适合 0/00/00 写法）
     play_start_mode: str = "begin"
+    # 离线文件播放倍速（csv_file 专用，v0.12.2）：1.0＝按数据真实时间速率播放（1 s 数据用 1 s 墙钟），2.0＝两倍速，
+    # 0＝不限速（能算多快播多快，CLI/批处理/测试默认）。按「相邻两块的间隔」限速：暂停后恢复不会突发追赶。
+    file_speed: float = 0.0
     play_start_value: str = ""
 
     def validate(self) -> None:
         if self.kind not in SOURCE_KINDS:
             raise ConfigError(f"source.kind 必须是 {SOURCE_KINDS}（当前 {self.kind}）")
+        try:
+            if float(self.file_speed) < 0:
+                raise ValueError
+        except (TypeError, ValueError):
+            raise ConfigError(f"source.file_speed 必须 ≥ 0（0＝不限速；当前 {self.file_speed!r}）")
         if self.play_start_mode not in PLAY_START_MODES:
             raise ConfigError(f"source.play_start_mode 必须是 {PLAY_START_MODES}（当前 {self.play_start_mode}）")
         if self.play_start_mode != "begin":
