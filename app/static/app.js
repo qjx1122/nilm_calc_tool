@@ -11,7 +11,7 @@ const PH = ['A', 'B', 'C'];
 const COLORS = { A: '#4ea1ff', B: '#3ddc97', C: '#ffb648', P: '#ff7ac6', Q: '#9d7bff', S: '#5ee0d0' };
 
 const S = {
-  side: (function () { try { return localStorage.getItem('elec_side') === 'branch' ? 'branch' : 'bus'; } catch (e) { return 'bus'; } })(),
+  side: 'bus',                 // 侧别由左侧导航的分组决定（总览/数据源＝总线侧；「总线侧」「分路侧」分组各自切换）
   state: null, result: null, view: 'overview',
   ws: null, wsOk: false, poll: null, histCache: {}, histAt: {},
   // 表单脏标记：用户一旦动手编辑，就暂停自动回填。
@@ -501,11 +501,10 @@ function apiUrl(path) {
   return path;
 }
 
-async function setSide(side) {
+async function setSide(side, opts = {}) {
   side = side === 'branch' ? 'branch' : 'bus';
   if (side === S.side) return;
   S.side = side;
-  try { localStorage.setItem('elec_side', side); } catch (e) { /* ignore */ }
   // 丢弃另一侧的所有缓存，重新连接推送
   S.state = null; S.result = null; S.histCache = {}; S.histAt = {};
   S.events = []; S.evSummary = null; S.evLoaded = false;
@@ -518,7 +517,7 @@ async function setSide(side) {
   connectWS();
   renderTop(); render();
   setTimeout(refreshHistory, 300);
-  toast('已切换到' + sideLabel(), 'ok');
+  if (!opts.silent) toast('已切换到' + sideLabel(), 'ok');
 }
 
 function sideLabel() { return S.side === 'branch' ? '分路侧设备' : '总线侧'; }
@@ -526,9 +525,6 @@ function sideLabel() { return S.side === 'branch' ? '分路侧设备' : '总线�
 function applySideUI() {
   document.body.classList.toggle('side-branch', S.side === 'branch');
   const t = $('#side-title'); if (t) t.textContent = sideLabel();
-  const b1 = $('#side-bus'), b2 = $('#side-branch');
-  if (b1) b1.className = S.side === 'bus' ? 'on' : '';
-  if (b2) b2.className = S.side === 'branch' ? 'on' : '';
   const bf = $('#branch-form'), bn = $('#branch-panel-note');
   if (bf) bf.style.display = S.side === 'bus' ? '' : 'none';
   if (bn) bn.style.display = S.side === 'bus' ? 'none' : '';
@@ -617,7 +613,42 @@ function startStateWatch() {
   }, 2000);
 }
 
+function sideStatusText(x) {
+  if (!x) return '—';
+  if (x.error) return '错误';
+  if (x.paused) return '已暂停';
+  if (x.running) return '运行中';
+  if (x.finished) return '已完成';
+  return x.enabled === false ? '未启用' : '未启动';
+}
+
+function renderNavBranchState(br) {
+  const b = $('#nav-br-state'); if (!b) return;
+  if (!br) { b.style.display = 'none'; return; }
+  const t = sideStatusText(br);
+  b.textContent = t; b.style.display = '';
+  b.className = 'badge' + (br.error ? ' bad' : br.running ? ' ok' : '');
+}
+
+function renderOverviewSides() {
+  const el = $('#ov-sides'); if (!el) return;
+  const st = S.state || {}, eng = st.engine || {}, cfg = st.config || {};
+  if (S.side !== 'bus') { el.innerHTML = ''; return; }
+  const br = st.branch || {};
+  const busTxt = st.error ? '错误' : st.paused ? '已暂停' : eng.running ? '运行中' : eng.finished ? '已完成' : '未启动';
+  const busSrc = (cfg.source && cfg.source.kind) || '—';
+  const busPath = (cfg.source && cfg.source.path) ? String(cfg.source.path).split(/[\\/]/).pop() : '';
+  const brPath = br.source_path ? String(br.source_path).split(/[\\/]/).pop() : '';
+  const brOn = !!(br.enabled || br.running || br.finished || br.error);
+  el.innerHTML = [
+    card('总线侧数据源', busTxt, '', `${busSrc} ${busPath}　样本 ${eng.samples_in || 0}　事件 ${eng.events_total || 0}　负荷事件 ${eng.nilm_events_total || 0}`),
+    card('分路侧设备数据源', brOn ? sideStatusText(br) : '未启用', '',
+      brOn ? `${br.source_kind || 'csv_file'} ${brPath}　样本 ${br.samples_in || 0}　事件 ${br.events_total || 0}　负荷事件 ${br.nilm_events_total || 0}` : '在「数据源与控制」页启用并配置分路侧文件'),
+  ].join('');
+}
+
 function renderBranchChip(br) {
+  renderNavBranchState(br);
   const el = $('#st-branch'); if (!el) return;
   if (!br) { el.textContent = '—'; el.className = 'pill'; el.title = ''; return; }
   let txt, cls;
@@ -629,18 +660,21 @@ function renderBranchChip(br) {
   else { txt = '已启用·未启动'; cls = 'pill'; }
   el.textContent = txt; el.className = cls;
   el.title = (br.error ? br.error + '\n' : '') + `源：${br.source_kind || '—'} ${br.source_path || ''}\n样本：${br.samples_in || 0}　事件：${br.events_total || 0}　负荷事件：${br.nilm_events_total || 0}`;
-  el.style.cursor = 'pointer'; el.onclick = () => setSide('branch');
+  el.style.cursor = 'pointer'; el.onclick = () => switchView(S.view === 'overview' || S.view === 'source' ? 'voltage' : S.view, 'branch');
 }
 
 function setEventBadge(n) {
-  const badge = $('#nav-ev-badge');
+  const badge = $(S.side === 'branch' ? '#nav-ev-badge-br' : '#nav-ev-badge');
   if (!badge) return;
   badge.textContent = String(n); badge.style.display = n ? '' : 'none'; badge.className = 'badge' + (n ? ' bad' : '');
 }
 
-function switchView(v) {
+async function switchView(v, side) {
+  // 导航分组决定侧别：总览/数据源与控制/工具 → 总线侧；「总线侧」「分路侧」分组下的子界面 → 对应侧
+  const want = side || 'bus';
+  if (want !== S.side) await setSide(want, { silent: true });
   S.view = v;
-  $$('.navitem').forEach(b => b.classList.toggle('active', b.dataset.view === v));
+  $$('.navitem').forEach(b => b.classList.toggle('active', b.dataset.view === v && (b.dataset.side || 'bus') === S.side));
   $$('.view').forEach(s => s.classList.toggle('active', s.id === 'view-' + v));
   render();
   if (['overview', 'power_factor', 'fundamental', 'interharmonic', 'dc'].includes(v)) refreshHistory();
@@ -750,6 +784,7 @@ function renderOverview() {
   }
   if (!cards.length) cards.push(card('状态', '尚无结果', '', '请到「数据源与控制」启动数据源'));
   $('#ov-cards').innerHTML = cards.join('');
+  renderOverviewSides();
 
   const hv = S.histCache.voltage || [], hi = S.histCache.current || [], hp = S.histCache.power || [], hh = S.histCache.harmonic || [];
   const tref = (arr) => arr.length ? arr[0].t : 0;
@@ -1719,7 +1754,7 @@ async function saveCfgFile() {
 
 function bind() {
   bindProcess();
-  $$('.navitem').forEach(b => b.addEventListener('click', () => switchView(b.dataset.view)));
+  $$('.navitem').forEach(b => b.addEventListener('click', () => switchView(b.dataset.view, b.dataset.side)));
   $('#btn-start').addEventListener('click', () => startEngine());
   $('#btn-stop').addEventListener('click', stopEngine);
   $('#btn-pause').addEventListener('click', togglePause);
@@ -1734,10 +1769,9 @@ function bind() {
   $('#btn-start2').addEventListener('click', () => startEngine());
   $('#btn-stop2').addEventListener('click', stopEngine);
   $('#btn-pause2').addEventListener('click', togglePause);
-  $('#side-bus').addEventListener('click', () => setSide('bus'));
-  $('#side-branch').addEventListener('click', () => setSide('branch'));
+
   $('#btn-br-save').addEventListener('click', saveBranchSource);
-  $('#btn-br-goto').addEventListener('click', () => setSide('branch'));
+  $('#btn-br-goto').addEventListener('click', () => switchView('voltage', 'branch'));
   $('#btn-br-probe').addEventListener('click', probeBranch);
   $('#btn-br-pick').addEventListener('click', pickBranchFile);
   ['br-enabled', 'br-path', 'br-file-speed', 'br-customtime', 'br-customstart', 'br-utc', 'br-block'].forEach((id) => {
@@ -1887,7 +1921,7 @@ function onNilmPush(list) {
 }
 
 function setNilmBadge(n) {
-  const b = $('#nav-nilm-badge'); if (!b) return;
+  const b = $(S.side === 'branch' ? '#nav-nilm-badge-br' : '#nav-nilm-badge'); if (!b) return;
   b.textContent = String(n); b.style.display = n > 0 ? '' : 'none';
 }
 

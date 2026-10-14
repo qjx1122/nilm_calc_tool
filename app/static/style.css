@@ -104,3 +104,8 @@ input:disabled, select:disabled { cursor: not-allowed; }
 body.side-branch .sidetag{background:#3a2a12;color:var(--warn)}
 body.side-branch header{box-shadow:inset 0 3px 0 var(--warn)}
 .notes.muted{color:var(--mut);font-size:12px}
+.navgroup-bus{color:var(--acc)}
+.navgroup-branch{color:var(--warn)}
+.navhint{display:block;font-size:10px;color:var(--mut);font-weight:400;margin-top:1px}
+.badge.ok{background:#123a2c;color:var(--ok)}
+.ovsub{margin:14px 0 6px;color:var(--mut);font-size:13px;font-weight:600}

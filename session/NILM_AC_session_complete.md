@@ -220,3 +220,5 @@
 
 - **[2026-10-14] 第 14 轮：总线侧 + 分路侧设备双数据源**。设计取舍：不复制 30 多个端点，而是 `RUNNERS={bus,branch}` + contextvar `_SIDE` + `RUNNER` 属性代理 + 纯 ASGI 中间件把 `/api/branch/...`→`/api/...`、`/ws/branch`→`/ws`，既有端点代码零改动即服务两侧；前端同理只在 `api()` 入口加前缀、WS 路径按侧选择，所有子界面天然"按当前侧显示"。总线侧 `branch.enabled` 决定联动；分路侧是独立 AppConfig（`configs/branch_runtime.json`，输出 `output/branch/`）。联动点只在 start/stop/pause/resume 四个端点且仅 side==bus 时触发。测试 4 项 + jsdom 19 项 + 全量 274。沙盒开局未回收。教训：**横向复制功能时优先在"路由/上下文"层做乘法，不在"端点"层做加法。**
 - **[2026-10-14] 第 14 轮补充**（用户重述需求并限定「离线文件输入方式下」）：分路侧面板改为固定 csv_file，补齐文件参数（探查 / 从 data/ 选择 / 倍速 / 自定义播放时间 / UTC / 块大小）；服务端联动条件加「两侧都是 csv_file」，否则 `branch.skipped/error` 带原因；ui_r14 23/23、全量 274。
+
+- **[2026-10-14] 第 15 轮：导航按侧别三分组**（用户：1 总览＝总览面板+数据源与控制；2 总线侧＝总线侧电气量子界面；3 分路侧＝分路侧电气量子界面）。实现：`index.html` 导航项加 `data-side`，总线/分路两组各复制一套子界面入口（分路组徽标 id 加 `-br` 后缀避免重复 id，并多一项「分路侧数据源与口径」给 fs/PT-CT 配置留入口）；`switchView(v, side)` 先静默 `setSide` 再切页，高亮按 view+side 匹配；删除顶栏 `.sideswitch`（避免两个真相源）与 localStorage 侧别记忆（刷新回到总览＝总线侧）；总览面板新增 `#ov-sides` 两侧状态卡、分路组标题 `#nav-br-state` 徽标。验证：ui_r14 27/27、ui_r12/ui_r13 通过、全量 274。踩坑：批量替换脚本里 `sub()` 已落盘后又用早先读入的旧串整体回写，把 app.js 清空——**同一文件只保留一个写入点**，改完立即 `git diff --stat` 看行数。

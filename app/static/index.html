@@ -14,9 +14,6 @@
       <h1>电力系统电气量计算工具 <span id="side-title" class="sidetag">总线侧</span></h1>
       <div class="sub" id="subtitle">nilm_calc_tool · elec_tool</div>
     </div>
-    <div class="sideswitch" title="切换当前查看/配置的数据源侧别：两侧各自独立配置、独立计算；所有子界面都按当前侧显示">
-      <button id="side-bus" class="on">总线侧</button><button id="side-branch">分路侧设备</button>
-    </div>
   </div>
   <div class="topstats">
     <div class="stat"><label>状态</label><span id="st-running" class="pill">未启动</span></div>
@@ -39,23 +36,38 @@
 <div id="layout">
   <nav id="navbar">
     <div class="navgroup">总览</div>
-    <button class="navitem active" data-view="overview">📊 总览面板</button>
-    <button class="navitem" data-view="source">🔌 数据源与控制</button>
-    <div class="navgroup">电气量（各分子界面）</div>
-    <button class="navitem" data-view="voltage">🔆 三相电压</button>
-    <button class="navitem" data-view="current">🔌 三相电流</button>
-    <button class="navitem" data-view="power">⚙️ 有功 / 无功 / 视在</button>
-    <button class="navitem" data-view="power_factor">📐 功率因数</button>
-    <button class="navitem" data-view="fundamental">〰️ 基波</button>
-    <button class="navitem" data-view="harmonic">📶 谐波 (2–50 次)</button>
-    <button class="navitem" data-view="interharmonic">🎚 间谐波</button>
-    <button class="navitem" data-view="dc">➖ 直流偏置</button>
-    <button class="navitem" data-view="spectrum">🌈 频谱</button>
-    <button class="navitem" data-view="events">🚨 事件 <span class="badge" id="nav-ev-badge" style="display:none">0</span></button>
-    <button class="navitem" data-view="nilm">🧩 负荷辨识 <span class="badge" id="nav-nilm-badge" style="display:none">0</span></button>
-    <div class="navgroup">配置与运维</div>
-    <button class="navitem" data-view="windows">⏱ 窗口配置（需求⑥）</button>
-    <button class="navitem" data-view="export">💾 导出与日志</button>
+    <button class="navitem active" data-view="overview" data-side="bus">📊 总览面板</button>
+    <button class="navitem" data-view="source" data-side="bus">🔌 数据源与控制</button>
+    <div class="navgroup navgroup-bus">总线侧 <span class="navhint">总线侧数据源计算的电气量</span></div>
+    <button class="navitem" data-view="voltage" data-side="bus">🔆 三相电压</button>
+    <button class="navitem" data-view="current" data-side="bus">🔌 三相电流</button>
+    <button class="navitem" data-view="power" data-side="bus">⚙️ 有功 / 无功 / 视在</button>
+    <button class="navitem" data-view="power_factor" data-side="bus">📐 功率因数</button>
+    <button class="navitem" data-view="fundamental" data-side="bus">〰️ 基波</button>
+    <button class="navitem" data-view="harmonic" data-side="bus">📶 谐波 (2–50 次)</button>
+    <button class="navitem" data-view="interharmonic" data-side="bus">🎚 间谐波</button>
+    <button class="navitem" data-view="dc" data-side="bus">➖ 直流偏置</button>
+    <button class="navitem" data-view="spectrum" data-side="bus">🌈 频谱</button>
+    <button class="navitem" data-view="events" data-side="bus">🚨 事件 <span class="badge" id="nav-ev-badge" style="display:none">0</span></button>
+    <button class="navitem" data-view="nilm" data-side="bus">🧩 负荷辨识 <span class="badge" id="nav-nilm-badge" style="display:none">0</span></button>
+    <button class="navitem" data-view="windows" data-side="bus">⏱ 窗口配置</button>
+    <button class="navitem" data-view="export" data-side="bus">💾 导出与日志</button>
+    <div class="navgroup navgroup-branch">分路侧 <span class="navhint">分路侧设备数据源计算的电气量</span> <span class="badge" id="nav-br-state" style="display:none"></span></div>
+    <button class="navitem" data-view="voltage" data-side="branch">🔆 三相电压</button>
+    <button class="navitem" data-view="current" data-side="branch">🔌 三相电流</button>
+    <button class="navitem" data-view="power" data-side="branch">⚙️ 有功 / 无功 / 视在</button>
+    <button class="navitem" data-view="power_factor" data-side="branch">📐 功率因数</button>
+    <button class="navitem" data-view="fundamental" data-side="branch">〰️ 基波</button>
+    <button class="navitem" data-view="harmonic" data-side="branch">📶 谐波 (2–50 次)</button>
+    <button class="navitem" data-view="interharmonic" data-side="branch">🎚 间谐波</button>
+    <button class="navitem" data-view="dc" data-side="branch">➖ 直流偏置</button>
+    <button class="navitem" data-view="spectrum" data-side="branch">🌈 频谱</button>
+    <button class="navitem" data-view="events" data-side="branch">🚨 事件 <span class="badge" id="nav-ev-badge-br" style="display:none">0</span></button>
+    <button class="navitem" data-view="nilm" data-side="branch">🧩 负荷辨识 <span class="badge" id="nav-nilm-badge-br" style="display:none">0</span></button>
+    <button class="navitem" data-view="source" data-side="branch">🔧 分路侧数据源与口径</button>
+    <button class="navitem" data-view="windows" data-side="branch">⏱ 窗口配置</button>
+    <button class="navitem" data-view="export" data-side="branch">💾 导出与日志</button>
+    <div class="navgroup">工具</div>
     <button class="navitem" data-view="selftest">✅ 算法自检</button>
     <button class="navitem" data-view="process">🧮 数据处理</button>
     <div class="navfoot" id="nav-foot">—</div>
@@ -65,6 +77,8 @@
     <!-- 总览 -->
     <section class="view active" id="view-overview">
       <h2>总览面板</h2>
+      <div class="cards" id="ov-sides"></div>
+      <h3 class="ovsub">总线侧 · 最新电气量</h3>
       <div class="cards" id="ov-cards"></div>
       <div class="grid2">
         <div class="panel"><h3 class="curvehdr"><span>三相电压趋势</span><label class="curvesave" title="勾选＝「保存曲线数据」时包含本曲线；不勾选＝保存时跳过本曲线"><input type="checkbox" class="curve-save" data-curve="voltage"> 保存曲线</label><span class="curvespan" data-curve="voltage"></span></h3><canvas id="ov-u" height="200"></canvas></div>
@@ -160,7 +174,7 @@
             <label>每块样本数 <input id="br-block" type="number" value="640"></label>
             <div class="row">
               <button id="btn-br-save" class="primary">保存分路侧数据源</button>
-              <button id="btn-br-goto">切换到分路侧 →（采样率 / PT-CT / 窗口 / 阈值等完整配置与电气量子界面）</button>
+              <button id="btn-br-goto">去左侧「分路侧」分组查看电气量 →（采样率 / PT-CT 在「分路侧数据源与口径」页改，窗长在分路侧「窗口配置」页改）</button>
             </div>
             <div class="notes" id="br-status"></div>
             <div class="notes muted">分路侧是一份<b>完全独立</b>的配置（采样率、PT/CT、窗口、事件阈值、负荷辨识参数…），

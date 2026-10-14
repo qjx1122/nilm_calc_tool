@@ -81,6 +81,7 @@
 - 范围边界：~~本 session 不写业务代码~~ ❌**已失效**（该边界属上一任务；本任务即为写代码）；仍然遵守：不新建台账外散文件、不把数据/产物入库
 
 ## 已完成
+- **第 15 轮（v0.14）**：导航三分组「总览 / 总线侧 / 分路侧」（+「工具」），侧别随导航分组切换；总览面板两侧状态卡；ui_r14 27/27、ui_r12 16/16、ui_r13 12/12、全量 pytest 274 passed/1 skipped。执行模式：混合模式（用户未指定）。
 - [x] 2026-10-10 开局仪式：`git status` / `git log` / `git branch --show-current`；读 `ROLE.md`；`gh auth status` 通过（qjx1122）；`git ls-remote origin` 通过
 - [x] 2026-10-10 初始化 `STATUS.md` 并即刻 push（`e821ef3`）；创建 5 份台账骨架 v0.1 + 文件级验证 V1–V8（`2b7d3c3`）
 - [x] 2026-10-10 **算法核心**（`880bf5f`）：`elec_tool/{config,blocks,scaling,metrics,selftest}.py` + `analysis/{window,rms,harmonic,power}.py`——整周期矩形窗 FFT、RMS/相量/序分量、谐波 2–50 次与 THD/HR/间谐波、P/Q/S/PF/DPF/四象限/零线电流、过零+基带精修估频、窗切分与降级策略、PT/CT 变比
