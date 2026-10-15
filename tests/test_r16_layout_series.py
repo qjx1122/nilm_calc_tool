@@ -25,8 +25,8 @@ def test_source_view_two_columns_same_row():
     sec = HTML[HTML.index('id="view-source"'):HTML.index("<!-- 三相电压 -->")]
     grid = sec[sec.index('id="srcgrid"'):sec.index("</section>")]
     cols = re.findall(r'<div class="panel (col-bus|col-br)"', grid)
-    # 4 行 × 2 列：总线侧在左、分路侧在右，交替出现
-    assert cols == ["col-bus", "col-br"] * 4
+    # 5 行 × 2 列（v0.21.1 增加两侧各自的原始数据导出面板）：总线侧在左、分路侧在右，交替出现
+    assert cols == ["col-bus", "col-br"] * 5
     # 未启用分路侧：右列隐藏（CSS 规则存在 + 初始类名 no-branch）
     css = (ROOT / "app" / "static" / "style.css").read_text(encoding="utf-8")
     assert ".srcgrid.no-branch .col-br{display:none}" in css

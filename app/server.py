@@ -1389,13 +1389,12 @@ async def get_nilm_cycles(n: int = 300) -> Dict[str, Any]:
 
 # ------------------------------------------------------------------ v0.21：离线文件指定时间段原始数据重新导出
 def _raw_export_sides(payload: Dict[str, Any]) -> Tuple[List[Tuple[AppConfig, int]], List[str], Dict[str, Any]]:
-    """当前侧（及总线侧联动的分路侧）的离线文件配置；非 csv_file 的一侧跳过并给出说明。"""
+    """**只取当前侧**的离线文件配置（总线侧与分路侧的导出相互独立、互不关联）；非 csv_file 时给出说明。"""
     side = current_side()
     notes: List[str] = []
     ranges: Dict[str, Any] = {}
     out: List[Tuple[AppConfig, int]] = []
-    cands = [side] + (["branch"] if side == "bus" and RUNNER.cfg.branch.enabled and payload.get("with_branch", True) else [])
-    for sd in cands:
+    for sd in [side]:
         cfg = AppConfig.from_dict(RUNNERS[sd].cfg.to_dict())
         label = "总线侧" if sd == "bus" else "分路侧"
         if cfg.source.kind != "csv_file":
@@ -1415,9 +1414,9 @@ def _raw_export_sides(payload: Dict[str, Any]) -> Tuple[List[Tuple[AppConfig, in
 
 
 @app.get("/api/source/raw_range")
-async def raw_range_info(with_branch: bool = True) -> Dict[str, Any]:
-    """当前侧（含联动分路侧）离线文件的时间范围，供导出界面填默认值。"""
-    sides, notes, ranges = _raw_export_sides({"with_branch": with_branch})
+async def raw_range_info() -> Dict[str, Any]:
+    """当前侧离线文件的时间范围，供导出界面填默认值（分路侧用 /api/branch/source/raw_range）。"""
+    sides, notes, ranges = _raw_export_sides({})
     return {"ok": True, "sides": {("bus" if sid == 0 else "branch"): {"path": _display_path(_abs_path(c.source.path)), "custom_time": bool(c.source.custom_time)}
                                   for c, sid in sides}, "ranges": ranges, "notes": notes}
 
@@ -1426,10 +1425,10 @@ async def raw_range_info(with_branch: bool = True) -> Dict[str, Any]:
 async def raw_export_range(payload: Optional[Dict[str, Any]] = None) -> Any:
     """v0.21：从离线数据源 CSV 中把**指定时间段的原始采样行**重新导出到一个新的 CSV 文件。
 
-    body：{t_from, t_to（时间文本 "2026-10-15 14:14:20.5" 或 epoch 秒；可留一端为空）, with_branch?: true, name?: 文件名}。
-    时间按播放时间轴判断（与界面显示一致，含自定义播放时间）。总线侧调用且启用分路侧时，分路侧文件同一时间段的行
-    写进**同一个**文件；行按原样写出，末尾追加 source_id 列（0 总线 / 1 分路）；导出文件可直接再作为离线数据源播放。
-    文件：output/raw_<起>_<止>.csv。
+    body：{t_from, t_to（时间文本 "2026-10-15 14:14:20.5" / "14:14:20.5000" 或 epoch 秒；可留一端为空）, name?: 文件名}。
+    时间按播放时间轴判断（与界面显示一致，含自定义播放时间）。**只导出当前侧自己的文件**（总线侧 `/api/source/export_range`、
+    分路侧 `/api/branch/source/export_range`，两者相互独立、互不关联）；行按原样写出，末尾追加 source_id 列（0 总线 / 1 分路）；
+    导出文件可直接再作为离线数据源播放。文件：output/raw_<起>_<止>_src<source_id>.csv。
     """
     payload = payload or {}
     from elec_tool import raw_export
@@ -1463,7 +1462,8 @@ async def raw_export_range(payload: Optional[Dict[str, Any]] = None) -> Any:
     if not os.path.isabs(out_dir):
         out_dir = os.path.join(ROOT, out_dir)
     stamp = lambda t: fmt_local(t, ms=False).replace("-", "").replace(":", "").replace(" ", "_")   # noqa: E731
-    name = str(payload.get("name") or "").strip() or f"raw_{stamp(tf) if tf is not None else 'begin'}_{stamp(tt) if tt is not None else 'end'}.csv"
+    name = (str(payload.get("name") or "").strip()
+            or f"raw_{stamp(tf) if tf is not None else 'begin'}_{stamp(tt) if tt is not None else 'end'}_src{sides[0][1]}.csv")
     if not name.lower().endswith(".csv"):
         name += ".csv"
     name = os.path.basename(name)

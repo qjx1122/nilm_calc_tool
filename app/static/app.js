@@ -1849,7 +1849,7 @@ async function pickBranchFile() {
 }
 
 function renderSource() {
-  if (!S._rawRangeAt || Date.now() - S._rawRangeAt > 15000) { S._rawRangeAt = Date.now(); refreshRawRange(); }
+  if (!S._rawRangeAt || Date.now() - S._rawRangeAt > 15000) { S._rawRangeAt = Date.now(); refreshRawRange('bus'); refreshRawRange('branch'); }
   const st = S.state || {}, cfg = st.config || {};
   if (S.formDirty) {
     setFormNote('⚠ 界面有未保存的修改：已暂停自动回填（实时推送不会覆盖你正在输入的内容）。' +
@@ -2320,38 +2320,47 @@ function tsFull(v) {      // "YYYY-MM-DD HH:MM:SS.fff"（本地时间；可直�
   const d = new Date(+v * 1000), p = (n, w = 2) => String(n).padStart(w, '0');
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}.${p(d.getMilliseconds(), 3)}`;
 }
-async function refreshRawRange() {
-  const el = $('#raw-exp-range'); if (!el) return null;
+/* v0.21.1：两侧各自独立的原始数据导出；side = 'bus' | 'branch'，显式走各自前缀，不随页面侧别切换 */
+const RAW_EXP = {
+  bus:    { pre: '',    url: '/api/source',        label: '总线侧' },
+  branch: { pre: 'br-', url: '/api/branch/source', label: '分路侧' },
+};
+async function rawApi(url, opt) {
+  const res = await fetch(url, opt);
+  let data = null;
+  try { data = await res.json(); } catch (e) { data = { ok: false, error: 'HTTP ' + res.status }; }
+  if (!res.ok) throw new Error((data && data.error) || ('HTTP ' + res.status));
+  return data;
+}
+async function refreshRawRange(side = 'bus') {
+  const cfg = RAW_EXP[side]; const el = $('#' + cfg.pre + 'raw-exp-range'); if (!el) return null;
   try {
-    const wb = $('#raw-exp-branch') ? $('#raw-exp-branch').checked : true;
-    const d = await api(`/api/source/raw_range?with_branch=${wb ? 1 : 0}`);
-    const parts = Object.entries(d.ranges || {}).map(([sd, r]) => `${sd === 'branch' ? '分路侧' : '总线侧'} ${r.error ? '✗ ' + r.error : `${r.t0_local} ~ ${r.t1_local}（${r.rows} 行）`}`);
-    el.textContent = parts.length ? parts.join('；') : (d.notes || []).join('；') || '无离线文件数据源';
+    const d = await rawApi(cfg.url + '/raw_range');
+    const r = (d.ranges || {})[side];
+    el.textContent = r ? (r.error ? '✗ ' + r.error : `${r.t0_local} ~ ${r.t1_local}（${r.rows} 行）`) : ((d.notes || []).join('；') || '无离线文件数据源');
     return d;
   } catch (e) { el.textContent = '文件范围获取失败：' + e.message; return null; }
 }
-async function fillRawRange() {
-  const d = await refreshRawRange();
-  const rs = Object.values((d || {}).ranges || {}).filter(r => !r.error);
-  if (!rs.length) { toast('没有可用的离线文件时间范围', 'err'); return; }
-  const t0 = Math.max(...rs.map(r => r.t0)), t1 = Math.min(...rs.map(r => r.t1));
-  if (t1 <= t0) { toast('两侧文件没有公共时间段，请手动填写', 'err'); }
-  $('#raw-exp-from').value = tsFull(Math.min(...rs.map(r => r.t0)));
-  $('#raw-exp-to').value = tsFull(Math.max(...rs.map(r => r.t1)));
+async function fillRawRange(side = 'bus') {
+  const cfg = RAW_EXP[side]; const d = await refreshRawRange(side);
+  const r = ((d || {}).ranges || {})[side];
+  if (!r || r.error) { toast(`${cfg.label}没有可用的离线文件时间范围`, 'err'); return; }
+  $('#' + cfg.pre + 'raw-exp-from').value = tsFull(r.t0);
+  $('#' + cfg.pre + 'raw-exp-to').value = tsFull(r.t1);
 }
-async function exportRawRange() {
-  const body = { t_from: ($('#raw-exp-from').value || '').trim(), t_to: ($('#raw-exp-to').value || '').trim(),
-                 name: ($('#raw-exp-name').value || '').trim(), with_branch: !!$('#raw-exp-branch').checked };
-  const note = $('#raw-exp-note'); const btn = $('#btn-raw-export');
+async function exportRawRange(side = 'bus') {
+  const cfg = RAW_EXP[side]; const g = (id) => $('#' + cfg.pre + id);
+  const body = { t_from: (g('raw-exp-from').value || '').trim(), t_to: (g('raw-exp-to').value || '').trim(), name: (g('raw-exp-name').value || '').trim() };
+  const note = g('raw-exp-note'); const btn = g('btn-raw-export');
   btn.disabled = true; btn.textContent = '导出中…';
   try {
-    const r = await api('/api/source/export_range', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-    const sides = Object.entries(r.sides || {}).map(([sd, v]) => `${sd === 'branch' ? '分路侧' : '总线侧'} ${v.rows} 行（${v.path}）`);
-    toast(`已导出 ${r.rows} 行 → ${r.path}`, 'ok');
-    if (note) note.innerHTML = notes([`✓ ${r.path}（${(r.size_bytes / 1024 / 1024).toFixed(2)} MB）`, `共 ${r.rows} 行，source_id ${r.source_ids.join('/')}：${sides.join('；')}`,
+    const r = await rawApi(cfg.url + '/export_range', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    const v = (r.sides || {})[side] || {};
+    toast(`${cfg.label}已导出 ${r.rows} 行 → ${r.path}`, 'ok');
+    if (note) note.innerHTML = notes([`✓ ${r.path}（${(r.size_bytes / 1024 / 1024).toFixed(2)} MB）`, `${cfg.label} ${r.rows} 行，source_id=${r.source_ids.join('/')}，源文件 ${v.path || ''}`,
                                       `数据时间 ${r.t_first_local} ~ ${r.t_last_local}`, r.header ? `列：${r.header.join(', ')}` : '无表头（与源文件一致）', ...(r.notes || []).map(n => 'ℹ ' + n)]);
   } catch (e) {
-    toast('导出原始数据失败：' + e.message, 'err');
+    toast(`${cfg.label}导出原始数据失败：` + e.message, 'err');
     if (note) note.innerHTML = notes(['✗ ' + e.message]);
   } finally { btn.disabled = false; btn.textContent = '导出到新 CSV'; }
 }
@@ -2494,9 +2503,10 @@ function bind() {
   $('#btn-stop2').addEventListener('click', stopEngine);
   $('#btn-pause2').addEventListener('click', togglePause);
   $('#btn-load-last').addEventListener('click', loadLastData);
-  $('#btn-raw-export').addEventListener('click', exportRawRange);
-  $('#btn-raw-exp-fill').addEventListener('click', fillRawRange);
-  $('#raw-exp-branch').addEventListener('change', refreshRawRange);
+  $('#btn-raw-export').addEventListener('click', () => exportRawRange('bus'));
+  $('#btn-raw-exp-fill').addEventListener('click', () => fillRawRange('bus'));
+  $('#br-btn-raw-export').addEventListener('click', () => exportRawRange('branch'));
+  $('#br-btn-raw-exp-fill').addEventListener('click', () => fillRawRange('branch'));
   $('#autoload-last').addEventListener('change', async (e) => {
     const on = !!e.target.checked; S.autoloadDirty = true;
     try {

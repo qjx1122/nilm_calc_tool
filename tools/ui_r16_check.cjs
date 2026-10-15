@@ -72,7 +72,7 @@ async function main() {
   await nav('source');
   const grid = $('srcgrid');
   const busCols = [...grid.querySelectorAll(':scope > .col-bus')], brCols = [...grid.querySelectorAll(':scope > .col-br')];
-  check('网格 4 行 × 2 列（总线侧 4 块 / 分路侧 4 块，交替排列）', busCols.length === 4 && brCols.length === 4 &&
+  check('网格 5 行 × 2 列（总线侧 5 块 / 分路侧 5 块，交替排列）', busCols.length === 5 && brCols.length === 5 &&
     [...grid.children].filter(el => !el.classList.contains('col-full')).every((el, i) => el.classList.contains(i % 2 === 0 ? 'col-bus' : 'col-br')), `${busCols.length}/${brCols.length}`);
   const titles = (cols) => cols.map(c => c.querySelector('h3').textContent.replace(/\s+/g, ''));
   check('同类配置左右同行：数据源 / 量纲与口径 / 列映射 / 数据源状态', titles(busCols).every((t, i) => t.replace('总线侧', '') .split(' ')[0].slice(0, 4) === titles(brCols)[i].replace('分路侧', '').split(' ')[0].slice(0, 4)), titles(busCols).join(',') + ' | ' + titles(brCols).join(','));

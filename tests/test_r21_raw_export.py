@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import csv
 import pathlib
+import os
 import shutil
 import time
 
@@ -112,26 +113,36 @@ def test_web_export_range(tmp_path, monkeypatch):
         c.put("/api/config", json={"source": {"kind": "csv_file", "path": str(bus), "custom_time": False},
                                    "branch": {"enabled": True, "common_window": False}, "output": {"export_dir": str(tmp_path / "out"), "realtime_save": False}})
         c.put("/api/branch/config", json={"source": {"kind": "csv_file", "path": str(br), "custom_time": False}})
+        # 两侧范围查询各自独立：总线侧只回总线侧、分路侧只回分路侧
         info = c.get("/api/source/raw_range").json()
-        assert info["ok"] and set(info["ranges"]) == {"bus", "branch"} and abs(info["ranges"]["bus"]["t0"] - T0) < 1e-3
+        assert info["ok"] and set(info["ranges"]) == {"bus"} and abs(info["ranges"]["bus"]["t0"] - T0) < 1e-3
+        info_br = c.get("/api/branch/source/raw_range").json()
+        assert info_br["ok"] and set(info_br["ranges"]) == {"branch"} and abs(info_br["ranges"]["branch"]["t0"] - (T0 + 0.5)) < 1e-3
         assert c.post("/api/source/export_range", json={}).status_code == 400
         assert c.post("/api/source/export_range", json={"t_from": "xx"}).status_code == 400
         assert c.post("/api/source/export_range", json={"t_from": T0 + 1, "t_to": T0 + 0.5}).status_code == 400
         assert c.post("/api/source/export_range", json={"t_from": T0 + 100, "t_to": T0 + 101}).status_code == 409
+        # 总线侧导出：只含总线侧行（分路侧已启用也不联动）
         r = c.post("/api/source/export_range", json={"t_from": T0 + 1.0, "t_to": T0 + 1.25, "name": "seg.csv"}).json()
-        assert r["ok"] and r["source_ids"] == [0, 1] and r["path"].endswith("seg.csv"), r
-        assert abs(r["sides"]["bus"]["rows"] - 0.25 * FS) <= 2 and abs(r["sides"]["branch"]["rows"] - 0.25 * FS) <= 2
+        assert r["ok"] and r["source_ids"] == [0] and set(r["sides"]) == {"bus"} and r["path"].endswith("seg.csv"), r
+        assert abs(r["sides"]["bus"]["rows"] - 0.25 * FS) <= 2
         fp = tmp_path / "out" / "seg.csv"
         assert fp.is_file() and r["rows"] == sum(1 for _ in open(fp, encoding="utf-8-sig")) - 1
-        # 不播放也能导；播放中同样可以（读的是文件，不动引擎）
-        r2 = c.post("/api/source/export_range", json={"t_from": T0 + 1.0, "t_to": T0 + 1.1, "with_branch": False}).json()
-        assert r2["ok"] and r2["source_ids"] == [0]
+        assert all(line.rstrip("\r\n").endswith(",0") for line in list(open(fp, encoding="utf-8-sig"))[1:])
+        # 默认文件名含 src<source_id>，两侧同一时间段导出不会互相覆盖
+        r2 = c.post("/api/source/export_range", json={"t_from": T0 + 1.0, "t_to": T0 + 1.1}).json()
+        assert r2["ok"] and r2["source_ids"] == [0] and r2["path"].endswith("_src0.csv"), r2
         r3 = c.post("/api/branch/source/export_range", json={"t_from": T0 + 1.0, "t_to": T0 + 1.1}).json()
-        assert r3["ok"] and r3["source_ids"] == [1]
+        assert r3["ok"] and r3["source_ids"] == [1] and set(r3["sides"]) == {"branch"} and r3["path"].endswith("_src1.csv"), r3
+        assert r3["path"] != r2["path"] and abs(r3["rows"] - r2["rows"]) <= 2
+        fp3 = tmp_path / "out" / os.path.basename(r3["path"])
+        assert all(line.rstrip("\r\n").endswith(",1") for line in list(open(fp3, encoding="utf-8-sig"))[1:])
+        # 分路侧时间段落在分路侧文件之外（但在总线侧文件之内）→ 409：互不关联
+        assert c.post("/api/branch/source/export_range", json={"t_from": T0 + 0.1, "t_to": T0 + 0.4}).status_code == 409
         # 只填时刻（HH:MM:SS.ffff，与文件时标写法一致）→ 以文件首行日期补齐
         from datetime import datetime as _dt
         hms = lambda t: _dt.fromtimestamp(t).strftime("%H:%M:%S.%f")[:-2]   # noqa: E731
-        r4 = c.post("/api/source/export_range", json={"t_from": hms(T0 + 1.0), "t_to": hms(T0 + 1.25), "with_branch": False}).json()
+        r4 = c.post("/api/source/export_range", json={"t_from": hms(T0 + 1.0), "t_to": hms(T0 + 1.25)}).json()
         assert r4["ok"] and abs(r4["rows"] - r2["rows"] * 2.5) <= 4, r4
         # 导出文件可作为总线侧数据源播放
         c.put("/api/config", json={"branch": {"enabled": False}})
@@ -144,7 +155,8 @@ def test_web_export_range(tmp_path, monkeypatch):
 def test_frontend_contract_raw_export():
     html = (ROOT / "app" / "static" / "index.html").read_text(encoding="utf-8")
     js = (ROOT / "app" / "static" / "app.js").read_text(encoding="utf-8")
-    for i in ("raw-exp-from", "raw-exp-to", "raw-exp-name", "raw-exp-branch", "btn-raw-exp-fill", "btn-raw-export", "raw-exp-note", "raw-exp-range"):
-        assert f'id="{i}"' in html, i
-    for s in ("async function exportRawRange()", "'/api/source/export_range'", "/api/source/raw_range", "$('#btn-raw-export').addEventListener('click', exportRawRange);"):
+    for i in ("raw-exp-from", "raw-exp-to", "raw-exp-name", "btn-raw-exp-fill", "btn-raw-export", "raw-exp-note", "raw-exp-range"):
+        assert f'id="{i}"' in html and f'id="br-{i}"' in html, i      # 两侧各自一套控件
+    assert 'id="raw-exp-branch"' not in html                            # 不再有「含分路侧」联动勾选
+    for s in ("async function exportRawRange(side = 'bus')", "url: '/api/branch/source'", "exportRawRange('branch')", "fillRawRange('branch')"):
         assert s in js, s
