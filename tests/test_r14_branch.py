@@ -270,3 +270,38 @@ def test_r15_common_window(client, tmp_path):
     assert a["common_window"] is None
     client.post("/api/engine/stop"); client.post("/api/branch/engine/stop")
     client.put("/api/config", json={"branch": {"enabled": False}})
+
+
+def test_r15_1_pace_sync_and_merged_result(client, tmp_path):
+    """v0.15.1：两侧共用节拍钟（state.source.pace_clock 同一 wall0、两侧进度差 ≤ 容差）；
+    两侧长度不一致时先播完的一侧 done、另一侧继续播到自己的结尾；/api/result?full=false 为各量并集。"""
+    from elec_tool.selftest import build_signal, HarmSpec
+    from tests.conftest import write_csv
+    specs = [HarmSpec(1, 57.735, 5.0, phi_deg=0.0)]
+    fs = 6400.0; T0 = 1_760_000_000.0
+    t, u, i = build_signal(specs, fs, 3.0, t0=T0); write_csv(str(tmp_path / "bus.csv"), t, u, i)            # 总线 3 s
+    t2, u2, i2 = build_signal(specs, fs, 1.5, t0=T0); write_csv(str(tmp_path / "br.csv"), t2, u2, i2)       # 分路 1.5 s（更短）
+    client.post("/api/engine/stop"); client.post("/api/branch/engine/stop")
+    client.put("/api/config", json={"branch": {"enabled": True, "common_window": False, "common_start": ""},
+                                    "source": {"kind": "csv_file", "path": str(tmp_path / "bus.csv")}})
+    client.put("/api/branch/config", json={"source": {"kind": "csv_file", "path": str(tmp_path / "br.csv"), "custom_time": False}})
+    r = client.post("/api/engine/start", json={"kind": "csv_file", "path": str(tmp_path / "bus.csv"), "file_speed": 3}).json()
+    assert r["ok"] and r["branch"]["ok"], r
+    worst = 0.0; n_both = 0; a = b = None
+    for _ in range(100):
+        time.sleep(0.1)
+        a = client.get("/api/state").json(); b = client.get("/api/branch/state").json()
+        pa, pb = a["source"].get("pace_clock"), b["source"].get("pace_clock")
+        if a["running"] and b["running"] and pa and pb and pa.get("wall0") and pb.get("wall0"):
+            assert pa["wall0"] == pb["wall0"]                          # 同一只钟
+            pr = pa.get("progress_s") or {}
+            if "bus" in pr and "branch" in pr:
+                n_both += 1; worst = max(worst, abs(pr["bus"] - pr["branch"]))
+        if not a["running"] and not b["running"]:
+            break
+    assert n_both >= 2 and worst <= 0.25, (n_both, worst)              # 严格同步：块起点领先 ≤0.1 s → 进度差 ≤ 1 块 + 0.1
+    assert abs(b["engine"]["samples_in"] - 1.5 * fs) <= 640 and abs(a["engine"]["samples_in"] - 3.0 * fs) <= 640   # 短的播完停，长的播完整
+    assert a["finished"] and b["finished"]
+    pc = a["source"]["pace_clock"]; assert pc["done"].get("branch") and pc["done"].get("bus")
+    full = client.get("/api/result?full=false").json()
+    assert {"voltage", "power", "fundamental", "harmonic"} <= set(k for k, v in full["quantities"].items() if v.get("ok"))

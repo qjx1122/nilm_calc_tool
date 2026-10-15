@@ -35,6 +35,7 @@ from elec_tool import __version__
 from elec_tool.config import (AppConfig, ConfigError, CURVE_KEYS, QUANTITY_KEYS, SourceConfig, WindowSpec,
                               load_or_default)
 from elec_tool.engine import LiveEngine
+from elec_tool.pace import PaceClock
 from elec_tool.timefmt import fmt_local
 from elec_tool.metrics import MetricsResult
 from elec_tool.resample import METHODS as RESAMPLE_METHODS, ResampleError, ResampleJob, resample_csv
@@ -94,6 +95,7 @@ class EngineRunner:
         self.paused_at: Optional[float] = None
         self.paused_total_s = 0.0
         self.latest: Optional[MetricsResult] = None
+        self.latest_merged: Optional[Dict[str, Any]] = None   # 各量最近一次结果的并集（/api/result?full=false）
         self.latest_full: Optional[MetricsResult] = None
         self.store: Deque[MetricsResult] = deque(maxlen=maxlen)
         self.loop: Optional[asyncio.AbstractEventLoop] = None
@@ -177,7 +179,7 @@ class EngineRunner:
         return eng.nilm.clear() if eng is not None else 0
 
     # ---------- 生命周期 ----------
-    def start(self, cfg: AppConfig, duration_s: Optional[float] = None) -> Dict[str, Any]:
+    def start(self, cfg: AppConfig, duration_s: Optional[float] = None, pace_clock=None) -> Dict[str, Any]:
         cfg.validate()
         # 先在**锁外**回收旧线程：join 时若仍持有 self.lock，旧线程正好卡在
         # 「append 结果要拿锁」上就会互等到超时（2s），旧线程存活后继续轮询
@@ -193,10 +195,17 @@ class EngineRunner:
             self.error = None
             self.latest = None
             self.latest_full = None
+            self.latest_merged = None
             # 一次运行＝一个数据集：重启引擎必须清空历史，否则导出/趋势会把
             # 不同数据源、不同窗长的结果混在一张表里（误导性极强）。
             self.store.clear()
             self.engine = LiveEngine(cfg, output_root=ROOT)
+            # 节拍钟：联动启动时两侧共用一只（严格同步）；单侧启动也用一只（绝对限速，误差不累积）
+            src = self.engine.source
+            if hasattr(src, "_pace"):
+                src.pace_clock = pace_clock if pace_clock is not None else PaceClock(cfg.source.file_speed)
+                src.pace_side = self.side
+                src.pace_abort = self.stop_event.is_set
             self.engine.on_event = self._on_event
             self.engine.on_nilm_event = self._on_nilm_event
             self.started_at = time.time()
@@ -221,6 +230,7 @@ class EngineRunner:
                 if pause_event.is_set():        # 暂停：不读源、不计算、不推进数据时间；缓冲与事件原地保留
                     time.sleep(0.05)
                     continue
+                n_before = engine.state.samples_in
                 res = engine.poll_once()
                 if res is not None:
                     with self.lock:
@@ -228,7 +238,9 @@ class EngineRunner:
                             return
                         self.latest = res
                         self.store.append(res)
-                    self.broadcast({"type": "result", "data": res.to_dict()})
+                        d = res.to_dict()
+                        self._merge_latest(d)
+                    self.broadcast({"type": "result", "data": d})
                 elif engine.state.finished:
                     final = engine.flush_all()
                     if final is not None:
@@ -238,9 +250,13 @@ class EngineRunner:
                             self.latest = final
                             self.latest_full = final
                             self.store.append(final)
-                        self.broadcast({"type": "result", "data": final.to_dict()})
+                            d = final.to_dict()
+                            self._merge_latest(d)
+                        self.broadcast({"type": "result", "data": d})
                     break
-                else:
+                elif engine.state.samples_in == n_before:
+                    # 本轮没读到数据（实时源空转/文件尾）才等 poll_interval；读到块但无量到期时立即继续——
+                    # 离线文件的节拍由数据源/节拍钟控制，这里再睡 0.2 s 会把吞吐压到 < 实时（v0.15.1）
                     time.sleep(max(0.01, min(engine.cfg.source.poll_interval_s, 0.2)))
                 if duration_s and (time.time() - (self.started_at or time.time()) - self.paused_total_s) > duration_s:
                     break
@@ -251,6 +267,9 @@ class EngineRunner:
                     self.error = msg
             self.broadcast({"type": "error", "message": msg})
         finally:
+            clk = getattr(getattr(engine, "source", None), "pace_clock", None)
+            if clk is not None:
+                clk.finish(self.side)   # 本侧播完/停止 → 对侧不再等本侧（v0.15.1 互锁）
             try:
                 engine.stop()          # 只停自己的引擎，绝不动 self.engine
             except Exception:
@@ -286,6 +305,9 @@ class EngineRunner:
             if not self.pause_event.is_set():
                 self.pause_event.set()
                 self.paused_at = time.time()
+            clk = getattr(getattr(self.engine, "source", None), "pace_clock", None)
+        if clk is not None:
+            clk.pause()
         self.broadcast({"type": "state", "data": self.state()})
         return {"ok": True, "paused": True}
 
@@ -299,6 +321,9 @@ class EngineRunner:
                 if self.paused_at is not None:
                     self.paused_total_s += time.time() - self.paused_at
                 self.paused_at = None
+            clk = getattr(getattr(self.engine, "source", None), "pace_clock", None)
+        if clk is not None:
+            clk.resume()
         self.broadcast({"type": "state", "data": self.state()})
         return {"ok": True, "paused": False}
 
@@ -341,6 +366,10 @@ class EngineRunner:
 
     # ---------- 状态 ----------
     def state(self) -> Dict[str, Any]:
+        # 对侧摘要必须在拿到 self.lock **之前**算：_side_summary 要拿对侧的 lock，而对侧线程此刻可能正
+        # 持着自己的 lock 在算 state() 并等我们的 lock → AB/BA 死锁（v0.15.1 两侧严格同步后两线程同时
+        # 播完、同时广播终态，实测复现：两条 elec-engine 线程互等，整个服务挂起）
+        other_summary = (_side_summary("branch") if self.side == "bus" else _side_summary("bus"))
         with self.lock:
             eng = self.engine
             cfg = self.cfg
@@ -358,8 +387,8 @@ class EngineRunner:
                 "version": __version__,
                 "side": self.side,
                 "side_label": SIDE_LABELS.get(self.side, self.side),
-                "branch": (_side_summary("branch") if self.side == "bus" else None),
-                "bus": (_side_summary("bus") if self.side == "branch" else None),       # 对侧摘要（徽标/顶栏用）
+                "branch": (other_summary if self.side == "bus" else None),
+                "bus": (other_summary if self.side == "branch" else None),       # 对侧摘要（徽标/顶栏用）
                 "common_window": ({k: v for k, v in COMMON_WINDOW.items() if k not in ("bus", "branch")}
                                   if COMMON_WINDOW.get("enabled") else None),
                 "running": bool(self.thread and self.thread.is_alive() and not self.stop_event.is_set() and not self._thread_done),
@@ -380,17 +409,33 @@ class EngineRunner:
                 "server_time": time.time(),
             }
 
+    def _merge_latest(self, d: Dict[str, Any]) -> None:
+        """持锁调用。latest_merged＝最近一次发射 + 之前各量的最新值：单次发射往往只含到期的几个量
+        （如 0.2 s 一次的基波/谐波），对侧总览/徽标用 full=false 拉结果时若只拿到这几项，电压/功率卡片会闪「—」。"""
+        prev = self.latest_merged
+        if prev and isinstance(prev.get("quantities"), dict) and isinstance(d.get("quantities"), dict):
+            merged = dict(d)
+            merged["quantities"] = {**prev["quantities"], **d["quantities"]}
+            merged["_merged"] = True
+            self.latest_merged = merged
+        else:
+            self.latest_merged = d
+
     def snapshot(self, force: bool = True) -> Optional[Dict[str, Any]]:
-        """取当前缓冲的全量结果（UI 首次加载/手动刷新）。"""
+        """取当前缓冲的全量结果（UI 首次加载/手动刷新）。force=False：各量最近一次结果的并集（不重算）。"""
         with self.lock:
             eng = self.engine
             if eng is None:
-                return self.latest.to_dict() if self.latest else None
-            res = eng.snapshot_full() if force else self.latest
+                return self.latest_merged or (self.latest.to_dict() if self.latest else None)
+            if not force:
+                return self.latest_merged or (self.latest.to_dict() if self.latest else None)
+            res = eng.snapshot_full()
             if res is not None:
                 self.latest_full = res
-                return res.to_dict()
-            return self.latest.to_dict() if self.latest else None
+                d = res.to_dict()
+                self._merge_latest(d)
+                return d
+            return self.latest_merged or (self.latest.to_dict() if self.latest else None)
 
 
 # ------------------------------------------------------------------ 两侧数据源（第 14 轮）
@@ -667,7 +712,7 @@ def _apply_window_to_source(cfg: AppConfig, rng: Dict[str, Any], play_start: flo
     _AUTO_PLAY[side] = (cfg.source.play_start_mode, str(cfg.source.play_start_value), str(cfg.source.play_end_time))
 
 
-def _start_branch_if_enabled(bus_cfg: AppConfig) -> Optional[Dict[str, Any]]:
+def _start_branch_if_enabled(bus_cfg: AppConfig, pace_clock=None) -> Optional[Dict[str, Any]]:
     """总线侧启动后联动分路侧（仅 enabled 时）。返回分路侧启动结果；失败只记录、不影响总线侧。"""
     if not bus_cfg.branch.enabled:
         return {"ok": False, "skipped": True, "reason": "分路侧未启用"}
@@ -690,7 +735,7 @@ def _start_branch_if_enabled(bus_cfg: AppConfig) -> Optional[Dict[str, Any]]:
         _restore_auto_play("branch", cfg)
         if cw:
             _apply_window_to_source(cfg, cw["branch"], cw["play_start"], cw["t_end"], side="branch")
-        br.start(cfg)
+        br.start(cfg, pace_clock=pace_clock)      # 与总线侧共用节拍钟：两侧严格同步播放
         br.error = None
         return {"ok": True, "source_kind": cfg.source.kind, "path": cfg.source.path}
     except Exception as exc:
@@ -955,12 +1000,13 @@ async def engine_start(payload: Optional[Dict[str, Any]] = None) -> Any:
             w = _compute_common_window(cfg, br_cfg)        # 失败 → 400，两侧都不启动
             COMMON_WINDOW.update(w)
             _apply_window_to_source(cfg, w["bus"], w["play_start"], w["t_end"], side="bus")
-        RUNNER.start(cfg, duration_s=payload.get("duration_s"))
+        clock = PaceClock(cfg.source.file_speed) if cfg.source.kind == "csv_file" else None
+        RUNNER.start(cfg, duration_s=payload.get("duration_s"), pace_clock=clock)
         out: Dict[str, Any] = {"ok": True, "side": current_side(), "config": cfg.to_dict()}
         if COMMON_WINDOW.get("enabled"):
             out["common_window"] = {k: v for k, v in COMMON_WINDOW.items() if k not in ("bus", "branch")}
         if current_side() == "bus" and payload.get("with_branch", True):
-            out["branch"] = _start_branch_if_enabled(cfg)
+            out["branch"] = _start_branch_if_enabled(cfg, pace_clock=clock)
         return out
     except ConfigError as exc:
         return JSONResponse(status_code=400, content={"ok": False, "error": str(exc)})

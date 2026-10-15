@@ -538,6 +538,17 @@ def iter_csv_blocks(path: str, colmap: ColumnMap, sampling: SamplingConfig,
         seq = 0
         produced = 0
         row_offset = 0
+        # v0.15.1：定位后 buf 里可能残留一大段已读行（按块预读）→ 先按正常块大小切出，
+        # 否则第一块会异常大（之前实测 2014～8000 行），两侧同步/倍速节拍都会被它打乱
+        while len(buf) >= block_samples:
+            head, buf = buf[:block_samples], buf[block_samples:]
+            blk, info = _rows_to_block(head, colmap, sampling, idx_map, path, seq, tz_offset_h, row_offset)
+            row_offset += len(head)
+            seq += 1
+            produced += 1
+            yield blk, info
+            if max_blocks and produced >= max_blocks:
+                return
         for row in reader:
             if not row or all(not str(c).strip() for c in row):
                 continue

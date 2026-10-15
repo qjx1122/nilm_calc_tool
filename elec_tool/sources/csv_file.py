@@ -116,9 +116,24 @@ class CsvFileSource(DataSource):
                 desc = f"时标 ≥ {self.cfg.source.play_start_value}"
             self._seek_notes = [f"播放起点：{desc}（之前的数据已跳过，不参与计算）"]
 
+    # v0.15.1：可选的共享节拍钟（server 在联动启动时给两侧挂同一只），见 elec_tool/pace.py
+    pace_clock = None
+    pace_side = "bus"
+    pace_abort = None       # callable → True 表示应放弃等待（Runner 停止）
+
     def _pace(self, block: SampleBlock) -> None:
-        """倍速限速：距上一块产出至少间隔 块时长/speed。只看相邻两块，暂停/卡顿后不追赶。"""
+        """倍速限速。有节拍钟 → 绝对限速（按本侧 fs 算块时长、与对侧同步、误差不累积）；
+        否则退化为旧的相邻块间隔限速。"""
         if self.speed <= 0 or block.n == 0:
+            return
+        clk = self.pace_clock
+        if clk is not None:
+            clk.anchor(self.pace_side, float(block.t_start))
+            # 等到「本块结束时刻」对应的墙钟：块时长 = block.n / fs（各侧按自己的采样率）
+            fs = float(self.cfg.sampling.fs) or 1.0
+            t_end = float(block.t_start) + block.n / fs
+            clk.wait_until(self.pace_side, t_end, self.pace_abort, t_block_start=float(block.t_start))
+            clk.advance(self.pace_side, t_end)
             return
         now = time.monotonic()
         if self._last_emit_wall is not None:
@@ -194,6 +209,7 @@ class CsvFileSource(DataSource):
             "file_first_t": self._file_first_t,
             "file_time_utc": bool(self.cfg.source.file_time_utc), "tz_offset_h": self.tz_offset_h,
             "play_end_time": self.play_end_t,
+            "pace_clock": (self.pace_clock.info() if self.pace_clock is not None else None),
             "play_start_mode": self.play_start_mode,
             "play_start_value": self.cfg.source.play_start_value if self.play_start_mode != "begin" else None,
             "play_seek": dict(self._seek_info) if self._seek_info else None,

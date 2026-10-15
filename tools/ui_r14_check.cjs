@@ -90,7 +90,7 @@ async function main() {
   check('模拟器模式启动不带起分路侧', rs.branch && rs.branch.skipped === true, JSON.stringify(rs.branch));
   await api('/api/engine/stop', { method: 'POST' }); await sleep(300);
   $('src-kind').value = 'csv_file'; change($('src-kind'));
-  $('src-path').value = 'data/sample_6400hz.csv'; $('src-file-speed').value = '1';
+  $('src-path').value = 'data/sample_6400hz.csv'; $('src-file-speed').value = '0.5';   // v0.15.1 起节拍精确：5 s 文件 1× 会在 L2–L4 检查途中播完，改 0.5×
   click($('btn-start2')); await sleep(2500);
   const st = await api('/api/state'), bst = await api('/api/branch/state');
   check('总线侧运行中', st.running === true);
@@ -122,7 +122,7 @@ async function main() {
   check('点总览 → 回到总线侧', window.__S().side === 'bus' && window.__S().state.side === 'bus');
   check('总览有两侧状态卡', /总线侧数据源/.test($('ov-sides').textContent) && /分路侧设备数据源/.test($('ov-sides').textContent) && /运行中/.test($('ov-sides').textContent), $('ov-sides').textContent.slice(0, 80));
   check('分路侧分组标题徽标=运行中', $('nav-br-state').textContent === '运行中', $('nav-br-state').textContent);
-  await sleep(2500);
+  await sleep(5000);   // 0.5× 下分路侧 voltage 首次出结果 ≈3 s 墙钟 + 总览分路刷新节流
   check('总览卡片两侧放一起（总线/分路标签 + 总线−分路）', /总线/.test($('ov-cards').textContent) && /分路/.test($('ov-cards').textContent) && /总线−分路/.test($('ov-cards').textContent) && !$('ov-br-cards'), $('ov-cards').textContent.slice(0, 80));
   check('总览曲线叠加分路侧（图例含 (分路)）', !!($('ov-p').__chart && $('ov-p').__chart.pts.some(s => /\(分路\)/.test(s.name))), $('ov-p').__chart ? $('ov-p').__chart.pts.map(s => s.name).join(',') : 'no chart');
   // 增量刷新：相同内容不触碰 DOM
@@ -165,7 +165,7 @@ async function main() {
   $('src-file-speed').value = '0'; change($('src-file-speed'));
   const rs2 = await api('/api/engine/start', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ kind: 'csv_file', path: 'data/sample_6400hz.csv', file_speed: 0 }) });
   check('联动启动返回公共时间段且分路侧启动', rs2.ok && rs2.common_window && rs2.common_window.enabled && rs2.branch && rs2.branch.ok, JSON.stringify(rs2.branch));
-  const waitDone = async () => { let a, b; for (let k = 0; k < 20; k++) { await sleep(600); a = await api('/api/state'); b = await api('/api/branch/state'); if (!a.running && !b.running) break; } return [a, b]; };
+  const waitDone = async () => { let a, b; for (let k = 0; k < 40; k++) { await sleep(600); a = await api('/api/state'); b = await api('/api/branch/state'); if (!a.running && !b.running) break; } return [a, b]; };
   let [st3, bst3] = await waitDone();
   check('顶栏显示公共时间段（起止/总时长/播放起点）', $('topstats-common').style.display !== 'none' && /s$/.test($('st-cw-dur').textContent) && $('st-cw-start').textContent !== '—', $('st-cw-dur').textContent);
   const expect = Math.round(pv.duration_s * 6400);
@@ -178,6 +178,25 @@ async function main() {
   const rs3 = await api('/api/engine/start', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ kind: 'csv_file', path: 'data/sample_6400hz.csv', file_speed: 0 }) });
   const [st4, bst4] = await waitDone();
   check('自定义播放起始时间生效（两侧样本 ≈ 2 s×6400）', rs3.common_window && rs3.common_window.play_start_source === '自定义播放起始时间' && Math.abs(st4.engine.samples_in - (expect - 12800)) <= 1300 && Math.abs(bst4.engine.samples_in - (expect - 12800)) <= 1300, `bus=${st4.engine.samples_in} br=${bst4.engine.samples_in}`);
+  // L7（v0.15.1）：坐标轴固定为公共时间段；两侧严格同步；先播完的一侧停止刷新
+  console.log('L7 公共时间段：坐标轴/同步/完成侧停刷');
+  await api('/api/config', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ branch: { common_start: '' } }) });
+  const rs5 = await api('/api/engine/start', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ kind: 'csv_file', path: 'data/sample_6400hz.csv', file_speed: 4 }) });
+  check('4 倍速联动启动（公共时间段）', rs5.ok && rs5.branch && rs5.branch.ok, JSON.stringify(rs5.branch || rs5.error));
+  await nav('overview'); await sleep(300);
+  let worst = 0, nBoth = 0;
+  for (let k = 0; k < 12; k++) {
+    await sleep(150);
+    const a = await api('/api/state'), b = await api('/api/branch/state');
+    if (a.running && b.running && a.source && b.source && a.source.t_end && b.source.t_end) { nBoth++; worst = Math.max(worst, Math.abs(a.source.t_end - b.source.t_end)); }
+  }
+  check('两侧播放数据时刻严格同步（共享节拍钟+互锁，|Δ| ≤ 容差 0.2 s）', nBoth >= 2 && worst <= 0.25, `样本点 ${nBoth}，最大偏差 ${worst.toFixed(3)} s`);
+  await sleep(900);
+  const ch = ($('ov-p') || {}).__chart;
+  const cw5 = rs5.common_window;
+  check('总览 P/Q/S 趋势图坐标轴固定为公共时间段整段', !!ch && Math.abs((ch.xmax - ch.xmin) - cw5.duration_s) < 0.2 && ch.pts.every(sr => sr.data.every(([x]) => x >= ch.xmin - 1e-3 && x <= ch.xmax + 1e-3)), ch ? `轴宽 ${(ch.xmax - ch.xmin).toFixed(2)} s vs 公共段 ${cw5.duration_s} s` : '无图');
+  await waitDone(); await nav('overview'); await sleep(1200);
+  check('两侧播完后总览提示「已播放完毕（数据停在终值）」且分路侧不再请求', /已播放完毕/.test($('ov-br-hint').textContent) && window.OVB && window.OVB.doneFetched === true, $('ov-br-hint').textContent);
   // 还原
   await api('/api/config', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ branch: { common_window: false, common_start: '' } }) });
   await api('/api/branch/config', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ source: { custom_time: false, custom_time_start: '' } }) });

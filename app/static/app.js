@@ -322,9 +322,17 @@ function bindHover(cv) {
   cv.style.cursor = 'crosshair';
 }
 
+/* 公共时间段模式：时间轴固定为 [公共起点, 公共终点]（相对 tbase），段外的点不画 —— 两侧、各子界面坐标轴一致 */
+function commonWindowX(opt) {
+  const cw = (S.state || {}).common_window;
+  if (!cw || !cw.enabled || opt.tbase === undefined || !isNum(opt.tbase)) return null;
+  return [cw.t_start - opt.tbase, cw.t_end - opt.tbase];
+}
+
 function chartSig(cv, series, opt) {
   // 数据签名：每条线的名字/点数/首末点/中点 + 画布宽度 + 关键选项；相同 → 画面不可能变化
-  const parts = [cv.clientWidth, opt.height || cv.dataset.h, !!opt.zero, opt.empty || '', (opt.marks || []).length];
+  const xf = commonWindowX(opt);
+  const parts = [cv.clientWidth, opt.height || cv.dataset.h, !!opt.zero, opt.empty || '', (opt.marks || []).length, xf ? xf.join('~') : ''];
   series.forEach(s => {
     if (!s || !s.data) { parts.push('-'); return; }
     const d = s.data, n = d.length, f = d[0], l = d[n - 1], m = d[n >> 1];
@@ -340,7 +348,9 @@ function drawLine(cv, series, opt = {}) {
   cv.__sig = sig;
   const { ctx, w, h } = prep(cv, opt.height);
   const pad = { l: 62, r: 12, t: 12, b: 26 };
-  const pts = series.filter(s => s && s.data && s.data.length);
+  const xfix = commonWindowX(opt);
+  let pts = series.filter(s => s && s.data && s.data.length);
+  if (xfix) pts = pts.map(s => Object.assign({}, s, { data: s.data.filter(([x]) => x >= xfix[0] - 1e-6 && x <= xfix[1] + 1e-6) })).filter(s => s.data.length);
   cv.__chart = null;
   cv.__redraw = () => drawLine(cv, series, Object.assign({}, opt, { force: true }));
   bindHover(cv);
@@ -348,7 +358,7 @@ function drawLine(cv, series, opt = {}) {
   ctx.strokeRect(pad.l + .5, pad.t + .5, w - pad.l - pad.r, h - pad.t - pad.b);
   if (!pts.length) {
     ctx.fillStyle = '#5f6f92'; ctx.font = '12px sans-serif'; ctx.textAlign = 'center';
-    ctx.fillText(opt.empty || '暂无数据（等待计算结果…）', w / 2, h / 2);
+    ctx.fillText(xfix ? (opt.empty || '公共时间段内暂无数据') : (opt.empty || '暂无数据（等待计算结果…）'), w / 2, h / 2);
     return;
   }
   let xmin = Infinity, xmax = -Infinity, ymin = Infinity, ymax = -Infinity;
@@ -358,6 +368,7 @@ function drawLine(cv, series, opt = {}) {
     if (y < ymin) ymin = y; if (y > ymax) ymax = y;
   }));
   if (!isFinite(ymin)) return;
+  if (xfix) { xmin = xfix[0]; xmax = xfix[1]; }          // 公共时间段：坐标轴固定为整段，曲线随播放逐步填满
   if (opt.zero) { ymin = Math.min(ymin, 0); ymax = Math.max(ymax, 0); }
   const pad2 = (ymax - ymin) * 0.08 || Math.abs(ymax) * 0.05 || 1;
   ymin -= pad2; ymax += pad2;
@@ -747,6 +758,7 @@ async function switchView(v, side) {
 /* ------------------------------------------------------------------ 总览：分路侧数据（第 15 轮补充） */
 
 const OVB = { result: null, hist: {}, at: 0, busy: false, keys: ['voltage', 'current', 'power', 'harmonic'] };
+window.OVB = OVB;   // 调试/自检脚本可读（tools/ui_r14_check.cjs）
 
 async function refreshOverviewBranch(force) {
   // 总览页在总线侧上下文；分路侧数据直接走 /api/branch/*（不切侧），每 ≥2 s 刷一次
@@ -756,14 +768,21 @@ async function refreshOverviewBranch(force) {
   try {
     const br = (S.state || {}).branch || {};
     const active = !!(br.enabled || br.running || br.finished);
-    if (!active) { OVB.result = null; OVB.hist = {}; return; }
+    if (!active) { OVB.result = null; OVB.hist = {}; OVB.doneFetched = false; return; }
+    // 分路侧已播放完毕：取最后一次完整数据后不再请求（曲线与数据停在终值；总线侧未播完则继续各自刷新）
+    if (br.running) OVB.doneFetched = false;
+    else if (OVB.doneFetched) return;
     const [res, ...hs] = await Promise.all([
       fetch('/api/branch/result?full=false').then(r => r.ok ? r.json() : null).catch(() => null),
       ...OVB.keys.map(k => fetch(`/api/branch/history/${k}?max_points=${HIST_MAX_POINTS}`).then(r => r.ok ? r.json() : null).catch(() => null)),
     ]);
-    OVB.result = res && res.quantities ? res : null;
+    // /api/branch/result?full=false 给的是「最近一次发射」（可能只含基波/谐波几项）→ 与上次合并，
+    // 否则卡片里分路侧值会在"有/—"之间闪烁（v0.15.1）；分路重新启动（数据时间倒退）时清空
+    if (res && OVB.result && isNum(res.t_ref) && isNum(OVB.result.t_ref) && res.t_ref < OVB.result.t_ref - 0.5) OVB.result = null;
+    OVB.result = res && res.quantities ? mergeResult(OVB.result, res) : OVB.result;
     OVB.keys.forEach((k, i) => { OVB.hist[k] = (hs[i] && hs[i].points) || []; });
     OVB.at = Date.now();
+    if (!br.running && (br.finished || br.error)) OVB.doneFetched = true;
     if (S.view === 'overview') renderOverview();
   } finally { OVB.busy = false; }
 }
@@ -948,11 +967,11 @@ function renderCompare() {
   drawLine($('#cmp-abs'), [
     { name: '总线侧', color: COLORS.A, data: pts.map(p => [p.t - t0, p.bus[f]]) },
     { name: '分路侧', color: COLORS.C, data: pts.map(p => [p.t - t0, p.branch[f]]) },
-  ], { ylabel: u, fmtX: x => tsX(x + t0, span), fmtTip: x => ts(x + t0), empty: '暂无对齐点' });
+  ], { ylabel: u, fmtX: x => tsX(x + t0, span), fmtTip: x => ts(x + t0), tbase: t0, empty: '暂无对齐点' });
   drawLine($('#cmp-diff'), [showRatio
     ? { name: '占比 %', color: COLORS.Q, data: pts.map(p => [p.t - t0, p.ratio_pct[f]]) }
     : { name: '差值', color: COLORS.P, data: pts.map(p => [p.t - t0, p.diff[f]]) }],
-    { ylabel: showRatio ? '%' : u, fmtX: x => tsX(x + t0, span), fmtTip: x => ts(x + t0), empty: '暂无对齐点' });
+    { ylabel: showRatio ? '%' : u, fmtX: x => tsX(x + t0, span), fmtTip: x => ts(x + t0), tbase: t0, empty: '暂无对齐点' });
 }
 
 async function saveCompareOffset() {
@@ -1003,7 +1022,11 @@ function renderOverview() {
   }
   if (!cards.length) cards.push(card('状态', '尚无结果', '', '请到「数据源与控制」启动数据源'));
   const hint = $('#ov-br-hint');
-  if (hint) { const br = (S.state || {}).branch || {}; hint.textContent = act ? `　· 分路侧 ${sideStatusText(br)}，样本 ${br.samples_in || 0}` : ''; }
+  if (hint) {
+    const br = (S.state || {}).branch || {}, st = S.state || {};
+    const busTxt = st.running ? '播放中' : st.finished ? '已播放完毕（数据停在终值）' : '未启动';
+    hint.textContent = act ? `　· 总线侧 ${busTxt}　· 分路侧 ${br.running ? '播放中' : br.finished ? '已播放完毕（数据停在终值）' : sideStatusText(br)}，样本 ${br.samples_in || 0}` : '';
+  }
   $('#ov-cards').innerHTML = cards.join('');
   renderOverviewSides();
 
@@ -1028,21 +1051,21 @@ function renderOverview() {
                         { name: 'Ub', color: COLORS.B, data: hv.map(p => [p.t - t0u, p.Ub]) },
                         { name: 'Uc', color: COLORS.C, data: hv.map(p => [p.t - t0u, p.Uc]) },
                         ...brSeries(bhv, hv, [['Ua', COLORS.A, 'Ua'], ['Ub', COLORS.B, 'Ub'], ['Uc', COLORS.C, 'Uc']])],
-           { ylabel: 'V', fmtX: x => tsX(x + t0u, spanOf('voltage')), fmtTip: x => ts(x + t0u), empty: '暂无电压趋势（需累计 ≥2 个窗）' });
+           { ylabel: 'V', fmtX: x => tsX(x + t0u, spanOf('voltage')), fmtTip: x => ts(x + t0u), tbase: t0u, empty: '暂无电压趋势（需累计 ≥2 个窗）' });
   drawLine($('#ov-i'), [{ name: 'Ia', color: COLORS.A, data: hi.map(p => [p.t - t0i, p.Ia]) },
                         { name: 'Ib', color: COLORS.B, data: hi.map(p => [p.t - t0i, p.Ib]) },
                         { name: 'Ic', color: COLORS.C, data: hi.map(p => [p.t - t0i, p.Ic]) },
                         ...brSeries(bhi, hi, [['Ia', COLORS.A, 'Ia'], ['Ib', COLORS.B, 'Ib'], ['Ic', COLORS.C, 'Ic']])],
-           { ylabel: 'A', fmtX: x => tsX(x + t0i, spanOf('current')), fmtTip: x => ts(x + t0i) });
+           { ylabel: 'A', fmtX: x => tsX(x + t0i, spanOf('current')), fmtTip: x => ts(x + t0i), tbase: t0i });
   drawLine($('#ov-p'), [{ name: 'P', color: COLORS.P, data: hp.map(p => [p.t - t0p, p.P]) },
                         { name: 'Q', color: COLORS.Q, data: hp.map(p => [p.t - t0p, p.Q]) },
                         { name: 'S', color: COLORS.S, data: hp.map(p => [p.t - t0p, p.S]) },
                         ...brSeries(bhp, hp, [['P', COLORS.P, 'P'], ['Q', COLORS.Q, 'Q'], ['S', COLORS.S, 'S']])],
-           { ylabel: 'W/var/VA', fmtX: x => tsX(x + t0p, spanOf('power')), fmtTip: x => ts(x + t0p) });
+           { ylabel: 'W/var/VA', fmtX: x => tsX(x + t0p, spanOf('power')), fmtTip: x => ts(x + t0p), tbase: t0p });
   drawLine($('#ov-thd'), [{ name: 'THD_U', color: COLORS.A, data: hh.map(p => [p.t - t0h, p.THD_U]) },
                           { name: 'THD_I', color: COLORS.C, data: hh.map(p => [p.t - t0h, p.THD_I]) },
                           ...brSeries(bhh, hh, [['THD_U', COLORS.A, 'THD_U'], ['THD_I', COLORS.C, 'THD_I']])],
-           { ylabel: '%', fmtX: x => tsX(x + t0h, spanOf('harmonic')), fmtTip: x => ts(x + t0h), zero: true });
+           { ylabel: '%', fmtX: x => tsX(x + t0h, spanOf('harmonic')), fmtTip: x => ts(x + t0h), tbase: t0h, zero: true });
   renderCurveSave();
   refreshOverviewBranch(false);
   const hn = $('#ov-histnote');
@@ -1174,7 +1197,7 @@ function renderPF() {
   const t0 = hp.length ? hp[0].t : 0;
   drawLine($('#pf-trend'), [{ name: 'PF', color: COLORS.P, data: hp.map(x => [x.t - t0, x.PF]) },
                             { name: 'DPF', color: COLORS.B, data: hp.map(x => [x.t - t0, x.DPF]) }],
-           { ylabel: '', fmtX: x => tsX(x + t0, spanOf('power_factor')), fmtTip: x => ts(x + t0), height: 220 });
+           { ylabel: '', fmtX: x => tsX(x + t0, spanOf('power_factor')), fmtTip: x => ts(x + t0), tbase: t0, height: 220 });
   renderCurveSave();
   drawQuadrant($('#pf-quad'), p ? p.values.p_total : NaN, p ? p.values.q_total : NaN);
   $('#pf-quadtxt').innerHTML = p && p.values.quadrant ? notes([`${p.values.quadrant.name}：${p.values.quadrant.meaning}`]) : '';
@@ -1201,7 +1224,7 @@ function renderFundamental() {
   const hf = S.histCache.fundamental || [];
   const t0 = hf.length ? hf[0].t : 0;
   drawLine($('#f-trend'), [{ name: '频率 (Hz)', color: COLORS.A, data: hf.map(x => [x.t - t0, x.f]) }],
-           { ylabel: 'Hz', fmtX: x => tsX(x + t0, spanOf('fundamental')), fmtTip: x => ts(x + t0), height: 200 });
+           { ylabel: 'Hz', fmtX: x => tsX(x + t0, spanOf('fundamental')), fmtTip: x => ts(x + t0), tbase: t0, height: 200 });
   renderCurveSave();
   $('#f-win').innerHTML = winNotes('fundamental');
 }
@@ -1628,7 +1651,7 @@ function renderInterharmonic() {
   const t0 = hh.length ? hh[0].t : 0;
   drawLine($('#ih-trend'), [{ name: 'TIHD_U (%)', color: COLORS.A, data: hh.map(x => [x.t - t0, x.TIHD_U]) },
                             { name: 'TIHD_I (%)', color: COLORS.B, data: hh.map(x => [x.t - t0, x.TIHD_I]) }],
-           { ylabel: '%', fmtX: x => tsX(x + t0, spanOf('interharmonic')), fmtTip: x => ts(x + t0), height: 200, legend: true });
+           { ylabel: '%', fmtX: x => tsX(x + t0, spanOf('interharmonic')), fmtTip: x => ts(x + t0), tbase: t0, height: 200, legend: true });
   renderCurveSave();
   $('#ih-win').innerHTML = winNotes('interharmonic');
 }
@@ -1663,7 +1686,7 @@ function renderDC() {
   const t0 = hh.length ? hh[0].t : 0;
   const pre = mode === 'u' ? 'U' : 'I';
   drawLine($('#dc-trend'), PH.map(k => ({ name: `${pre}${k.toLowerCase()} DC`, color: COLORS[k], data: hh.map(x => [x.t - t0, x[`${pre}${k.toLowerCase()}_dc`]]) })),
-           { ylabel: mode === 'u' ? 'V' : 'A', fmtX: x => tsX(x + t0, spanOf('dc')), fmtTip: x => ts(x + t0), height: 200, legend: true });
+           { ylabel: mode === 'u' ? 'V' : 'A', fmtX: x => tsX(x + t0, spanOf('dc')), fmtTip: x => ts(x + t0), tbase: t0, height: 200, legend: true });
   renderCurveSave();
   $('#dc-win').innerHTML = winNotes('dc');
 }
