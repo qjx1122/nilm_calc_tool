@@ -310,23 +310,105 @@ function drawHover(cv) {
   cv.__hoverInfo = info;         // 供测试/其它面板读取
 }
 
+/* 曲线缩放（v0.17，需求②）：每张折线图独立的 X / Y 缩放状态（X 存绝对坐标：x + tbase，趋势图数据滚动时视窗不漂移）。
+   操作：滚轮＝X 轴缩放（以光标为中心）；Shift+滚轮＝Y 轴缩放；拖选矩形＝只显示框选区间（宽 >6px 取 X 区间，高 >6px 取 Y 区间）；
+   双击＝复位；图例行的 X＋/X－/Y＋/Y－/复位 按钮同义。只影响显示。 */
+const ZOOM = {};
+window.ZOOM = ZOOM;
+function zoomOf(cv) { return (cv && cv.id && ZOOM[cv.id]) || null; }
+function setZoom(cv, z) {
+  if (!cv || !cv.id) return;
+  if (!z || (!z.x && !z.y)) delete ZOOM[cv.id]; else ZOOM[cv.id] = z;
+  if (cv.__redraw) cv.__redraw();
+}
+function zoomAxis(cv, axis, factor, center) {
+  // factor <1 放大、>1 缩小；center＝缩放中心（数据坐标，绝对 X 或 Y），缺省取当前视窗中点
+  const c = cv.__chart; if (!c) return;
+  const z = Object.assign({ x: null, y: null }, zoomOf(cv) || {});
+  const tb = isNum(c.opt.tbase) ? c.opt.tbase : 0;
+  const cur = axis === 'x' ? [c.xmin + tb, c.xmax + tb] : [c.ymin, c.ymax];
+  const full = axis === 'x' ? [c.xfull[0] + tb, c.xfull[1] + tb] : c.yfull;
+  const mid = isNum(center) ? center : (cur[0] + cur[1]) / 2;
+  let lo = mid - (mid - cur[0]) * factor, hi = mid + (cur[1] - mid) * factor;
+  if (factor > 1 && lo <= full[0] && hi >= full[1]) { z[axis] = null; setZoom(cv, z); return; }   // 缩回全图 → 复位该轴
+  if (hi - lo <= 0) return;
+  z[axis] = [lo, hi];
+  setZoom(cv, z);
+}
+function zoomReset(cv) { setZoom(cv, null); }
 function bindHover(cv) {
   if (cv.__hoverBound) return;
   cv.__hoverBound = true;
+  const pos = (e) => { const r = cv.getBoundingClientRect(); return { mx: e.clientX - r.left, my: e.clientY - r.top }; };
   cv.addEventListener('mousemove', (e) => {
-    const r = cv.getBoundingClientRect();
-    cv.__hover = { mx: e.clientX - r.left, my: e.clientY - r.top };
+    cv.__hover = pos(e);
+    if (cv.__drag) { cv.__drag.x1 = cv.__hover.mx; cv.__drag.y1 = cv.__hover.my; }
     if (cv.__redraw) cv.__redraw();
   });
-  cv.addEventListener('mouseleave', () => { cv.__hover = null; cv.__hoverInfo = null; if (cv.__redraw) cv.__redraw(); });
+  cv.addEventListener('mouseleave', () => { cv.__hover = null; cv.__hoverInfo = null; cv.__drag = null; if (cv.__redraw) cv.__redraw(); });
+  cv.addEventListener('mousedown', (e) => {
+    if (e.button !== 0 || !cv.__chart) return;
+    const p = pos(e); cv.__drag = { x0: p.mx, y0: p.my, x1: p.mx, y1: p.my };
+    e.preventDefault();
+  });
+  const finish = (e) => {
+    const d = cv.__drag, c = cv.__chart; cv.__drag = null;
+    if (!d || !c) return;
+    const dx = Math.abs(d.x1 - d.x0), dy = Math.abs(d.y1 - d.y0);
+    if (dx < 6 && dy < 6) { if (cv.__redraw) cv.__redraw(); return; }
+    const tb = isNum(c.opt.tbase) ? c.opt.tbase : 0;
+    const xa = c.xAt(Math.min(d.x0, d.x1)), xb = c.xAt(Math.max(d.x0, d.x1));
+    const ya = c.yAt(Math.max(d.y0, d.y1)), yb = c.yAt(Math.min(d.y0, d.y1));
+    const z = Object.assign({ x: null, y: null }, zoomOf(cv) || {});
+    if (dx >= 6) z.x = [xa + tb, xb + tb];
+    if (dy >= 6) z.y = [ya, yb];
+    setZoom(cv, z);
+  };
+  cv.addEventListener('mouseup', finish);
+  cv.addEventListener('dblclick', (e) => { e.preventDefault(); zoomReset(cv); });
+  cv.addEventListener('wheel', (e) => {
+    const c = cv.__chart; if (!c) return;
+    e.preventDefault();
+    const p = pos(e), f = e.deltaY > 0 ? 1.25 : 0.8;
+    if (e.shiftKey) zoomAxis(cv, 'y', f, c.yAt(p.my));
+    else zoomAxis(cv, 'x', f, c.xAt(p.mx) + (isNum(c.opt.tbase) ? c.opt.tbase : 0));
+  }, { passive: false });
   cv.style.cursor = 'crosshair';
+}
+function renderZoomBar(cv) {
+  // 图例行末尾的缩放按钮（每张图一个，动态插入；无图例时单独一行）
+  if (!cv || !cv.id || !cv.parentNode) return;
+  let bar = cv.__zoombar;
+  if (!bar) {
+    bar = document.createElement('span'); bar.className = 'zoombar'; bar.dataset.chart = cv.id;
+    bar.innerHTML = '<span class="muted">缩放：</span>' + [['x-', 'X＋', '放大 X 轴（滚轮）'], ['x+', 'X－', '缩小 X 轴'], ['y-', 'Y＋', '放大 Y 轴（Shift+滚轮）'], ['y+', 'Y－', '缩小 Y 轴'], ['reset', '复位', '恢复全图（双击图面）']]
+      .map(([a, t, tip]) => `<button type="button" class="zoom-btn" data-z="${a}" title="${tip}">${t}</button>`).join('') +
+      '<span class="zoomtip muted">拖选区间＝只显示该区间</span>';
+    bar.addEventListener('click', (ev) => {
+      const b = ev.target.closest('button.zoom-btn'); if (!b) return;
+      const a = b.dataset.z;
+      if (a === 'reset') zoomReset(cv);
+      else zoomAxis(cv, a[0], a[1] === '-' ? 0.5 : 2);
+    });
+    cv.__zoombar = bar;
+  }
+  const host = cv.__legend || null;
+  if (host) { if (bar.parentNode !== host) host.appendChild(bar); }
+  else if (!bar.parentNode || !bar.parentNode.isConnected) {
+    const d = document.createElement('div'); d.className = 'serlegend'; d.appendChild(bar);
+    cv.insertAdjacentElement('afterend', d);
+  }
+  const z = zoomOf(cv);
+  bar.classList.toggle('active', !!z);
+  const tip = bar.querySelector('.zoomtip');
+  if (tip) tip.textContent = z ? ('已缩放' + (z.x ? ' X' : '') + (z.y ? ' Y' : '') + '（双击复位）') : '拖选区间＝只显示该区间';
 }
 
 /* 公共时间段模式：时间轴固定为 [公共起点, 公共终点]（相对 tbase），段外的点不画 —— 两侧、各子界面坐标轴一致 */
 function commonWindowX(opt) {
   const cw = (S.state || {}).common_window;
   if (!cw || !cw.enabled || opt.tbase === undefined || !isNum(opt.tbase)) return null;
-  return [cw.t_start - opt.tbase, cw.t_end - opt.tbase];
+  return [cw.t_start - opt.tbase, (isNum(cw.play_end) ? cw.play_end : cw.t_end) - opt.tbase];
 }
 
 function chartSig(cv, series, opt) {
@@ -364,6 +446,7 @@ function renderSeriesLegend(cv, series, hidden) {
   cv.__legendKey = key;
   cv.__legend.innerHTML = '<span class="muted">显示：</span>' + series.filter(s => s && s.name).map(s =>
     `<label class="${hidden.has(s.name) ? 'off' : ''}" title="勾选＝显示该曲线；取消＝隐藏（已保存到配置）"><input type="checkbox" class="ser-vis" data-chart="${esc(cv.id)}" data-name="${esc(s.name)}" ${hidden.has(s.name) ? '' : 'checked'}><i style="background:${s.color || '#4ea1ff'}"></i>${esc(s.name)}</label>`).join('');
+  if (cv.__zoombar) cv.__legend.appendChild(cv.__zoombar);
 }
 async function setSeriesVisible(chartId, name, on) {
   const cv = document.getElementById(chartId); if (!cv) return;
@@ -387,8 +470,10 @@ async function setSeriesVisible(chartId, name, on) {
 
 function drawLine(cv, series, opt = {}) {
   const hidden = seriesHiddenSet(cv);
-  const sig = chartSig(cv, series, opt) + '#' + [...hidden].join(',');
+  const zoom = zoomOf(cv);
+  const sig = chartSig(cv, series, opt) + '#' + [...hidden].join(',') + '#' + JSON.stringify(zoom);
   renderSeriesLegend(cv, series, hidden);
+  renderZoomBar(cv);
   if (!opt.force && cv.__sig === sig && cv.__chart !== undefined) return;    // 无变化 → 不重绘
   cv.__sig = sig;
   const { ctx, w, h } = prep(cv, opt.height);
@@ -418,12 +503,19 @@ function drawLine(cv, series, opt = {}) {
   if (opt.zero) { ymin = Math.min(ymin, 0); ymax = Math.max(ymax, 0); }
   const pad2 = (ymax - ymin) * 0.08 || Math.abs(ymax) * 0.05 || 1;
   ymin -= pad2; ymax += pad2;
-  const yt = niceTicks(ymin, ymax, 5);
+  let yt = niceTicks(ymin, ymax, 5);
   ymin = Math.min(yt[0], ymin); ymax = Math.max(yt[yt.length - 1], ymax);
+  const xfull = [xmin, xmax], yfull = [ymin, ymax];      // 全图范围（缩放复位 / 判断是否已缩回全图）
+  const tbz = isNum(opt.tbase) ? opt.tbase : 0;
+  if (zoom && zoom.x) { xmin = zoom.x[0] - tbz; xmax = zoom.x[1] - tbz; }
+  if (zoom && zoom.y) { ymin = zoom.y[0]; ymax = zoom.y[1]; yt = niceTicks(ymin, ymax, 5).filter(t => t >= ymin && t <= ymax); }
   const X = x => pad.l + (xmax === xmin ? 0.5 : (x - xmin) / (xmax - xmin)) * (w - pad.l - pad.r);
   const Y = y => h - pad.b - (y - ymin) / (ymax - ymin) * (h - pad.t - pad.b);
+  const xAt = px => xmin + (px - pad.l) / Math.max(1e-9, (w - pad.l - pad.r)) * (xmax - xmin);
+  const yAt = py => ymin + (h - pad.b - py) / Math.max(1e-9, (h - pad.t - pad.b)) * (ymax - ymin);
   ctx.font = '10.5px sans-serif'; ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
   yt.forEach(t => {
+    if (t < ymin || t > ymax) return;
     const y = Y(t);
     ctx.strokeStyle = '#1b2338'; ctx.beginPath(); ctx.moveTo(pad.l, y); ctx.lineTo(w - pad.r, y); ctx.stroke();
     ctx.fillStyle = '#7b8ab0';
@@ -439,6 +531,9 @@ function drawLine(cv, series, opt = {}) {
   if (opt.zero && ymin < 0 && ymax > 0) {
     ctx.strokeStyle = '#33415f'; ctx.beginPath(); ctx.moveTo(pad.l, Y(0)); ctx.lineTo(w - pad.r, Y(0)); ctx.stroke();
   }
+  if (zoom) {                                              // 缩放后：曲线裁剪到绘图区，区间外不画
+    ctx.save(); ctx.beginPath(); ctx.rect(pad.l, pad.t, w - pad.l - pad.r, h - pad.t - pad.b); ctx.clip();
+  }
   pts.forEach(s => {
     ctx.strokeStyle = s.color || '#4ea1ff'; ctx.lineWidth = s.width || 1.4; ctx.beginPath();
     ctx.setLineDash(s.dash || []);
@@ -451,6 +546,7 @@ function drawLine(cv, series, opt = {}) {
     ctx.stroke();
     ctx.setLineDash([]);
   });
+  if (zoom) ctx.restore();
   if (opt.marks && opt.marks.length) {
     ctx.save();
     opt.marks.forEach(mk => {
@@ -481,7 +577,14 @@ function drawLine(cv, series, opt = {}) {
     ctx.save(); ctx.translate(12, h / 2); ctx.rotate(-Math.PI / 2);
     ctx.fillStyle = '#7b8ab0'; ctx.textAlign = 'center'; ctx.fillText(opt.ylabel, 0, 0); ctx.restore();
   }
-  cv.__chart = { ctx, w, h, pad, pts, xmin, xmax, ymin, ymax, X, Y, opt };
+  cv.__chart = { ctx, w, h, pad, pts, xmin, xmax, ymin, ymax, xfull, yfull, X, Y, xAt, yAt, opt, zoom };
+  if (cv.__drag) {                                         // 拖选框
+    const d = cv.__drag;
+    ctx.save(); ctx.fillStyle = 'rgba(78,161,255,0.15)'; ctx.strokeStyle = '#4ea1ff'; ctx.setLineDash([4, 3]);
+    ctx.fillRect(Math.min(d.x0, d.x1), Math.min(d.y0, d.y1), Math.abs(d.x1 - d.x0), Math.abs(d.y1 - d.y0));
+    ctx.strokeRect(Math.min(d.x0, d.x1) + .5, Math.min(d.y0, d.y1) + .5, Math.abs(d.x1 - d.x0), Math.abs(d.y1 - d.y0));
+    ctx.restore();
+  }
   drawHover(cv);
 }
 
@@ -1412,6 +1515,9 @@ function fillSourceFields(pre, src) {
   set('customstart', src.custom_time_start || '');
   set('playmode', src.play_start_mode || 'begin');
   set('playvalue', src.play_start_value || '');
+  chk('window', src.play_window);
+  set('winstart', src.play_window_start || '');
+  set('winend', src.play_window_end || '');
 }
 
 function fillSourceForm(cfg) {
@@ -1468,6 +1574,9 @@ function syncSourceFields(pre) {
     'playmode': kind === 'csv_file',
     'playvalue': kind === 'csv_file' && (srcEl(pre, 'playmode') || {}).value !== 'begin',
     'speed': kind === 'simulator',
+    'window': kind === 'csv_file',
+    'winstart': kind === 'csv_file' && !!(srcEl(pre, 'window') || {}).checked,
+    'winend': kind === 'csv_file' && !!(srcEl(pre, 'window') || {}).checked,
     'file-speed': kind === 'csv_file' && !bothFile,
     'block': true,
   };
@@ -1521,6 +1630,7 @@ async function loadBranchForm(force) {
       const bb = (S.state && S.state.config && S.state.config.branch) || {};
       $('#br-toffset').value = bb.time_offset_s ?? 0; $('#br-tol').value = bb.align_tol_s ?? 0;
       $('#br-common').checked = !!bb.common_window; $('#br-common-start').value = bb.common_start || '';
+      $('#br-common-end').value = bb.common_end || '';
       syncSourceFields('br-');
     }
   } catch (e) { /* 分路侧不可用 */ }
@@ -1557,7 +1667,8 @@ function sourceSummaryLines(st, cfg, sideName) {
         ? `　<b>播放起点</b>：${esc(src.play_start_mode)}=${esc(src.play_start_value || '')}` +
           (src.play_seek && isNum(src.play_seek.skipped_rows) ? `（跳过 ${src.play_seek.skipped_rows} 行）` : '') +
           (src.play_seek && isNum(src.play_seek.start_byte) ? `（字节 ${src.play_seek.start_byte}/${src.play_seek.file_size}）` : '')
-        : ''),
+        : '') +
+      (isNum(src.play_end_time) ? `　<b>播放终点</b>：${ts(src.play_end_time)}` : ''),
     `已摄入 ${num(e.samples_in, 0)} 点（${num(e.blocks_in, 0)} 块），数据时长 ${num(e.data_duration_s, 2)}s，` +
       `速率 ${num(e.rate_samples_per_s, 1)} 点/s（配置采样率 ${num((cfg.sampling || {}).fs, 0)}）`,
     `环形缓冲 ${num(e.buffer_fill, 0)} / ${num(e.buffer_capacity, 0)} 点（各量窗长按需自动扩容），` +
@@ -1616,7 +1727,8 @@ async function saveBranchSource() {
   try {
     const enabled = $('#br-enabled').checked;
     const brTop = { enabled, time_offset_s: parseFloat($('#br-toffset').value) || 0, align_tol_s: Math.max(0, parseFloat($('#br-tol').value) || 0),
-                    common_window: $('#br-common').checked, common_start: $('#br-common-start').value.trim() };
+                    common_window: $('#br-common').checked, common_start: $('#br-common-start').value.trim(),
+                    common_end: $('#br-common-end').value.trim() };
     const r1 = await fetch('/api/config', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ branch: brTop }) });
     if (!r1.ok) throw new Error((await r1.json()).error || 'HTTP ' + r1.status);
     const body = collectBranchConfigPayload();
@@ -1668,7 +1780,7 @@ async function previewCommonWindow() {
       `✓ 公共时间段：${ts(w.t_start)} → ${ts(w.t_end)}　总时长 ${num(w.duration_s, 3)} s`,
       `总线侧文件：${ts(w.bus.t0)} → ${ts(w.bus.t1)}（${w.bus.rows} 行${w.bus.custom_time ? '，自定义时间轴' : ''}）`,
       `分路侧文件：${ts(w.branch.t0)} → ${ts(w.branch.t1)}（${w.branch.rows} 行${w.branch.custom_time ? '，自定义时间轴' : ''}）`,
-      `播放起点：${ts(w.play_start)}（${w.play_start_source}）　可播放 ${num(w.play_duration_s, 3)} s`,
+      `播放起点：${ts(w.play_start)}（${w.play_start_source}）　播放终点：${ts(w.play_end)}（${w.play_end_source}）　可播放 ${num(w.play_duration_s, 3)} s`,
     ]);
   } catch (e) { out.innerHTML = notes(['✗ ' + e.message]); }
 }
@@ -1991,6 +2103,10 @@ function collectSourceFields(pre) {
     p.play_start_mode = (srcEl(pre, 'playmode') || {}).value || 'begin';
     if (p.play_start_mode !== 'begin') p.play_start_value = txt('playvalue');
     p.file_speed = parseFloat((srcEl(pre, 'file-speed') || {}).value) || 0;
+    // 指定时间段播放（v0.17）：布尔必送；起止文本空串也送（空＝数据起点/终点是有效语义）
+    p.play_window = chk('window');
+    p.play_window_start = txt('winstart');
+    p.play_window_end = txt('winend');
   }
   if (kind === 'csv_tail') {
     p.file_time_utc = chk('utc');
@@ -2291,7 +2407,8 @@ function bind() {
     const mark = () => { BR.dirty = true; };
     el.addEventListener('input', mark); el.addEventListener('change', mark);
   });
-  ['br-kind', 'br-frame', 'br-customtime', 'br-playmode'].forEach(id => $('#' + id).addEventListener('change', () => syncSourceFields('br-')));
+  ['br-kind', 'br-frame', 'br-customtime', 'br-playmode', 'br-window'].forEach(id => $('#' + id).addEventListener('change', () => syncSourceFields('br-')));
+  $('#src-window').addEventListener('change', () => { S.srcDirty = true; S.formDirty = true; syncSourceForm(); });
   $('#br-kind').addEventListener('change', syncBranchColumns);
   $('#br-file-speed').addEventListener('change', () => { BR.fileSpeedChosen = parseFloat($('#br-file-speed').value) || 0; });
   $('#br-enabled').addEventListener('change', () => { syncBranchColumns(); if ($('#br-enabled').checked) { loadBranchForm(false); refreshBranchState(true); } });

@@ -61,13 +61,13 @@ def test_realtime_writer_appends_one_row_per_curve_point(csv_factory, tmp_path, 
         rows = _rows(fp)
         n_hist = len(eng.calc.history.get(key))
         assert len(rows) - 1 == n_hist == eng.writer.rows_written[key], (key, len(rows) - 1, n_hist)
-        assert rows[0][:3] == ["t_epoch_s", "time_local", "window_s"]
+        assert rows[0][:4] == ["t_epoch_s", "time_local", "source_id", "window_s"]
     vrows = _rows(next(rt.glob("voltage_*.csv")))
-    assert vrows[0][3:6] == ["Ua", "Ub", "Uc"]
+    assert vrows[0][4:7] == ["Ua", "Ub", "Uc"]
     # 文件里的值 == 历史里的值（同一提取规则）
     hist = eng.calc.history.get("voltage")
-    assert float(vrows[1][0]) == pytest.approx(hist[0]["t"]) and float(vrows[1][3]) == pytest.approx(hist[0]["Ua"])
-    assert float(vrows[-1][3]) == pytest.approx(hist[-1]["Ua"])
+    assert float(vrows[1][0]) == pytest.approx(hist[0]["t"]) and float(vrows[1][4]) == pytest.approx(hist[0]["Ua"]) and vrows[1][2] == "0"
+    assert float(vrows[-1][4]) == pytest.approx(hist[-1]["Ua"])
     # BOM：Excel 直接打开不乱码
     assert open(next(rt.glob("voltage_*.csv")), "rb").read(3) == b"\xef\xbb\xbf"
 
@@ -403,7 +403,7 @@ def test_frontend_hover_tooltip_contract():
     body = APP_JS.split("function drawLine(")[1].split("\nfunction drawBars(")[0]
     assert "bindHover(cv)" in body and "cv.__redraw = () => drawLine(cv, series, Object.assign({}, opt, { force: true }))" in body   # v0.15：重绘绕过签名跳过
     assert "if (!opt.force && cv.__sig === sig" in body                                           # v0.15：数据未变不重绘
-    assert "cv.__chart = { ctx, w, h, pad, pts, xmin, xmax, ymin, ymax, X, Y, opt }" in body
+    assert "cv.__chart = { ctx, w, h, pad, pts, xmin, xmax, ymin, ymax, xfull, yfull, X, Y, xAt, yAt, opt, zoom }" in body
     assert body.rstrip().endswith("drawHover(cv);\n}")
     assert "cv.addEventListener('mousemove'" in APP_JS and "cv.addEventListener('mouseleave'" in APP_JS
     assert "if (cv.__hoverBound) return;" in APP_JS

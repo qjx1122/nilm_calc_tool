@@ -356,8 +356,8 @@ def test_web_curves_save_skips_unchecked(client):
     assert "current.csv" not in files and "voltage.csv" in files
     text = (out / "voltage.csv").read_text(encoding="utf-8-sig")
     head = text.splitlines()[0]
-    assert head.startswith("t_epoch_s,time_local,quantity,") and ",Ua," in head
-    assert re.search(r"\n\d+\.\d+,2026-10-12 08:00:0\d\.\d{3},voltage,", text)
+    assert head.startswith("t_epoch_s,time_local,source_id,quantity,") and ",Ua," in head
+    assert re.search(r"\n\d+\.\d+,2026-10-12 08:00:0\d\.\d{3},0,voltage,", text)
 
 
 def test_web_curves_export_respects_selection(client):
@@ -365,7 +365,8 @@ def test_web_curves_export_respects_selection(client):
     r = client.get("/api/curves/export", params={"quantity": "voltage"})
     assert r.status_code == 200 and r.headers["content-type"].startswith("text/csv")
     merged = client.get("/api/curves/export").text
-    kinds = {ln.split(",")[2] for ln in merged.splitlines()[1:] if ln}
+    kinds = {ln.split(",")[3] for ln in merged.splitlines()[1:] if ln}
+    assert {ln.split(",")[2] for ln in merged.splitlines()[1:] if ln} == {"0"}     # v0.17 source_id 列
     assert kinds == {"voltage", "power", "power_factor", "fundamental", "interharmonic", "dc"}
     client.put("/api/config", json={"output": {"curve_save": {k: False for k in CURVE_KEYS}}})
     assert client.post("/api/curves/save", json={}).status_code == 400

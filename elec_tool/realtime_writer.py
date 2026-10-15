@@ -28,11 +28,13 @@ def _time_local(t: float) -> str:
 
 
 class RealtimeCurveWriter:
-    FIXED = ("t_epoch_s", "time_local")
+    FIXED = ("t_epoch_s", "time_local", "source_id")      # v0.17：第 3 列数据来源号 0＝总线 / 1＝分路
+    FIXED_LEGACY = ("t_epoch_s", "time_local")           # v0.17 之前的文件：追加时保持原列结构
 
     def __init__(self, cfg: AppConfig, root: Optional[str] = None):
         self.cfg = cfg
         self.enabled = bool(cfg.output.realtime_save)
+        self.source_id = int(getattr(cfg.output, "source_id", 0) or 0)
         # 环境变量 ELEC_TOOL_REALTIME_DIR 可整体改写目录（测试隔离 / 现场把落盘指到数据盘）
         d = os.environ.get("ELEC_TOOL_REALTIME_DIR") or cfg.output.realtime_dir or "output/realtime"
         if not os.path.isabs(d) and root:
@@ -90,7 +92,7 @@ class RealtimeCurveWriter:
                 f["fh"].close()
             f = self._open(key, day, list(rec.keys()))
             self._files[key] = f
-        row = [repr(t), _time_local(t)]
+        row = [repr(t), _time_local(t)] + ([] if f.get("legacy") else [self.source_id])
         for name in f["fields"]:
             v = rec.get(name)
             row.append("" if v is None else v)
@@ -103,11 +105,14 @@ class RealtimeCurveWriter:
         os.makedirs(self.dir, exist_ok=True)
         path = os.path.join(self.dir, f"{key}_{day}.csv")
         existing_fields: Optional[List[str]] = None
+        legacy = False
         if os.path.isfile(path) and os.path.getsize(path) > 0:
             with open(path, "r", encoding="utf-8-sig", newline="") as fh:
                 head = next(csv.reader(fh), None)
-            if head and head[:2] == list(self.FIXED):
-                existing_fields = head[2:]
+            if head and head[:3] == list(self.FIXED):
+                existing_fields = head[3:]
+            elif head and head[:2] == list(self.FIXED_LEGACY):
+                existing_fields = head[2:]; legacy = True
         fh = open(path, "a", encoding="utf-8-sig" if existing_fields is None else "utf-8", newline="")
         w = csv.writer(fh)
         if existing_fields is None:
@@ -116,4 +121,4 @@ class RealtimeCurveWriter:
             use = fields
         else:
             use = existing_fields
-        return {"fh": fh, "writer": w, "path": path, "fields": use, "day": day, "rows": 0}
+        return {"fh": fh, "writer": w, "path": path, "fields": use, "day": day, "rows": 0, "legacy": legacy}

@@ -40,8 +40,8 @@ EVENT_TYPES: Dict[str, str] = {
     "power_osc": "功率振荡",
 }
 PHASES = ("A", "B", "C")
-_CSV_FIELDS = ("id", "status", "type", "type_name", "subject", "start_t", "start_time", "end_t", "end_time",
-               "duration_s", "value_start", "value_peak", "limit", "unit", "direction", "detail")
+_CSV_FIELDS = ("source_id", "id", "status", "type", "type_name", "subject", "start_t", "start_time", "end_t", "end_time",
+               "duration_s", "value_start", "value_peak", "limit", "unit", "direction", "detail")   # v0.17 首列数据来源号
 
 
 @dataclass
@@ -83,8 +83,9 @@ def _ts(t: Optional[float]) -> str:
 class EventWriter:
     """events_<数据日期>.csv 追加写（每行 flush）。"""
 
-    def __init__(self, cfg: EventConfig, root: Optional[str] = None):
+    def __init__(self, cfg: EventConfig, root: Optional[str] = None, source_id: int = 0):
         self.cfg = cfg
+        self.source_id = int(source_id)
         env_dir = os.environ.get("ELEC_TOOL_EVENTS_DIR")
         d = env_dir or cfg.events_dir
         self.dir = d if os.path.isabs(d) else os.path.join(root or os.getcwd(), d)
@@ -113,7 +114,7 @@ class EventWriter:
         try:
             self._open_for(ev.start_t)
             d = ev.to_dict()
-            row = [d["id"], status, d["type"], d["type_name"], d["subject"],
+            row = [self.source_id, d["id"], status, d["type"], d["type_name"], d["subject"],
                    f"{d['start_t']:.3f}", _ts(d["start_t"]),
                    ("" if d["end_t"] is None else f"{d['end_t']:.3f}"), _ts(d["end_t"]),
                    ("" if d["duration_s"] is None else f"{d['duration_s']:.3f}"),
@@ -153,7 +154,7 @@ class EventDetector:
         self._freq_hist: Deque[Tuple[float, float]] = deque(maxlen=8)
         self._p_hist: Deque[Tuple[float, float]] = deque(maxlen=4096)
         self._root_dir = root
-        self.writer = EventWriter(self.ecfg, root=root)
+        self.writer = EventWriter(self.ecfg, root=root, source_id=int(getattr(cfg.output, "source_id", 0) or 0))
         self.counts: Dict[str, int] = {k: 0 for k in EVENT_TYPES}
         self.last_eval: Dict[str, Any] = {}
         self.osc_info: Dict[str, Any] = {}
@@ -164,7 +165,7 @@ class EventDetector:
             self.cfg = cfg
             self.ecfg = cfg.events
             self.writer.close()
-            self.writer = EventWriter(self.ecfg, root=self._root_dir)
+            self.writer = EventWriter(self.ecfg, root=self._root_dir, source_id=int(getattr(self.cfg.output, "source_id", 0) or 0))
             if self._log.maxlen != int(self.ecfg.max_log):
                 self._log = deque(self._log, maxlen=int(self.ecfg.max_log))
 

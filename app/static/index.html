@@ -156,6 +156,10 @@
               <label>自定义播放起始时间（公共时间段内） <input id="br-common-start" placeholder="留空＝从公共时间段起点开始；如 2026-10-14 08:00:05 / epoch 秒"></label>
             </div>
             <div class="row2">
+              <label>自定义播放结束时间（公共时间段内） <input id="br-common-end" placeholder="留空＝播到公共时间段终点；如 2026-10-14 08:00:09 / epoch 秒"></label>
+              <div class="notes muted">公共时间段＝两侧文件时标的交集；起始/结束都留空＝整段。</div>
+            </div>
+            <div class="row2">
               <label>分路侧时标偏移 (s) <input id="br-toffset" type="number" step="0.001" value="0" title="分路侧时标 + 偏移 ≈ 总线侧时标；两份文件起点不同步时填（可在「跨侧对比」页一键按起点对齐）"></label>
               <label>配对容差 (s)，0＝自动 <input id="br-tol" type="number" step="0.01" min="0" value="0" title="自动＝两侧输出步长最大值×0.6"></label>
             </div>
@@ -210,6 +214,12 @@
               </select></label>
             <label>播放起点取值 <input id="src-playvalue" placeholder="按左侧模式填：120001 / 30 / 50 / 2026-10-12 08:00:00 或 08:00:00"
               title="row：第几行（1 起算，不含表头）；seconds：秒；percent：0~100；time：完整日期时间，或只填 HH:MM:SS（与文件时标的当天时刻比较，适合 0/00/00 写法）"></label>
+            <label class="chk"><input id="src-window" type="checkbox">
+              csv_file：指定时间段播放（默认不启用；起始留空＝从数据起点，结束留空＝播到数据终点；两侧都是离线文件且启用「公共时间段」时以公共时间段为准）</label>
+            <div class="row2">
+              <label>时间段起始 <input id="src-winstart" placeholder="2026-10-12 08:00:00 / epoch 秒 / 08:00:00"></label>
+              <label>时间段结束 <input id="src-winend" placeholder="2026-10-12 08:10:00 / epoch 秒 / 08:10:00"></label>
+            </div>
             <label class="chk"><input id="src-tailend" type="checkbox">
               csv_tail：从文件末尾开始（只算新写入数据，不补算历史）</label>
             <label class="chk"><input id="src-newest" type="checkbox">
@@ -267,6 +277,12 @@
                 <option value="time">指定时刻（文件时标 ≥ 该时刻）</option>
               </select></label>
             <label>播放起点取值 <input id="br-playvalue" placeholder="按左侧模式填：120001 / 30 / 50 / 2026-10-12 08:00:00 或 08:00:00"></label>
+            <label class="chk"><input id="br-window" type="checkbox">
+              csv_file：指定时间段播放（默认不启用；起始留空＝从数据起点，结束留空＝播到数据终点；两侧都是离线文件且启用「公共时间段」时以公共时间段为准）</label>
+            <div class="row2">
+              <label>时间段起始 <input id="br-winstart" placeholder="2026-10-12 08:00:00 / epoch 秒 / 08:00:00"></label>
+              <label>时间段结束 <input id="br-winend" placeholder="2026-10-12 08:10:00 / epoch 秒 / 08:10:00"></label>
+            </div>
             <label class="chk"><input id="br-tailend" type="checkbox">
               csv_tail：从文件末尾开始（只算新写入数据，不补算历史）</label>
             <label class="chk"><input id="br-newest" type="checkbox">

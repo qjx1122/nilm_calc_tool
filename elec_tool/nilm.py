@@ -37,7 +37,7 @@ from .config import AppConfig, NILM_ALGO_DEFAULTS, NILM_ALGO_NAMES, NILM_CHANNEL
 
 __all__ = ["NilmEvent", "NilmDetector", "CycleFeatures", "detect_steps", "NILM_ALGO_NAMES"]
 
-_CSV_FIELDS = ["id", "algorithm", "algorithm_name", "channel", "t_start", "t_start_local", "t_end", "t_end_local",
+_CSV_FIELDS = ["source_id", "id", "algorithm", "algorithm_name", "channel", "t_start", "t_start_local", "t_end", "t_end_local",
                "duration_s", "cycles", "direction", "magnitude_w", "delta_p_w", "delta_q_var", "delta_i_a",
                "pre_p_w", "post_p_w", "score"]
 
@@ -347,8 +347,9 @@ def _confirm_cycles(algo: str, prm: Dict[str, Any]) -> int:
 
 # ---------------------------------------------------------------- 落盘
 class NilmWriter:
-    def __init__(self, cfg: NilmConfig, root: Optional[str] = None):
+    def __init__(self, cfg: NilmConfig, root: Optional[str] = None, source_id: int = 0):
         self.cfg = cfg
+        self.source_id = int(source_id)
         d = os.environ.get("ELEC_TOOL_NILM_DIR") or cfg.nilm_dir
         self.dir = d if os.path.isabs(d) else os.path.join(root or os.getcwd(), d)
         self._fh = None
@@ -376,7 +377,7 @@ class NilmWriter:
         try:
             self._open_for(ev.t_start)
             d = ev.to_dict()
-            row = [d["id"], d["algorithm"], d["algorithm_name"], d["channel"],
+            row = [self.source_id, d["id"], d["algorithm"], d["algorithm_name"], d["channel"],
                    f"{d['t_start']:.4f}", d["t_start_local"], f"{d['t_end']:.4f}", d["t_end_local"],
                    f"{d['duration_s']:.4f}", d["cycles"], d["direction"],
                    f"{d['magnitude_w']:.3f}", f"{d['delta_p_w']:.3f}", f"{d['delta_q_var']:.3f}", f"{d['delta_i_a']:.4f}",
@@ -410,7 +411,7 @@ class NilmDetector:
         self.ncfg: NilmConfig = cfg.nilm
         self._root = root
         self.feat = CycleFeatures(cfg.sampling.fs, cfg.sampling.f_nom)
-        self.writer = NilmWriter(self.ncfg, root=root)
+        self.writer = NilmWriter(self.ncfg, root=root, source_id=int(getattr(cfg.output, "source_id", 0) or 0))
         self._lock = threading.RLock()
         self._t = np.zeros(0)
         self._p = np.zeros((4, 0))
@@ -434,7 +435,7 @@ class NilmDetector:
                 self._t = np.zeros(0); self._p = np.zeros((4, 0)); self._q = np.zeros((4, 0)); self._i = np.zeros((4, 0))
                 self._g0 += 0
             self.writer.close()
-            self.writer = NilmWriter(self.ncfg, root=self._root)
+            self.writer = NilmWriter(self.ncfg, root=self._root, source_id=int(getattr(self.cfg.output, "source_id", 0) or 0))
 
     # ---- 主入口
     def ingest(self, block: SampleBlock) -> List[Dict[str, Any]]:

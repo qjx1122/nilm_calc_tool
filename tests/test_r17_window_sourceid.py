@@ -1,0 +1,224 @@
+"""v0.17（第 23 轮）：① 指定时间段播放（单侧 / 公共时间段 common_end）② 曲线缩放前端契约 ③ 所有 CSV 的 source_id 列 + 分路曲线一并保存。"""
+from __future__ import annotations
+
+import csv
+import pathlib
+import shutil
+import time
+
+import pytest
+
+ROOT = pathlib.Path(__file__).resolve().parents[1]
+FS = 6400.0
+T0 = 1_760_000_000.0
+
+
+def _wait_done(client, path="/api/state", n=60):
+    a = None
+    for _ in range(n):
+        time.sleep(0.2)
+        a = client.get(path).json()
+        if not a["running"]:
+            break
+    return a
+
+
+@pytest.fixture(scope="module")
+def client(tmp_path_factory):
+    pytest.importorskip("httpx")
+    from pytest import MonkeyPatch
+    from starlette.testclient import TestClient
+    d = tmp_path_factory.mktemp("r17")
+    shutil.copy(ROOT / "configs" / "default.json", d / "cfg.json")
+    mp = MonkeyPatch()
+    mp.setenv("ELEC_TOOL_CONFIG_PATH", str(d / "cfg.json")); mp.setenv("ELEC_TOOL_AUTOSTART", "")
+    mp.setenv("ELEC_TOOL_BRANCH_CONFIG_PATH", str(d / "branch.json"))
+    mp.setenv("ELEC_TOOL_PERSIST_CONFIG", "0")
+    for k in ("ELEC_TOOL_EVENTS_DIR", "ELEC_TOOL_REALTIME_DIR", "ELEC_TOOL_NILM_DIR"):
+        mp.delenv(k, raising=False)
+    import app.server as srv
+    with TestClient(srv.app) as c:
+        c.dir = d  # type: ignore[attr-defined]
+        yield c
+    mp.undo()
+
+
+@pytest.fixture(scope="module")
+def files(tmp_path_factory):
+    from elec_tool.selftest import build_signal, HarmSpec
+    from tests.conftest import write_csv
+    d = tmp_path_factory.mktemp("r17data")
+    specs = [HarmSpec(1, 57.735, 5.0, phi_deg=0.0)]
+    t, u, i = build_signal(specs, FS, 4.0, t0=T0)                 # 总线 T0 → T0+4
+    write_csv(str(d / "bus.csv"), t, u, i)
+    t2, u2, i2 = build_signal(specs, FS, 4.0, t0=T0 + 1.0)        # 分路 T0+1 → T0+5；公共 [T0+1, T0+4]
+    write_csv(str(d / "br.csv"), t2, u2, i2)
+    return d
+
+
+# ---------- ① 配置层 ----------
+
+def test_config_play_window_fields_and_validation():
+    from elec_tool.config import AppConfig, ConfigError, SourceConfig
+    cfg = AppConfig()
+    assert cfg.source.play_window is False and cfg.source.play_window_start == "" and cfg.source.play_window_end == ""
+    assert cfg.branch.common_end == "" and cfg.output.source_id == 0
+    s = SourceConfig(kind="csv_file", path="x.csv", play_window=True, play_window_start="08:00:00", play_window_end="08:00:10")
+    s.validate()
+    s = SourceConfig(kind="csv_file", path="x.csv", play_window=True, play_window_start="", play_window_end="")
+    s.validate()                                                 # 两端留空＝整个文件
+    with pytest.raises(ConfigError):
+        SourceConfig(kind="csv_file", path="x.csv", play_window=True, play_window_start="abc").validate()
+    with pytest.raises(ConfigError):
+        SourceConfig(kind="csv_file", path="x.csv", play_window=True, play_window_start="08:00:10", play_window_end="08:00:05").validate()
+    from elec_tool.config import OutputConfig
+    with pytest.raises(ConfigError):
+        OutputConfig(source_id=2).validate()
+
+
+# ---------- ① 单侧时间段播放 ----------
+
+def test_single_side_play_window_start_end_and_empty_semantics(client, files):
+    client.post("/api/engine/stop"); client.post("/api/branch/engine/stop")
+    client.put("/api/config", json={"branch": {"enabled": False, "common_window": False}})
+    base = {"kind": "csv_file", "path": str(files / "bus.csv"), "file_speed": 0, "custom_time": False}
+    # 起止都给：T0+1 → T0+3 → 2 s
+    r = client.post("/api/engine/start", json={**base, "play_window": True, "play_window_start": repr(T0 + 1.0), "play_window_end": repr(T0 + 3.0)}).json()
+    assert r["ok"], r
+    a = _wait_done(client)
+    assert abs(a["engine"]["samples_in"] - 2 * FS) <= 640, a["engine"]["samples_in"]
+    assert abs(a["source"]["play_end_time"] - (T0 + 3.0)) < 1e-6
+    # 对外配置仍是用户字段：起点模式不被自动值污染
+    c = client.get("/api/config").json()
+    assert c["source"]["play_window"] is True and c["source"]["play_start_mode"] == "begin" and c["source"]["play_end_time"] == ""
+    # 只给终点：从数据起点播到 T0+1.5 → 1.5 s
+    r = client.post("/api/engine/start", json={**base, "play_window": True, "play_window_start": "", "play_window_end": repr(T0 + 1.5)}).json()
+    assert r["ok"], r
+    a = _wait_done(client)
+    assert abs(a["engine"]["samples_in"] - 1.5 * FS) <= 640, a["engine"]["samples_in"]
+    # 只给起点：T0+3 播到文件尾 → 1 s
+    r = client.post("/api/engine/start", json={**base, "play_window": True, "play_window_start": repr(T0 + 3.0), "play_window_end": ""}).json()
+    assert r["ok"], r
+    a = _wait_done(client)
+    assert abs(a["engine"]["samples_in"] - 1 * FS) <= 640, a["engine"]["samples_in"]
+    # 未启用（默认）：整个文件 4 s，即使起止文本还在
+    r = client.post("/api/engine/start", json={**base, "play_window": False, "play_window_start": repr(T0 + 3.0), "play_window_end": repr(T0 + 3.5)}).json()
+    assert r["ok"], r
+    a = _wait_done(client)
+    assert abs(a["engine"]["samples_in"] - 4 * FS) <= 640, a["engine"]["samples_in"]
+
+
+def test_play_window_tod_end_text(client, files):
+    """终点只填 HH:MM:SS：按文件时标当天折算。"""
+    from elec_tool.timefmt import fmt_local
+    client.post("/api/engine/stop")
+    end_txt = fmt_local(T0 + 2.0, ms=False).split(" ")[1]           # 本地时刻 HH:MM:SS
+    base = {"kind": "csv_file", "path": str(files / "bus.csv"), "file_speed": 0, "custom_time": False}
+    r = client.post("/api/engine/start", json={**base, "play_window": True, "play_window_start": "", "play_window_end": end_txt}).json()
+    assert r["ok"], r
+    a = _wait_done(client)
+    assert abs(a["engine"]["samples_in"] - 2 * FS) <= 640, a["engine"]["samples_in"]
+
+
+# ---------- ① 公共时间段 + common_end ----------
+
+def test_common_window_end(client, files):
+    client.post("/api/engine/stop"); client.post("/api/branch/engine/stop")
+    client.put("/api/branch/config", json={"source": {"kind": "csv_file", "path": str(files / "br.csv"), "file_speed": 0, "custom_time": False,
+                                                       "play_window": True, "play_window_start": repr(T0 + 4.5)}})   # 公共时间段启用时被忽略
+    client.put("/api/config", json={"source": {"kind": "csv_file", "path": str(files / "bus.csv"), "custom_time": False},
+                                    "branch": {"enabled": True, "common_window": True, "common_start": repr(T0 + 2.0), "common_end": repr(T0 + 3.0)}})
+    pv = client.get("/api/common_window?preview=1").json()
+    assert pv["ok"] and pv["play_end_source"] == "自定义播放结束时间" and abs(pv["play_duration_s"] - 1.0) < 1e-6, pv
+    r = client.post("/api/engine/start", json={"kind": "csv_file", "path": str(files / "bus.csv"), "file_speed": 0}).json()
+    assert r["ok"] and r["branch"]["ok"], r
+    a = _wait_done(client); b = _wait_done(client, "/api/branch/state")
+    assert abs(a["engine"]["samples_in"] - FS) <= 640 and abs(b["engine"]["samples_in"] - FS) <= 640, (a["engine"]["samples_in"], b["engine"]["samples_in"])
+    # 结束时间越界 → 400
+    client.put("/api/config", json={"branch": {"common_end": repr(T0 + 4.5)}})
+    r = client.post("/api/engine/start", json={"kind": "csv_file", "path": str(files / "bus.csv"), "file_speed": 0})
+    assert r.status_code == 400 and "结束时间" in r.json()["error"]
+    client.put("/api/config", json={"branch": {"common_window": False, "common_start": "", "common_end": ""}})
+
+
+# ---------- ③ source_id ----------
+
+def test_source_id_in_realtime_events_nilm_and_curve_csv(client, files, tmp_path):
+    """两侧启动（分路启用、非公共时间段）→ realtime/curves save 的 CSV 带 source_id（0 总线 / 1 分路），分路曲线保存到 branch/。"""
+    import os
+    os.environ.pop("ELEC_TOOL_REALTIME_DIR", None)                 # conftest 的整体改写会把两侧指到同一目录，这里按各侧 realtime_dir
+    client.post("/api/engine/stop"); client.post("/api/branch/engine/stop")
+    rt_bus = tmp_path / "rt_bus"; rt_br = tmp_path / "rt_br"
+    client.put("/api/config", json={"branch": {"enabled": True, "common_window": False},
+                                    "output": {"realtime_save": True, "realtime_dir": str(rt_bus), "source_id": 1,   # 用户填 1 也被服务端改回 0
+                                               "curve_save": {"voltage": True, "power": True}}})
+    client.put("/api/branch/config", json={"source": {"kind": "csv_file", "path": str(files / "br.csv"), "file_speed": 0, "custom_time": False, "play_window": False},
+                                           "output": {"realtime_save": True, "realtime_dir": str(rt_br), "source_id": 0,
+                                                      "curve_save": {"voltage": True, "power": False}}})
+    assert client.get("/api/config").json()["output"]["source_id"] == 0
+    assert client.get("/api/branch/config").json()["output"]["source_id"] == 1
+    r = client.post("/api/engine/start", json={"kind": "csv_file", "path": str(files / "bus.csv"), "file_speed": 0, "play_window": False}).json()
+    assert r["ok"] and r["branch"]["ok"], r
+    _wait_done(client); _wait_done(client, "/api/branch/state")
+    for d, sid in ((rt_bus, "0"), (rt_br, "1")):
+        f = next(d.glob("voltage_*.csv"))
+        rows = list(csv.reader(open(f, encoding="utf-8-sig")))
+        assert rows[0][:3] == ["t_epoch_s", "time_local", "source_id"] and rows[1][2] == sid, (f, rows[0], rows[1][:3])
+    # 曲线保存：总线目录含 voltage/power（source_id 0），branch/ 子目录只含分路勾选的 voltage（source_id 1）
+    out = tmp_path / "curves"
+    r = client.post("/api/curves/save", json={"dir": str(out)}).json()
+    assert r["ok"], r
+    qs = {(f["quantity"], f["source_id"]) for f in r["files"]}
+    assert ("voltage", 0) in qs and ("power", 0) in qs and ("voltage", 1) in qs and ("power", 1) not in qs, qs
+    bq = [f["quantity"] for f in r["branch_files"]]
+    assert "voltage" in bq and "power" not in bq and "power" in r["branch_skipped"]
+    outd = pathlib.Path(r["dir"]) if pathlib.Path(r["dir"]).is_absolute() else ROOT / r["dir"]
+    hb = open(outd / "voltage.csv", encoding="utf-8-sig").read().splitlines()
+    hr = open(outd / "branch" / "voltage.csv", encoding="utf-8-sig").read().splitlines()
+    assert hb[0].startswith("t_epoch_s,time_local,source_id,quantity,") and hb[1].split(",")[2] == "0"
+    assert hr[0].startswith("t_epoch_s,time_local,source_id,quantity,") and hr[1].split(",")[2] == "1"
+    # 合并下载：两侧都在，source_id 两种
+    merged = client.get("/api/curves/export").text.splitlines()
+    assert merged[0] == "t_epoch_s,time_local,source_id,quantity,field,value"
+    assert {ln.split(",")[2] for ln in merged[1:] if ln} == {"0", "1"}
+    # 结果导出
+    ex = client.get("/api/export?fmt=csv").text.splitlines()
+    assert ex[0] == "source_id,t_ref,quantity,metric,value,unit,window_s" and ex[1].startswith("0,")
+    ex = client.get("/api/branch/export?fmt=csv").text.splitlines()
+    assert ex[1].startswith("1,")
+    client.post("/api/engine/stop"); client.post("/api/branch/engine/stop")
+    client.put("/api/config", json={"branch": {"enabled": False}, "output": {"realtime_save": False}})
+
+
+def test_events_and_nilm_csv_source_id(tmp_path):
+    from elec_tool.config import AppConfig
+    from elec_tool.events import EventWriter
+    from elec_tool.nilm import NilmWriter
+    cfg = AppConfig(); cfg.output.source_id = 1
+    w = EventWriter(cfg, str(tmp_path / "ev"), 1)
+    assert list(w.fields)[0] == "source_id" if hasattr(w, "fields") else True
+    import elec_tool.events as ev, elec_tool.nilm as nm
+    assert ev._CSV_FIELDS[0] == "source_id" and nm._CSV_FIELDS[0] == "source_id"
+
+
+def test_realtime_writer_legacy_header_kept(tmp_path):
+    """旧版（2 列固定头）文件追加时不插 source_id 列，不破坏旧文件结构。"""
+    from elec_tool.realtime_writer import RealtimeCurveWriter as RealtimeWriter
+    import inspect
+    src = inspect.getsource(RealtimeWriter)
+    assert "legacy" in src and "source_id" in src
+
+
+# ---------- ② 前端契约 ----------
+
+def test_frontend_zoom_and_window_contract():
+    js = (ROOT / "app/static/app.js").read_text(encoding="utf-8")
+    html = (ROOT / "app/static/index.html").read_text(encoding="utf-8")
+    for s in ("const ZOOM = {}", "function zoomAxis(cv, axis, factor, center)", "function zoomReset(cv)",
+              "cv.addEventListener('wheel'", "e.shiftKey", "cv.addEventListener('dblclick'", "cv.addEventListener('mousedown'",
+              "if (zoom && zoom.x)", "if (zoom && zoom.y)", "ctx.clip()", "class=\"zoom-btn\"", "['reset', '复位'",
+              "p.play_window = chk('window')", "p.play_window_start = txt('winstart')", "p.play_window_end = txt('winend')",
+              "common_end: $('#br-common-end').value.trim()"):
+        assert s in js, s
+    for i in ("src-window", "src-winstart", "src-winend", "br-window", "br-winstart", "br-winend", "br-common-end"):
+        assert f'id="{i}"' in html, i

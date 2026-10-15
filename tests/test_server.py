@@ -297,7 +297,7 @@ def test_export_csv_and_json(client, csv_factory, tmp_path):
     csv_resp = client.get("/api/export", params={"fmt": "csv"})
     assert csv_resp.status_code == 200
     lines = csv_resp.text.strip().splitlines()
-    assert lines[0].strip() == "t_ref,quantity,metric,value,unit,window_s"
+    assert lines[0].strip() == "source_id,t_ref,quantity,metric,value,unit,window_s"
     assert len(lines) > 200
     assert any("harmonic,thd_u_pct.A," in ln for ln in lines)
     assert any("fundamental,freq_hz," in ln for ln in lines)

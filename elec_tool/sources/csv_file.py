@@ -53,7 +53,14 @@ class CsvFileSource(DataSource):
         self._seek_notes: list = []
         # 播放终点（公共时间段）：块起点 ≥ 终点即视为播完
         _pe = str(getattr(cfg.source, "play_end_time", "") or "").strip()
-        self.play_end_t: Optional[float] = parse_time_text(_pe) if _pe else None
+        self.play_end_t: Optional[float] = None
+        self._play_end_tod: Optional[float] = None       # v0.17：只填 HH:MM:SS 的终点 → 第 1 块到达后按当天折算
+        if _pe:
+            kind, v = parse_play_start("time", _pe)
+            if kind == "abs":
+                self.play_end_t = float(v)
+            else:
+                self._play_end_tod = float(v)
 
     def _apply_custom_time(self, block: SampleBlock) -> SampleBlock:
         """把块时间轴改写为 起始时间 + 全局样本序号 / fs（等间隔）。
@@ -161,6 +168,14 @@ class CsvFileSource(DataSource):
                        "无日期写法可只填 HH:MM:SS）"))
             return None
         block = self._apply_custom_time(block)
+        if self._play_end_tod is not None and block.n and self.play_end_t is None:
+            from .parsing import _tod_of
+            mode = (info or {}).get("ts_mode") or (self._last_info or {}).get("ts_mode")
+            tod0 = _tod_of(float(block.t_start), mode or "", self.tz_offset_h)
+            end = float(block.t_start) - tod0 + self._play_end_tod
+            if end <= float(block.t_start):
+                end += 86400.0                                  # 终点时刻早于起点时刻 → 视为次日
+            self.play_end_t = end
         if self.play_end_t is not None and block.n and block.t_start >= self.play_end_t:
             self._exhausted = True
             self.close()

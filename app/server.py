@@ -57,6 +57,7 @@ BRANCH_CONFIG_PATH = os.path.join(ROOT, "configs", "branch.json")            # �
 BRANCH_RUNTIME_CONFIG_PATH = os.path.join(ROOT, "configs", "branch_runtime.json")
 SIDES = ("bus", "branch")
 SIDE_LABELS = {"bus": "总线侧", "branch": "分路侧设备"}
+SIDE_SOURCE_ID = {"bus": 0, "branch": 1}      # v0.17：落盘/导出 CSV 的 source_id 列
 
 
 def _resolve_cfg_paths() -> Tuple[str, str]:
@@ -128,6 +129,7 @@ class EngineRunner:
         return load_or_default(self.cfg_path)
 
     def set_cfg(self, cfg: AppConfig) -> None:
+        cfg.output.source_id = SIDE_SOURCE_ID[self.side]        # v0.17：数据来源号按侧别强制（0 总线 / 1 分路）
         cfg.validate()
         with self.lock:
             self._cfg_view = None
@@ -203,6 +205,7 @@ class EngineRunner:
     def start(self, cfg: AppConfig, duration_s: Optional[float] = None, pace_clock=None,
               play_user: Optional[Tuple[str, str, str]] = None) -> Dict[str, Any]:
         """play_user：若本次运行的播放起点/终点是自动算出来的（公共时间段），这里传用户原来的设置，对外呈现/持久化都用它。"""
+        cfg.output.source_id = SIDE_SOURCE_ID[self.side]
         cfg.validate()
         # 先在**锁外**回收旧线程：join 时若仍持有 self.lock，旧线程正好卡在
         # 「append 结果要拿锁」上就会互等到超时（2s），旧线程存活后继续轮询
@@ -756,8 +759,15 @@ def _compute_common_window(bus_cfg: AppConfig, br_cfg: AppConfig) -> Dict[str, A
         if not (t_start <= ps < t_end):
             raise ConfigError(f"自定义播放起始时间 {txt} 不在公共时间段 {fmt_local(t_start)} → {fmt_local(t_end)} 内")
         out["play_start"] = ps; out["play_start_source"] = "自定义播放起始时间"
-    out["play_start_text"] = fmt_local(out["play_start"])
-    out["play_duration_s"] = t_end - out["play_start"]
+    out["play_end"] = t_end; out["play_end_source"] = "公共时间段终点"
+    txe = str(getattr(bus_cfg.branch, "common_end", "") or "").strip()
+    if txe:
+        pe = _ptt(txe)
+        if not (out["play_start"] < pe <= t_end):
+            raise ConfigError(f"自定义播放结束时间 {txe} 不在 {fmt_local(out['play_start'])} → {fmt_local(t_end)} 内")
+        out["play_end"] = pe; out["play_end_source"] = "自定义播放结束时间"
+    out["play_start_text"] = fmt_local(out["play_start"]); out["play_end_text"] = fmt_local(out["play_end"])
+    out["play_duration_s"] = out["play_end"] - out["play_start"]
     return out
 
 
@@ -773,6 +783,20 @@ def _apply_window_to_source(cfg: AppConfig, rng: Dict[str, Any], play_start: flo
     else:
         cfg.source.play_start_mode = "time"; cfg.source.play_start_value = repr(float(play_start))
     cfg.source.play_end_time = repr(float(t_end))
+
+
+def _apply_play_window(cfg: AppConfig) -> Optional[Tuple[str, str, str]]:
+    """v0.17 指定时间段播放（单侧）：source.play_window 启用时把起点/终点写进本次运行配置。
+    起点空＝沿用用户原播放起点设置（默认文件开头）；终点空＝播到文件尾。返回用户原字段（供对外呈现/持久化），未启用返回 None。"""
+    if cfg.source.kind != "csv_file" or not bool(cfg.source.play_window):
+        return None
+    user = _play_fields(cfg)
+    st = str(cfg.source.play_window_start or "").strip()
+    en = str(cfg.source.play_window_end or "").strip()
+    if st:
+        cfg.source.play_start_mode = "time"; cfg.source.play_start_value = st
+    cfg.source.play_end_time = en
+    return user
 
 
 def _start_branch_if_enabled(bus_cfg: AppConfig, pace_clock=None) -> Optional[Dict[str, Any]]:
@@ -803,7 +827,9 @@ def _start_branch_if_enabled(bus_cfg: AppConfig, pace_clock=None) -> Optional[Di
         play_user: Optional[Tuple[str, str, str]] = None
         if cw:
             play_user = _play_fields(cfg)
-            _apply_window_to_source(cfg, cw["branch"], cw["play_start"], cw["t_end"], side="branch")
+            _apply_window_to_source(cfg, cw["branch"], cw["play_start"], cw["play_end"], side="branch")
+        else:
+            play_user = _apply_play_window(cfg)          # 分路侧自己的指定时间段（未按公共时间段联动时）
         br.start(cfg, pace_clock=clock, play_user=play_user)
         br.error = None
         return {"ok": True, "source_kind": cfg.source.kind, "path": cfg.source.path, "synced_pace": both_file}
@@ -1042,7 +1068,8 @@ async def engine_start(payload: Optional[Dict[str, Any]] = None) -> Any:
                     if k in ("kind", "path", "host", "port", "frame", "block_samples",
                              "poll_interval_s", "tail_from_end", "sim_speed", "watch_dir_newest",
                              "struct_fmt", "struct_fields", "custom_time", "custom_time_start",
-                             "file_time_utc", "play_start_mode", "play_start_value", "file_speed")}
+                             "file_time_utc", "play_start_mode", "play_start_value", "file_speed",
+                             "play_window", "play_window_start", "play_window_end")}
         if src_over:
             data["source"].update(src_over)
         if payload.get("windows"):
@@ -1075,7 +1102,9 @@ async def engine_start(payload: Optional[Dict[str, Any]] = None) -> Any:
                 w = _compute_common_window(cfg, br_cfg)        # 失败 → 400，两侧都不启动
                 COMMON_WINDOW.update(w)
                 play_user = _play_fields(cfg)
-                _apply_window_to_source(cfg, w["bus"], w["play_start"], w["t_end"], side="bus")
+                _apply_window_to_source(cfg, w["bus"], w["play_start"], w["play_end"], side="bus")
+        if play_user is None:
+            play_user = _apply_play_window(cfg)                # 本侧自己的指定时间段播放（v0.17）
         clock = PaceClock(cfg.source.file_speed) if cfg.source.kind == "csv_file" else None
         RUNNER.start(cfg, duration_s=payload.get("duration_s"), pace_clock=clock, play_user=play_user)
         out: Dict[str, Any] = {"ok": True, "side": current_side(), "config": RUNNER.cfg.to_dict()}
@@ -1205,9 +1234,10 @@ def _display_path(p: str) -> str:
     return os.path.relpath(ap, root) if ap.startswith(root + os.sep) else ap
 
 
-def _curve_rows(quantity: str, hours: Optional[float]) -> List[Dict[str, Any]]:
-    with RUNNER.lock:
-        eng = RUNNER.engine
+def _curve_rows(quantity: str, hours: Optional[float], side: Optional[str] = None) -> List[Dict[str, Any]]:
+    r = RUNNERS[side] if side else RUNNER
+    with r.lock:
+        eng = r.engine
         if not eng:
             return []
         return eng.calc.history.get(quantity, hours=hours)
@@ -1222,16 +1252,16 @@ def _curve_fields(rows: List[Dict[str, Any]]) -> List[str]:
     return fields
 
 
-def _curve_csv(quantity: str, rows: List[Dict[str, Any]]) -> str:
+def _curve_csv(quantity: str, rows: List[Dict[str, Any]], source_id: int = 0) -> str:
     import csv as _csv
     import io as _io
     buf = _io.StringIO()
     w = _csv.writer(buf)
     fields = _curve_fields(rows)
-    w.writerow(["t_epoch_s", "time_local", "quantity"] + fields)
+    w.writerow(["t_epoch_s", "time_local", "source_id", "quantity"] + fields)     # v0.17：source_id 0 总线 / 1 分路
     for r in rows:
         tl = fmt_local(r["t"])
-        w.writerow([repr(float(r["t"])), tl, quantity] + [("" if r.get(f) is None else r.get(f)) for f in fields])
+        w.writerow([repr(float(r["t"])), tl, int(source_id), quantity] + [("" if r.get(f) is None else r.get(f)) for f in fields])
     return buf.getvalue()
 
 
@@ -1266,6 +1296,7 @@ async def curves_save(payload: Optional[Dict[str, Any]] = None) -> Any:
     os.makedirs(target, exist_ok=True)
     files: List[Dict[str, Any]] = []
     empty: List[str] = []
+    sid = SIDE_SOURCE_ID[current_side()]
     for k in chosen:
         rows = _curve_rows(k, hours)
         if not rows:
@@ -1273,9 +1304,27 @@ async def curves_save(payload: Optional[Dict[str, Any]] = None) -> Any:
             continue
         fp = os.path.join(target, f"{k}.csv")
         with open(fp, "w", encoding="utf-8-sig", newline="") as fh:
-            fh.write(_curve_csv(k, rows))
-        files.append({"quantity": k, "path": _display_path(fp), "rows": len(rows),
+            fh.write(_curve_csv(k, rows, sid))
+        files.append({"quantity": k, "path": _display_path(fp), "rows": len(rows), "source_id": sid,
                       "t_first": rows[0]["t"], "t_last": rows[-1]["t"]})
+    # v0.17：总线侧保存且启用分路侧 → 分路侧曲线一并保存到同一目录的 branch/ 子目录（按分路侧自己的勾选过滤，source_id=1）
+    branch_files: List[Dict[str, Any]] = []
+    branch_skipped: List[str] = []
+    if current_side() == "bus" and cfg.branch.enabled and payload.get("with_branch", True):
+        br_cfg = RUNNERS["branch"].cfg
+        br_chosen, branch_skipped = _selected_curves(payload, br_cfg)
+        for k in br_chosen:
+            rows = _curve_rows(k, hours, side="branch")
+            if not rows:
+                continue
+            bdir = os.path.join(target, "branch"); os.makedirs(bdir, exist_ok=True)
+            fp = os.path.join(bdir, f"{k}.csv")
+            with open(fp, "w", encoding="utf-8-sig", newline="") as fh:
+                fh.write(_curve_csv(k, rows, 1))
+            branch_files.append({"quantity": k, "path": _display_path(fp), "rows": len(rows), "source_id": 1,
+                                 "t_first": rows[0]["t"], "t_last": rows[-1]["t"]})
+    if not files and branch_files:
+        files, branch_files = branch_files, []        # 总线侧无数据但分路侧有：仍算保存成功
     if not files:
         try:
             os.rmdir(target)
@@ -1284,8 +1333,8 @@ async def curves_save(payload: Optional[Dict[str, Any]] = None) -> Any:
         return JSONResponse(status_code=409, content={
             "ok": False, "error": "已勾选的曲线暂无数据可保存（请先启动数据源并累计 ≥1 个窗）",
             "skipped": skipped, "empty": empty})
-    return {"ok": True, "dir": _display_path(target), "files": files,
-            "skipped": skipped, "empty": empty, "hours": hours}
+    return {"ok": True, "dir": _display_path(target), "files": files + branch_files, "branch_files": branch_files,
+            "branch_skipped": branch_skipped, "skipped": skipped, "empty": empty, "hours": hours}
 
 
 @app.get("/api/realtime")
@@ -1328,23 +1377,28 @@ async def curves_export(quantity: Optional[str] = None, hours: Optional[float] =
         if not rows:
             return JSONResponse(status_code=409, content={"ok": False, "error": f"曲线 '{quantity}' 暂无数据"})
         stamp = time.strftime("%Y%m%d_%H%M%S")
-        return Response(content=_curve_csv(quantity, rows), media_type="text/csv; charset=utf-8",
+        return Response(content=_curve_csv(quantity, rows, SIDE_SOURCE_ID[current_side()]), media_type="text/csv; charset=utf-8",
                         headers={"Content-Disposition": f'attachment; filename="curve_{quantity}_{stamp}.csv"'})
     chosen, _ = _selected_curves(None, cfg)
     import csv as _csv
     import io as _io
     buf = _io.StringIO()
     w = _csv.writer(buf)
-    w.writerow(["t_epoch_s", "time_local", "quantity", "field", "value"])
+    w.writerow(["t_epoch_s", "time_local", "source_id", "quantity", "field", "value"])
     n = 0
-    for k in chosen:
-        for r in _curve_rows(k, use_hours):
-            tl = fmt_local(r["t"], ms=False)
-            for f, v in r.items():
-                if f in ("t", "window_s") or v is None:
-                    continue
-                w.writerow([repr(float(r["t"])), tl, k, f, v])
-                n += 1
+    sides = [(current_side(), SIDE_SOURCE_ID[current_side()])]
+    if current_side() == "bus" and cfg.branch.enabled:
+        sides.append(("branch", 1))                    # v0.17：启用分路侧时合并下载也含分路数据（source_id=1）
+    for side, sid in sides:
+        side_chosen = chosen if side == current_side() else _selected_curves(None, RUNNERS[side].cfg)[0]
+        for k in side_chosen:
+            for r in _curve_rows(k, use_hours, side=side):
+                tl = fmt_local(r["t"], ms=False)
+                for f, v in r.items():
+                    if f in ("t", "window_s") or v is None:
+                        continue
+                    w.writerow([repr(float(r["t"])), tl, sid, k, f, v])
+                    n += 1
     if n == 0:
         return JSONResponse(status_code=409, content={"ok": False, "error": "已勾选的曲线暂无数据可导出"})
     stamp = time.strftime("%Y%m%d_%H%M%S")
@@ -1368,12 +1422,13 @@ async def export(fmt: str = "json", quantity: Optional[str] = None) -> Response:
         import io
         buf = io.StringIO()
         w = csv.writer(buf)
-        w.writerow(["t_ref", "quantity", "metric", "value", "unit", "window_s"])
+        sid = SIDE_SOURCE_ID[current_side()]
+        w.writerow(["source_id", "t_ref", "quantity", "metric", "value", "unit", "window_s"])
         for r in results:
             for row in r.scalar_table():
                 if quantity and row["quantity"] != quantity:
                     continue
-                w.writerow([r.t_ref, row["quantity"], row["metric"], row["value"],
+                w.writerow([sid, r.t_ref, row["quantity"], row["metric"], row["value"],
                             row["unit"], row["window_s"]])
         return Response(content=buf.getvalue(), media_type="text/csv; charset=utf-8",
                         headers={"Content-Disposition": f'attachment; filename="elec_result_{ts}.csv"'})

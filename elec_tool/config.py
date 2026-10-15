@@ -465,8 +465,24 @@ class SourceConfig:
     play_start_value: str = ""
     # 离线文件播放终点（csv_file，v0.15 公共时间段用）：epoch 秒文本；块起点 ≥ 该时刻即停止（空＝播到文件尾）
     play_end_time: str = ""
+    # v0.17 指定时间段播放（csv_file；每侧独立，默认不启用）：启用后 起点＝文件时标 ≥ play_window_start 的第一条
+    # （空＝从数据起点）、终点＝play_window_end（空＝播到数据终点）。两侧都是离线文件且启用「公共时间段」时以公共时间段为准。
+    play_window: bool = False
+    play_window_start: str = ""      # "2026-10-12 08:00:00" / epoch 秒 / 只填 "08:00:00"（与文件时标当天时刻比较）
+    play_window_end: str = ""        # "2026-10-12 08:10:00" / epoch 秒 / 只填 "08:10:00"
 
     def validate(self) -> None:
+        if self.play_window:
+            for lab, v in (("play_window_start", self.play_window_start), ("play_window_end", self.play_window_end)):
+                if str(v or "").strip():
+                    try:
+                        parse_play_start("time", v)
+                    except ConfigError as exc:
+                        raise ConfigError(f"source.{lab}: {exc}")
+            if str(self.play_window_start or "").strip() and str(self.play_window_end or "").strip():
+                a, b = parse_play_start("time", self.play_window_start), parse_play_start("time", self.play_window_end)
+                if a[0] == b[0] and b[1] <= a[1]:
+                    raise ConfigError(f"source.play_window_end 必须晚于 play_window_start（{self.play_window_start} → {self.play_window_end}）")
         if self.kind not in SOURCE_KINDS:
             raise ConfigError(f"source.kind 必须是 {SOURCE_KINDS}（当前 {self.kind}）")
         try:
@@ -567,8 +583,16 @@ class OutputConfig:
     # 界面曲线分线显示开关（v0.16）：键＝图表 id（如 "ov-u"），值＝被隐藏的曲线名列表（如 ["Ub","Uc"]）；
     # 只影响显示，不影响计算/保存。随配置持久化，重开页面仍保持。
     series_hidden: Dict[str, List[str]] = field(default_factory=dict)
+    # 数据来源号（v0.17）：0＝总线侧、1＝分路侧。写入所有落盘/导出 CSV 的 source_id 列；服务端按侧别强制设置。
+    source_id: int = 0
 
     def validate(self) -> None:
+        try:
+            self.source_id = int(self.source_id)
+        except (TypeError, ValueError):
+            raise ConfigError("output.source_id 必须是整数（0＝总线侧，1＝分路侧）")
+        if self.source_id not in (0, 1):
+            raise ConfigError(f"output.source_id 必须是 0（总线侧）或 1（分路侧），当前 {self.source_id}")
         if not isinstance(self.series_hidden, dict):
             raise ConfigError("output.series_hidden 必须是 {图表id: [曲线名, ...]} 字典")
         clean: Dict[str, List[str]] = {}
@@ -782,6 +806,7 @@ class BranchConfig:
     # v0.15：只播放两侧文件的公共时间段（联动启动时两侧都从公共起点播到公共终点）
     common_window: bool = False
     common_start: str = ""         # 公共时间段内的自定义播放起始时间（本地时间文本 / epoch 秒）；空＝公共起点
+    common_end: str = ""           # v0.17：公共时间段内的自定义播放结束时间；空＝公共终点
 
     def validate(self) -> None:
         if not str(self.config_path).strip():
