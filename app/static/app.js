@@ -2273,7 +2273,7 @@ async function loadLastData() {
     const parts = [];
     const fmt = x => {
       const pts = Object.values(x.curves || {}).reduce((a, b) => a + (b || 0), 0);
-      return `曲线点 ${pts}、事件 ${x.events || 0}、负荷辨识事件 ${x.nilm_events || 0}` +
+      return `曲线点 ${pts}、事件 ${x.events || 0}、负荷辨识事件 ${x.nilm_events || 0}、最新电气量${x.result ? '有' : '无'}` +
         (x.t_first_local ? `，${x.t_first_local} ~ ${x.t_last_local}` : '（无数据）');
     };
     parts.push(`${r.side === 'branch' ? '分路侧' : '总线侧'}：${fmt(r)}`);
@@ -2282,20 +2282,27 @@ async function loadLastData() {
     toast('已加载上次播放数据 — ' + parts.join('；'), 'ok');
     S.histCache = {}; S.histAt = {}; S.histMeta = {}; OVB.hist = {}; OVB.meta = {}; OVB.at = 0; OVB.doneFetched = false; S.events = []; NL.events = [];
     await Promise.all([refreshHistory(), refreshEvents(), refreshNilm(), refreshOverviewBranch(true)]);
-    try { S.state = await api('/api/state'); renderTop(); render(); refreshBranchState(true); } catch (e) { /* 快照刷新失败不影响已加载数据 */ }
+    try {
+      S.state = await api('/api/state');
+      if (r.result) { const rr = await fetch(apiUrl('/api/result?full=false')); if (rr.ok) S.result = await rr.json(); }
+      renderTop(); render(); refreshBranchState(true);
+    } catch (e) { /* 快照刷新失败不影响已加载数据 */ }
   } catch (e) { toast('加载上次数据失败：' + e.message, 'err'); }
   finally { _loadingLast = false; }
 }
 
 function renderLoadedLast(st, eng) {
   const ll = st.loaded_last;
+  const al = $('#autoload-last');
+  if (al && !S.autoloadDirty) al.checked = ((((st.config || {}).output) || {}).autoload_last) !== false;
   const el = $('#src-loaded-last');
   if (!el) return;
   if (!ll || eng.running) { el.textContent = ''; el.style.display = 'none'; return; }
   const pts = Object.values(ll.curves || {}).reduce((a, b) => a + (b || 0), 0);
   el.style.display = '';
-  el.textContent = `已加载上次播放数据（${ll.loaded_at_local || ''}）：曲线点 ${pts}、事件 ${ll.events || 0}、负荷辨识事件 ${ll.nilm_events || 0}` +
-    (ll.t_first_local ? `，数据时间 ${ll.t_first_local} ~ ${ll.t_last_local}` : '，CSV 中无本侧数据');
+  el.textContent = `${ll.auto ? '软件启动时已自动加载' : '已加载'}上次运行数据（${ll.loaded_at_local || ''}）：曲线点 ${pts}、事件 ${ll.events || 0}、负荷辨识事件 ${ll.nilm_events || 0}` +
+    (ll.t_first_local ? `，数据时间 ${ll.t_first_local} ~ ${ll.t_last_local}` : '，CSV 中无本侧数据') +
+    (ll.result ? `；最新电气量取自 ${ll.result_saved_at_local || ''} 保存的结果（${ll.result_source || ''}）` : '；无保存的最新电气量');
 }
 
 async function startEngine(payloadExtra = {}) {
@@ -2436,6 +2443,15 @@ function bind() {
   $('#btn-stop2').addEventListener('click', stopEngine);
   $('#btn-pause2').addEventListener('click', togglePause);
   $('#btn-load-last').addEventListener('click', loadLastData);
+  $('#autoload-last').addEventListener('change', async (e) => {
+    const on = !!e.target.checked; S.autoloadDirty = true;
+    try {
+      await api('/api/config', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ output: { autoload_last: on } }) });
+      if (S.state && S.state.config) { S.state.config.output = S.state.config.output || {}; S.state.config.output.autoload_last = on; }
+      toast(`软件启动时自动加载上次数据：已${on ? '开启' : '关闭'}（已写入配置）`, 'ok');
+    } catch (err) { toast('设置失败：' + err.message, 'err'); }
+    finally { S.autoloadDirty = false; }
+  });
   $('#btn-load-last2').addEventListener('click', loadLastData);
 
   $('#btn-br-save').addEventListener('click', saveBranchSource);

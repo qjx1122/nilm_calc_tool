@@ -585,6 +585,9 @@ class OutputConfig:
     series_hidden: Dict[str, List[str]] = field(default_factory=dict)
     # 数据来源号（v0.17）：0＝总线侧、1＝分路侧。写入所有落盘/导出 CSV 的 source_id 列；服务端按侧别强制设置。
     source_id: int = 0
+    # v0.20：软件启动时自动把上次运行落盘的曲线 / 事件 / 负荷辨识事件（CSV）与最后一次电气量结果
+    # （output/last_result.json，两侧共用、按 source_id 分键）读回各子界面；关闭则仅在点「加载上次数据」时读取
+    autoload_last: bool = True
 
     def validate(self) -> None:
         try:

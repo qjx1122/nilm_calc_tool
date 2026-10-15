@@ -34,6 +34,7 @@ def _isolate_realtime_dir(tmp_path, monkeypatch):
     monkeypatch.setenv("ELEC_TOOL_REALTIME_DIR", str(tmp_path / "realtime"))
     monkeypatch.setenv("ELEC_TOOL_EVENTS_DIR", str(tmp_path / "events"))      # 第 9 轮：事件 CSV 同样隔离
     monkeypatch.setenv("ELEC_TOOL_NILM_DIR", str(tmp_path / "nilm"))          # 第 12 轮：负荷事件 CSV 隔离
+    monkeypatch.setenv("ELEC_TOOL_LAST_RESULT_FILE", str(tmp_path / "last_result.json"))   # v0.20：最新结果快照隔离
     yield
 
 

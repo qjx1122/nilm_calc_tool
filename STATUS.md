@@ -81,6 +81,7 @@
 - 范围边界：~~本 session 不写业务代码~~ ❌**已失效**（该边界属上一任务；本任务即为写代码）；仍然遵守：不新建台账外散文件、不把数据/产物入库
 
 ## 已完成
+- **v0.20**：重启后各子界面自动恢复上次运行数据——`output/last_result.json`（两侧共用、source_id 分键）保存最新电气量；启动时 `_autoload_last()` 读回 CSV + 快照；`output.autoload_last` 开关。
 - **v0.19**：总览 P/Q/S 趋势增加分相 Pa..Sc 曲线（默认隐藏、图例勾选显示，总 P/Q/S 默认显示）；power 趋势记录新增 9 个分相字段。
 - **v0.18**：不播放时「加载上次数据」——从 realtime/events/nilm 三条落盘 CSV 按 source_id 读回曲线点/事件/负荷辨识事件；`POST /api/history/load_last`；两侧按钮；test_r18 4 项。
 - **v0.17.3**：配置界面排版规范化（勾选框对齐 / 说明文字独立行 / 左标签右输入框两列）——`normalizeConfigForms()` + CSS，不改 id。test_web_ui 15、ui_r16 31、ui_r17 36 通过。

@@ -179,7 +179,67 @@ class EngineRunner:
         return {"ok": True, "events": eng.detector.list(active_only=active, limit=limit, types=types, since_id=since_id),
                 "summary": eng.detector.summary()}
 
-    def load_last(self, hours: Optional[float] = None, curves: bool = True, events: bool = True, nilm: bool = True) -> Dict[str, Any]:
+    # ---------- 最后一次电气量结果落盘（v0.20）：两侧共用 output/last_result.json，按 source_id 分键 ----------
+    LAST_RESULT_FILE: Optional[str] = None       # 测试可覆盖；默认 env ELEC_TOOL_LAST_RESULT_FILE 或 output/last_result.json
+
+    def _last_result_path(self) -> str:
+        return self.LAST_RESULT_FILE or os.environ.get("ELEC_TOOL_LAST_RESULT_FILE") or os.path.join(ROOT, "output", "last_result.json")
+
+    def persist_last_result(self) -> bool:
+        """把 latest_merged（各量最近一次结果的并集，含频谱等 series）写入 last_result.json 的本侧键。
+        停止 / 播完 / 异常退出 / 运行中每 ≥5 s 调用一次；失败只记日志。"""
+        from elec_tool.filelock import SHARED_FILE_LOCK
+        with self.lock:
+            d = self.latest_merged
+            if not d:
+                return False
+            src = getattr(self.engine.cfg.source, "path", "") if self.engine is not None else ""
+            kind = getattr(self.engine.cfg.source, "kind", "") if self.engine is not None else ""
+        sid = str(SIDE_SOURCE_ID[self.side])
+        entry = {"side": self.side, "source_id": int(sid), "saved_at": time.time(), "saved_at_local": fmt_local(time.time()),
+                 "source_kind": kind, "source_path": src, "t_ref": d.get("t_ref"), "result": d}
+        path = self._last_result_path()
+        try:
+            with SHARED_FILE_LOCK:
+                data: Dict[str, Any] = {}
+                if os.path.isfile(path):
+                    try:
+                        with open(path, "r", encoding="utf-8") as fh:
+                            data = json.load(fh) or {}
+                    except Exception:
+                        data = {}
+                if not isinstance(data, dict):
+                    data = {}
+                data[sid] = entry
+                data["_note"] = "两侧共用：键 0＝总线侧、1＝分路侧（source_id）；由软件自动维护，重启时读回各子界面的最新电气量"
+                os.makedirs(os.path.dirname(path), exist_ok=True)
+                tmp = path + ".tmp"
+                with open(tmp, "w", encoding="utf-8") as fh:
+                    json.dump(data, fh, ensure_ascii=False)
+                os.replace(tmp, path)
+            self._last_persist_at = time.time()
+            return True
+        except Exception as exc:
+            log.warning("last_result.json 写入失败：%s", exc)
+            return False
+
+    def read_last_result(self) -> Optional[Dict[str, Any]]:
+        from elec_tool.filelock import SHARED_FILE_LOCK
+        path = self._last_result_path()
+        if not os.path.isfile(path):
+            return None
+        try:
+            with SHARED_FILE_LOCK:
+                with open(path, "r", encoding="utf-8") as fh:
+                    data = json.load(fh) or {}
+            ent = data.get(str(SIDE_SOURCE_ID[self.side])) if isinstance(data, dict) else None
+            return ent if isinstance(ent, dict) and isinstance(ent.get("result"), dict) else None
+        except Exception as exc:
+            log.warning("last_result.json 读取失败：%s", exc)
+            return None
+
+    def load_last(self, hours: Optional[float] = None, curves: bool = True, events: bool = True, nilm: bool = True,
+                  result: bool = True) -> Dict[str, Any]:
         """v0.18：不播放时把上次播放落盘的曲线点 / 事件 / 负荷辨识事件从 CSV 读回内存（按本侧 source_id 过滤），
         界面各曲线与事件表立即可看。运行中拒绝（409）。"""
         from elec_tool import replay_load
@@ -200,7 +260,16 @@ class EngineRunner:
         nl_dir = os.environ.get("ELEC_TOOL_NILM_DIR") or cfg.nilm.nilm_dir
         absd = lambda d: d if os.path.isabs(d) else os.path.join(ROOT, d)   # noqa: E731
         out: Dict[str, Any] = {"ok": True, "side": self.side, "source_id": sid, "hours": use_hours,
-                               "curves": {}, "events": 0, "nilm_events": 0, "notes": []}
+                               "curves": {}, "events": 0, "nilm_events": 0, "result": False, "notes": []}
+        if result:
+            ent = self.read_last_result()
+            if ent:
+                with self.lock:
+                    self.latest_merged = ent["result"]
+                    self.latest_full = None
+                out["result"] = True
+                out["result_saved_at_local"] = ent.get("saved_at_local")
+                out["result_source"] = ent.get("source_path") or ent.get("source_kind")
         t_first = t_last = None
         if curves:
             res = replay_load.load_curves(absd(rt_dir), sid, use_hours, max_points=int(cfg.output.history_max_points))
@@ -225,9 +294,15 @@ class EngineRunner:
         out["t_first_local"] = fmt_local(t_first) if t_first is not None else None
         out["t_last_local"] = fmt_local(t_last) if t_last is not None else None
         out["loaded_at"] = time.time(); out["loaded_at_local"] = fmt_local(out["loaded_at"])
-        self.loaded_last = {k: out[k] for k in ("source_id", "hours", "curves", "events", "nilm_events", "t_first", "t_last",
-                                                 "t_first_local", "t_last_local", "loaded_at", "loaded_at_local")}
+        self.loaded_last = {k: out.get(k) for k in ("source_id", "hours", "curves", "events", "nilm_events", "t_first", "t_last",
+                                                     "t_first_local", "t_last_local", "loaded_at", "loaded_at_local",
+                                                     "result", "result_saved_at_local", "result_source", "auto")}
         self.broadcast({"type": "state", "data": self.state()})
+        if out.get("result"):
+            with self.lock:
+                snap = self.latest_merged
+            if snap:
+                self.broadcast({"type": "snapshot", "data": snap})
         self.broadcast({"type": "events_cleared", "data": {"removed": 0, "reloaded": True}})
         self.broadcast({"type": "nilm_cleared", "data": {"removed": 0, "reloaded": True}})
         return out
@@ -336,6 +411,8 @@ class EngineRunner:
                         d = res.to_dict()
                         self._merge_latest(d)
                     self.broadcast({"type": "result", "data": d})
+                    if time.time() - getattr(self, "_last_persist_at", 0.0) >= 5.0:
+                        self.persist_last_result()
                 elif engine.state.finished:
                     final = engine.flush_all()
                     if final is not None:
@@ -376,6 +453,7 @@ class EngineRunner:
                 if mine:
                     self._thread_done = True
             if mine:
+                self.persist_last_result()      # v0.20：停止 / 播完 / 异常都把最后结果落盘，重启后读回
                 self.broadcast({"type": "state", "data": self.state()})
 
     # ---------- 暂停 / 恢复（离线文件源） ----------
@@ -732,6 +810,30 @@ async def _startup() -> None:
             bus.start(bus.cfg)
         except Exception as exc:
             bus.error = f"自动启动失败：{type(exc).__name__}: {exc}"
+    elif os.environ.get("ELEC_TOOL_AUTOLOAD_LAST", "1").strip() not in ("0", "false", "no"):
+        _autoload_last()
+
+
+def _autoload_last() -> None:
+    """v0.20：软件启动时自动把上次运行保存的 CSV（曲线 / 事件 / 负荷辨识事件）与 last_result.json（最新电气量）
+    读回两侧内存，各子界面打开即有数据。受 output.autoload_last 控制；任何失败只记日志、不影响启动。"""
+    bus = RUNNERS["bus"]
+    try:
+        cfg = bus.cfg
+    except Exception:
+        return
+    if not getattr(cfg.output, "autoload_last", True):
+        return
+    sides = ["bus"] + (["branch"] if cfg.branch.enabled else [])
+    for side in sides:
+        try:
+            r = RUNNERS[side].load_last()
+            RUNNERS[side].loaded_last["auto"] = True
+            pts = sum(int(v) for v in (r.get("curves") or {}).values())
+            log.info("启动自动加载上次数据（%s）：曲线点 %d、事件 %d、负荷辨识事件 %d、最新电气量 %s",
+                     side, pts, r.get("events", 0), r.get("nilm_events", 0), "有" if r.get("result") else "无")
+        except Exception as exc:
+            log.warning("启动自动加载上次数据失败（%s）：%s", side, exc)
 
 
 # ------------------------------------------------------------------ 公共时间段（v0.15）

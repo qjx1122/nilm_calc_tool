@@ -170,3 +170,64 @@ def test_r19_power_history_has_per_phase_and_overview_series():
               "drawLine($('#ov-p'), pqsSeries(hp, t0p)", "drawLine($('#ov-p-br'), pqsSeries(bhp, b0p)",
               "function seriesHiddenSet(cv, series)"):
         assert s in js, s
+
+
+def test_r20_restart_autoload(tmp_path, monkeypatch):
+    """v0.20：运行→停止后 last_result.json 两侧分键；重启（新 TestClient）自动把 CSV 与最新电气量读回。"""
+    pytest.importorskip("httpx")
+    from starlette.testclient import TestClient
+    from elec_tool.selftest import build_signal, HarmSpec
+    from tests.conftest import write_csv
+    import json as _json
+    import app.server as srv
+    specs = [HarmSpec(1, 57.735, 5.0, phi_deg=0.0)]
+    t, u, i = build_signal(specs, FS, 3.0, t0=T0); write_csv(str(tmp_path / "bus.csv"), t, u, i)
+    t2, u2, i2 = build_signal(specs, FS, 3.0, t0=T0 + 1.0); write_csv(str(tmp_path / "br.csv"), t2, u2, i2)
+    cfg = _json.loads((ROOT / "configs" / "default.json").read_text(encoding="utf-8"))
+    cfg.setdefault("output", {}).update({"realtime_save": True, "realtime_dir": str(tmp_path / "rt")})
+    cfg.setdefault("events", {})["events_dir"] = str(tmp_path / "ev"); cfg.setdefault("nilm", {})["nilm_dir"] = str(tmp_path / "nl")
+    cfg.setdefault("branch", {}).update({"enabled": True, "common_window": False})
+    (tmp_path / "cfg.json").write_text(_json.dumps(cfg), encoding="utf-8")
+    bcfg = {"source": {"kind": "csv_file", "path": str(tmp_path / "br.csv"), "file_speed": 0, "custom_time": False}, "output": {"realtime_save": True}}
+    (tmp_path / "branch.json").write_text(_json.dumps(bcfg), encoding="utf-8")
+    lr = tmp_path / "last_result.json"
+    monkeypatch.setenv("ELEC_TOOL_CONFIG_PATH", str(tmp_path / "cfg.json")); monkeypatch.setenv("ELEC_TOOL_BRANCH_CONFIG_PATH", str(tmp_path / "branch.json"))
+    monkeypatch.setenv("ELEC_TOOL_AUTOSTART", ""); monkeypatch.setenv("ELEC_TOOL_PERSIST_CONFIG", "0")
+    for k in ("ELEC_TOOL_EVENTS_DIR", "ELEC_TOOL_REALTIME_DIR", "ELEC_TOOL_NILM_DIR"):
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setattr(srv.EngineRunner, "LAST_RESULT_FILE", str(lr), raising=False)
+
+    def fresh():
+        for side in ("bus", "branch"):
+            rn = srv.RUNNERS[side]
+            with rn.lock:
+                rn.engine = None; rn.latest = None; rn.latest_merged = None; rn.thread = None
+            rn.loaded_last = None
+    fresh()
+    with TestClient(srv.app) as c:
+        r = c.post("/api/engine/start", json={"kind": "csv_file", "path": str(tmp_path / "bus.csv"), "file_speed": 0, "custom_time": False}).json()
+        assert r["ok"] and r["branch"]["ok"], r
+        _wait_done(c); _wait_done(c, "/api/branch/state")
+        assert c.get("/api/history/voltage").json()["count_total"] >= 2
+    data = _json.loads(lr.read_text(encoding="utf-8"))
+    assert "0" in data and "1" in data and data["0"]["result"]["quantities"] and data["1"]["source_id"] == 1
+    # —— 模拟重启：引擎丢弃，新客户端触发 _startup → 自动加载 ——
+    fresh()
+    with TestClient(srv.app) as c:
+        st = c.get("/api/state").json()
+        assert st["loaded_last"] and st["loaded_last"]["auto"] is True and st["loaded_last"]["result"] is True, st["loaded_last"]
+        assert c.get("/api/history/voltage").json()["count_total"] >= 2
+        assert c.get("/api/branch/history/voltage").json()["count_total"] >= 2
+        res = c.get("/api/result?full=true").json()
+        assert res and res.get("quantities") and "voltage" in res["quantities"]
+        bres = c.get("/api/branch/result?full=false").json()
+        assert bres and bres.get("quantities")
+        bst = c.get("/api/branch/state").json()
+        assert bst["loaded_last"] and bst["loaded_last"]["auto"] is True
+    # 关闭自动加载 → 重启后不加载
+    cfg["output"]["autoload_last"] = False
+    (tmp_path / "cfg.json").write_text(_json.dumps(cfg), encoding="utf-8")
+    fresh()
+    with TestClient(srv.app) as c:
+        assert c.get("/api/state").json()["loaded_last"] is None
+        assert c.get("/api/history/voltage").json()["count_total"] == 0
