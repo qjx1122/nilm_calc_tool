@@ -782,6 +782,8 @@ function renderTop() {
   $('#subtitle').textContent = `elec_tool v${st.version || '?'} · ${S.wsOk ? 'WebSocket 实时' : '轮询'} · 缓冲 ${eng.buffer_fill || 0}/${eng.buffer_capacity || 0}`;
   $('#btn-start').disabled = !!eng.running;
   $('#btn-stop').disabled = !eng.running;
+  ['#btn-load-last', '#btn-load-last2'].forEach(sel => { const b = $(sel); if (b) b.disabled = !!eng.running; });
+  renderLoadedLast(st, eng);
   renderPauseButtons(st, eng);
   renderNavBranchState(S.side === 'bus' ? st.branch : null);
   renderBadges(st);
@@ -2243,6 +2245,42 @@ function collectWindowPayload() {
   return { windows: out };
 }
 
+// v0.18：不播放时把上次播放落盘的曲线 / 事件 / 负荷辨识事件读回界面（服务端按本侧 source_id 过滤）
+let _loadingLast = false;
+async function loadLastData() {
+  if (_loadingLast) return;
+  _loadingLast = true;
+  ['#btn-load-last', '#btn-load-last2'].forEach(sel => { const b = $(sel); if (b) b.disabled = true; });
+  try {
+    const r = await api('/api/history/load_last', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}) });
+    const parts = [];
+    const fmt = x => {
+      const pts = Object.values(x.curves || {}).reduce((a, b) => a + (b || 0), 0);
+      return `曲线点 ${pts}、事件 ${x.events || 0}、负荷辨识事件 ${x.nilm_events || 0}` +
+        (x.t_first_local ? `，${x.t_first_local} ~ ${x.t_last_local}` : '（无数据）');
+    };
+    parts.push(`${r.side === 'branch' ? '分路侧' : '总线侧'}：${fmt(r)}`);
+    if (r.branch && r.branch.ok) parts.push(`分路侧：${fmt(r.branch)}`);
+    else if (r.branch && r.branch.error) parts.push(`分路侧：${r.branch.error}`);
+    toast('已加载上次播放数据 — ' + parts.join('；'), 'ok');
+    S.histCache = {}; S.histAt = {}; S.histMeta = {}; OVB.hist = {}; OVB.meta = {}; OVB.at = 0; OVB.doneFetched = false; S.events = []; NL.events = [];
+    await Promise.all([refreshHistory(), refreshEvents(), refreshNilm(), refreshOverviewBranch(true)]);
+    try { S.state = await api('/api/state'); renderTop(); render(); refreshBranchState(true); } catch (e) { /* 快照刷新失败不影响已加载数据 */ }
+  } catch (e) { toast('加载上次数据失败：' + e.message, 'err'); }
+  finally { _loadingLast = false; }
+}
+
+function renderLoadedLast(st, eng) {
+  const ll = st.loaded_last;
+  const el = $('#src-loaded-last');
+  if (!el) return;
+  if (!ll || eng.running) { el.textContent = ''; el.style.display = 'none'; return; }
+  const pts = Object.values(ll.curves || {}).reduce((a, b) => a + (b || 0), 0);
+  el.style.display = '';
+  el.textContent = `已加载上次播放数据（${ll.loaded_at_local || ''}）：曲线点 ${pts}、事件 ${ll.events || 0}、负荷辨识事件 ${ll.nilm_events || 0}` +
+    (ll.t_first_local ? `，数据时间 ${ll.t_first_local} ~ ${ll.t_last_local}` : '，CSV 中无本侧数据');
+}
+
 async function startEngine(payloadExtra = {}) {
   try {
     // 只送 source（+ 可选 windows）：/api/engine/start 的白名单只有 source 键与 windows，
@@ -2380,6 +2418,8 @@ function bind() {
   $('#btn-start2').addEventListener('click', () => startEngine());
   $('#btn-stop2').addEventListener('click', stopEngine);
   $('#btn-pause2').addEventListener('click', togglePause);
+  $('#btn-load-last').addEventListener('click', loadLastData);
+  $('#btn-load-last2').addEventListener('click', loadLastData);
 
   $('#btn-br-save').addEventListener('click', saveBranchSource);
   $('#btn-br-savecfg').addEventListener('click', saveBranchSource);

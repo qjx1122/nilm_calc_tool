@@ -244,6 +244,34 @@ class History:
             ts.append(float(t))
             self._trim(key)
 
+    def load_records(self, key: str, records: List[Dict[str, Any]], replace: bool = True) -> int:
+        """v0.18：把落盘 CSV 读回来的曲线点（[{"t":..., 字段: 值}] 按 t 升序）装入历史；replace=True 先清空该量。"""
+        with self._lock:
+            if replace or key not in self._t:
+                self._t[key] = array("d")
+                self._cols[key] = {}
+                self._dropped[key] = 0
+            ts = self._t[key]
+            cols = self._cols[key]
+            for rec in records:
+                t = rec.get("t")
+                if t is None:
+                    continue
+                n = len(ts)
+                for f, v in rec.items():
+                    if f == "t":
+                        continue
+                    col = cols.get(f)
+                    if col is None:
+                        col = cols[f] = array("d", [_NAN]) * n
+                    col.append(float(v) if isinstance(v, (int, float)) and math.isfinite(float(v)) else _NAN)
+                for f, col in cols.items():
+                    if len(col) < n + 1:
+                        col.append(_NAN)
+                ts.append(float(t))
+            self._trim(key)
+            return len(ts)
+
     def _trim(self, key: str) -> None:
         ts = self._t[key]
         n = len(ts)

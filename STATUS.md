@@ -81,6 +81,7 @@
 - 范围边界：~~本 session 不写业务代码~~ ❌**已失效**（该边界属上一任务；本任务即为写代码）；仍然遵守：不新建台账外散文件、不把数据/产物入库
 
 ## 已完成
+- **v0.18**：不播放时「加载上次数据」——从 realtime/events/nilm 三条落盘 CSV 按 source_id 读回曲线点/事件/负荷辨识事件；`POST /api/history/load_last`；两侧按钮；test_r18 4 项。
 - **v0.17.3**：配置界面排版规范化（勾选框对齐 / 说明文字独立行 / 左标签右输入框两列）——`normalizeConfigForms()` + CSS，不改 id。test_web_ui 15、ui_r16 31、ui_r17 36 通过。
 - **v0.17.2**：实时落盘/事件/负荷辨识 CSV 两侧共用同一文件（分路侧目录强制＝总线侧，共享文件锁），不再有 `output/branch/`。全量 296 passed/1 skipped。
 - **v0.17.1**：保存曲线时分路侧数据与总线侧写同一个 `<曲线>.csv`（source_id 区分、按时间排序），不再建 `branch/`。ui_r17 36/36、全量 296 passed/1 skipped。

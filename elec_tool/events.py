@@ -203,6 +203,30 @@ class EventDetector:
                 "types": EVENT_TYPES, "writer": self.writer.info(), "osc": dict(self.osc_info),
                 "last_eval": dict(self.last_eval)}
 
+    def load_events(self, rows: List[Dict[str, Any]], replace: bool = True) -> int:
+        """v0.18：把 events CSV 读回的事件（字典，见 replay_load.load_events）装入日志；全部按已结束处理（不进 _active）。"""
+        with self._lock:
+            if replace:
+                self._log.clear(); self._active.clear()
+                self.counts = {k: 0 for k in EVENT_TYPES}
+            n = 0
+            for d in rows:
+                typ = str(d.get("type") or "")
+                if typ not in EVENT_TYPES:
+                    continue
+                st = float(d["start_t"])
+                ev = Event(id=self._next_id, type=typ, subject=str(d.get("subject") or ""), start_t=st,
+                           value_start=float(d.get("value_start") or 0.0), limit=float(d.get("limit") or 0.0),
+                           unit=str(d.get("unit") or ""), direction=str(d.get("direction") or ""),
+                           detail=str(d.get("detail") or ""), value_peak=float(d.get("value_peak") or 0.0),
+                           end_t=(float(d["end_t"]) if d.get("end_t") is not None else st))
+                ev.peak_t = st
+                self._next_id += 1
+                self._log.append(ev)
+                self.counts[typ] = self.counts.get(typ, 0) + 1
+                n += 1
+            return n
+
     def clear(self) -> int:
         with self._lock:
             n = len(self._log)

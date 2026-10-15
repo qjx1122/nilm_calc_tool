@@ -107,6 +107,7 @@ class EngineRunner:
         self.clients: Set[asyncio.Queue] = set()
         self.started_at: Optional[float] = None
         self.error: Optional[str] = None
+        self.loaded_last: Optional[Dict[str, Any]] = None     # v0.18：最近一次「加载上次播放数据」的摘要（state 里带出）
         self.cfg_path: str = DEFAULT_CONFIG_PATH        # 启动时加载哪个文件
         self.persist_path: str = RUNTIME_CONFIG_PATH    # 界面改动写到哪个文件
         self._play_user: Optional[Tuple[str, str, str]] = None   # 本次运行用户自己的 (play_start_mode, play_start_value, play_end_time)
@@ -177,6 +178,59 @@ class EngineRunner:
                                                           "types": EVENT_TYPES, "notes": ["引擎尚未启动"]}}
         return {"ok": True, "events": eng.detector.list(active_only=active, limit=limit, types=types, since_id=since_id),
                 "summary": eng.detector.summary()}
+
+    def load_last(self, hours: Optional[float] = None, curves: bool = True, events: bool = True, nilm: bool = True) -> Dict[str, Any]:
+        """v0.18：不播放时把上次播放落盘的曲线点 / 事件 / 负荷辨识事件从 CSV 读回内存（按本侧 source_id 过滤），
+        界面各曲线与事件表立即可看。运行中拒绝（409）。"""
+        from elec_tool import replay_load
+        with self.lock:
+            running = bool(self.thread and self.thread.is_alive() and not self.stop_event.is_set() and not self._thread_done)
+        if running:
+            raise RuntimeError("数据源正在播放，不能加载历史数据；请先停止")
+        cfg = self.cfg
+        if self.engine is None:
+            self.set_cfg(AppConfig.from_dict(cfg.to_dict()))       # 建一个未运行的引擎承载历史/事件
+        with self.lock:
+            eng = self.engine
+        assert eng is not None
+        sid = SIDE_SOURCE_ID[self.side]
+        use_hours = float(hours) if hours else float(cfg.output.history_hours)
+        rt_dir = os.environ.get("ELEC_TOOL_REALTIME_DIR") or cfg.output.realtime_dir
+        ev_dir = os.environ.get("ELEC_TOOL_EVENTS_DIR") or cfg.events.events_dir
+        nl_dir = os.environ.get("ELEC_TOOL_NILM_DIR") or cfg.nilm.nilm_dir
+        absd = lambda d: d if os.path.isabs(d) else os.path.join(ROOT, d)   # noqa: E731
+        out: Dict[str, Any] = {"ok": True, "side": self.side, "source_id": sid, "hours": use_hours,
+                               "curves": {}, "events": 0, "nilm_events": 0, "notes": []}
+        t_first = t_last = None
+        if curves:
+            res = replay_load.load_curves(absd(rt_dir), sid, use_hours, max_points=int(cfg.output.history_max_points))
+            for k, recs in res["records"].items():
+                eng.calc.history.load_records(k, recs, replace=True)
+            out["curves"] = res["points"]; out["curve_files"] = [{**f, "path": _display_path(f["path"])} for f in res["files"]]
+            t_first, t_last = res["t_first"], res["t_last"]
+            if not res["records"]:
+                out["notes"].append(f"实时落盘目录 {rt_dir} 下没有本侧（source_id={sid}）的曲线数据")
+        # 事件 / 负荷辨识事件与曲线取同一时间窗：曲线最新点往前 hours；没有曲线时不按时间过滤（只受 max_log 限制）
+        t_from = (t_last - use_hours * 3600.0) if t_last is not None else None
+        if events:
+            evs = replay_load.load_events(absd(ev_dir), sid, t_from=t_from, limit=int(cfg.events.max_log))
+            out["events"] = eng.detector.load_events(evs, replace=True)
+            for d in evs:
+                t_first = d["start_t"] if t_first is None else min(t_first, d["start_t"])
+                t_last = d["start_t"] if t_last is None else max(t_last, d["start_t"])
+        if nilm:
+            nevs = replay_load.load_nilm_events(absd(nl_dir), sid, t_from=t_from, limit=int(cfg.nilm.max_log))
+            out["nilm_events"] = eng.nilm.load_events(nevs, replace=True)
+        out["t_first"] = t_first; out["t_last"] = t_last
+        out["t_first_local"] = fmt_local(t_first) if t_first is not None else None
+        out["t_last_local"] = fmt_local(t_last) if t_last is not None else None
+        out["loaded_at"] = time.time(); out["loaded_at_local"] = fmt_local(out["loaded_at"])
+        self.loaded_last = {k: out[k] for k in ("source_id", "hours", "curves", "events", "nilm_events", "t_first", "t_last",
+                                                 "t_first_local", "t_last_local", "loaded_at", "loaded_at_local")}
+        self.broadcast({"type": "state", "data": self.state()})
+        self.broadcast({"type": "events_cleared", "data": {"removed": 0, "reloaded": True}})
+        self.broadcast({"type": "nilm_cleared", "data": {"removed": 0, "reloaded": True}})
+        return out
 
     def clear_events(self) -> int:
         with self.lock:
@@ -438,6 +492,7 @@ class EngineRunner:
                 "paused_total_s": round(self.paused_total_s + ((time.time() - self.paused_at) if self.paused_at else 0.0), 3),
                 "finished": bool(st.get("finished")),
                 "error": self.error,
+                "loaded_last": self.loaded_last,
                 "engine": st,
                 "source": src,
                 "config": cfg.to_dict(),
@@ -1184,6 +1239,29 @@ async def get_events(active: bool = False, limit: int = 200, types: Optional[str
     """事件列表：active=1 只看活动事件；types=逗号分隔类型；since_id 增量拉取。"""
     tl = [t.strip() for t in types.split(",") if t.strip()] if types else None
     return RUNNER.events(active=active, limit=max(1, min(int(limit), 5000)), types=tl, since_id=int(since_id))
+
+
+@app.post("/api/history/load_last")
+async def history_load_last(payload: Optional[Dict[str, Any]] = None) -> Any:
+    """v0.18：不播放时直接加载上次播放落盘的电气量曲线 / 事件 / 负荷辨识事件（按本侧 source_id 过滤）。
+    body：{hours?: 小时数（默认 output.history_hours）, curves?: true, events?: true, nilm?: true, with_branch?: true}。
+    总线侧调用且启用分路侧时，分路侧一并加载（结果在 branch 字段）。"""
+    payload = payload or {}
+    try:
+        res = RUNNER.load_last(hours=payload.get("hours"), curves=payload.get("curves", True) is not False,
+                               events=payload.get("events", True) is not False, nilm=payload.get("nilm", True) is not False)
+    except RuntimeError as exc:
+        return JSONResponse(status_code=409, content={"ok": False, "error": str(exc)})
+    except Exception as exc:
+        return JSONResponse(status_code=500, content={"ok": False, "error": f"{type(exc).__name__}: {exc}"})
+    if current_side() == "bus" and RUNNER.cfg.branch.enabled and payload.get("with_branch", True):
+        try:
+            res["branch"] = RUNNERS["branch"].load_last(hours=payload.get("hours"))
+        except RuntimeError as exc:
+            res["branch"] = {"ok": False, "error": str(exc)}
+        except Exception as exc:
+            res["branch"] = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+    return res
 
 
 @app.post("/api/events/clear")

@@ -48,6 +48,7 @@
     <button id="btn-start" class="primary">启动</button>
     <button id="btn-pause" title="仅离线文件源：暂停后不再读文件、不计算，数据时刻原地不动；再次点击从暂停处继续">暂停</button>
     <button id="btn-stop" class="danger">停止</button>
+    <button id="btn-load-last" title="未播放时：把上次播放落盘的曲线点 / 事件 / 负荷辨识事件（本侧 source_id）从 CSV 读回界面显示；播放中不可用">加载上次数据</button>
     <button id="btn-refresh">刷新快照</button>
   </div>
 </header>
@@ -235,8 +236,10 @@
               <button id="btn-start2" class="primary">启动数据源</button>
               <button id="btn-pause2" title="仅离线文件源">暂停播放</button>
               <button id="btn-stop2" class="danger">停止</button>
+              <button id="btn-load-last2" title="未播放时读回上次播放落盘的数据">加载上次数据</button>
             </div>
-            <div class="notes muted">启用分路侧后，这里的「启动 / 暂停 / 停止」同时作用于两侧。</div>
+            <div id="src-loaded-last" class="notes" style="display:none"></div>
+            <div class="notes muted">启用分路侧后，这里的「启动 / 暂停 / 停止 / 加载上次数据」同时作用于两侧。<br>「加载上次数据」：不播放时，从 output/realtime、output/events、output/nilm 的 CSV 读回最近 history_hours 内本侧（source_id）的曲线点、事件与负荷辨识事件，供各曲线 / 事件页直接查看；重新启动播放后会被新数据覆盖。</div>
           </div>
         </div>
         <div class="panel col-br" id="branch-panel">

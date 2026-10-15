@@ -568,6 +568,30 @@ class NilmDetector:
                     "algorithm_names": NILM_ALGO_NAMES, "writer": self.writer.info(), "errors": list(self.errors),
                     "notes": notes}
 
+    def load_events(self, rows: List[Dict[str, Any]], replace: bool = True) -> int:
+        """v0.18：把 nilm_events CSV 读回的事件（字典，见 replay_load.load_nilm_events）装入日志。"""
+        with self._lock:
+            if replace:
+                self._log.clear()
+                self.counts = {a: 0 for a in NILM_ALGO_DEFAULTS}
+            n = 0
+            for d in rows:
+                algo = str(d.get("algorithm") or "")
+                if algo not in NILM_ALGO_DEFAULTS:
+                    continue
+                ev = NilmEvent(id=self._next_id, algorithm=algo, channel=str(d.get("channel") or "total"),
+                               t_start=float(d["t_start"]), t_end=float(d.get("t_end") or d["t_start"]),
+                               direction=str(d.get("direction") or ""), magnitude_w=float(d.get("magnitude_w") or 0.0),
+                               delta_p_w=float(d.get("delta_p_w") or 0.0), delta_q_var=float(d.get("delta_q_var") or 0.0),
+                               delta_i_a=float(d.get("delta_i_a") or 0.0), pre_p_w=float(d.get("pre_p_w") or 0.0),
+                               post_p_w=float(d.get("post_p_w") or 0.0), cycles=int(d.get("cycles") or 0),
+                               score=float(d.get("score") or 0.0))
+                self._next_id += 1
+                self._log.append(ev)
+                self.counts[algo] = self.counts.get(algo, 0) + 1
+                n += 1
+            return n
+
     def clear(self) -> int:
         with self._lock:
             n = len(self._log)
