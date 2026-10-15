@@ -433,6 +433,107 @@ def _seek_rows(reader, first_rows: List[List[str]], n_skip: int) -> Tuple[List[L
     return pending, skipped
 
 
+def _ts_values(raw: List[str], kind: str, colmap: ColumnMap, tz_offset_h: float) -> Tuple[np.ndarray, np.ndarray]:
+    """把一批时标文本变成可与播放起点比较的数值：abs → epoch；tod → 当天秒。返回 (比较值, epoch)。"""
+    info = parse_timestamps(raw, colmap.timestamp_unit, tz_offset_h)
+    t = info.t
+    if kind == "abs" or not t.size:
+        return t, t
+    if info.mode == "clock_time":
+        return (t + tz_offset_h * 3600.0) % 86400.0, t
+    return np.array([_tod_of(float(x), info.mode) for x in t]), t
+
+
+# v0.15.4：大文件快速定位。此前按时标/按行定位都是 csv 逐行顺序扫（6400 Hz 一小时 ≈ 2300 万行，几十秒到几分钟），
+# 用户体感＝「启动后很久才开始」。现在：按行 → 字节块数 \n 直接算出目标行的字节偏移；按时标 → 字节二分（每次探测只读一行），
+# 再顺序扫最后 ≤64 KB 精确到行。两者都假定文件里没有带引号换行的字段（本工具的 CSV 格式不含），
+# 按行定位还假定没有空行（有则 skipped_rows 会把空行也算进去；旧实现剔除空行，差异只在这种畸形文件上）。
+SEEK_FAST_MIN_BYTES = 4 << 20          # 小于 4 MB 的文件仍走旧的顺序扫（够快，且行为与旧版完全一致）
+
+
+def _line_starts_after(raw, pos: int, lo: int) -> int:
+    """pos 处若在行中间则跳到下一行行首（pos==lo 视为已在行首）。"""
+    if pos <= lo:
+        return lo
+    raw.seek(pos - 1)
+    if raw.read(1) == b"\n":
+        return pos
+    raw.readline()
+    return raw.tell()
+
+
+def _byte_offset_of_row(raw, n_skip: int, lo: int, size: int) -> Tuple[int, int]:
+    """从数据起点 lo 开始数 n_skip 个换行，返回 (第 n_skip 行的行首字节, 实际跳过行数)。"""
+    raw.seek(lo)
+    remaining = n_skip
+    pos = lo
+    while remaining > 0 and pos < size:
+        chunk = raw.read(min(8 << 20, size - pos))
+        if not chunk:
+            break
+        c = chunk.count(b"\n")
+        if c < remaining:
+            remaining -= c; pos += len(chunk)
+            continue
+        # 目标行首就在这一块里：找第 remaining 个 \n
+        idx = -1
+        for _ in range(remaining):
+            idx = chunk.find(b"\n", idx + 1)
+        pos += idx + 1; remaining = 0
+    if remaining > 0:                                  # 文件没那么多行
+        return size, n_skip - remaining
+    return pos, n_skip
+
+
+def _count_newlines(raw, lo: int, hi: int) -> int:
+    raw.seek(lo); n = 0; left = hi - lo
+    while left > 0:
+        chunk = raw.read(min(8 << 20, left))
+        if not chunk:
+            break
+        n += chunk.count(b"\n"); left -= len(chunk)
+    return n
+
+
+def _bisect_time(raw, lo: int, size: int, enc: str, delimiter: str, ts_col: int, colmap: ColumnMap,
+                 target: Tuple[str, float], tz_offset_h: float, window: int = 65536) -> Optional[int]:
+    """字节二分：返回一个行首字节位置 p，保证 [p, p+window) 内含「第一条时标 ≥ 目标」的行（或 p 之前全部 < 目标）。
+    探测行解析失败 / 时标非单调（探测到的值比前一个探测点小）→ 返回 None，调用方退回顺序扫。"""
+    kind, tv = target
+
+    def probe(pos: int) -> Tuple[int, Optional[float]]:
+        p0 = _line_starts_after(raw, pos, lo)
+        if p0 >= size:
+            return p0, None
+        raw.seek(p0)
+        line = raw.readline()
+        try:
+            cells = next(csv.reader([line.decode(enc, errors="replace")], delimiter=delimiter))
+            v, _ = _ts_values([cells[ts_col].strip()], kind, colmap, tz_offset_h)
+        except Exception:
+            return p0, float("nan")
+        return p0, (float(v[0]) if v.size and np.isfinite(v[0]) else float("nan"))
+
+    a, b = lo, size
+    _, va = probe(a)
+    if va is None or not np.isfinite(va):
+        return None
+    if va >= tv:
+        return lo
+    while b - a > window:
+        mid = (a + b) // 2
+        pm, vm = probe(mid)
+        if vm is None:                      # mid 已到文件尾
+            b = mid; continue
+        if not np.isfinite(vm) or vm < va:  # 解析不了 / 非单调 → 放弃快速路径
+            return None
+        if vm >= tv:
+            b = pm
+        else:
+            a, va = pm, vm
+    return a
+
+
 def _seek_time(reader, first_rows: List[List[str]], colmap: ColumnMap, idx_map: Optional[Dict[str, int]],
                target: Tuple[str, float], tz_offset_h: float, chunk: int = 8192) -> Tuple[List[List[str]], int, Optional[float]]:
     """按时标定位：返回 (从目标时刻起的剩余行, 跳过行数, 命中行时标)。target=("abs", epoch) | ("tod", 当天秒)。"""
@@ -460,13 +561,8 @@ def _seek_time(reader, first_rows: List[List[str]], colmap: ColumnMap, idx_map: 
         if not rows:
             return [], skipped, None
         raw = [(r[ts_col].strip() if ts_col < len(r) else "") for r in rows]
-        info = parse_timestamps(raw, colmap.timestamp_unit, tz_offset_h)
-        t = info.t
-        if kind == "abs":
-            hit = np.nonzero(t >= tv)[0]
-        else:
-            tod = ((t + tz_offset_h * 3600.0) % 86400.0) if info.mode == "clock_time" else np.array([_tod_of(float(x), info.mode) for x in t])
-            hit = np.nonzero(tod >= tv - 1e-6)[0]
+        cmp, t = _ts_values(raw, kind, colmap, tz_offset_h)
+        hit = np.nonzero(cmp >= (tv if kind == "abs" else tv - 1e-6))[0]
         if hit.size:
             i = int(hit[0])
             return rows[i:], skipped + i, float(t[i])
@@ -493,6 +589,8 @@ def iter_csv_blocks(path: str, colmap: ColumnMap, sampling: SamplingConfig,
     if not os.path.isfile(path):
         raise ParseError(f"CSV 文件不存在：{path}")
     enc = encoding if encoding != "auto" else detect_encoding(path)
+    with open(path, "rb") as _rb:
+        first_line_bytes = _rb.readline()
     with open(path, "r", encoding=enc, newline="") as fh:
         reader = csv.reader(fh, delimiter=delimiter)
         try:
@@ -508,12 +606,45 @@ def iter_csv_blocks(path: str, colmap: ColumnMap, sampling: SamplingConfig,
             # 首行不像表头 → 当数据行处理
             buf.append(first)
         idx_map = colmap.layout(header)            # 未启用映射＝表头/默认列序；启用＝只按 mapping
+        size = os.path.getsize(path)
+        data_lo = len(first_line_bytes) if header is not None else 0    # 数据区起始字节（表头行之后）
+
+        def _rewrap(byte_pos: int):
+            """把读取位置切到 byte_pos（必须是行首），返回新的 csv.reader。"""
+            import io as _io
+            fh.seek(0)
+            raw_fh = fh.buffer
+            raw_fh.seek(byte_pos)
+            fh2 = _io.TextIOWrapper(raw_fh, encoding=enc, newline="")
+            return csv.reader(fh2, delimiter=delimiter)
+
+        fast = size >= SEEK_FAST_MIN_BYTES and not buf     # 首行是数据（无表头）时 buf 非空，保持旧路径
         # ---- 播放起点定位 ----
         if start_time is not None:
-            buf, skipped, hit_t = _seek_time(reader, buf, colmap, idx_map, start_time, tz_offset_h)
+            fast_pos = None
+            if fast:
+                ts_col = (idx_map or {}).get("timestamp")
+                if ts_col is None and not getattr(colmap, "mapping_enabled", False):
+                    ts_col = 0
+                if ts_col is not None:
+                    try:
+                        fast_pos = _bisect_time(fh.buffer, data_lo, size, enc, delimiter, ts_col, colmap, start_time, tz_offset_h)
+                    except Exception:
+                        fast_pos = None
+            if fast_pos is not None and fast_pos > data_lo:
+                pre_rows = _count_newlines(fh.buffer, data_lo, fast_pos)
+                reader = _rewrap(fast_pos)
+                buf, skipped, hit_t = _seek_time(reader, [], colmap, idx_map, start_time, tz_offset_h)
+                skipped += pre_rows
+                seek_mode = "time(bisect)"
+            else:
+                if fast:
+                    reader = _rewrap(data_lo)          # 探测移动过底层文件位置，顺序扫前必须回到数据区起点
+                buf, skipped, hit_t = _seek_time(reader, buf, colmap, idx_map, start_time, tz_offset_h)
+                seek_mode = "time"
             if seek_info is not None:
                 seek_info.update({"mode": "time", "skipped_rows": skipped, "start_t": hit_t,
-                                  "reached_eof": hit_t is None})
+                                  "reached_eof": hit_t is None, "method": seek_mode})
         elif start_percent is not None and start_percent > 0:
             size = os.path.getsize(path)
             pos = int(size * float(start_percent) / 100.0)
@@ -532,9 +663,16 @@ def iter_csv_blocks(path: str, colmap: ColumnMap, sampling: SamplingConfig,
                 seek_info.update({"mode": "percent", "start_byte": start_byte, "file_size": size,
                                   "skipped_rows": None, "reached_eof": start_byte >= size})
         elif skip_rows and skip_rows > 0:
-            buf, skipped = _seek_rows(reader, buf, int(skip_rows))
-            if seek_info is not None:
-                seek_info.update({"mode": "row", "skipped_rows": skipped, "reached_eof": skipped < skip_rows})
+            if fast:
+                pos, skipped = _byte_offset_of_row(fh.buffer, int(skip_rows), data_lo, size)
+                reader = _rewrap(pos)
+                buf = []
+                if seek_info is not None:
+                    seek_info.update({"mode": "row", "skipped_rows": skipped, "reached_eof": skipped < skip_rows, "method": "row(bytes)"})
+            else:
+                buf, skipped = _seek_rows(reader, buf, int(skip_rows))
+                if seek_info is not None:
+                    seek_info.update({"mode": "row", "skipped_rows": skipped, "reached_eof": skipped < skip_rows, "method": "row"})
         seq = 0
         produced = 0
         row_offset = 0

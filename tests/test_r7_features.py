@@ -200,7 +200,7 @@ def test_play_start_row_seconds_percent(csv_factory, tmp_path):
     assert n == total and t0 == pytest.approx(d["t"][0])
     n, t0, src = _play(cfg, "row", "6401")
     assert n == total - 6400 and t0 == pytest.approx(d["t"][6400])
-    assert src.info()["play_seek"] == {"mode": "row", "skipped_rows": 6400, "reached_eof": False}
+    assert src.info()["play_seek"] == {"mode": "row", "skipped_rows": 6400, "reached_eof": False, "method": "row"}
     assert any("播放起点" in s and "实际跳过 6400 行" in s for s in src.info()["notes"])
     n, t0, _ = _play(cfg, "seconds", "1.5")
     assert n == total - 9600 and t0 == pytest.approx(d["t"][9600])
