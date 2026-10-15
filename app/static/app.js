@@ -913,15 +913,23 @@ async function switchView(v, side) {
 /* ------------------------------------------------------------------ 总览：分路侧数据（第 15 轮补充） */
 
 /* v0.19：总览 P/Q/S 趋势 = 三相总 P/Q/S（默认显示）+ 分相 Pa/Pb/Pc、Qa/Qb/Qc、Sa/Sb/Sc（默认隐藏，图例勾选显示）。
-   分相线颜色沿用相色（A 蓝 / B 绿 / C 橙），P 实线、Q 短虚线、S 点划线以区分量类。 */
-const PQS_DASH = { P: [], Q: [5, 3], S: [2, 2] };
+   v0.20.1：分相线一律**实线**。此前 Q 用 [5,3]、S 用 [2,2] 虚线且线宽 1.1，三相值几乎重合时三条短虚线叠在一起、
+   再加上 0.2 s 一点的高密度采样，屏幕上看起来像一串散点（用户反馈「三相无功 / 视在功率曲线为散点」）。
+   现在按量取基色（P 粉 / Q 紫 / S 青），A/B/C 相分别用基色的亮 / 原 / 暗三档区分。 */
+function shadeColor(hex, amt) {       // amt>0 变亮、<0 变暗（-1..1）
+  const n = parseInt(hex.slice(1), 16);
+  const ch = (v) => Math.max(0, Math.min(255, Math.round(amt >= 0 ? v + (255 - v) * amt : v * (1 + amt))));
+  const r = ch((n >> 16) & 255), g = ch((n >> 8) & 255), bl = ch(n & 255);
+  return '#' + ((1 << 24) | (r << 16) | (g << 8) | bl).toString(16).slice(1);
+}
+const PQS_PHASE_SHADE = { A: 0.45, B: 0, C: -0.4 };
 function pqsSeries(hp, t0) {
   const out = [{ name: 'P', color: COLORS.P, data: hp.map(p => [p.t - t0, p.P]) },
                { name: 'Q', color: COLORS.Q, data: hp.map(p => [p.t - t0, p.Q]) },
                { name: 'S', color: COLORS.S, data: hp.map(p => [p.t - t0, p.S]) }];
   ['P', 'Q', 'S'].forEach(k => ['A', 'B', 'C'].forEach(ph => {
     const f = k + ph.toLowerCase();
-    out.push({ name: f, color: COLORS[ph], dash: PQS_DASH[k], width: 1.1, defaultHidden: true, data: hp.map(p => [p.t - t0, p[f]]) });
+    out.push({ name: f, color: shadeColor(COLORS[k], PQS_PHASE_SHADE[ph]), width: 1.3, defaultHidden: true, data: hp.map(p => [p.t - t0, p[f]]) });
   }));
   return out;
 }

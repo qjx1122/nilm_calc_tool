@@ -256,3 +256,5 @@
 - **[2026-10-15] v0.19**（用户：总览 P/Q/S 趋势曲线增加 3 相 P/Q/S 趋势曲线，默认显示 3 相总 P/Q/S）。改动：metrics power 趋势记录追加 Pa/Pb/Pc/Qa/Qb/Qc/Sa/Sb/Sc；app.js `pqsSeries()` 组 12 条曲线、`defaultHidden` 机制 + `*none*` 哨兵；两侧总览 P/Q/S 图共用。验证：jsdom 实测图例 P✓Q✓S✓ 其余 ✗、12 条曲线均有数据、勾选 Pa 后 PUT series_hidden 为其余 8 条、全部勾选后为 `*none*`；全量 pytest 301 passed 1 skipped；ui_r16 31/31、ui_r17 36/36。缺口：当天已有 power CSV 表头不含分相列（续写不写分相）；功率子界面趋势未改（用户只要求总览）。
 
 - **[2026-10-15] v0.20**（用户：软件重启后各子界面展示的数据从上次运行保存的 CSV 或配置文件加载显示）。设计：曲线/事件/负荷辨识事件复用 v0.18 CSV 读回；「最新电气量」此前无落盘 → 新增 `output/last_result.json`（两侧共用、按 source_id 分键，运行中节流 5 s + 终态写入，原子替换）；启动时 `_autoload_last()`；`output.autoload_last` 默认开。验证：`test_r20_restart_autoload`（两侧播→停→JSON 两键→模拟重启自动恢复→关闭开关不加载）；全量 pytest 302 passed 1 skipped；ui_r16 31/31、ui_r17 36/36；jsdom 冷启动：state.loaded_last.auto=true、result 9 个量、电压/电流/功率/谐波/事件各子页有数值、数据源页提示与勾选框正确。缺口：快照文件约 1.3 MB（含频谱 series），每 5 s 重写一次，HDD 环境可调；波形类面板（原始采样）不在恢复范围；沙盒无浏览器截图。
+
+- **[2026-10-15] v0.20.1**（用户：检查总览三相无功、视在功率曲线为散点显示的原因）。分析：数据连续（history/power 分相字段无 None）；绘图 `drawLine` 对非数值断线、数值连续时连线正常；真正原因是 v0.19 分相线样式——Q 虚线 [5,3]、S 虚线 [2,2]、线宽 1.1，三相重合 + 高密度点 → 视觉上为散点。修复为实线 + 基色明暗分相。验证：JS 语法、test_r19 字符串断言更新、ui_r16/r17 通过。

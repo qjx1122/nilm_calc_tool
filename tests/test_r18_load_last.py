@@ -168,8 +168,9 @@ def test_r19_power_history_has_per_phase_and_overview_series():
     js = (ROOT / "app" / "static" / "app.js").read_text(encoding="utf-8")
     for s in ("function pqsSeries(hp, t0)", "defaultHidden: true", "const SER_NONE = '*none*'",
               "drawLine($('#ov-p'), pqsSeries(hp, t0p)", "drawLine($('#ov-p-br'), pqsSeries(bhp, b0p)",
-              "function seriesHiddenSet(cv, series)"):
+              "function seriesHiddenSet(cv, series)", "function shadeColor(hex, amt)"):
         assert s in js, s
+    assert "PQS_DASH" not in js and "dash: PQS_DASH" not in js      # v0.20.1：分相线实线，不再用虚线（曾被看成散点）
 
 
 def test_r20_restart_autoload(tmp_path, monkeypatch):
