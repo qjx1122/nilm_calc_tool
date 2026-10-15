@@ -2451,6 +2451,9 @@ function bind() {
   $('#btn-stop2').addEventListener('click', stopEngine);
   $('#btn-pause2').addEventListener('click', togglePause);
   $('#btn-load-last').addEventListener('click', loadLastData);
+  $('#btn-nilm-export').addEventListener('click', exportNilmCycles);
+  $('#btn-nilm-exp-fill').addEventListener('click', fillNilmExportRange);
+  ['#nilm-exp-from', '#nilm-exp-to'].forEach(sel => $(sel).addEventListener('input', renderNilmKeep));
   $('#autoload-last').addEventListener('change', async (e) => {
     const on = !!e.target.checked; S.autoloadDirty = true;
     try {
@@ -2575,7 +2578,7 @@ const NILM_ALGOS = {
                   params: { median_cycles: '中值窗 (周波)', min_delta_w: '最小幅值 (W)', settle_cycles: '稳定周波数', settle_tol_w: '稳定容差 (W)', max_rise_cycles: '最长暂态 (周波)' } },
 };
 const NILM_COLORS = { threshold: '#ff6b6b', two_window: '#ffa94d', cusum: '#ffd43b', glr: '#69db7c', steady_state: '#4dabf7', median_diff: '#da77f2' };
-const NILM_FIELDS = ['enabled', 'save', 'window_cycles', 'min_gap_cycles', 'rel_tol_pct', 'min_delta_pct'];
+const NILM_FIELDS = ['enabled', 'save', 'window_cycles', 'min_gap_cycles', 'cycle_keep_cycles', 'rel_tol_pct', 'min_delta_pct'];
 const NILM_CH = ['total', 'A', 'B', 'C'];
 
 function buildNilmForm() {
@@ -2622,6 +2625,48 @@ function collectNilmPayload() {
     p.algorithms[a] = prm;
   });
   return p;
+}
+
+/* v0.21：导出指定时间段的原始周波数据 */
+function tsFull(v) {      // "YYYY-MM-DD HH:MM:SS.fff"（本地时间；可直接回填给服务端 parse_time_text）
+  if (!isNum(+v)) return '';
+  const d = new Date(+v * 1000), p = (n, w = 2) => String(n).padStart(w, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}.${p(d.getMilliseconds(), 3)}`;
+}
+function nilmKeepText(sm) {
+  const k = (sm || {}).keep;
+  if (!k || !k.cycles) return '保留区：暂无周波数据';
+  return `保留区：${k.cycles} / ${k.keep_cycles} 周波，${tsFull(k.t_first)} ~ ${tsFull(k.t_last)}`;
+}
+function renderNilmKeep() {
+  const el = $('#nilm-keep-range'); if (!el) return;
+  el.textContent = nilmKeepText(NL.summary);
+  const a = $('#nilm-exp-download');
+  if (a) {
+    const q = new URLSearchParams();
+    const f = ($('#nilm-exp-from').value || '').trim(), t = ($('#nilm-exp-to').value || '').trim();
+    if (f) q.set('t_from', f); if (t) q.set('t_to', t);
+    a.href = apiUrl('/api/nilm/cycles/export') + (q.toString() ? '?' + q.toString() : '');
+  }
+}
+async function exportNilmCycles() {
+  const body = { t_from: ($('#nilm-exp-from').value || '').trim(), t_to: ($('#nilm-exp-to').value || '').trim() };
+  const note = $('#nilm-exp-note');
+  try {
+    const r = await api('/api/nilm/cycles/export', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    const sides = Object.entries(r.sides || {}).map(([sd, v]) => `${sd === 'branch' ? '分路侧' : '总线侧'} ${v.rows} 周波`).join('、');
+    toast(`已导出 ${r.rows} 个周波 → ${r.path}`, 'ok');
+    if (note) note.innerHTML = notes([`✓ ${r.path}`, `行数 ${r.rows}（${sides}；source_id ${r.source_ids.join('/')}）`, `数据时间 ${r.t_first_local} ~ ${r.t_last_local}`, `列：${r.columns.join(', ')}`]);
+  } catch (e) {
+    toast('导出原始周波数据失败：' + e.message, 'err');
+    if (note) note.innerHTML = notes(['✗ ' + e.message, nilmKeepText(NL.summary)]);
+  }
+}
+function fillNilmExportRange() {
+  const k = (NL.summary || {}).keep;
+  if (!k || !k.cycles) { toast('保留区暂无周波数据', 'err'); return; }
+  $('#nilm-exp-from').value = tsFull(k.t_first); $('#nilm-exp-to').value = tsFull(k.t_last);
+  renderNilmKeep();
 }
 
 async function saveNilmConfig() {
@@ -2674,6 +2719,7 @@ function nilmRow(e) {
 }
 
 function renderNilm() {
+  renderNilmKeep();
   buildNilmForm();
   if (!NL.loaded) { NL.loaded = true; refreshNilm(); return; }
   const sm = NL.summary || {};

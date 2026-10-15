@@ -36,7 +36,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from elec_tool import __version__
-from elec_tool.config import (AppConfig, ConfigError, CURVE_KEYS, QUANTITY_KEYS, SourceConfig, WindowSpec,
+from elec_tool.config import (AppConfig, ConfigError, parse_time_text, CURVE_KEYS, QUANTITY_KEYS, SourceConfig, WindowSpec,
                               load_or_default)
 from elec_tool.engine import LiveEngine
 from elec_tool.pace import PaceClock
@@ -327,6 +327,14 @@ class EngineRunner:
                                                           "algorithm_names": NILM_ALGO_NAMES, "notes": ["引擎尚未启动"]}}
         return {"ok": True, "events": eng.nilm.list(limit=limit, algos=algos, channel=channel, since_id=since_id),
                 "summary": eng.nilm.summary()}
+
+    def nilm_cycles_between(self, t_from: Optional[float], t_to: Optional[float]) -> Optional[Dict[str, Any]]:
+        """v0.21：保留区内指定时间段的原始周波数据（None＝引擎尚未建立）。"""
+        with self.lock:
+            eng = self.engine
+        if eng is None:
+            return None
+        return eng.nilm.cycles_between(t_from, t_to)
 
     def nilm_cycles(self, n: int) -> Dict[str, Any]:
         with self.lock:
@@ -1385,6 +1393,101 @@ async def get_nilm_events(limit: int = 500, algos: Optional[str] = None, channel
 async def get_nilm_cycles(n: int = 300) -> Dict[str, Any]:
     """最近 n 个周波的 P/Q/I 序列（total/A/B/C），供负荷辨识界面画图。"""
     return RUNNER.nilm_cycles(max(1, min(int(n), 20000)))
+
+
+NILM_CYCLE_HEADER = ["source_id", "cycle_idx", "t_epoch_s", "time_local",
+                     "P_total", "P_A", "P_B", "P_C", "Q_total", "Q_A", "Q_B", "Q_C", "I_total", "I_A", "I_B", "I_C"]
+
+
+def _cycle_rows(side: str, d: Dict[str, Any]) -> List[List[Any]]:
+    sid = SIDE_SOURCE_ID[side]
+    t = d["t"]; p = d["p"]; q = d["q"]; i = d["i"]; idx = d["idx"]
+    rows: List[List[Any]] = []
+    for k in range(int(t.shape[0])):
+        rows.append([sid, int(idx[k]), repr(float(t[k])), fmt_local(float(t[k]))]
+                    + [f"{float(p[c, k]):.10g}" for c in range(4)] + [f"{float(q[c, k]):.10g}" for c in range(4)]
+                    + [f"{float(i[c, k]):.10g}" for c in range(4)])
+    return rows
+
+
+def _parse_range(payload: Dict[str, Any]) -> Tuple[Optional[float], Optional[float]]:
+    t_from = payload.get("t_from"); t_to = payload.get("t_to")
+    tf = parse_time_text(str(t_from)) if t_from not in (None, "") else None
+    tt = parse_time_text(str(t_to)) if t_to not in (None, "") else None
+    if tf is not None and tt is not None and tt < tf:
+        raise ConfigError("结束时间早于开始时间")
+    return tf, tt
+
+
+@app.post("/api/nilm/cycles/export")
+async def nilm_cycles_export(payload: Optional[Dict[str, Any]] = None) -> Any:
+    """v0.21：导出指定时间段的**原始周波数据**（每周波 P/Q/I × total/A/B/C）到 CSV。
+
+    body：{t_from?: 时间文本或 epoch 秒, t_to?: 同, with_branch?: true}（两者都空＝保留区全部）。
+    总线侧调用且启用分路侧时，分路侧同一时间段的周波写进**同一个文件**（source_id=1），按时间排序。
+    文件：output/cycles_<起>_<止>.csv。数据来自内存保留区（nilm.cycle_keep_cycles，默认 ≈1 h@50 Hz）。
+    """
+    payload = payload or {}
+    try:
+        tf, tt = _parse_range(payload)
+    except ConfigError as exc:
+        return JSONResponse(status_code=400, content={"ok": False, "error": str(exc)})
+    side = current_side()
+    sides = [side] + (["branch"] if side == "bus" and RUNNER.cfg.branch.enabled and payload.get("with_branch", True) else [])
+    rows: List[List[Any]] = []
+    per: Dict[str, Any] = {}
+    for sd in sides:
+        d = RUNNERS[sd].nilm_cycles_between(tf, tt)
+        info = RUNNERS[sd].engine.nilm.keep_info() if RUNNERS[sd].engine is not None else {"cycles": 0}
+        n = int(d["t"].shape[0]) if d is not None else 0
+        per[sd] = {"rows": n, "keep": info,
+                   "t_first": (float(d["t"][0]) if n else None), "t_last": (float(d["t"][-1]) if n else None)}
+        if n:
+            rows.extend(_cycle_rows(sd, d))
+    if not rows:
+        return JSONResponse(status_code=409, content={
+            "ok": False, "error": "指定时间段内没有原始周波数据（保留区范围见 sides[*].keep.t_first~t_last；保留区长度由 nilm.cycle_keep_cycles 决定）",
+            "sides": per, "t_from": tf, "t_to": tt})
+    rows.sort(key=lambda r: (float(r[2]), int(r[0])))
+    out_dir = RUNNER.cfg.output.export_dir
+    if not os.path.isabs(out_dir):
+        out_dir = os.path.join(ROOT, out_dir)
+    os.makedirs(out_dir, exist_ok=True)
+    t0 = float(rows[0][2]); t1 = float(rows[-1][2])
+    name = f"cycles_{fmt_local(t0, ms=False).replace('-', '').replace(':', '').replace(' ', '_')}_{fmt_local(t1, ms=False).replace('-', '').replace(':', '').replace(' ', '_')}.csv"
+    fp = os.path.join(out_dir, name)
+    import csv as _csv
+    with open(fp, "w", encoding="utf-8-sig", newline="") as fh:
+        w = _csv.writer(fh)
+        w.writerow(NILM_CYCLE_HEADER)
+        w.writerows(rows)
+    return {"ok": True, "path": _display_path(fp), "rows": len(rows), "sides": per, "source_ids": sorted({int(r[0]) for r in rows}),
+            "t_from": tf, "t_to": tt, "t_first": t0, "t_last": t1, "t_first_local": fmt_local(t0), "t_last_local": fmt_local(t1),
+            "columns": NILM_CYCLE_HEADER}
+
+
+@app.get("/api/nilm/cycles/export")
+async def nilm_cycles_download(t_from: Optional[str] = None, t_to: Optional[str] = None, with_branch: bool = True) -> Any:
+    """同上，但直接以 CSV 下载（不落盘）。"""
+    try:
+        tf, tt = _parse_range({"t_from": t_from, "t_to": t_to})
+    except ConfigError as exc:
+        return JSONResponse(status_code=400, content={"ok": False, "error": str(exc)})
+    side = current_side()
+    sides = [side] + (["branch"] if side == "bus" and RUNNER.cfg.branch.enabled and with_branch else [])
+    rows: List[List[Any]] = []
+    for sd in sides:
+        d = RUNNERS[sd].nilm_cycles_between(tf, tt)
+        if d is not None and d["t"].shape[0]:
+            rows.extend(_cycle_rows(sd, d))
+    rows.sort(key=lambda r: (float(r[2]), int(r[0])))
+    import csv as _csv
+    import io as _io
+    buf = _io.StringIO()
+    w = _csv.writer(buf); w.writerow(NILM_CYCLE_HEADER); w.writerows(rows)
+    fname = "cycles.csv" if not rows else f"cycles_{fmt_local(float(rows[0][2]), ms=False).replace('-', '').replace(':', '').replace(' ', '_')}.csv"
+    return Response(content="\ufeff" + buf.getvalue(), media_type="text/csv; charset=utf-8",
+                    headers={"Content-Disposition": f"attachment; filename={fname}"})
 
 
 @app.post("/api/nilm/clear")

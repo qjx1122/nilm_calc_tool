@@ -733,6 +733,9 @@ class NilmConfig:
     #   min_delta_pct 作用于各算法的 min_delta_w。这样同一套默认值在二次侧（W 级）和一次侧（MW 级）都能用。
     rel_tol_pct: float = 1.0
     min_delta_pct: float = 0.0
+    # v0.21：原始周波数据（每周波 P/Q/I × total/A/B/C）在内存中保留的周波数，供「导出指定时间段的原始周波数据」使用。
+    # 默认 180000 ≈ 1 h@50 Hz，每侧约 19 MB；0＝只保留检测窗（不可导出）。导出文件两侧共用、按 source_id 区分。
+    cycle_keep_cycles: int = 180000
     algorithms: Dict[str, Dict[str, Any]] = field(default_factory=lambda: {k: dict(v) for k, v in NILM_ALGO_DEFAULTS.items()})
 
     def params(self, algo: str) -> Dict[str, Any]:
@@ -749,6 +752,8 @@ class NilmConfig:
             raise ConfigError("nilm.min_gap_cycles 必须 ≥ 0")
         if int(self.max_log) < 10:
             raise ConfigError("nilm.max_log 必须 ≥ 10")
+        if int(self.cycle_keep_cycles) < 0 or int(self.cycle_keep_cycles) > 20_000_000:
+            raise ConfigError("nilm.cycle_keep_cycles 必须在 0~20000000（0＝不保留）")
         if not (0 <= float(self.rel_tol_pct) <= 50):
             raise ConfigError("nilm.rel_tol_pct 必须在 0~50")
         if not (0 <= float(self.min_delta_pct) <= 100):
