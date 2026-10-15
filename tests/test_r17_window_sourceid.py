@@ -168,15 +168,21 @@ def test_source_id_in_realtime_events_nilm_and_curve_csv(client, files, tmp_path
     out = tmp_path / "curves"
     r = client.post("/api/curves/save", json={"dir": str(out)}).json()
     assert r["ok"], r
-    qs = {(f["quantity"], f["source_id"]) for f in r["files"]}
-    assert ("voltage", 0) in qs and ("power", 0) in qs and ("voltage", 1) in qs and ("power", 1) not in qs, qs
-    bq = [f["quantity"] for f in r["branch_files"]]
-    assert "voltage" in bq and "power" not in bq and "power" in r["branch_skipped"]
+    # 同一个 <曲线>.csv 内两侧行并存：voltage 含 0/1，power 只有 0（分路侧未勾选 power），不另建 branch/ 目录
+    byq = {f["quantity"]: f for f in r["files"]}
+    assert byq["voltage"]["source_ids"] == [0, 1] and byq["voltage"]["rows_branch"] > 0, byq["voltage"]
+    assert byq["power"]["source_ids"] == [0] and byq["power"]["rows_branch"] == 0, byq["power"]
+    assert "voltage" in r["branch_quantities"] and "power" in r["branch_skipped"]
     outd = pathlib.Path(r["dir"]) if pathlib.Path(r["dir"]).is_absolute() else ROOT / r["dir"]
+    assert not (outd / "branch").exists() and sorted(p.name for p in outd.iterdir() if p.is_dir()) == []
     hb = open(outd / "voltage.csv", encoding="utf-8-sig").read().splitlines()
-    hr = open(outd / "branch" / "voltage.csv", encoding="utf-8-sig").read().splitlines()
-    assert hb[0].startswith("t_epoch_s,time_local,source_id,quantity,") and hb[1].split(",")[2] == "0"
-    assert hr[0].startswith("t_epoch_s,time_local,source_id,quantity,") and hr[1].split(",")[2] == "1"
+    assert hb[0].startswith("t_epoch_s,time_local,source_id,quantity,") and "_sid" not in hb[0]
+    sids = [ln.split(",")[2] for ln in hb[1:]]
+    assert set(sids) == {"0", "1"} and len(sids) == byq["voltage"]["rows"]
+    ts = [float(ln.split(",")[0]) for ln in hb[1:]]
+    assert ts == sorted(ts)                                      # 按时间排序
+    hp = open(outd / "power.csv", encoding="utf-8-sig").read().splitlines()
+    assert {ln.split(",")[2] for ln in hp[1:]} == {"0"}
     # 合并下载：两侧都在，source_id 两种
     merged = client.get("/api/curves/export").text.splitlines()
     assert merged[0] == "t_epoch_s,time_local,source_id,quantity,field,value"

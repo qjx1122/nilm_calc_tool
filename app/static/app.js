@@ -1037,7 +1037,7 @@ async function saveCurves() {
   try {
     const d = await api('/api/curves/save', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
     // notes() 会转义 HTML（告警文本来自服务端，必须转义），这里是纯文本列表即可
-    const lines = d.files.map(f => `✓ ${CURVE_NAME[f.quantity] || f.quantity}：${f.path}（${f.rows} 点，${ts(f.t_first)} → ${ts(f.t_last)}）`);
+    const lines = d.files.map(f => `✓ ${CURVE_NAME[f.quantity] || f.quantity}：${f.path}（${f.rows} 点${f.rows_branch ? `＝总线 ${f.rows_bus} + 分路 ${f.rows_branch}，同一文件按 source_id 区分` : ''}，${ts(f.t_first)} → ${ts(f.t_last)}）`);
     (d.skipped || []).forEach(k => lines.push(`－ ${CURVE_NAME[k] || k}：未勾选，已跳过`));
     (d.empty || []).forEach(k => lines.push(`－ ${CURVE_NAME[k] || k}：已勾选但暂无数据`));
     out.innerHTML = notes([`已保存到目录 ${d.dir}（最近 ${d.hours}h）`].concat(lines));

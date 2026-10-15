@@ -195,9 +195,12 @@ async function main() {
   const ex3 = (await text('/api/branch/export?fmt=csv')).split('\n');
   check('分路侧结果导出 source_id=1', ex3[1] && ex3[1].startsWith('1,'));
   const sv = await api('/api/curves/save', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ dir: 'output/_ui_r17' }) });
-  check('曲线保存：含分路侧文件（branch/… source_id=1）', sv.ok && Array.isArray(sv.branch_files) && sv.branch_files.length > 0 && sv.branch_files.every(f => f.source_id === 1 && /branch/.test(f.path)), JSON.stringify((sv.branch_files || []).slice(0, 2)));
-  const svBus = (sv.files || []).filter(f => f.source_id === 0);
-  check('曲线保存：总线侧文件 source_id=0', svBus.length > 0);
+  const svV = (sv.files || []).find(f => f.quantity === 'voltage');
+  check('曲线保存：分路侧数据写入同一个 <曲线>.csv（source_ids=[0,1]），不另建目录/文件', sv.ok && svV && JSON.stringify(svV.source_ids) === '[0,1]' && svV.rows_branch > 0 && (sv.files || []).every(f => !/branch\//.test(f.path)), JSON.stringify(svV));
+  const svDir = path.join(ROOT, sv.dir);
+  check('保存目录下无子目录、文件数＝曲线数', fs.existsSync(svDir) && fs.readdirSync(svDir).every(n => n.endsWith('.csv')) && fs.readdirSync(svDir).length === sv.files.length);
+  const vlines = fs.readFileSync(path.join(svDir, 'voltage.csv'), 'utf8').split(/\r?\n/).filter(Boolean);
+  check('voltage.csv 行内 source_id 同时含 0 与 1', new Set(vlines.slice(1).map(l => l.split(',')[2])).size === 2);
 
   // 还原
   await put('/api/config', { source: { play_window: false, play_window_start: '', play_window_end: '' }, branch: { enabled: false, common_window: false, common_start: '', common_end: '' } });

@@ -1247,7 +1247,7 @@ def _curve_fields(rows: List[Dict[str, Any]]) -> List[str]:
     fields: List[str] = []
     for r in rows:
         for k in r:
-            if k not in ("t",) and k not in fields:
+            if k not in ("t", "_sid") and k not in fields:
                 fields.append(k)
     return fields
 
@@ -1261,7 +1261,7 @@ def _curve_csv(quantity: str, rows: List[Dict[str, Any]], source_id: int = 0) ->
     w.writerow(["t_epoch_s", "time_local", "source_id", "quantity"] + fields)     # v0.17：source_id 0 总线 / 1 分路
     for r in rows:
         tl = fmt_local(r["t"])
-        w.writerow([repr(float(r["t"])), tl, int(source_id), quantity] + [("" if r.get(f) is None else r.get(f)) for f in fields])
+        w.writerow([repr(float(r["t"])), tl, int(r.get("_sid", source_id)), quantity] + [("" if r.get(f) is None else r.get(f)) for f in fields])
     return buf.getvalue()
 
 
@@ -1297,34 +1297,31 @@ async def curves_save(payload: Optional[Dict[str, Any]] = None) -> Any:
     files: List[Dict[str, Any]] = []
     empty: List[str] = []
     sid = SIDE_SOURCE_ID[current_side()]
-    for k in chosen:
-        rows = _curve_rows(k, hours)
-        if not rows:
+    # v0.17.1：总线侧保存且启用分路侧 → 分路侧曲线写进**同一个** <曲线>.csv（按 source_id 区分 0/1，按时间排序），
+    # 不另建目录/文件；分路侧按自己的「保存曲线」勾选过滤。
+    branch_rows: Dict[str, List[Dict[str, Any]]] = {}
+    branch_skipped: List[str] = []
+    with_branch = current_side() == "bus" and cfg.branch.enabled and payload.get("with_branch", True)
+    if with_branch:
+        br_chosen, branch_skipped = _selected_curves(payload, RUNNERS["branch"].cfg)
+        for k in br_chosen:
+            rows_b = _curve_rows(k, hours, side="branch")
+            if rows_b:
+                branch_rows[k] = rows_b
+    for k in list(chosen) + [k for k in branch_rows if k not in chosen]:
+        rows = _curve_rows(k, hours) if k in chosen else []
+        tagged = [dict(r, _sid=sid) for r in rows] + [dict(r, _sid=1) for r in branch_rows.get(k, [])]
+        if not tagged:
             empty.append(k)
             continue
+        tagged.sort(key=lambda r: float(r["t"]))        # 稳定排序：同一时刻总线行在前
         fp = os.path.join(target, f"{k}.csv")
         with open(fp, "w", encoding="utf-8-sig", newline="") as fh:
-            fh.write(_curve_csv(k, rows, sid))
-        files.append({"quantity": k, "path": _display_path(fp), "rows": len(rows), "source_id": sid,
-                      "t_first": rows[0]["t"], "t_last": rows[-1]["t"]})
-    # v0.17：总线侧保存且启用分路侧 → 分路侧曲线一并保存到同一目录的 branch/ 子目录（按分路侧自己的勾选过滤，source_id=1）
-    branch_files: List[Dict[str, Any]] = []
-    branch_skipped: List[str] = []
-    if current_side() == "bus" and cfg.branch.enabled and payload.get("with_branch", True):
-        br_cfg = RUNNERS["branch"].cfg
-        br_chosen, branch_skipped = _selected_curves(payload, br_cfg)
-        for k in br_chosen:
-            rows = _curve_rows(k, hours, side="branch")
-            if not rows:
-                continue
-            bdir = os.path.join(target, "branch"); os.makedirs(bdir, exist_ok=True)
-            fp = os.path.join(bdir, f"{k}.csv")
-            with open(fp, "w", encoding="utf-8-sig", newline="") as fh:
-                fh.write(_curve_csv(k, rows, 1))
-            branch_files.append({"quantity": k, "path": _display_path(fp), "rows": len(rows), "source_id": 1,
-                                 "t_first": rows[0]["t"], "t_last": rows[-1]["t"]})
-    if not files and branch_files:
-        files, branch_files = branch_files, []        # 总线侧无数据但分路侧有：仍算保存成功
+            fh.write(_curve_csv(k, tagged, sid))
+        nb = len(branch_rows.get(k, []))
+        files.append({"quantity": k, "path": _display_path(fp), "rows": len(tagged), "rows_bus": len(rows), "rows_branch": nb,
+                      "source_ids": sorted({int(r["_sid"]) for r in tagged}),
+                      "t_first": tagged[0]["t"], "t_last": tagged[-1]["t"]})
     if not files:
         try:
             os.rmdir(target)
@@ -1333,8 +1330,9 @@ async def curves_save(payload: Optional[Dict[str, Any]] = None) -> Any:
         return JSONResponse(status_code=409, content={
             "ok": False, "error": "已勾选的曲线暂无数据可保存（请先启动数据源并累计 ≥1 个窗）",
             "skipped": skipped, "empty": empty})
-    return {"ok": True, "dir": _display_path(target), "files": files + branch_files, "branch_files": branch_files,
-            "branch_skipped": branch_skipped, "skipped": skipped, "empty": empty, "hours": hours}
+    return {"ok": True, "dir": _display_path(target), "files": files, "with_branch": bool(with_branch),
+            "branch_quantities": sorted(branch_rows), "branch_skipped": branch_skipped,
+            "skipped": skipped, "empty": empty, "hours": hours}
 
 
 @app.get("/api/realtime")
