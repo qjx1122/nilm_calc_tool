@@ -69,7 +69,7 @@ async function main() {
   $('br-path').value = 'data/nilm_steps.csv'; change($('br-path'));
   click($('btn-br-probe')); await sleep(1200);
   check('分路侧文件探查输出', /行数 \d+/.test($('br-probe-out').textContent), $('br-probe-out').textContent.slice(0, 60));
-  $('br-file-speed').value = '1'; change($('br-file-speed'));
+  $('src-file-speed').value = '1'; change($('src-file-speed'));
   $('br-pt').value = '110'; change($('br-pt')); $('br-ct').value = '20'; change($('br-ct')); $('br-toffset').value = '0'; change($('br-toffset'));
   click($('btn-br-save')); await sleep(900);
   const bcfg = await api('/api/branch/config'), buscfg0 = await api('/api/config');
@@ -80,7 +80,7 @@ async function main() {
   const bcfg2 = await api('/api/branch/config'), buscfg2 = await api('/api/config');
   check('分路侧列映射独立保存（启用 + 按表头填入），总线侧列映射不受影响', bcfg2.columns.mapping_enabled === true && !!bcfg2.columns.mapping.ua && buscfg2.columns.mapping_enabled === false, JSON.stringify(bcfg2.columns.mapping));
   check('分路侧 PT/CT 单独保存，总线侧不受影响', bcfg.transform.pt_ratio === 110 && bcfg.transform.ct_ratio === 20 && buscfg0.transform.pt_ratio !== 110, `${bcfg.transform.pt_ratio}/${bcfg.transform.ct_ratio} bus=${buscfg0.transform.pt_ratio}`);
-  check('分路侧 source 已保存', bcfg.source.kind === 'csv_file' && bcfg.source.path.endsWith('nilm_steps.csv') && bcfg.source.file_speed === 1, JSON.stringify(bcfg.source.path));
+  check('分路侧 source 已保存，倍速随总线侧（1×）', bcfg.source.kind === 'csv_file' && bcfg.source.path.endsWith('nilm_steps.csv') && bcfg.source.file_speed === 1, JSON.stringify(bcfg.source.path));
   check('总线侧 branch.enabled 已保存', (await api('/api/config')).branch.enabled === true);
   check('分路侧固定为离线文件且块大小已存', bcfg.source.kind === 'csv_file' && bcfg.source.block_samples === 640);
   // 总线侧不是离线文件 → 提示 + 启动不联动
@@ -123,7 +123,14 @@ async function main() {
   check('总览有两侧状态卡', /总线侧数据源/.test($('ov-sides').textContent) && /分路侧设备数据源/.test($('ov-sides').textContent) && /运行中/.test($('ov-sides').textContent), $('ov-sides').textContent.slice(0, 80));
   check('分路侧分组标题徽标=运行中', $('nav-br-state').textContent === '运行中', $('nav-br-state').textContent);
   await sleep(2500);
-  check('总览显示分路侧最新电气量卡片（含 P 总线−分路）', /A 相电压/.test($('ov-br-cards').textContent) && /总线 − 分路/.test($('ov-br-cards').textContent) && $('ov-br-charts').style.display !== 'none', $('ov-br-cards').textContent.slice(0, 80));
+  check('总览卡片两侧放一起（总线/分路标签 + 总线−分路）', /总线/.test($('ov-cards').textContent) && /分路/.test($('ov-cards').textContent) && /总线−分路/.test($('ov-cards').textContent) && !$('ov-br-cards'), $('ov-cards').textContent.slice(0, 80));
+  check('总览曲线叠加分路侧（图例含 (分路)）', !!($('ov-p').__chart && $('ov-p').__chart.pts.some(s => /\(分路\)/.test(s.name))), $('ov-p').__chart ? $('ov-p').__chart.pts.map(s => s.name).join(',') : 'no chart');
+  // 增量刷新：相同内容不触碰 DOM
+  const probeEl = $('ov-cards'); const before = probeEl.firstElementChild; const html0 = probeEl.innerHTML;
+  probeEl.innerHTML = html0;
+  check('增量刷新：相同 innerHTML 不重建节点', probeEl.firstElementChild === before);
+  const sig0 = $('ov-p').__sig; window.__S().view = 'overview'; const chart0 = $('ov-p').__chart; probeEl.innerHTML = html0;
+  check('增量刷新：曲线签名机制存在', typeof sig0 === 'string' && sig0.length > 0 && chart0 !== undefined);
   console.log('L5 跨侧对比');
   const cmp0 = await api('/api/compare/power');
   check('两份样例文件起点不同 → 默认偏移 0 无对齐点，但给出建议偏移', cmp0.aligned_count === 0 && Math.abs(cmp0.offset_suggest_s) > 1000, `suggest=${cmp0.offset_suggest_s}`);
@@ -139,6 +146,42 @@ async function main() {
   $('cmp-offset').value = '0.25'; click($('btn-cmp-save')); await sleep(800);
   check('保存偏移到 config.branch.time_offset_s', (await api('/api/config')).branch.time_offset_s === 0.25);
   $('cmp-offset').value = '0'; click($('btn-cmp-save')); await sleep(500);
+  console.log('L6 公共时间段');
+  await api('/api/engine/stop', { method: 'POST' }); await sleep(500);
+  await nav('source'); await sleep(800);
+  // 两份样例起点不同步 → 先给分路侧自定义时间轴：起点 = 总线侧起点 + 1 s
+  const pb = await api('/api/probe?path=data/sample_6400hz.csv');
+  const brStart = new Date((pb.t_first + 1) * 1000);
+  const pad2 = (n) => String(n).padStart(2, '0');
+  const txt = `${brStart.getFullYear()}-${pad2(brStart.getMonth() + 1)}-${pad2(brStart.getDate())} ${pad2(brStart.getHours())}:${pad2(brStart.getMinutes())}:${pad2(brStart.getSeconds())}`;
+  $('br-customtime').checked = true; change($('br-customtime')); $('br-customstart').value = txt; change($('br-customstart'));
+  $('br-common').checked = true; change($('br-common')); $('br-common-start').value = ''; change($('br-common-start'));
+  click($('btn-br-save')); await sleep(900);
+  check('公共时间段开关已保存', (await api('/api/config')).branch.common_window === true);
+  click($('btn-br-common-preview')); await sleep(1500);
+  check('预览公共时间段输出', /公共时间段：/.test($('br-common-out').textContent) && /总时长/.test($('br-common-out').textContent), $('br-common-out').textContent.slice(0, 100));
+  const pv = await api('/api/common_window?preview=1');
+  check('公共时间段 ≈ 4 s（总线 5 s，分路起点晚 ~1 s、长 6 s；起始文本按秒取整）', pv.ok && pv.duration_s > 3.9 && pv.duration_s < 4.35, `${pv.duration_s}`);
+  $('src-file-speed').value = '0'; change($('src-file-speed'));
+  const rs2 = await api('/api/engine/start', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ kind: 'csv_file', path: 'data/sample_6400hz.csv', file_speed: 0 }) });
+  check('联动启动返回公共时间段且分路侧启动', rs2.ok && rs2.common_window && rs2.common_window.enabled && rs2.branch && rs2.branch.ok, JSON.stringify(rs2.branch));
+  const waitDone = async () => { let a, b; for (let k = 0; k < 20; k++) { await sleep(600); a = await api('/api/state'); b = await api('/api/branch/state'); if (!a.running && !b.running) break; } return [a, b]; };
+  let [st3, bst3] = await waitDone();
+  check('顶栏显示公共时间段（起止/总时长/播放起点）', $('topstats-common').style.display !== 'none' && /s$/.test($('st-cw-dur').textContent) && $('st-cw-start').textContent !== '—', $('st-cw-dur').textContent);
+  const expect = Math.round(pv.duration_s * 6400);
+  check('两侧都只播放公共时间段（样本数 ≈ 4 s×6400，容差 1 块）', Math.abs(st3.engine.samples_in - expect) <= 640 && Math.abs(bst3.engine.samples_in - expect) <= 640, `bus=${st3.engine.samples_in} br=${bst3.engine.samples_in} expect=${expect}`);
+  check('分路侧倍速与总线侧一致（不限速）', bst3.config.source.file_speed === 0 && st3.config.source.file_speed === 0);
+  // 自定义起始时间：公共起点 + 2 s
+  const cs = new Date((pv.t_start + 2) * 1000);
+  const txt2 = `${cs.getFullYear()}-${pad2(cs.getMonth() + 1)}-${pad2(cs.getDate())} ${pad2(cs.getHours())}:${pad2(cs.getMinutes())}:${pad2(cs.getSeconds())}`;
+  await api('/api/config', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ branch: { common_start: txt2 } }) });
+  const rs3 = await api('/api/engine/start', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ kind: 'csv_file', path: 'data/sample_6400hz.csv', file_speed: 0 }) });
+  const [st4, bst4] = await waitDone();
+  check('自定义播放起始时间生效（两侧样本 ≈ 2 s×6400）', rs3.common_window && rs3.common_window.play_start_source === '自定义播放起始时间' && Math.abs(st4.engine.samples_in - (expect - 12800)) <= 1300 && Math.abs(bst4.engine.samples_in - (expect - 12800)) <= 1300, `bus=${st4.engine.samples_in} br=${bst4.engine.samples_in}`);
+  // 还原
+  await api('/api/config', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ branch: { common_window: false, common_start: '' } }) });
+  await api('/api/branch/config', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ source: { custom_time: false, custom_time_start: '' } }) });
+  $('src-file-speed').value = '1';
   click($('btn-stop')); await sleep(800);
   const st2 = await api('/api/state'), bst2 = await api('/api/branch/state');
   check('总线侧停止 → 分路侧也停止', !st2.running && !bst2.running);

@@ -360,6 +360,8 @@ class EngineRunner:
                 "side_label": SIDE_LABELS.get(self.side, self.side),
                 "branch": (_side_summary("branch") if self.side == "bus" else None),
                 "bus": (_side_summary("bus") if self.side == "branch" else None),       # 对侧摘要（徽标/顶栏用）
+                "common_window": ({k: v for k, v in COMMON_WINDOW.items() if k not in ("bus", "branch")}
+                                  if COMMON_WINDOW.get("enabled") else None),
                 "running": bool(self.thread and self.thread.is_alive() and not self.stop_event.is_set() and not self._thread_done),
                 "paused": bool(self.pause_event.is_set() and self.thread and self.thread.is_alive() and not self.stop_event.is_set() and not self._thread_done),
                 "pausable": bool(eng is not None and eng.cfg.source.kind == "csv_file"),
@@ -555,6 +557,116 @@ async def _startup() -> None:
             bus.error = f"自动启动失败：{type(exc).__name__}: {exc}"
 
 
+# ------------------------------------------------------------------ 公共时间段（v0.15）
+
+COMMON_WINDOW: Dict[str, Any] = {"enabled": False}      # 最近一次联动启动计算出的公共时间段（界面顶部显示）
+
+
+def _abs_path(p: str) -> str:
+    if p and not os.path.isabs(p):
+        cand = os.path.join(ROOT, p)
+        if os.path.exists(cand):
+            return cand
+    return p
+
+
+def _file_time_range(cfg: AppConfig, path: str) -> Dict[str, Any]:
+    """离线文件的数据时间范围 [t0, t1] 与行数。custom_time 时时间轴＝起始时间 + 行号/fs。"""
+    import csv as _csv
+    from elec_tool.config import parse_time_text as _ptt
+    from elec_tool.sources.parsing import detect_encoding, file_tz_offset_h, parse_timestamps, read_header
+    p = _abs_path(path)
+    if not os.path.isfile(p):
+        raise ConfigError(f"文件不存在：{p}")
+    header, enc = read_header(p, cfg.columns.encoding, cfg.columns.delimiter)
+    has_header = cfg.columns.looks_like_header(header)
+    idx = cfg.columns.layout(header if has_header else None)
+    ts_c = idx.get("timestamp")
+    fs = float(cfg.sampling.fs)
+    first: List[str] = []; last: Deque[str] = deque(maxlen=3); n = 0
+    with open(p, "r", encoding=enc, newline="") as fh:
+        rdr = _csv.reader(fh, delimiter=cfg.columns.delimiter)
+        if has_header:
+            next(rdr, None)
+        for row in rdr:
+            if not row:
+                continue
+            n += 1
+            if ts_c is not None and len(row) > ts_c:
+                if len(first) < 3:
+                    first.append(row[ts_c])
+                last.append(row[ts_c])
+    if n == 0:
+        raise ConfigError(f"文件没有数据行：{p}")
+    tz_h = file_tz_offset_h(cfg)
+    if cfg.source.custom_time:
+        txt = str(cfg.source.custom_time_start or "").strip()
+        if txt:
+            t0 = _ptt(txt)
+        else:
+            info = parse_timestamps(first, cfg.columns.timestamp_unit, tz_h)
+            t0 = float(info.t[0]) if info.t.size else 0.0
+        return {"path": p, "rows": n, "t0": t0, "t1": t0 + n / fs, "custom_time": True, "fs": fs}
+    if ts_c is None:
+        raise ConfigError(f"文件没有时间列，无法计算公共时间段（可改用自定义播放时间）：{p}")
+    i0 = parse_timestamps(first, cfg.columns.timestamp_unit, tz_h)
+    i1 = parse_timestamps(list(last), cfg.columns.timestamp_unit, tz_h)
+    if not i0.t.size or not i1.t.size:
+        raise ConfigError(f"无法解析文件时标：{p}")
+    return {"path": p, "rows": n, "t0": float(i0.t[0]), "t1": float(i1.t[-1]) + 1.0 / fs, "custom_time": False, "fs": fs}
+
+
+def _compute_common_window(bus_cfg: AppConfig, br_cfg: AppConfig) -> Dict[str, Any]:
+    """两侧离线文件的公共时间段与播放起点。起点＝config.branch.common_start（若填且在段内）否则公共起点。"""
+    from elec_tool.config import parse_time_text as _ptt
+    rb = _file_time_range(bus_cfg, bus_cfg.source.path)
+    rr = _file_time_range(br_cfg, br_cfg.source.path)
+    t_start, t_end = max(rb["t0"], rr["t0"]), min(rb["t1"], rr["t1"])
+    out = {"enabled": True, "bus": rb, "branch": rr, "t_start": t_start, "t_end": t_end,
+           "duration_s": max(0.0, t_end - t_start), "play_start": t_start, "play_start_source": "公共时间段起点",
+           "t_start_text": fmt_local(t_start), "t_end_text": fmt_local(t_end)}
+    if t_end <= t_start:
+        raise ConfigError(f"两侧文件没有公共时间段：总线侧 {fmt_local(rb['t0'])} → {fmt_local(rb['t1'])}，"
+                          f"分路侧 {fmt_local(rr['t0'])} → {fmt_local(rr['t1'])}（可改用自定义播放时间让两侧时间轴对齐）")
+    txt = str(bus_cfg.branch.common_start or "").strip()
+    if txt:
+        ps = _ptt(txt)
+        if not (t_start <= ps < t_end):
+            raise ConfigError(f"自定义播放起始时间 {txt} 不在公共时间段 {fmt_local(t_start)} → {fmt_local(t_end)} 内")
+        out["play_start"] = ps; out["play_start_source"] = "自定义播放起始时间"
+    out["play_start_text"] = fmt_local(out["play_start"])
+    out["play_duration_s"] = t_end - out["play_start"]
+    return out
+
+
+_AUTO_PLAY: Dict[str, Tuple[str, str, str]] = {}      # side → 公共时间段自动写入的 (play_start_mode, play_start_value, play_end_time)
+_ORIG_PLAY: Dict[str, Tuple[str, str, str]] = {}      # side → 写入前用户自己的设置（下次非公共时间段启动时还原）
+
+
+def _restore_auto_play(side: str, cfg: AppConfig) -> None:
+    """上次联动启动若自动改写过播放起点/终点，且用户此后没改过，这次启动先还原，避免「残留的起点」让文件秒播完。"""
+    auto = _AUTO_PLAY.get(side); orig = _ORIG_PLAY.get(side)
+    cur = (cfg.source.play_start_mode, str(cfg.source.play_start_value), str(cfg.source.play_end_time))
+    if auto and orig and cur == auto:
+        # 条目保留：若本次启动随后失败（如公共时间段计算报错），RUNNER.cfg 仍是自动值，下次还能再还原
+        cfg.source.play_start_mode, cfg.source.play_start_value, cfg.source.play_end_time = orig
+    else:
+        _AUTO_PLAY.pop(side, None); _ORIG_PLAY.pop(side, None)      # 用户自己改过 → 以用户的为准
+        cfg.source.play_end_time = ""
+
+
+def _apply_window_to_source(cfg: AppConfig, rng: Dict[str, Any], play_start: float, t_end: float, side: str = "bus") -> None:
+    """把公共时间段写进一侧的运行配置：起点按时标定位（custom_time 时换算成行号），终点＝公共终点。"""
+    _ORIG_PLAY[side] = (cfg.source.play_start_mode, str(cfg.source.play_start_value), str(cfg.source.play_end_time))
+    if rng.get("custom_time"):
+        skip = int(round((play_start - rng["t0"]) * rng["fs"]))
+        cfg.source.play_start_mode = "row"; cfg.source.play_start_value = str(max(1, skip + 1))
+    else:
+        cfg.source.play_start_mode = "time"; cfg.source.play_start_value = repr(float(play_start))
+    cfg.source.play_end_time = repr(float(t_end))
+    _AUTO_PLAY[side] = (cfg.source.play_start_mode, str(cfg.source.play_start_value), str(cfg.source.play_end_time))
+
+
 def _start_branch_if_enabled(bus_cfg: AppConfig) -> Optional[Dict[str, Any]]:
     """总线侧启动后联动分路侧（仅 enabled 时）。返回分路侧启动结果；失败只记录、不影响总线侧。"""
     if not bus_cfg.branch.enabled:
@@ -572,6 +684,12 @@ def _start_branch_if_enabled(bus_cfg: AppConfig) -> Optional[Dict[str, Any]]:
             cand = os.path.join(ROOT, cfg.source.path)
             if os.path.exists(cand):
                 cfg.source.path = cand
+        # 播放速率与总线侧保持一致（需求：两侧倍速一致）
+        cfg.source.file_speed = float(bus_cfg.source.file_speed or 0.0)
+        cw = COMMON_WINDOW if COMMON_WINDOW.get("enabled") else None
+        _restore_auto_play("branch", cfg)
+        if cw:
+            _apply_window_to_source(cfg, cw["branch"], cw["play_start"], cw["t_end"], side="branch")
         br.start(cfg)
         br.error = None
         return {"ok": True, "source_kind": cfg.source.kind, "path": cfg.source.path}
@@ -592,6 +710,24 @@ async def lifespan(_app: "FastAPI"):
 
 app = FastAPI(title="电力系统电气量计算工具", version=__version__, lifespan=lifespan)
 app.add_middleware(_SideRouter)
+
+
+@app.get("/api/common_window")
+async def get_common_window(preview: bool = False) -> Any:
+    """公共时间段：preview=1 按当前两侧配置现算（不启动）；否则返回最近一次联动启动用的结果。"""
+    if not preview:
+        return COMMON_WINDOW
+    try:
+        bus_cfg = RUNNERS["bus"].cfg; br_cfg = RUNNERS["branch"].cfg
+        if bus_cfg.source.kind != "csv_file" or br_cfg.source.kind != "csv_file":
+            return {"ok": False, "error": "两侧都必须是离线文件 csv_file"}
+        if not bus_cfg.source.path or not br_cfg.source.path:
+            return {"ok": False, "error": "两侧文件路径都要先配置"}
+        w = _compute_common_window(bus_cfg, br_cfg); w["ok"] = True
+        return w
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
+
 
 
 # ------------------------------------------------------------------ 跨侧对齐与差值（第 15 轮）
@@ -807,8 +943,22 @@ async def engine_start(payload: Optional[Dict[str, Any]] = None) -> Any:
             cand = os.path.join(ROOT, cfg.source.path)
             if os.path.exists(cand):
                 cfg.source.path = cand
+        coupled = (current_side() == "bus" and payload.get("with_branch", True) and cfg.branch.enabled
+                   and cfg.source.kind == "csv_file")
+        if current_side() == "bus":
+            COMMON_WINDOW.clear(); COMMON_WINDOW["enabled"] = False
+            _restore_auto_play("bus", cfg)
+        if coupled and cfg.branch.common_window:
+            br_cfg = RUNNERS["branch"].cfg
+            if br_cfg.source.kind != "csv_file" or not br_cfg.source.path:
+                raise ConfigError("启用「只播放公共时间段」需要分路侧已配置离线文件")
+            w = _compute_common_window(cfg, br_cfg)        # 失败 → 400，两侧都不启动
+            COMMON_WINDOW.update(w)
+            _apply_window_to_source(cfg, w["bus"], w["play_start"], w["t_end"], side="bus")
         RUNNER.start(cfg, duration_s=payload.get("duration_s"))
         out: Dict[str, Any] = {"ok": True, "side": current_side(), "config": cfg.to_dict()}
+        if COMMON_WINDOW.get("enabled"):
+            out["common_window"] = {k: v for k, v in COMMON_WINDOW.items() if k not in ("bus", "branch")}
         if current_side() == "bus" and payload.get("with_branch", True):
             out["branch"] = _start_branch_if_enabled(cfg)
         return out

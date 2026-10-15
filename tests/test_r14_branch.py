@@ -177,12 +177,12 @@ def test_frontend_wiring():
     assert 'data-view="source" data-side="branch"' not in html      # 分路侧配置集中在总览的数据源页
     for s in ('data-view="voltage" data-side="bus"', 'data-view="voltage" data-side="branch"', 'id="branch-panel"',
               'data-view="compare"', 'id="view-compare"', 'id="br-pt"', 'id="br-fs"', 'id="br-toffset"', 'id="topstats-bus"', 'id="topstats-branch"', 'id="st-br-running"', 'id="st-br-samples"',
-              'id="br-mapen"', 'id="br-map-ua"', 'id="ov-br-cards"', 'id="ov-br-u"', 'id="ov-br-thd"', 'id="btn-br-map-save"', 'id="btn-map-save"', 'id="br-enabled"', 'id="br-path"', 
+              'id="br-mapen"', 'id="br-map-ua"', 'id="br-common"', 'id="br-common-start"', 'id="topstats-common"', 'id="st-cw-dur"', 'id="btn-br-map-save"', 'id="btn-map-save"', 'id="br-enabled"', 'id="br-path"', 
               'id="br-customtime"', 'id="br-utc"', 'id="btn-br-probe"', 'id="br-mode-note"'):
         assert s in html, s
     for s in ("function apiUrl", "async function setSide", "/ws/branch", "'/api/branch/' + path.slice(5)",
               "async function saveBranchSource", "async function switchView(v, side)", "function renderOverviewSides",
-              "function renderBadges", "function peerSummary", "async function refreshCompare", "/api/compare/", "async function saveColumns(side)", "async function refreshOverviewBranch", "function renderOverviewBranch"):
+              "function renderBadges", "function peerSummary", "async function refreshCompare", "/api/compare/", "async function saveColumns(side)", "async function refreshOverviewBranch", "function installIncrementalDom", "function chartSig", "async function previewCommonWindow"):
         assert s in js, s
 
 
@@ -212,3 +212,61 @@ def test_r15_align_rows_and_compare_endpoint(client):
     assert client.get("/api/config").json()["branch"]["time_offset_s"] == 1.5
     assert client.get("/api/compare/power").json()["offset_s"] == 1.5
     client.put("/api/config", json={"branch": {"time_offset_s": 0.0, "align_tol_s": 0.0}})
+
+
+def test_r15_common_window(client, tmp_path):
+    """v0.15：只播放两侧公共时间段 + 自定义起始时间 + 倍速同步 + 残留起点还原。"""
+    import numpy as np
+    from elec_tool.selftest import build_signal
+    from tests.conftest import write_csv, default_specs as _ds  # noqa
+    from elec_tool.selftest import HarmSpec
+    specs = [HarmSpec(1, 57.735, 5.0, phi_deg=0.0)]
+    fs = 6400.0; T0 = 1_760_000_000.0
+    t, u, i = build_signal(specs, fs, 3.0, t0=T0)                      # 总线：T0 → T0+3
+    write_csv(str(tmp_path / "bus.csv"), t, u, i)
+    t2, u2, i2 = build_signal(specs, fs, 3.0, t0=T0 + 1.0)             # 分路：T0+1 → T0+4 → 公共 [T0+1, T0+3]
+    write_csv(str(tmp_path / "br.csv"), t2, u2, i2)
+    client.post("/api/engine/stop"); client.post("/api/branch/engine/stop")
+    client.put("/api/config", json={"branch": {"enabled": True, "common_window": True, "common_start": ""}})
+    client.put("/api/branch/config", json={"source": {"kind": "csv_file", "path": str(tmp_path / "br.csv"), "file_speed": 5, "custom_time": False}})
+    pv = client.get("/api/common_window?preview=1").json()
+    assert pv["ok"] is False                                                 # 总线侧还没配文件
+    client.put("/api/config", json={"source": {"kind": "csv_file", "path": str(tmp_path / "bus.csv")}})
+    pv = client.get("/api/common_window?preview=1").json()
+    assert pv["ok"] and abs(pv["duration_s"] - 2.0) < 1e-3 and abs(pv["t_start"] - (T0 + 1.0)) < 1e-6
+    r = client.post("/api/engine/start", json={"kind": "csv_file", "path": str(tmp_path / "bus.csv"), "file_speed": 0}).json()
+    assert r["ok"] and r["common_window"]["enabled"] and r["branch"]["ok"], r
+    for _ in range(60):
+        time.sleep(0.2)
+        a = client.get("/api/state").json(); b = client.get("/api/branch/state").json()
+        if not a["running"] and not b["running"]:
+            break
+    assert abs(a["engine"]["samples_in"] - 2 * fs) <= 640 and abs(b["engine"]["samples_in"] - 2 * fs) <= 640, (a["engine"]["samples_in"], b["engine"]["samples_in"])
+    assert b["config"]["source"]["file_speed"] == 0 and a["common_window"]["duration_s"] > 1.9      # 倍速同步 + state 带公共时间段
+    # 自定义起始时间：公共起点 + 1 s → 两侧各播 1 s
+    client.put("/api/config", json={"branch": {"common_start": repr(T0 + 2.0)}})
+    r = client.post("/api/engine/start", json={"kind": "csv_file", "path": str(tmp_path / "bus.csv"), "file_speed": 0}).json()
+    assert r["common_window"]["play_start_source"] == "自定义播放起始时间"
+    for _ in range(60):
+        time.sleep(0.2)
+        a = client.get("/api/state").json(); b = client.get("/api/branch/state").json()
+        if not a["running"] and not b["running"]:
+            break
+    assert abs(a["engine"]["samples_in"] - fs) <= 640 and abs(b["engine"]["samples_in"] - fs) <= 640, (a["engine"]["samples_in"], b["engine"]["samples_in"])
+    # 起始时间不在公共段内 → 400，两侧都不启动
+    client.put("/api/config", json={"branch": {"common_start": repr(T0 + 3.5)}})
+    r = client.post("/api/engine/start", json={"kind": "csv_file", "path": str(tmp_path / "bus.csv"), "file_speed": 0})
+    assert r.status_code == 400 and "不在公共时间段" in r.json()["error"]
+    # 关闭公共时间段 → 自动写入的起点/终点被还原，总线侧播完整 3 s
+    client.put("/api/config", json={"branch": {"common_window": False, "common_start": ""}})
+    r = client.post("/api/engine/start", json={"kind": "csv_file", "path": str(tmp_path / "bus.csv"), "file_speed": 0}).json()
+    assert r["ok"] and "common_window" not in r and r["config"]["source"]["play_start_mode"] == "begin" and r["config"]["source"]["play_end_time"] == ""
+    for _ in range(60):
+        time.sleep(0.2)
+        a = client.get("/api/state").json()
+        if not a["running"]:
+            break
+    assert abs(a["engine"]["samples_in"] - 3 * fs) <= 640
+    assert a["common_window"] is None
+    client.post("/api/engine/stop"); client.post("/api/branch/engine/stop")
+    client.put("/api/config", json={"branch": {"enabled": False}})

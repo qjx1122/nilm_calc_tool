@@ -25,6 +25,30 @@ const S = {
   // 事件子界面：列表缓存 / 摘要 / 阈值表单脏标记
   events: [], evSummary: null, evDirty: false, evLoaded: false,
 };
+/* ------------------------------------------------------------------ 增量刷新（v0.15）
+ * 界面每秒收到 state/result 推送；大多数区域内容并未变化。这里让 innerHTML / textContent 的写入
+ * 在「字符串与上次写入相同」时直接跳过（不触碰 DOM、不重排、不打断用户选择/滚动）。
+ * 画布同理：drawLine 按数据签名跳过无变化的重绘（见 drawLine 开头）。 */
+(function installIncrementalDom() {
+  const patch = (proto, prop) => {
+    const d = Object.getOwnPropertyDescriptor(proto, prop);
+    if (!d || !d.set) return;
+    Object.defineProperty(proto, prop, {
+      configurable: true, enumerable: d.enumerable, get: d.get,
+      set(v) {
+        v = v == null ? '' : String(v);
+        if (this.__inc && this.__inc[prop] === v) return;        // 未变化 → 不刷新
+        (this.__inc || (this.__inc = {}))[prop] = v;
+        d.set.call(this, v);
+      },
+    });
+  };
+  if (typeof Element !== 'undefined') patch(Element.prototype, 'innerHTML');
+  if (typeof Node !== 'undefined') patch(Node.prototype, 'textContent');
+})();
+/* 手动改过子节点（appendChild / insertAdjacentHTML）的元素，调用它让下一次 innerHTML 写入强制生效 */
+function domTouched(el) { if (el) el.__inc = null; }
+
 const CURVE_KEYS = ['voltage', 'current', 'power', 'power_factor', 'fundamental', 'harmonic', 'interharmonic', 'dc'];
 const CURVE_NAME = { voltage: '三相电压', current: '三相电流', power: 'P/Q/S', power_factor: 'PF/DPF', fundamental: '频率', harmonic: 'THD',
                      interharmonic: 'TIHD', dc: '直流分量' };
@@ -298,12 +322,27 @@ function bindHover(cv) {
   cv.style.cursor = 'crosshair';
 }
 
+function chartSig(cv, series, opt) {
+  // 数据签名：每条线的名字/点数/首末点/中点 + 画布宽度 + 关键选项；相同 → 画面不可能变化
+  const parts = [cv.clientWidth, opt.height || cv.dataset.h, !!opt.zero, opt.empty || '', (opt.marks || []).length];
+  series.forEach(s => {
+    if (!s || !s.data) { parts.push('-'); return; }
+    const d = s.data, n = d.length, f = d[0], l = d[n - 1], m = d[n >> 1];
+    parts.push(s.name, s.color, n, f && f[0], f && f[1], l && l[0], l && l[1], m && m[1]);
+  });
+  (opt.marks || []).forEach(mk => parts.push(mk.x, mk.label));
+  return parts.join('|');
+}
+
 function drawLine(cv, series, opt = {}) {
+  const sig = chartSig(cv, series, opt);
+  if (!opt.force && cv.__sig === sig && cv.__chart !== undefined) return;    // 无变化 → 不重绘
+  cv.__sig = sig;
   const { ctx, w, h } = prep(cv, opt.height);
   const pad = { l: 62, r: 12, t: 12, b: 26 };
   const pts = series.filter(s => s && s.data && s.data.length);
   cv.__chart = null;
-  cv.__redraw = () => drawLine(cv, series, opt);
+  cv.__redraw = () => drawLine(cv, series, Object.assign({}, opt, { force: true }));
   bindHover(cv);
   ctx.strokeStyle = '#1e2740'; ctx.lineWidth = 1;
   ctx.strokeRect(pad.l + .5, pad.t + .5, w - pad.l - pad.r, h - pad.t - pad.b);
@@ -345,6 +384,7 @@ function drawLine(cv, series, opt = {}) {
   }
   pts.forEach(s => {
     ctx.strokeStyle = s.color || '#4ea1ff'; ctx.lineWidth = s.width || 1.4; ctx.beginPath();
+    ctx.setLineDash(s.dash || []);
     let started = false;
     s.data.forEach(([x, y]) => {
       if (!isNum(y)) { started = false; return; }
@@ -352,6 +392,7 @@ function drawLine(cv, series, opt = {}) {
       if (!started) { ctx.moveTo(px, py); started = true; } else ctx.lineTo(px, py);
     });
     ctx.stroke();
+    ctx.setLineDash([]);
   });
   if (opt.marks && opt.marks.length) {
     ctx.save();
@@ -571,6 +612,16 @@ function renderTop() {
     $('#' + pre + 'fs').textContent = d.fs; $('#' + pre + 'ptct').textContent = d.ptct; $('#' + pre + 'samples').textContent = d.samples;
   };
   fill('st-', bus); fill('st-br-', br);
+  const cw = S.side === 'bus' ? st.common_window : (st.common_window || null);
+  const cwEl = $('#topstats-common');
+  if (cwEl) {
+    cwEl.style.display = cw && cw.enabled ? '' : 'none';
+    if (cw && cw.enabled) {
+      $('#st-cw-start').textContent = ts(cw.t_start); $('#st-cw-end').textContent = ts(cw.t_end);
+      $('#st-cw-dur').textContent = num(cw.duration_s, 3) + ' s';
+      $('#st-cw-play').textContent = ts(cw.play_start) + (cw.play_start_source === '自定义播放起始时间' ? '（自定义）' : '');
+    }
+  }
   $('#subtitle').textContent = `elec_tool v${st.version || '?'} · ${S.wsOk ? 'WebSocket 实时' : '轮询'} · 缓冲 ${eng.buffer_fill || 0}/${eng.buffer_capacity || 0}`;
   $('#btn-start').disabled = !!eng.running;
   $('#btn-stop').disabled = !eng.running;
@@ -713,67 +764,25 @@ async function refreshOverviewBranch(force) {
     OVB.result = res && res.quantities ? res : null;
     OVB.keys.forEach((k, i) => { OVB.hist[k] = (hs[i] && hs[i].points) || []; });
     OVB.at = Date.now();
-    if (S.view === 'overview') renderOverviewBranch();
+    if (S.view === 'overview') renderOverview();
   } finally { OVB.busy = false; }
 }
 
 function qb(key) { const r = OVB.result; const o = r && r.quantities && r.quantities[key]; return (o && o.ok) ? o : null; }
 
-function renderOverviewBranch() {
-  const cardsEl = $('#ov-br-cards'); if (!cardsEl) return;
+function ovBranchActive() {
   const br = (S.state || {}).branch || {};
-  const active = !!(br.enabled || br.running || br.finished);
-  const hint = $('#ov-br-hint');
-  if (hint) hint.textContent = active ? `${br.source_path ? String(br.source_path).split(/[\\/]/).pop() : ''}　${sideStatusText(br)}　样本 ${br.samples_in || 0}` : '未启用';
-  const charts = $('#ov-br-charts');
-  if (!active) {
-    cardsEl.innerHTML = card('分路侧设备', '未启用', '', '在「数据源与控制」页启用并配置分路侧文件后，这里显示分路侧的最新电气量与趋势');
-    if (charts) charts.style.display = 'none';
-    return;
-  }
-  if (charts) charts.style.display = '';
-  const v = qb('voltage'), i = qb('current'), p = qb('power'), pf = qb('power_factor'), f = qb('fundamental'), h = qb('harmonic');
-  const cards = [];
-  if (v) PH.forEach(k => cards.push(card(`${k} 相电压`, si(v.values.rms[k], 'V'), '', `峰值 ${si(v.values.peak[k], 'V')}`)));
-  if (i) PH.forEach(k => cards.push(card(`${k} 相电流`, si(i.values.rms[k], 'A'), '', `零线 ${si(i.values.neutral_rms, 'A')}`)));
-  if (p) {
-    cards.push(card('有功 P', si(p.values.p_total, 'W'), '', `分相和 ${si(sumVals(p.values.p_per_phase, PH), 'W')}`));
-    cards.push(card('无功 Q', si(p.values.q_total, 'var'), '', p.values.quadrant ? p.values.quadrant.q_sign : ''));
-    cards.push(card('视在 S', si(p.values.s_total, 'VA'), '', p.values.modes ? p.values.modes.apparent_note : ''));
-  }
-  if (pf) cards.push(card('功率因数 PF', num(pf.values.pf_total, 4), '', `DPF ${num(pf.values.dpf, 4)}`));
-  if (f) cards.push(card('频率', num(f.values.freq_hz, 3), 'Hz', `${f.values.phase_sequence || ''} · 来源 ${f.values.freq_source}`));
-  if (h) {
-    cards.push(card('THD_U（最劣相）', num(h.values.thd_u_worst_pct, 2), '%', `最劣相 ${h.values.worst_phase_u || '—'}`));
-    cards.push(card('THD_I（最劣相）', num(h.values.thd_i_worst_pct, 2), '%', `最劣相 ${h.values.worst_phase_i || '—'}`));
-  }
-  // 与总线侧对照：P 差值与占比（最新值，不做时间对齐；严格对齐见「跨侧对比」页）
-  const pb = q('power');
-  if (p && pb && isNum(pb.values.p_total) && isNum(p.values.p_total)) {
-    const d = pb.values.p_total - p.values.p_total;
-    const r = Math.abs(pb.values.p_total) > 1e-9 ? p.values.p_total / pb.values.p_total * 100 : null;
-    cards.push(card('P：总线 − 分路', si(d, 'W'), '', (r === null ? '' : `分路占总线 ${num(r, 2)} %`) + '　（最新值，未对齐时间轴）'));
-  }
-  if (!cards.length) cards.push(card('分路侧', '尚无结果', '', br.error ? br.error : '分路侧已启用；启动总线侧后两侧同时播放'));
-  cardsEl.innerHTML = cards.join('');
+  return !!(br.enabled || br.running || br.finished);
+}
 
-  const hv = OVB.hist.voltage || [], hi = OVB.hist.current || [], hp = OVB.hist.power || [], hh = OVB.hist.harmonic || [];
-  const tref = (arr) => arr.length ? arr[0].t : 0, spanB = (arr) => arr.length ? arr[arr.length - 1].t - arr[0].t : 0;
-  drawLine($('#ov-br-u'), [{ name: 'Ua', color: COLORS.A, data: hv.map(p => [p.t - tref(hv), p.Ua]) },
-                           { name: 'Ub', color: COLORS.B, data: hv.map(p => [p.t - tref(hv), p.Ub]) },
-                           { name: 'Uc', color: COLORS.C, data: hv.map(p => [p.t - tref(hv), p.Uc]) }],
-           { ylabel: 'V', fmtX: x => tsX(x + tref(hv), spanB(hv)), fmtTip: x => ts(x + tref(hv)), empty: '分路侧暂无电压趋势' });
-  drawLine($('#ov-br-i'), [{ name: 'Ia', color: COLORS.A, data: hi.map(p => [p.t - tref(hi), p.Ia]) },
-                           { name: 'Ib', color: COLORS.B, data: hi.map(p => [p.t - tref(hi), p.Ib]) },
-                           { name: 'Ic', color: COLORS.C, data: hi.map(p => [p.t - tref(hi), p.Ic]) }],
-           { ylabel: 'A', fmtX: x => tsX(x + tref(hi), spanB(hi)), fmtTip: x => ts(x + tref(hi)), empty: '分路侧暂无电流趋势' });
-  drawLine($('#ov-br-p'), [{ name: 'P', color: COLORS.P, data: hp.map(p => [p.t - tref(hp), p.P]) },
-                           { name: 'Q', color: COLORS.Q, data: hp.map(p => [p.t - tref(hp), p.Q]) },
-                           { name: 'S', color: COLORS.S, data: hp.map(p => [p.t - tref(hp), p.S]) }],
-           { ylabel: 'W/var/VA', fmtX: x => tsX(x + tref(hp), spanB(hp)), fmtTip: x => ts(x + tref(hp)), empty: '分路侧暂无功率趋势' });
-  drawLine($('#ov-br-thd'), [{ name: 'THD_U', color: COLORS.A, data: hh.map(p => [p.t - tref(hh), p.THD_U]) },
-                             { name: 'THD_I', color: COLORS.C, data: hh.map(p => [p.t - tref(hh), p.THD_I]) }],
-           { ylabel: '%', fmtX: x => tsX(x + tref(hh), spanB(hh)), fmtTip: x => ts(x + tref(hh)), zero: true, empty: '分路侧暂无 THD 趋势' });
+/* 分路侧曲线叠加到总线侧时间轴：优先按 config.branch.time_offset_s 平移；若与总线区间无交集则按起点对齐 */
+function ovBranchX(brPts, busPts) {
+  if (!brPts.length) return { shift: 0, note: '' };
+  const off = (((S.state || {}).config || {}).branch || {}).time_offset_s || 0;
+  if (!busPts.length) return { shift: off, note: '' };
+  const b0 = busPts[0].t, b1 = busPts[busPts.length - 1].t, r0 = brPts[0].t + off, r1 = brPts[brPts.length - 1].t + off;
+  if (r1 >= b0 && r0 <= b1) return { shift: off, note: off ? `分路侧曲线已按时标偏移 ${num(off, 3)} s 平移` : '' };
+  return { shift: b0 - brPts[0].t, note: '两侧时间轴无交集：分路侧曲线按起点对齐叠加（可在数据源页设置时标偏移或启用公共时间段）' };
 }
 
 /* ------------------------------------------------------------------ 历史曲线 */
@@ -961,48 +970,86 @@ async function saveCompareOffset() {
 function renderOverview() {
   const v = q('voltage'), i = q('current'), p = q('power'), pf = q('power_factor'),
         f = q('fundamental'), h = q('harmonic');
+  const act = ovBranchActive();
+  const bv = act ? qb('voltage') : null, bi = act ? qb('current') : null, bp = act ? qb('power') : null,
+        bpf = act ? qb('power_factor') : null, bf = act ? qb('fundamental') : null, bh = act ? qb('harmonic') : null;
+  // 双值卡片：总线侧 / 分路侧放在同一张卡里（需求：两侧实时数据放一起）
+  const dual = (k, busV, brV, unit, sub) => act
+    ? `<div class="card"><div class="k">${k}</div><div class="v dual"><span class="tag bus">总线</span>${busV}${unit ? `<span class="u">${unit}</span>` : ''}<br><span class="tag branch">分路</span>${brV}${unit && brV !== '—' ? `<span class="u">${unit}</span>` : ''}</div>${sub ? `<div class="s">${sub}</div>` : ''}</div>`
+    : card(k, busV, unit, sub);
+  const g = (o, fn) => { try { const x = o ? fn(o) : null; return x === null || x === undefined ? '—' : x; } catch (e) { return '—'; } };
   const cards = [];
-  if (v) PH.forEach(k => cards.push(card(`${k} 相电压`, si(v.values.rms[k], 'V'), '', `峰值 ${si(v.values.peak[k], 'V')}`)));
-  if (i) PH.forEach(k => cards.push(card(`${k} 相电流`, si(i.values.rms[k], 'A'), '', `零线 ${si(i.values.neutral_rms, 'A')}`)));
-  if (p) {
-    cards.push(card('有功 P', si(p.values.p_total, 'W'), '', `分相和 ${si(sumVals(p.values.p_per_phase, PH), 'W')}`));
-    cards.push(card('无功 Q', si(p.values.q_total, 'var'), '', p.values.quadrant ? p.values.quadrant.q_sign : ''));
-    cards.push(card('视在 S', si(p.values.s_total, 'VA'), '', p.values.modes ? p.values.modes.apparent_note : ''));
+  if (v || bv) PH.forEach(k => cards.push(dual(`${k} 相电压`, g(v, o => si(o.values.rms[k], 'V')), g(bv, o => si(o.values.rms[k], 'V')), '',
+    `峰值 ${g(v, o => si(o.values.peak[k], 'V'))}` + (bv ? ` / ${g(bv, o => si(o.values.peak[k], 'V'))}` : ''))));
+  if (i || bi) PH.forEach(k => cards.push(dual(`${k} 相电流`, g(i, o => si(o.values.rms[k], 'A')), g(bi, o => si(o.values.rms[k], 'A')), '',
+    `零线 ${g(i, o => si(o.values.neutral_rms, 'A'))}` + (bi ? ` / ${g(bi, o => si(o.values.neutral_rms, 'A'))}` : ''))));
+  if (p || bp) {
+    const dP = (p && bp && isNum(p.values.p_total) && isNum(bp.values.p_total)) ? p.values.p_total - bp.values.p_total : null;
+    const rP = (dP !== null && Math.abs(p.values.p_total) > 1e-9) ? bp.values.p_total / p.values.p_total * 100 : null;
+    cards.push(dual('有功 P', g(p, o => si(o.values.p_total, 'W')), g(bp, o => si(o.values.p_total, 'W')), '',
+      dP === null ? `分相和 ${g(p, o => si(sumVals(o.values.p_per_phase, PH), 'W'))}` : `总线−分路 ${si(dP, 'W')}${rP === null ? '' : '　分路占 ' + num(rP, 2) + ' %'}（最新值）`));
+    cards.push(dual('无功 Q', g(p, o => si(o.values.q_total, 'var')), g(bp, o => si(o.values.q_total, 'var')), '', g(p, o => o.values.quadrant ? o.values.quadrant.q_sign : '')));
+    cards.push(dual('视在 S', g(p, o => si(o.values.s_total, 'VA')), g(bp, o => si(o.values.s_total, 'VA')), '', g(p, o => o.values.modes ? o.values.modes.apparent_note : '')));
   }
-  if (pf) cards.push(card('功率因数 PF', num(pf.values.pf_total, 4), '', `DPF ${num(pf.values.dpf, 4)}`));
-  if (f) cards.push(card('频率', num(f.values.freq_hz, 3), 'Hz', `${f.values.phase_sequence || ''} · 来源 ${f.values.freq_source}`));
-  if (h) {
-    cards.push(card('THD_U（最劣相）', num(h.values.thd_u_worst_pct, 2), '%', `最劣相 ${h.values.worst_phase_u || '—'}`));
-    cards.push(card('THD_I（最劣相）', num(h.values.thd_i_worst_pct, 2), '%', `最劣相 ${h.values.worst_phase_i || '—'}`));
+  if (pf || bpf) cards.push(dual('功率因数 PF', g(pf, o => num(o.values.pf_total, 4)), g(bpf, o => num(o.values.pf_total, 4)), '',
+    `DPF ${g(pf, o => num(o.values.dpf, 4))}` + (bpf ? ` / ${g(bpf, o => num(o.values.dpf, 4))}` : '')));
+  if (f || bf) cards.push(dual('频率', g(f, o => num(o.values.freq_hz, 3)), g(bf, o => num(o.values.freq_hz, 3)), 'Hz',
+    g(f, o => `${o.values.phase_sequence || ''} · 来源 ${o.values.freq_source}`)));
+  if (h || bh) {
+    cards.push(dual('THD_U（最劣相）', g(h, o => num(o.values.thd_u_worst_pct, 2)), g(bh, o => num(o.values.thd_u_worst_pct, 2)), '%',
+      `最劣相 ${g(h, o => o.values.worst_phase_u || '—')}` + (bh ? ` / ${g(bh, o => o.values.worst_phase_u || '—')}` : '')));
+    cards.push(dual('THD_I（最劣相）', g(h, o => num(o.values.thd_i_worst_pct, 2)), g(bh, o => num(o.values.thd_i_worst_pct, 2)), '%',
+      `最劣相 ${g(h, o => o.values.worst_phase_i || '—')}` + (bh ? ` / ${g(bh, o => o.values.worst_phase_i || '—')}` : '')));
   }
   if (!cards.length) cards.push(card('状态', '尚无结果', '', '请到「数据源与控制」启动数据源'));
+  const hint = $('#ov-br-hint');
+  if (hint) { const br = (S.state || {}).branch || {}; hint.textContent = act ? `　· 分路侧 ${sideStatusText(br)}，样本 ${br.samples_in || 0}` : ''; }
   $('#ov-cards').innerHTML = cards.join('');
   renderOverviewSides();
 
   const hv = S.histCache.voltage || [], hi = S.histCache.current || [], hp = S.histCache.power || [], hh = S.histCache.harmonic || [];
   const tref = (arr) => arr.length ? arr[0].t : 0;
-  drawLine($('#ov-u'), hv.map ? [{ name: 'Ua', color: COLORS.A, data: hv.map((p, k) => [p.t - tref(hv), p.Ua]) },
-                                 { name: 'Ub', color: COLORS.B, data: hv.map((p, k) => [p.t - tref(hv), p.Ub]) },
-                                 { name: 'Uc', color: COLORS.C, data: hv.map((p, k) => [p.t - tref(hv), p.Uc]) }] : [],
-           { ylabel: 'V', fmtX: x => tsX(x + tref(hv), spanOf('voltage')), fmtTip: x => ts(x + tref(hv)), empty: '暂无电压趋势（需累计 ≥2 个窗）' });
-  drawLine($('#ov-i'), [{ name: 'Ia', color: COLORS.A, data: hi.map(p => [p.t - tref(hi), p.Ia]) },
-                        { name: 'Ib', color: COLORS.B, data: hi.map(p => [p.t - tref(hi), p.Ib]) },
-                        { name: 'Ic', color: COLORS.C, data: hi.map(p => [p.t - tref(hi), p.Ic]) }],
-           { ylabel: 'A', fmtX: x => tsX(x + tref(hi), spanOf('current')), fmtTip: x => ts(x + tref(hi)) });
-  drawLine($('#ov-p'), [{ name: 'P', color: COLORS.P, data: hp.map(p => [p.t - tref(hp), p.P]) },
-                        { name: 'Q', color: COLORS.Q, data: hp.map(p => [p.t - tref(hp), p.Q]) },
-                        { name: 'S', color: COLORS.S, data: hp.map(p => [p.t - tref(hp), p.S]) }],
-           { ylabel: 'W/var/VA', fmtX: x => tsX(x + tref(hp), spanOf('power')), fmtTip: x => ts(x + tref(hp)) });
-  drawLine($('#ov-thd'), [{ name: 'THD_U', color: COLORS.A, data: hh.map(p => [p.t - tref(hh), p.THD_U]) },
-                          { name: 'THD_I', color: COLORS.C, data: hh.map(p => [p.t - tref(hh), p.THD_I]) }],
-           { ylabel: '%', fmtX: x => tsX(x + tref(hh), spanOf('harmonic')), fmtTip: x => ts(x + tref(hh)), zero: true });
+  // 分路侧曲线（虚线）叠加到同一张图
+  const act2 = act;
+  const bhv = act2 ? (OVB.hist.voltage || []) : [], bhi = act2 ? (OVB.hist.current || []) : [], bhp = act2 ? (OVB.hist.power || []) : [], bhh = act2 ? (OVB.hist.harmonic || []) : [];
+  const DASH = [5, 4];
+  const brSeries = (brPts, busPts, fields) => {
+    if (!brPts.length) return [];
+    const { shift } = ovBranchX(brPts, busPts);
+    const t0 = tref(busPts.length ? busPts : brPts.map(p => ({ t: p.t + shift })));
+    return fields.map(([f, color, label]) => ({ name: `${label}(分路)`, color, dash: DASH, data: brPts.map(p => [p.t + shift - t0, p[f]]) }));
+  };
+  const xo = (busPts, brPts) => {       // 总线无点时以分路侧（平移后）为时间基准
+    if (busPts.length) return tref(busPts);
+    const { shift } = ovBranchX(brPts, busPts); return brPts.length ? brPts[0].t + shift : 0;
+  };
+  const t0u = xo(hv, bhv), t0i = xo(hi, bhi), t0p = xo(hp, bhp), t0h = xo(hh, bhh);
+  drawLine($('#ov-u'), [{ name: 'Ua', color: COLORS.A, data: hv.map(p => [p.t - t0u, p.Ua]) },
+                        { name: 'Ub', color: COLORS.B, data: hv.map(p => [p.t - t0u, p.Ub]) },
+                        { name: 'Uc', color: COLORS.C, data: hv.map(p => [p.t - t0u, p.Uc]) },
+                        ...brSeries(bhv, hv, [['Ua', COLORS.A, 'Ua'], ['Ub', COLORS.B, 'Ub'], ['Uc', COLORS.C, 'Uc']])],
+           { ylabel: 'V', fmtX: x => tsX(x + t0u, spanOf('voltage')), fmtTip: x => ts(x + t0u), empty: '暂无电压趋势（需累计 ≥2 个窗）' });
+  drawLine($('#ov-i'), [{ name: 'Ia', color: COLORS.A, data: hi.map(p => [p.t - t0i, p.Ia]) },
+                        { name: 'Ib', color: COLORS.B, data: hi.map(p => [p.t - t0i, p.Ib]) },
+                        { name: 'Ic', color: COLORS.C, data: hi.map(p => [p.t - t0i, p.Ic]) },
+                        ...brSeries(bhi, hi, [['Ia', COLORS.A, 'Ia'], ['Ib', COLORS.B, 'Ib'], ['Ic', COLORS.C, 'Ic']])],
+           { ylabel: 'A', fmtX: x => tsX(x + t0i, spanOf('current')), fmtTip: x => ts(x + t0i) });
+  drawLine($('#ov-p'), [{ name: 'P', color: COLORS.P, data: hp.map(p => [p.t - t0p, p.P]) },
+                        { name: 'Q', color: COLORS.Q, data: hp.map(p => [p.t - t0p, p.Q]) },
+                        { name: 'S', color: COLORS.S, data: hp.map(p => [p.t - t0p, p.S]) },
+                        ...brSeries(bhp, hp, [['P', COLORS.P, 'P'], ['Q', COLORS.Q, 'Q'], ['S', COLORS.S, 'S']])],
+           { ylabel: 'W/var/VA', fmtX: x => tsX(x + t0p, spanOf('power')), fmtTip: x => ts(x + t0p) });
+  drawLine($('#ov-thd'), [{ name: 'THD_U', color: COLORS.A, data: hh.map(p => [p.t - t0h, p.THD_U]) },
+                          { name: 'THD_I', color: COLORS.C, data: hh.map(p => [p.t - t0h, p.THD_I]) },
+                          ...brSeries(bhh, hh, [['THD_U', COLORS.A, 'THD_U'], ['THD_I', COLORS.C, 'THD_I']])],
+           { ylabel: '%', fmtX: x => tsX(x + t0h, spanOf('harmonic')), fmtTip: x => ts(x + t0h), zero: true });
   renderCurveSave();
-  renderOverviewBranch();
   refreshOverviewBranch(false);
   const hn = $('#ov-histnote');
   if (hn) {
     const hrs = ((((S.state || {}).config || {}).output || {}).history_hours) || 24;
-    hn.innerHTML = notes([`趋势曲线显示<b>最近 ${hrs} 小时</b>的数据（按数据时间计；不足 ${hrs} 小时则显示全部）。` +
+    const ovn = act ? ovBranchX(OVB.hist.power || [], hp).note : '';
+    hn.innerHTML = notes([...(ovn ? [ovn] : []), `趋势曲线显示<b>最近 ${hrs} 小时</b>的数据（按数据时间计；不足 ${hrs} 小时则显示全部）。` +
       `每条曲线最多传输 ${HIST_MAX_POINTS} 点（超出按峰谷保形抽稀，面板标题处标注）。` +
       `曲线面板右上角「保存曲线」＝保存曲线数据时是否包含该曲线。`]);
   }
@@ -1340,7 +1387,6 @@ async function loadBranchForm(force) {
     BR.cfg = cfg; BR.loaded = true;
     if (!BR.dirty) {
       $('#br-path').value = cfg.source.path || '';
-      $('#br-file-speed').value = String(cfg.source.file_speed > 0 ? cfg.source.file_speed : (cfg.source.kind === 'csv_file' && cfg.source.file_speed === 0 && BR.touchedSpeed ? 0 : 1));
       $('#br-customtime').checked = !!cfg.source.custom_time;
       $('#br-customstart').value = cfg.source.custom_time_start || '';
       $('#br-utc').checked = !!cfg.source.file_time_utc;
@@ -1354,6 +1400,7 @@ async function loadBranchForm(force) {
       fillColumnsForm('branch', cfg.columns);
       const bb = (S.state && S.state.config && S.state.config.branch) || {};
       $('#br-toffset').value = bb.time_offset_s ?? 0; $('#br-tol').value = bb.align_tol_s ?? 0;
+      $('#br-common').checked = !!bb.common_window; $('#br-common-start').value = bb.common_start || '';
     }
   } catch (e) { /* 分路侧不可用 */ }
 }
@@ -1375,10 +1422,12 @@ function renderBranchPanel(st) {
 async function saveBranchSource() {
   try {
     const enabled = $('#br-enabled').checked;
-    const brTop = { enabled, time_offset_s: parseFloat($('#br-toffset').value) || 0, align_tol_s: Math.max(0, parseFloat($('#br-tol').value) || 0) };
+    const brTop = { enabled, time_offset_s: parseFloat($('#br-toffset').value) || 0, align_tol_s: Math.max(0, parseFloat($('#br-tol').value) || 0),
+                    common_window: $('#br-common').checked, common_start: $('#br-common-start').value.trim() };
     const r1 = await fetch('/api/config', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ branch: brTop }) });
     if (!r1.ok) throw new Error((await r1.json()).error || 'HTTP ' + r1.status);
-    const src = { kind: 'csv_file', path: $('#br-path').value.trim(), file_speed: parseFloat($('#br-file-speed').value) || 0,
+    const busSpeed = parseFloat(($('#src-file-speed') || {}).value); // 分路侧倍速与总线侧一致（启动时服务端也会强制同步）
+    const src = { kind: 'csv_file', path: $('#br-path').value.trim(), file_speed: Number.isFinite(busSpeed) ? busSpeed : 1,
       custom_time: $('#br-customtime').checked, custom_time_start: $('#br-customstart').value.trim(),
       file_time_utc: $('#br-utc').checked, block_samples: parseInt($('#br-block').value, 10) || 640 };
     if (enabled && !src.path) throw new Error('启用分路侧时必须填写分路侧离线文件路径');
@@ -1397,6 +1446,21 @@ async function saveBranchSource() {
     toast((enabled ? '分路侧配置已保存并启用：总线侧「启动」时将同时播放' : '分路侧配置已保存（未启用）') + '（数据源 + 量纲口径 + 对齐参数）', 'ok');
     S.state = await api('/api/state'); renderTop(); render();
   } catch (e) { toast('保存分路侧失败：' + e.message, 'err'); }
+}
+
+async function previewCommonWindow() {
+  const out = $('#br-common-out');
+  out.innerHTML = '<div class="notes">计算中…（按已保存的两侧配置；若刚改了路径/自定义时间请先保存）</div>';
+  try {
+    const w = await (await fetch('/api/common_window?preview=1')).json();
+    if (!w.ok) { out.innerHTML = notes(['✗ ' + w.error]); return; }
+    out.innerHTML = notes([
+      `✓ 公共时间段：${ts(w.t_start)} → ${ts(w.t_end)}　总时长 ${num(w.duration_s, 3)} s`,
+      `总线侧文件：${ts(w.bus.t0)} → ${ts(w.bus.t1)}（${w.bus.rows} 行${w.bus.custom_time ? '，自定义时间轴' : ''}）`,
+      `分路侧文件：${ts(w.branch.t0)} → ${ts(w.branch.t1)}（${w.branch.rows} 行${w.branch.custom_time ? '，自定义时间轴' : ''}）`,
+      `播放起点：${ts(w.play_start)}（${w.play_start_source}）　可播放 ${num(w.play_duration_s, 3)} s`,
+    ]);
+  } catch (e) { out.innerHTML = notes(['✗ ' + e.message]); }
 }
 
 async function probeBranch() {
@@ -2015,6 +2079,7 @@ function bind() {
   $('#btn-pause2').addEventListener('click', togglePause);
 
   $('#btn-br-save').addEventListener('click', saveBranchSource);
+  $('#btn-br-common-preview').addEventListener('click', previewCommonWindow);
   ['br-pt', 'br-ct', 'br-fs', 'br-fnom', 'br-adaptive', 'br-scale', 'br-uin', 'br-hmax', 'br-apparent', 'br-reactive', 'br-toffset', 'br-tol']
     .forEach(id => { const el = $('#' + id); if (el) el.addEventListener('input', () => { BR.dirty = true; }); });
   $('#cmp-key').addEventListener('change', e => { CMP.key = e.target.value; CMP.data = null; refreshCompare(); });
@@ -2029,7 +2094,7 @@ function bind() {
   $('#btn-br-goto').addEventListener('click', () => switchView('voltage', 'branch'));
   $('#btn-br-probe').addEventListener('click', probeBranch);
   $('#btn-br-pick').addEventListener('click', pickBranchFile);
-  ['br-enabled', 'br-path', 'br-file-speed', 'br-customtime', 'br-customstart', 'br-utc', 'br-block'].forEach((id) => {
+  ['br-enabled', 'br-path', 'br-common', 'br-common-start', 'br-customtime', 'br-customstart', 'br-utc', 'br-block'].forEach((id) => {
     const el = $('#' + id); if (!el) return;
     const mark = () => { BR.dirty = true; if (id === 'br-file-speed') BR.touchedSpeed = true; };
     el.addEventListener('input', mark); el.addEventListener('change', mark);
@@ -2133,8 +2198,8 @@ function buildNilmForm() {
       <div class="row2">${inputs}</div></div>`;
   }).join('');
   const opts = Object.keys(NILM_ALGOS).map(a => `<option value="${a}">${NILM_ALGOS[a].name}</option>`).join('');
-  $('#nilm-filter').insertAdjacentHTML('beforeend', opts);
-  $('#nilm-mark').insertAdjacentHTML('beforeend', opts);
+  $('#nilm-filter').insertAdjacentHTML('beforeend', opts); domTouched($('#nilm-filter'));
+  $('#nilm-mark').insertAdjacentHTML('beforeend', opts); domTouched($('#nilm-mark'));
   $$('#nilm-form input, #nilm-algos input').forEach(el => { const mark = () => { NL.dirty = true; }; el.addEventListener('input', mark); el.addEventListener('change', mark); });
 }
 

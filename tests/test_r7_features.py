@@ -400,13 +400,14 @@ def test_frontend_realtime_panel_wired():
 def test_frontend_hover_tooltip_contract():
     """drawLine 必须：挂 __chart、绑定 mousemove/mouseleave 一次、重绘末尾叠加悬停（撤销任一 → 悬停失效或被刷新抹掉）。"""
     body = APP_JS.split("function drawLine(")[1].split("\nfunction drawBars(")[0]
-    assert "bindHover(cv)" in body and "cv.__redraw = () => drawLine(cv, series, opt)" in body
+    assert "bindHover(cv)" in body and "cv.__redraw = () => drawLine(cv, series, Object.assign({}, opt, { force: true }))" in body   # v0.15：重绘绕过签名跳过
+    assert "if (!opt.force && cv.__sig === sig" in body                                           # v0.15：数据未变不重绘
     assert "cv.__chart = { ctx, w, h, pad, pts, xmin, xmax, ymin, ymax, X, Y, opt }" in body
     assert body.rstrip().endswith("drawHover(cv);\n}")
     assert "cv.addEventListener('mousemove'" in APP_JS and "cv.addEventListener('mouseleave'" in APP_JS
     assert "if (cv.__hoverBound) return;" in APP_JS
     # 趋势图的提示用完整时刻（含毫秒），而不是刻度上的 HH:MM:SS
-    assert APP_JS.count("fmtTip: x => ts(x + ") == 15                     # 6 条原趋势 + R9 TIHD/直流 + R12 负荷辨识 + R15 跨侧对比两图 + 总览分路侧四图
+    assert APP_JS.count("fmtTip: x => ts(x + ") == 11                     # 6 条原趋势 + R9 TIHD/直流 + R12 负荷辨识 + R15 跨侧对比两图（总览分路侧曲线叠加进原四图）
     assert "fmtTip: x => x.toFixed(2) + ' Hz'" in APP_JS
     # 最近点查找：有序二分
     assert "function nearestIdx(data, x)" in APP_JS and "while (hi - lo > 1)" in APP_JS

@@ -26,6 +26,13 @@
       <div class="stat"><label>PT / CT</label><span id="st-ptct">—</span></div>
       <div class="stat"><label>样本</label><span id="st-samples">—</span></div>
     </div>
+    <div class="topstats common" id="topstats-common" style="display:none">
+      <div class="stat sidelbl"><label>公共时间段</label><span class="sidename common">两侧</span></div>
+      <div class="stat"><label>起始时间</label><span id="st-cw-start">—</span></div>
+      <div class="stat"><label>终止时间</label><span id="st-cw-end">—</span></div>
+      <div class="stat"><label>总时长</label><span id="st-cw-dur">—</span></div>
+      <div class="stat"><label>播放起点</label><span id="st-cw-play">—</span></div>
+    </div>
     <div class="topstats" id="topstats-branch" title="分路侧设备运行状态（仅显示；查看分路侧电气量请用左侧「分路侧」分组）">
       <div class="stat sidelbl"><label>侧别</label><span class="sidename branch">分路侧设备</span></div>
       <div class="stat"><label>状态</label><span id="st-br-running" class="pill">未启用</span></div>
@@ -90,23 +97,15 @@
     <section class="view active" id="view-overview">
       <h2>总览面板</h2>
       <div class="cards" id="ov-sides"></div>
-      <h3 class="ovsub">总线侧 · 最新电气量</h3>
+      <h3 class="ovsub">最新电气量 <span class="navhint">每张卡片：<span class="sidename bus">总线侧</span> / <span class="sidename branch">分路侧设备</span>（分路侧未启用时只显示总线侧）<span id="ov-br-hint"></span></span></h3>
       <div class="cards" id="ov-cards"></div>
       <div class="grid2">
-        <div class="panel"><h3 class="curvehdr"><span>三相电压趋势</span><label class="curvesave" title="勾选＝「保存曲线数据」时包含本曲线；不勾选＝保存时跳过本曲线"><input type="checkbox" class="curve-save" data-curve="voltage"> 保存曲线</label><span class="curvespan" data-curve="voltage"></span></h3><canvas id="ov-u" height="200"></canvas></div>
-        <div class="panel"><h3 class="curvehdr"><span>三相电流趋势</span><label class="curvesave" title="勾选＝「保存曲线数据」时包含本曲线；不勾选＝保存时跳过本曲线"><input type="checkbox" class="curve-save" data-curve="current"> 保存曲线</label><span class="curvespan" data-curve="current"></span></h3><canvas id="ov-i" height="200"></canvas></div>
-        <div class="panel"><h3 class="curvehdr"><span>P / Q / S 趋势</span><label class="curvesave" title="勾选＝「保存曲线数据」时包含本曲线；不勾选＝保存时跳过本曲线"><input type="checkbox" class="curve-save" data-curve="power"> 保存曲线</label><span class="curvespan" data-curve="power"></span></h3><canvas id="ov-p" height="200"></canvas></div>
-        <div class="panel"><h3 class="curvehdr"><span>THD 趋势</span><label class="curvesave" title="勾选＝「保存曲线数据」时包含本曲线；不勾选＝保存时跳过本曲线"><input type="checkbox" class="curve-save" data-curve="harmonic"> 保存曲线</label><span class="curvespan" data-curve="harmonic"></span></h3><canvas id="ov-thd" height="200"></canvas></div>
+        <div class="panel"><h3 class="curvehdr"><span>三相电压趋势（实线＝总线侧，虚线＝分路侧）</span><label class="curvesave" title="勾选＝「保存曲线数据」时包含本曲线；不勾选＝保存时跳过本曲线"><input type="checkbox" class="curve-save" data-curve="voltage"> 保存曲线</label><span class="curvespan" data-curve="voltage"></span></h3><canvas id="ov-u" height="200"></canvas></div>
+        <div class="panel"><h3 class="curvehdr"><span>三相电流趋势（实线＝总线侧，虚线＝分路侧）</span><label class="curvesave" title="勾选＝「保存曲线数据」时包含本曲线；不勾选＝保存时跳过本曲线"><input type="checkbox" class="curve-save" data-curve="current"> 保存曲线</label><span class="curvespan" data-curve="current"></span></h3><canvas id="ov-i" height="200"></canvas></div>
+        <div class="panel"><h3 class="curvehdr"><span>P / Q / S 趋势（实线＝总线侧，虚线＝分路侧）</span><label class="curvesave" title="勾选＝「保存曲线数据」时包含本曲线；不勾选＝保存时跳过本曲线"><input type="checkbox" class="curve-save" data-curve="power"> 保存曲线</label><span class="curvespan" data-curve="power"></span></h3><canvas id="ov-p" height="200"></canvas></div>
+        <div class="panel"><h3 class="curvehdr"><span>THD 趋势（实线＝总线侧，虚线＝分路侧）</span><label class="curvesave" title="勾选＝「保存曲线数据」时包含本曲线；不勾选＝保存时跳过本曲线"><input type="checkbox" class="curve-save" data-curve="harmonic"> 保存曲线</label><span class="curvespan" data-curve="harmonic"></span></h3><canvas id="ov-thd" height="200"></canvas></div>
       </div>
       <div id="ov-histnote" class="notes"></div>
-      <h3 class="ovsub ovsub-branch">分路侧设备 · 最新电气量 <span class="navhint" id="ov-br-hint"></span></h3>
-      <div class="cards" id="ov-br-cards"></div>
-      <div class="grid2" id="ov-br-charts">
-        <div class="panel"><h3 class="curvehdr"><span>分路侧 三相电压趋势</span></h3><canvas id="ov-br-u" height="200"></canvas></div>
-        <div class="panel"><h3 class="curvehdr"><span>分路侧 三相电流趋势</span></h3><canvas id="ov-br-i" height="200"></canvas></div>
-        <div class="panel"><h3 class="curvehdr"><span>分路侧 P / Q / S 趋势</span></h3><canvas id="ov-br-p" height="200"></canvas></div>
-        <div class="panel"><h3 class="curvehdr"><span>分路侧 THD 趋势</span></h3><canvas id="ov-br-thd" height="200"></canvas></div>
-      </div>
       <div class="panel"><h3>告警与提示</h3><div id="ov-notes" class="notes"></div></div>
     </section>
 
@@ -211,9 +210,12 @@
               <button id="btn-br-pick">从 data/ 选择…</button>
             </div>
             <div id="br-probe-out"></div>
-            <label>分路侧播放倍速 <select id="br-file-speed">
-                <option value="1">1×（真实速率）</option><option value="2">2×</option><option value="5">5×</option>
-                <option value="10">10×</option><option value="0">不限速（最快）</option></select></label>
+            <label>分路侧播放倍速 <input id="br-file-speed-note" value="与总线侧一致（随上方「离线文件播放倍速」）" disabled></label>
+            <h4 class="subhdr">公共时间段播放</h4>
+            <label class="chk"><input id="br-common" type="checkbox"> 只播放总线侧与分路侧设备的<b>公共时间段</b>数据（两侧都从公共起点播到公共终点；之外的数据跳过）</label>
+            <label>自定义播放起始时间（公共时间段内） <input id="br-common-start" placeholder="留空＝从公共时间段起点开始；如 2026-10-14 08:00:05 / epoch 秒"></label>
+            <div class="row"><button id="btn-br-common-preview">预览公共时间段</button></div>
+            <div id="br-common-out"></div>
             <label class="chk"><input id="br-customtime" type="checkbox"> 自定义播放时间（时间轴＝起始时间 + 样本序号/fs）</label>
             <label>自定义起始时间 <input id="br-customstart" placeholder="留空＝文件第 1 条时间；如 2026-10-14 08:00:00"></label>
             <label class="chk"><input id="br-utc" type="checkbox"> 文件时标按 UTC 解释（默认按本地时间）</label>

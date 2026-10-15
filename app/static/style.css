@@ -117,3 +117,8 @@ body.side-branch header{box-shadow:inset 0 3px 0 var(--warn)}
 #topstats-branch{border-top:1px dashed #1e2740;padding-top:4px}
 .stat.sidelbl{min-width:70px}
 .sidename{font-weight:700;font-size:12px}.sidename.bus{color:var(--acc)}.sidename.branch{color:var(--warn)}
+.sidename.common{color:var(--ok)}
+#topstats-common{border-top:1px dashed #1e2740;padding-top:4px}
+.card .v .tag{display:inline-block;font-size:10px;font-weight:600;padding:0 5px;border-radius:4px;margin-right:6px;vertical-align:middle}
+.card .v .tag.bus{background:#12304a;color:var(--acc)}.card .v .tag.branch{background:#3a2d12;color:var(--warn)}
+.card .v.dual{font-size:15px;line-height:1.35}

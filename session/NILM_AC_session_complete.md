@@ -230,3 +230,5 @@
 - **[2026-10-14] v0.14.3**（用户：总览增加分路侧数据与曲线）：`OVB` 缓存 + `refreshOverviewBranch()`（总览页、总线侧上下文下直接 fetch `/api/branch/result` 与 4 条 `/api/branch/history`，2 s 节流，随 WS state 触发）+ `renderOverviewBranch()`（卡片复用总线侧卡片逻辑 + P 差值/占比最新值 + 4 图）。`test_r7` 的 fmtTip 计数 11→15。
 
 - **[2026-10-14] v0.14.4**（用户：顶栏按总线侧/分路侧分开显示，分路侧只显示不切换）：`renderTop` 改为先构造 cur/peer 两份字段对象再按 `S.side` 分配到 `st-*`（总线行）/`st-br-*`（分路行）；服务端对侧摘要补 fs/PT/CT/频率/数据时刻/时长；删除可点击的 `renderBranchChip`。切侧入口只剩左侧导航。
+
+- **[2026-10-15] v0.15**（用户 5 条：增量刷新 / 倍速一致 / 总览合并 / 公共时间段 / 自定义起始）。沙盒重置后按既定流程恢复（fetch+reset、venv、样例、jsdom）。关键实现与坑：①增量刷新用 `Element.prototype.innerHTML` / `Node.prototype.textContent` setter 包装做「同串跳过」，副作用＝手动 appendChild 过的元素要 `domTouched()`；画布 `chartSig` 跳过重绘，`__redraw` 必须 `force`。②公共时间段的两处坑：**custom_time 时间轴原来按"播放的第 1 块"起算**，跳行后整条轴左移 → 改为配置起始时间时计入 `skipped_rows`；**联动自动写入的 play_start/play_end 会残留在 RUNNER.cfg**，下次普通启动秒播完 → `_AUTO_PLAY/_ORIG_PLAY` 记录并在下次启动还原（失败的启动不弹出条目）。③仓库两份样例时间不重叠：检查脚本给分路侧设自定义时间轴（总线起点+1 s）后公共段 ≈4.28 s（起始文本按秒取整）。全量 pytest 中 `test_tcp_binary_frames` 偶发失败、单测 3/3 通过、stash 后同样，判定为既有偶发。

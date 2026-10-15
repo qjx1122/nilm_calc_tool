@@ -463,6 +463,8 @@ class SourceConfig:
     # 0＝不限速（能算多快播多快，CLI/批处理/测试默认）。按「相邻两块的间隔」限速：暂停后恢复不会突发追赶。
     file_speed: float = 0.0
     play_start_value: str = ""
+    # 离线文件播放终点（csv_file，v0.15 公共时间段用）：epoch 秒文本；块起点 ≥ 该时刻即停止（空＝播到文件尾）
+    play_end_time: str = ""
 
     def validate(self) -> None:
         if self.kind not in SOURCE_KINDS:
@@ -762,6 +764,9 @@ class BranchConfig:
     # 第 15 轮：跨侧对齐参数（只影响 /api/compare 的时间轴对齐，不改任何一侧的计算）
     time_offset_s: float = 0.0     # 分路侧时标 + offset ≈ 总线侧时标（两份文件起点不同步时用）
     align_tol_s: float = 0.0       # 配对容差（秒）；0＝自动＝max(两侧输出步长)×0.6
+    # v0.15：只播放两侧文件的公共时间段（联动启动时两侧都从公共起点播到公共终点）
+    common_window: bool = False
+    common_start: str = ""         # 公共时间段内的自定义播放起始时间（本地时间文本 / epoch 秒）；空＝公共起点
 
     def validate(self) -> None:
         if not str(self.config_path).strip():

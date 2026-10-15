@@ -51,6 +51,9 @@ class CsvFileSource(DataSource):
         self._play_start = parse_play_start(self.play_start_mode, cfg.source.play_start_value)
         self._seek_info: Dict[str, Any] = {}
         self._seek_notes: list = []
+        # 播放终点（公共时间段）：块起点 ≥ 终点即视为播完
+        _pe = str(getattr(cfg.source, "play_end_time", "") or "").strip()
+        self.play_end_t: Optional[float] = parse_time_text(_pe) if _pe else None
 
     def _apply_custom_time(self, block: SampleBlock) -> SampleBlock:
         """把块时间轴改写为 起始时间 + 全局样本序号 / fs（等间隔）。
@@ -69,7 +72,12 @@ class CsvFileSource(DataSource):
                 f"文件内时标仅用于推算采样率；文件中的时间缺口在此模式下**不会**被检测"]
         fs = float(self.cfg.sampling.fs)
         n0 = self._n_samples                      # 本块之前已产出的样本数（read() 在之后才累加）
-        block.t = self._custom_t0 + (np.arange(block.n, dtype=np.float64) + n0) / fs
+        # 配置了起始时间且设置了播放起点（跳过了文件开头 N 行）时，时间轴要把跳过的行也算进去：
+        # 起始时间对应的是**文件第 1 行**，而不是播放的第 1 块（公共时间段 / 指定位置播放依赖这一点）
+        skipped = 0
+        if self._custom_t0_source == "配置起始时间":
+            skipped = int(self._seek_info.get("skipped_rows") or 0)
+        block.t = self._custom_t0 + (np.arange(block.n, dtype=np.float64) + n0 + skipped) / fs
         return block
 
     def open(self) -> None:
@@ -138,6 +146,10 @@ class CsvFileSource(DataSource):
                        "无日期写法可只填 HH:MM:SS）"))
             return None
         block = self._apply_custom_time(block)
+        if self.play_end_t is not None and block.n and block.t_start >= self.play_end_t:
+            self._exhausted = True
+            self.close()
+            return None
         self._pace(block)
         if self._n_blocks == 0 and self._seek_info and self._seek_info.get("mode") in ("row", "time"):
             sk = self._seek_info.get("skipped_rows")
@@ -181,6 +193,7 @@ class CsvFileSource(DataSource):
             "custom_time_start_source": self._custom_t0_source if self.custom_time else None,
             "file_first_t": self._file_first_t,
             "file_time_utc": bool(self.cfg.source.file_time_utc), "tz_offset_h": self.tz_offset_h,
+            "play_end_time": self.play_end_t,
             "play_start_mode": self.play_start_mode,
             "play_start_value": self.cfg.source.play_start_value if self.play_start_mode != "begin" else None,
             "play_seek": dict(self._seek_info) if self._seek_info else None,
