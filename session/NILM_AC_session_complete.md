@@ -248,3 +248,5 @@
 - **[2026-10-15] v0.17.1**（用户：保存数据时分路侧与总线侧保存在同一个 CSV，不另建目录/文件）。`/api/curves/save` 合并写法：行级 `_sid` 标记 → `_curve_csv` 按行写 `source_id`，按 t 稳定排序；删除 `branch/` 子目录与 `branch_files`，返回 `rows_bus/rows_branch/source_ids/branch_quantities`。test_r17/ui_r17 随之改断言；全量 296 passed。实时落盘未合并（两侧独立引擎各自目录），已在 README 标注。
 
 - **[2026-10-15] v0.17.2**（用户：播放分路侧 CSV 仍创建 branch 目录；要求所有保存文件两侧共用、只按 source_id 区分）。教训：上一轮只盯住自己新加的「保存曲线」链路，漏了既有的三条落盘链路——「不新建目录」应按**所有写文件的出口**逐一核对。实现：`_share_output_dirs` 强制分路侧四个目录＝总线侧、总线 set_cfg 后联动刷新分路；`filelock.SHARED_FILE_LOCK` 包住三个 writer 的 open/append；`configs/branch.json` 出厂目录改 `output/*`。全量 296 passed。
+
+- **[2026-10-15] v0.17.3**（用户：配置界面 ①勾选框与标签对齐 ②说明文字与配置项区分、缩进换行合理 ③左标签+右输入框成对）。先用 jsdom 统计 145 个 label 的结构（T+input 82、input+T 勾选 29…）发现根因：`.chk` 在 CSS 里根本没有规则（继承 `.form label` 的 column 布局，勾选框和文字上下错开），说明文字全写在 label 文本里。选择「JS 规范化 + CSS」而非手改 100 多个 label：`normalizeConfigForms()` 拆 scope/标题/说明并套 `.f`/`.chk` 结构。踩坑：`test_web_ui` 的「app.js 引用的 id 必须存在」正则会把注释里的 `$('#id')` 字样当引用 → 注释改措辞。无浏览器截图，视觉按 CSS 推断，已在 README 标注请用户核对。

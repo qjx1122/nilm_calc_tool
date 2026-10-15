@@ -140,3 +140,20 @@ body.side-branch header{box-shadow:inset 0 3px 0 var(--warn)}
 .zoombar .zoom-btn{padding:0 6px;font-size:11px;line-height:18px;min-height:0;border-radius:4px}
 .zoombar.active .zoomtip{color:var(--acc,#4ea1ff)}
 .zoombar .zoomtip{font-size:11px}
+/* v0.17.3 配置表单排版：①勾选框对齐 ②说明文字独立一行 ③左标签+右输入框成对 */
+.form label.f,.row2 label.f{display:grid;grid-template-columns:minmax(96px,34%) 1fr;column-gap:10px;row-gap:3px;align-items:center}
+.form label.f>.lbl,.row2 label.f>.lbl{color:var(--mut);font-size:12px;line-height:1.35;display:flex;flex-wrap:wrap;align-items:center;gap:4px 6px}
+.form label.f>input,.form label.f>select,.row2 label.f>input,.row2 label.f>select{min-width:0}
+.form label.f>.note,.row2 label.f>.note{grid-column:2;color:var(--mut);opacity:.8;font-size:11.5px;line-height:1.4;padding-left:2px}
+.form label.chk,.row2 label.chk,.form label.check,.row2 label.check{display:flex;flex-direction:row;align-items:flex-start;gap:8px;color:var(--fg);font-size:12.5px;line-height:1.4}
+.form label.chk>input,.row2 label.chk>input,.form label.check>input,.row2 label.check>input{flex:0 0 auto;width:14px;height:14px;margin:2px 0 0}
+label.chk>.lbl,label.check>.lbl{display:flex;flex-direction:column;gap:2px;min-width:0}
+label.chk>.lbl>.ttl,label.check>.lbl>.ttl{display:inline-flex;flex-wrap:wrap;align-items:center;gap:6px}
+label .scope{display:inline-block;font-size:10.5px;line-height:1;padding:3px 5px;border-radius:4px;background:#1b2338;color:#9fb3e0;font-family:ui-monospace,Consolas,monospace;margin-right:4px;white-space:nowrap}
+label .note{display:block;color:var(--mut);opacity:.8;font-size:11.5px;line-height:1.4;font-weight:normal}
+.row2>.notes,.form>.notes{grid-column:1/-1}
+.row2 .notes.muted,.form .notes.muted{padding:2px 0 0 2px;border-left:2px solid #243050;padding-left:8px}
+@media(max-width:760px){.form label.f,.row2 label.f{grid-template-columns:1fr}.form label.f>.note,.row2 label.f>.note{grid-column:1}}
+.row>label{display:inline-flex;align-items:center;gap:6px;color:var(--mut);font-size:12px;white-space:nowrap}
+.row>label>input[type=checkbox]{margin:0}
+.toggle label{display:inline-flex;align-items:center;gap:5px}

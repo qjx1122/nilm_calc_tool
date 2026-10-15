@@ -166,7 +166,7 @@
             <div class="row"><button id="btn-br-common-preview">预览公共时间段</button><button id="btn-br-goto">去左侧「分路侧」分组查看电气量 →</button></div>
             <div id="br-common-out"></div>
           </div>
-          <div class="notes muted">分路侧是一份<b>完全独立</b>的配置，落盘到 <code>configs/branch_runtime.json</code>，输出到 <code>output/branch/</code>。
+          <div class="notes muted">分路侧是一份<b>完全独立</b>的配置，落盘到 <code>configs/branch_runtime.json</code>，落盘/导出目录与总线侧相同（同一个 CSV 文件，按 <code>source_id</code> 区分：0 总线 / 1 分路）。
             本页右列集中配置分路侧的数据源 / 量纲口径 / 列映射；窗长 / 事件阈值 / 负荷辨识参数在「分路侧」分组对应子界面改。</div>
           <div class="notes" id="branch-panel-note" style="display:none"></div>
         </div>

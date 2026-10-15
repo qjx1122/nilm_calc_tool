@@ -241,7 +241,9 @@ def test_frontend_zoom_and_window_contract():
               "cv.addEventListener('wheel'", "e.shiftKey", "cv.addEventListener('dblclick'", "cv.addEventListener('mousedown'",
               "if (zoom && zoom.x)", "if (zoom && zoom.y)", "ctx.clip()", "class=\"zoom-btn\"", "['reset', '复位'",
               "p.play_window = chk('window')", "p.play_window_start = txt('winstart')", "p.play_window_end = txt('winend')",
-              "common_end: $('#br-common-end').value.trim()"):
+              "common_end: $('#br-common-end').value.trim()",
+              # v0.17.3 配置表单排版规范化：init 首先规范化、NILM 动态表单也规范化
+              "function normalizeConfigForms(root = document)", "  normalizeConfigForms();\n  bind();", "normalizeConfigForms(host);"):
         assert s in js, s
     for i in ("src-window", "src-winstart", "src-winend", "br-window", "br-winstart", "br-winend", "br-common-end"):
         assert f'id="{i}"' in html, i

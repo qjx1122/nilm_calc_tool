@@ -2509,6 +2509,7 @@ function buildNilmForm() {
       <label class="check"><input type="checkbox" id="nilm-${a}-enabled"> ${sp.name}</label><span class="mut" style="font-weight:normal">${sp.desc}</span></h3>
       <div class="row2">${inputs}</div></div>`;
   }).join('');
+  normalizeConfigForms(host);
   const opts = Object.keys(NILM_ALGOS).map(a => `<option value="${a}">${NILM_ALGOS[a].name}</option>`).join('');
   $('#nilm-filter').insertAdjacentHTML('beforeend', opts); domTouched($('#nilm-filter'));
   $('#nilm-mark').insertAdjacentHTML('beforeend', opts); domTouched($('#nilm-mark'));
@@ -2776,7 +2777,67 @@ function bindProcess() {
   $('#btn-rs-use').addEventListener('click', rsUseAsSource);
 }
 
+
+/* 配置表单排版规范化（v0.17.3）：
+ *  ① 勾选框与标题顶部对齐（.chk/.check → flex，勾选框固定在第一列）；
+ *  ② 标签文字里的说明部分（「：…」或尾部「（…）」）拆成 .note 单独一行、缩进到输入框列下，与正式配置项区分；
+ *     「csv_file：」「csv_tail：」这类适用范围前缀渲染成小标签 .scope；
+ *  ③ 普通配置项统一为「左标签 + 右输入框」两列网格（.f）。
+ *  只改 DOM 结构不改 id / 文本内容：textContent、按 id 取元素、disabled、label.off 等既有约定全部保持。 */
+function splitLabelText(raw) {
+  let text = raw.replace(/\s+/g, ' ').trim();
+  let scope = '';
+  const m = text.match(/^([a-z_]+(?:\s*\/\s*[a-z_]+)*)：/);
+  if (m) { scope = m[1].replace(/\s*\/\s*/g, ' / '); text = text.slice(m[0].length).trim(); }
+  let title = text, note = '';
+  const c = text.indexOf('：');
+  if (c > 0) { title = text.slice(0, c).trim(); note = text.slice(c + 1).trim(); }
+  else {
+    const o = text.indexOf('（');
+    if (o > 0 && text.endsWith('）')) {
+      const inner = text.slice(o + 1, -1).trim();
+      if (inner.length > 10) { title = text.slice(0, o).trim(); note = inner; }
+    }
+  }
+  return { scope, title, note };
+}
+function normalizeConfigForms(root = document) {
+  root.querySelectorAll('.form label, .row2 label').forEach((lab) => {
+    if (lab.dataset.norm || lab.closest('.toggle') || lab.closest('.curvehdr') || lab.closest('.stat')) return;
+    const nodes = [...lab.childNodes];
+    const ctrl = nodes.find(n => n.nodeType === 1 && /^(INPUT|SELECT|TEXTAREA)$/.test(n.tagName));
+    if (!ctrl) return;
+    const isChk = ctrl.tagName === 'INPUT' && (ctrl.type === 'checkbox' || ctrl.type === 'radio');
+    const textNodes = nodes.filter(n => n.nodeType === 3 || (n.nodeType === 1 && n !== ctrl && !n.querySelector('input,select')));
+    if (!textNodes.length) return;
+    const html = textNodes.map(n => n.nodeType === 3 ? n.textContent : n.outerHTML).join('');
+    const plain = textNodes.map(n => n.textContent).join('');
+    const { scope, title, note } = splitLabelText(plain);
+    const hasMarkup = /<\w+/.test(html);
+    textNodes.forEach(n => n.remove());
+    const head = document.createElement('span'); head.className = 'lbl';
+    if (scope) { const sc = document.createElement('span'); sc.className = 'scope'; sc.textContent = scope; head.appendChild(sc); }
+    const ttl = document.createElement('span'); ttl.className = 'ttl';
+    if (hasMarkup && !note) ttl.innerHTML = html.replace(/^\s*[a-z_ \/]+：/, '').trim(); else ttl.textContent = title;
+    head.appendChild(ttl);
+    let noteEl = null;
+    if (note) { noteEl = document.createElement('small'); noteEl.className = 'note'; noteEl.textContent = note; }
+    lab.dataset.norm = '1';
+    if (isChk) {
+      lab.classList.add('chk');
+      if (noteEl) head.appendChild(noteEl);
+      lab.insertBefore(head, ctrl.nextSibling);
+    } else {
+      lab.classList.add('f');
+      lab.insertBefore(head, lab.firstChild);
+      if (noteEl) lab.appendChild(noteEl);
+    }
+  });
+}
+window.normalizeConfigForms = normalizeConfigForms;
+
 async function init() {
+  normalizeConfigForms();
   bind();
   try {
     S.state = await api('/api/state');
