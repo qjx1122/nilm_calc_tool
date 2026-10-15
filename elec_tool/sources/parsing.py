@@ -577,7 +577,8 @@ def iter_csv_blocks(path: str, colmap: ColumnMap, sampling: SamplingConfig,
                     tz_offset_h: float = 0.0, max_blocks: Optional[int] = None,
                     skip_rows: int = 0, start_percent: Optional[float] = None,
                     start_time: Optional[Tuple[str, float]] = None,
-                    seek_info: Optional[Dict[str, Any]] = None):
+                    seek_info: Optional[Dict[str, Any]] = None,
+                    keep_rows: bool = False):
     """流式读取 CSV，按 block_samples 逐块产出 (SampleBlock, info)。
 
     播放起点（三选一，优先级 start_time > start_percent > skip_rows）：
@@ -681,6 +682,8 @@ def iter_csv_blocks(path: str, colmap: ColumnMap, sampling: SamplingConfig,
         while len(buf) >= block_samples:
             head, buf = buf[:block_samples], buf[block_samples:]
             blk, info = _rows_to_block(head, colmap, sampling, idx_map, path, seq, tz_offset_h, row_offset)
+            if keep_rows:
+                info["rows"] = head; info["header"] = header
             row_offset += len(head)
             seq += 1
             produced += 1
@@ -693,6 +696,8 @@ def iter_csv_blocks(path: str, colmap: ColumnMap, sampling: SamplingConfig,
             buf.append(row)
             if len(buf) >= block_samples:
                 blk, info = _rows_to_block(buf, colmap, sampling, idx_map, path, seq, tz_offset_h, row_offset)
+                if keep_rows:
+                    info["rows"] = buf; info["header"] = header
                 row_offset += len(buf)
                 buf = []
                 seq += 1
@@ -702,6 +707,8 @@ def iter_csv_blocks(path: str, colmap: ColumnMap, sampling: SamplingConfig,
                     return
         if buf:
             blk, info = _rows_to_block(buf, colmap, sampling, idx_map, path, seq, tz_offset_h, row_offset)
+            if keep_rows:
+                info["rows"] = buf; info["header"] = header
             yield blk, info
 
 

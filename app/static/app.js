@@ -1849,6 +1849,7 @@ async function pickBranchFile() {
 }
 
 function renderSource() {
+  if (!S._rawRangeAt || Date.now() - S._rawRangeAt > 15000) { S._rawRangeAt = Date.now(); refreshRawRange(); }
   const st = S.state || {}, cfg = st.config || {};
   if (S.formDirty) {
     setFormNote('⚠ 界面有未保存的修改：已暂停自动回填（实时推送不会覆盖你正在输入的内容）。' +
@@ -2313,6 +2314,48 @@ function renderLoadedLast(st, eng) {
     (ll.result ? `；最新电气量取自 ${ll.result_saved_at_local || ''} 保存的结果（${ll.result_source || ''}）` : '；无保存的最新电气量');
 }
 
+/* v0.21：离线文件指定时间段原始数据重新导出 */
+function tsFull(v) {      // "YYYY-MM-DD HH:MM:SS.fff"（本地时间；可直接回填给服务端 parse_time_text）
+  if (!isNum(+v)) return '';
+  const d = new Date(+v * 1000), p = (n, w = 2) => String(n).padStart(w, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}.${p(d.getMilliseconds(), 3)}`;
+}
+async function refreshRawRange() {
+  const el = $('#raw-exp-range'); if (!el) return null;
+  try {
+    const wb = $('#raw-exp-branch') ? $('#raw-exp-branch').checked : true;
+    const d = await api(`/api/source/raw_range?with_branch=${wb ? 1 : 0}`);
+    const parts = Object.entries(d.ranges || {}).map(([sd, r]) => `${sd === 'branch' ? '分路侧' : '总线侧'} ${r.error ? '✗ ' + r.error : `${r.t0_local} ~ ${r.t1_local}（${r.rows} 行）`}`);
+    el.textContent = parts.length ? parts.join('；') : (d.notes || []).join('；') || '无离线文件数据源';
+    return d;
+  } catch (e) { el.textContent = '文件范围获取失败：' + e.message; return null; }
+}
+async function fillRawRange() {
+  const d = await refreshRawRange();
+  const rs = Object.values((d || {}).ranges || {}).filter(r => !r.error);
+  if (!rs.length) { toast('没有可用的离线文件时间范围', 'err'); return; }
+  const t0 = Math.max(...rs.map(r => r.t0)), t1 = Math.min(...rs.map(r => r.t1));
+  if (t1 <= t0) { toast('两侧文件没有公共时间段，请手动填写', 'err'); }
+  $('#raw-exp-from').value = tsFull(Math.min(...rs.map(r => r.t0)));
+  $('#raw-exp-to').value = tsFull(Math.max(...rs.map(r => r.t1)));
+}
+async function exportRawRange() {
+  const body = { t_from: ($('#raw-exp-from').value || '').trim(), t_to: ($('#raw-exp-to').value || '').trim(),
+                 name: ($('#raw-exp-name').value || '').trim(), with_branch: !!$('#raw-exp-branch').checked };
+  const note = $('#raw-exp-note'); const btn = $('#btn-raw-export');
+  btn.disabled = true; btn.textContent = '导出中…';
+  try {
+    const r = await api('/api/source/export_range', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    const sides = Object.entries(r.sides || {}).map(([sd, v]) => `${sd === 'branch' ? '分路侧' : '总线侧'} ${v.rows} 行（${v.path}）`);
+    toast(`已导出 ${r.rows} 行 → ${r.path}`, 'ok');
+    if (note) note.innerHTML = notes([`✓ ${r.path}（${(r.size_bytes / 1024 / 1024).toFixed(2)} MB）`, `共 ${r.rows} 行，source_id ${r.source_ids.join('/')}：${sides.join('；')}`,
+                                      `数据时间 ${r.t_first_local} ~ ${r.t_last_local}`, r.header ? `列：${r.header.join(', ')}` : '无表头（与源文件一致）', ...(r.notes || []).map(n => 'ℹ ' + n)]);
+  } catch (e) {
+    toast('导出原始数据失败：' + e.message, 'err');
+    if (note) note.innerHTML = notes(['✗ ' + e.message]);
+  } finally { btn.disabled = false; btn.textContent = '导出到新 CSV'; }
+}
+
 async function startEngine(payloadExtra = {}) {
   try {
     // 只送 source（+ 可选 windows）：/api/engine/start 的白名单只有 source 键与 windows，
@@ -2451,6 +2494,9 @@ function bind() {
   $('#btn-stop2').addEventListener('click', stopEngine);
   $('#btn-pause2').addEventListener('click', togglePause);
   $('#btn-load-last').addEventListener('click', loadLastData);
+  $('#btn-raw-export').addEventListener('click', exportRawRange);
+  $('#btn-raw-exp-fill').addEventListener('click', fillRawRange);
+  $('#raw-exp-branch').addEventListener('change', refreshRawRange);
   $('#autoload-last').addEventListener('change', async (e) => {
     const on = !!e.target.checked; S.autoloadDirty = true;
     try {

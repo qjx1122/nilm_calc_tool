@@ -310,6 +310,20 @@
           </div>
         </div>
 
+        <!-- v0.21：离线文件指定时间段原始数据重新导出（两侧写同一文件） -->
+        <div class="panel col-full" style="grid-column:1 / -1">
+          <h3 class="curvehdr"><span>导出指定时间段的原始数据（从离线文件重新导出为新 CSV）</span><span class="navhint" id="raw-exp-range"></span></h3>
+          <div class="row">
+            <label>开始时间 <input type="text" id="raw-exp-from" placeholder="2026-10-15 14:14:20.5 ｜ 14:14:20.5000 ｜ epoch 秒" style="width:230px"></label>
+            <label>结束时间 <input type="text" id="raw-exp-to" placeholder="2026-10-15 14:14:25 ｜ 14:14:25" style="width:230px"></label>
+            <label>文件名（可空）<input type="text" id="raw-exp-name" placeholder="raw_<起>_<止>.csv" style="width:200px"></label>
+            <label class="chk"><input type="checkbox" id="raw-exp-branch" checked> 含分路侧（写入同一文件）</label>
+            <button id="btn-raw-exp-fill" title="把两侧离线文件的公共时间范围填入">填入文件时间范围</button>
+            <button id="btn-raw-export" class="primary">导出到新 CSV</button>
+          </div>
+          <div id="raw-exp-note" class="notes muted">从当前配置的离线数据源 CSV（总线侧与分路侧各自的文件）中，把指定时间段内的原始采样行按原样重新写到 output/raw_&lt;起&gt;_&lt;止&gt;.csv；两侧写进同一个文件，末尾追加 source_id 列（0＝总线侧、1＝分路侧），导出文件可直接再作为离线数据源播放。时间按播放时间轴判断（与界面显示的数据时间一致，含「自定义播放时间」）。</div>
+        </div>
+
         <!-- 第 2 行：量纲与口径 -->
         <div class="panel col-bus">
           <h3><span class="sidename bus">总线侧</span> 量纲与口径</h3>

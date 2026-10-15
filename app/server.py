@@ -36,7 +36,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from elec_tool import __version__
-from elec_tool.config import (AppConfig, ConfigError, CURVE_KEYS, QUANTITY_KEYS, SourceConfig, WindowSpec,
+from elec_tool.config import (AppConfig, ConfigError, parse_time_text, CURVE_KEYS, QUANTITY_KEYS, SourceConfig, WindowSpec,
                               load_or_default)
 from elec_tool.engine import LiveEngine
 from elec_tool.pace import PaceClock
@@ -1385,6 +1385,104 @@ async def get_nilm_events(limit: int = 500, algos: Optional[str] = None, channel
 async def get_nilm_cycles(n: int = 300) -> Dict[str, Any]:
     """最近 n 个周波的 P/Q/I 序列（total/A/B/C），供负荷辨识界面画图。"""
     return RUNNER.nilm_cycles(max(1, min(int(n), 20000)))
+
+
+# ------------------------------------------------------------------ v0.21：离线文件指定时间段原始数据重新导出
+def _raw_export_sides(payload: Dict[str, Any]) -> Tuple[List[Tuple[AppConfig, int]], List[str], Dict[str, Any]]:
+    """当前侧（及总线侧联动的分路侧）的离线文件配置；非 csv_file 的一侧跳过并给出说明。"""
+    side = current_side()
+    notes: List[str] = []
+    ranges: Dict[str, Any] = {}
+    out: List[Tuple[AppConfig, int]] = []
+    cands = [side] + (["branch"] if side == "bus" and RUNNER.cfg.branch.enabled and payload.get("with_branch", True) else [])
+    for sd in cands:
+        cfg = AppConfig.from_dict(RUNNERS[sd].cfg.to_dict())
+        label = "总线侧" if sd == "bus" else "分路侧"
+        if cfg.source.kind != "csv_file":
+            notes.append(f"{label}数据源不是离线文件（当前 {cfg.source.kind}），已跳过"); continue
+        if not str(cfg.source.path or "").strip():
+            notes.append(f"{label}未配置离线文件路径，已跳过"); continue
+        p = _abs_path(cfg.source.path)
+        if not os.path.isfile(p):
+            notes.append(f"{label}离线文件不存在：{cfg.source.path}，已跳过"); continue
+        try:
+            ranges[sd] = _file_time_range(cfg, cfg.source.path)
+            ranges[sd]["t0_local"] = fmt_local(ranges[sd]["t0"]); ranges[sd]["t1_local"] = fmt_local(ranges[sd]["t1"])
+        except Exception as exc:
+            ranges[sd] = {"error": str(exc)}
+        out.append((cfg, SIDE_SOURCE_ID[sd]))
+    return out, notes, ranges
+
+
+@app.get("/api/source/raw_range")
+async def raw_range_info(with_branch: bool = True) -> Dict[str, Any]:
+    """当前侧（含联动分路侧）离线文件的时间范围，供导出界面填默认值。"""
+    sides, notes, ranges = _raw_export_sides({"with_branch": with_branch})
+    return {"ok": True, "sides": {("bus" if sid == 0 else "branch"): {"path": _display_path(_abs_path(c.source.path)), "custom_time": bool(c.source.custom_time)}
+                                  for c, sid in sides}, "ranges": ranges, "notes": notes}
+
+
+@app.post("/api/source/export_range")
+async def raw_export_range(payload: Optional[Dict[str, Any]] = None) -> Any:
+    """v0.21：从离线数据源 CSV 中把**指定时间段的原始采样行**重新导出到一个新的 CSV 文件。
+
+    body：{t_from, t_to（时间文本 "2026-10-15 14:14:20.5" 或 epoch 秒；可留一端为空）, with_branch?: true, name?: 文件名}。
+    时间按播放时间轴判断（与界面显示一致，含自定义播放时间）。总线侧调用且启用分路侧时，分路侧文件同一时间段的行
+    写进**同一个**文件；行按原样写出，末尾追加 source_id 列（0 总线 / 1 分路）；导出文件可直接再作为离线数据源播放。
+    文件：output/raw_<起>_<止>.csv。
+    """
+    payload = payload or {}
+    from elec_tool import raw_export
+    from elec_tool.config import parse_play_start
+    try:
+        tf = parse_play_start("time", payload.get("t_from")) if payload.get("t_from") not in (None, "") else None
+        tt = parse_play_start("time", payload.get("t_to")) if payload.get("t_to") not in (None, "") else None
+    except ConfigError as exc:
+        return JSONResponse(status_code=400, content={"ok": False, "error": str(exc)})
+    if tf is None and tt is None:
+        return JSONResponse(status_code=400, content={"ok": False, "error": "请至少填写开始或结束时间（都留空＝整个文件，请改用复制文件）"})
+    sides, notes, ranges = _raw_export_sides(payload)
+    if not sides:
+        return JSONResponse(status_code=409, content={"ok": False, "error": "没有可导出的离线文件数据源：" + "；".join(notes), "notes": notes})
+    # 只填时刻（HH:MM:SS.ffff，与文件时标写法一致）→ 以主侧文件首行所在日期（播放时间轴）补齐
+    def _resolve(v: Any) -> Optional[float]:
+        if v is None:
+            return None
+        kind, val = v
+        if kind == "abs":
+            return float(val)
+        from datetime import datetime as _dt
+        r0 = next((r for r in ranges.values() if isinstance(r, dict) and r.get("t0") is not None), {})
+        base = float(r0.get("t0") or 0.0)
+        day = _dt.fromtimestamp(base).replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
+        return day + float(val)
+    tf = _resolve(tf); tt = _resolve(tt)
+    if tf is not None and tt is not None and tt <= tf:
+        return JSONResponse(status_code=400, content={"ok": False, "error": "结束时间必须晚于开始时间"})
+    out_dir = RUNNER.cfg.output.export_dir
+    if not os.path.isabs(out_dir):
+        out_dir = os.path.join(ROOT, out_dir)
+    stamp = lambda t: fmt_local(t, ms=False).replace("-", "").replace(":", "").replace(" ", "_")   # noqa: E731
+    name = str(payload.get("name") or "").strip() or f"raw_{stamp(tf) if tf is not None else 'begin'}_{stamp(tt) if tt is not None else 'end'}.csv"
+    if not name.lower().endswith(".csv"):
+        name += ".csv"
+    name = os.path.basename(name)
+    fp = os.path.join(out_dir, name)
+    try:
+        res = await asyncio.get_event_loop().run_in_executor(None, lambda: raw_export.export_range(sides, tf, tt, fp, root=ROOT))
+    except Exception as exc:
+        return JSONResponse(status_code=500, content={"ok": False, "error": f"{type(exc).__name__}: {exc}", "notes": notes})
+    notes += res.get("notes", [])
+    if not res["rows"]:
+        return JSONResponse(status_code=409, content={"ok": False, "error": "指定时间段内没有数据行（请对照各文件的时间范围）",
+                                                      "ranges": ranges, "notes": notes, "t_from": tf, "t_to": tt})
+    per = {("bus" if sid == 0 else "branch"): v for sid, v in res["sides"].items()}
+    for v in per.values():
+        v["path"] = _display_path(v["path"])
+    return {"ok": True, "path": _display_path(fp), "rows": res["rows"], "sides": per, "source_ids": sorted(res["sides"]),
+            "header": res["header"], "t_from": tf, "t_to": tt, "t_first": res["t_first"], "t_last": res["t_last"],
+            "t_first_local": res.get("t_first_local"), "t_last_local": res.get("t_last_local"), "ranges": ranges, "notes": notes,
+            "size_bytes": os.path.getsize(fp)}
 
 
 @app.post("/api/nilm/clear")

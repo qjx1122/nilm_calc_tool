@@ -108,7 +108,7 @@ class CsvFileSource(DataSource):
             block_samples=self.block_samples, encoding=self.cfg.columns.encoding,
             delimiter=self.cfg.columns.delimiter, has_header=self.cfg.columns.has_header,
             tz_offset_h=self.tz_offset_h, max_blocks=self.max_blocks,
-            seek_info=self._seek_info, **seek_kw)
+            seek_info=self._seek_info, keep_rows=bool(getattr(self, "keep_rows", False)), **seek_kw)
         self._exhausted = False
         self._seek_notes = []
         if mode != "begin":
