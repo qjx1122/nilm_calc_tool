@@ -15,13 +15,17 @@ from __future__ import annotations
 import asyncio
 import contextvars
 import json
+import logging
 import os
+import re
 import threading
 import platform
 import sys
 import time
 from collections import deque
 from typing import Any, Deque, Dict, List, Optional, Set, Tuple
+
+log = logging.getLogger("elec_tool.server")
 
 from contextlib import asynccontextmanager
 
@@ -104,19 +108,36 @@ class EngineRunner:
         self.error: Optional[str] = None
         self.cfg_path: str = DEFAULT_CONFIG_PATH        # 启动时加载哪个文件
         self.persist_path: str = RUNTIME_CONFIG_PATH    # 界面改动写到哪个文件
+        self._play_user: Optional[Tuple[str, str, str]] = None   # 本次运行用户自己的 (play_start_mode, play_start_value, play_end_time)
+        self._cfg_view: Optional[AppConfig] = None               # cfg 属性的缓存视图（引擎配置 + 用户播放字段）
 
     # ---------- 配置 ----------
     @property
     def cfg(self) -> AppConfig:
         with self.lock:
             if self.engine is not None:
-                return self.engine.cfg
+                if self._play_user is None:
+                    return self.engine.cfg
+                # 公共时间段联动启动时，引擎配置里的播放起点/终点是**本次运行专用**的自动值；
+                # 对外（/api/config、持久化、下次启动）一律呈现用户自己的设置，自动值绝不外泄（v0.15.3）
+                if self._cfg_view is None:
+                    c = AppConfig.from_dict(self.engine.cfg.to_dict())
+                    c.source.play_start_mode, c.source.play_start_value, c.source.play_end_time = self._play_user
+                    self._cfg_view = c
+                return self._cfg_view
         return load_or_default(self.cfg_path)
 
     def set_cfg(self, cfg: AppConfig) -> None:
         cfg.validate()
         with self.lock:
+            self._cfg_view = None
             if self.engine is not None:
+                if self._play_user is not None:
+                    # 热更新不得把用户的播放起点/终点覆盖到正在按公共时间段播放的引擎上（这些字段只在开源时生效）
+                    self._play_user = (cfg.source.play_start_mode, str(cfg.source.play_start_value), str(cfg.source.play_end_time))
+                    ec = self.engine.cfg.source
+                    cfg = AppConfig.from_dict(cfg.to_dict())
+                    cfg.source.play_start_mode, cfg.source.play_start_value, cfg.source.play_end_time = ec.play_start_mode, ec.play_start_value, ec.play_end_time
                 # 运行中或已结束（离线文件读完）都走热更新：保留趋势历史与最近结果。
                 # 旧写法对「已结束」的引擎整个重建 → 勾一下「保存曲线」24h 曲线和结果全部清空。
                 self.engine.update_config(cfg)
@@ -179,7 +200,9 @@ class EngineRunner:
         return eng.nilm.clear() if eng is not None else 0
 
     # ---------- 生命周期 ----------
-    def start(self, cfg: AppConfig, duration_s: Optional[float] = None, pace_clock=None) -> Dict[str, Any]:
+    def start(self, cfg: AppConfig, duration_s: Optional[float] = None, pace_clock=None,
+              play_user: Optional[Tuple[str, str, str]] = None) -> Dict[str, Any]:
+        """play_user：若本次运行的播放起点/终点是自动算出来的（公共时间段），这里传用户原来的设置，对外呈现/持久化都用它。"""
         cfg.validate()
         # 先在**锁外**回收旧线程：join 时若仍持有 self.lock，旧线程正好卡在
         # 「append 结果要拿锁」上就会互等到超时（2s），旧线程存活后继续轮询
@@ -196,6 +219,8 @@ class EngineRunner:
             self.latest = None
             self.latest_full = None
             self.latest_merged = None
+            self._play_user = play_user
+            self._cfg_view = None
             # 一次运行＝一个数据集：重启引擎必须清空历史，否则导出/趋势会把
             # 不同数据源、不同窗长的结果混在一张表里（误导性极强）。
             self.store.clear()
@@ -559,12 +584,33 @@ def _resolve_branch_cfg_paths(bus_cfg: Optional[AppConfig]) -> Tuple[str, str]:
     return load_path, BRANCH_RUNTIME_CONFIG_PATH
 
 
+def _sanitize_leaked_play(cfg: AppConfig, side: str) -> List[str]:
+    """清理 v0.15～v0.15.2 公共时间段联动启动泄漏进配置文件的自动播放字段（v0.15.3 起不再泄漏）：
+    - play_end_time 非空：用户界面没有这个字段，一定是自动值 → 清空（否则下次启动可能秒播完）；
+    - play_start_mode=time 且取值是裸 epoch 数字（repr 写法，人不会这么填）：是自动起点 → 回到 begin
+      （否则下次播放别的文件会按时标逐行扫到文件尾才开始 / 报起点越界，表现为「启动后很久才开始」）。"""
+    notes: List[str] = []
+    src = cfg.source
+    if str(src.play_end_time or "").strip():
+        notes.append(f"{side}: 清除残留的自动播放终点 play_end_time={src.play_end_time!r}")
+        src.play_end_time = ""
+    v = str(src.play_start_value or "").strip()
+    if src.play_start_mode == "time" and re.fullmatch(r"\d{9,}(\.\d+)?", v):
+        notes.append(f"{side}: 清除残留的自动播放起点 play_start_mode=time/{v} → begin")
+        src.play_start_mode = "begin"; src.play_start_value = ""
+    if src.play_start_mode == "row" and v == "1":            # 分路侧自动起点（第 1 行＝从头）→ 等价 begin
+        src.play_start_mode = "begin"; src.play_start_value = ""
+    return notes
+
+
 def _init_branch_runner(bus_cfg: Optional[AppConfig]) -> None:
     br = RUNNERS["branch"]
     cfg_path, persist_path = _resolve_branch_cfg_paths(bus_cfg)
     br.cfg_path = cfg_path; br.persist_path = persist_path
     try:
         cfg = AppConfig.load(cfg_path) if os.path.isfile(cfg_path) else _default_branch_cfg().validate()
+        for n in _sanitize_leaked_play(cfg, "branch"):
+            log.warning("配置清理：%s", n)
         br.set_cfg(cfg)
     except Exception as exc:
         try:
@@ -587,7 +633,10 @@ async def _startup() -> None:
         if env_cfg:
             bus.set_cfg(AppConfig.from_dict(json.loads(env_cfg)))
         else:
-            bus.set_cfg(load_or_default(cfg_path))
+            cfg0 = load_or_default(cfg_path)
+            for n in _sanitize_leaked_play(cfg0, "bus"):
+                log.warning("配置清理：%s", n)
+            bus.set_cfg(cfg0)
     except Exception as exc:
         bus.error = f"配置初始化失败：{type(exc).__name__}: {exc}"
     try:
@@ -615,6 +664,20 @@ def _abs_path(p: str) -> str:
     return p
 
 
+def _count_data_rows(p: str, has_header: bool) -> int:
+    """按字节数 \n 统计数据行数（空行无法剔除，但样例/现场文件没有空行；末行无换行符时补 1）。"""
+    n = 0; last = b""
+    with open(p, "rb") as fh:
+        while True:
+            chunk = fh.read(8 << 20)
+            if not chunk:
+                break
+            n += chunk.count(b"\n"); last = chunk[-1:]
+    if last and last != b"\n":
+        n += 1
+    return max(0, n - (1 if has_header else 0))
+
+
 def _file_time_range(cfg: AppConfig, path: str) -> Dict[str, Any]:
     """离线文件的数据时间范围 [t0, t1] 与行数。custom_time 时时间轴＝起始时间 + 行号/fs。"""
     import csv as _csv
@@ -628,19 +691,33 @@ def _file_time_range(cfg: AppConfig, path: str) -> Dict[str, Any]:
     idx = cfg.columns.layout(header if has_header else None)
     ts_c = idx.get("timestamp")
     fs = float(cfg.sampling.fs)
-    first: List[str] = []; last: Deque[str] = deque(maxlen=3); n = 0
-    with open(p, "r", encoding=enc, newline="") as fh:
-        rdr = _csv.reader(fh, delimiter=cfg.columns.delimiter)
-        if has_header:
-            next(rdr, None)
-        for row in rdr:
-            if not row:
+    # v0.15.3：不再用 csv.reader 逐行解析整文件（1 小时 6400 Hz ≈ 2300 万行，两侧要扫十几秒到几分钟，
+    # 表现为「启动后很久才开始」）。行数按字节块数 \n；首/末几行分别从文件头和文件尾 64 KB 取。
+    first: List[str] = []; last: List[str] = []
+    n = _count_data_rows(p, has_header)
+    with open(p, "rb") as fh:
+        head = fh.read(65536).decode(enc, errors="replace").splitlines()
+        size = fh.seek(0, os.SEEK_END)
+        fh.seek(max(0, size - 65536))
+        tail = fh.read().decode(enc, errors="replace").splitlines()
+    if has_header and head:
+        head = head[1:]
+    def _cells(lines: List[str]) -> List[List[str]]:
+        out: List[List[str]] = []
+        for ln in lines:
+            if not ln.strip():
                 continue
-            n += 1
-            if ts_c is not None and len(row) > ts_c:
-                if len(first) < 3:
-                    first.append(row[ts_c])
-                last.append(row[ts_c])
+            try:
+                out.append(next(_csv.reader([ln], delimiter=cfg.columns.delimiter)))
+            except Exception:
+                continue
+        return out
+    if ts_c is not None:
+        first = [r[ts_c] for r in _cells(head[:5]) if len(r) > ts_c][:3]
+        tl = [r for r in _cells(tail[1:] if size > 65536 else tail) if len(r) > ts_c]   # 尾块首行可能被截断
+        if has_header and size <= 65536 and tl:
+            tl = [r for r in tl if r[ts_c] != header[ts_c]]
+        last = [r[ts_c] for r in tl[-3:]]
     if n == 0:
         raise ConfigError(f"文件没有数据行：{p}")
     tz_h = file_tz_offset_h(cfg)
@@ -684,32 +761,18 @@ def _compute_common_window(bus_cfg: AppConfig, br_cfg: AppConfig) -> Dict[str, A
     return out
 
 
-_AUTO_PLAY: Dict[str, Tuple[str, str, str]] = {}      # side → 公共时间段自动写入的 (play_start_mode, play_start_value, play_end_time)
-_ORIG_PLAY: Dict[str, Tuple[str, str, str]] = {}      # side → 写入前用户自己的设置（下次非公共时间段启动时还原）
-
-
-def _restore_auto_play(side: str, cfg: AppConfig) -> None:
-    """上次联动启动若自动改写过播放起点/终点，且用户此后没改过，这次启动先还原，避免「残留的起点」让文件秒播完。"""
-    auto = _AUTO_PLAY.get(side); orig = _ORIG_PLAY.get(side)
-    cur = (cfg.source.play_start_mode, str(cfg.source.play_start_value), str(cfg.source.play_end_time))
-    if auto and orig and cur == auto:
-        # 条目保留：若本次启动随后失败（如公共时间段计算报错），RUNNER.cfg 仍是自动值，下次还能再还原
-        cfg.source.play_start_mode, cfg.source.play_start_value, cfg.source.play_end_time = orig
-    else:
-        _AUTO_PLAY.pop(side, None); _ORIG_PLAY.pop(side, None)      # 用户自己改过 → 以用户的为准
-        cfg.source.play_end_time = ""
+def _play_fields(cfg: AppConfig) -> Tuple[str, str, str]:
+    return (cfg.source.play_start_mode, str(cfg.source.play_start_value), str(cfg.source.play_end_time))
 
 
 def _apply_window_to_source(cfg: AppConfig, rng: Dict[str, Any], play_start: float, t_end: float, side: str = "bus") -> None:
     """把公共时间段写进一侧的运行配置：起点按时标定位（custom_time 时换算成行号），终点＝公共终点。"""
-    _ORIG_PLAY[side] = (cfg.source.play_start_mode, str(cfg.source.play_start_value), str(cfg.source.play_end_time))
     if rng.get("custom_time"):
         skip = int(round((play_start - rng["t0"]) * rng["fs"]))
         cfg.source.play_start_mode = "row"; cfg.source.play_start_value = str(max(1, skip + 1))
     else:
         cfg.source.play_start_mode = "time"; cfg.source.play_start_value = repr(float(play_start))
     cfg.source.play_end_time = repr(float(t_end))
-    _AUTO_PLAY[side] = (cfg.source.play_start_mode, str(cfg.source.play_start_value), str(cfg.source.play_end_time))
 
 
 def _start_branch_if_enabled(bus_cfg: AppConfig, pace_clock=None) -> Optional[Dict[str, Any]]:
@@ -732,10 +795,12 @@ def _start_branch_if_enabled(bus_cfg: AppConfig, pace_clock=None) -> Optional[Di
         # 播放速率与总线侧保持一致（需求：两侧倍速一致）
         cfg.source.file_speed = float(bus_cfg.source.file_speed or 0.0)
         cw = COMMON_WINDOW if COMMON_WINDOW.get("enabled") else None
-        _restore_auto_play("branch", cfg)
+        cfg.source.play_end_time = ""
+        play_user: Optional[Tuple[str, str, str]] = None
         if cw:
+            play_user = _play_fields(cfg)
             _apply_window_to_source(cfg, cw["branch"], cw["play_start"], cw["t_end"], side="branch")
-        br.start(cfg, pace_clock=pace_clock)      # 与总线侧共用节拍钟：两侧严格同步播放
+        br.start(cfg, pace_clock=pace_clock, play_user=play_user)      # 与总线侧共用节拍钟：两侧严格同步播放
         br.error = None
         return {"ok": True, "source_kind": cfg.source.kind, "path": cfg.source.path}
     except Exception as exc:
@@ -948,6 +1013,7 @@ async def put_config(payload: Dict[str, Any]) -> Any:
 def _persist(cfg: AppConfig) -> None:
     """写运行时配置文件；路径尽量存成相对仓库根的形式，换机器/换目录仍可用。"""
     out = AppConfig.from_dict(cfg.to_dict())
+    out.source.play_end_time = ""                 # 运行期自动字段，不落盘
     sp = out.source.path or ""
     if sp.startswith(ROOT + os.sep):
         out.source.path = os.path.relpath(sp, ROOT)
@@ -990,19 +1056,21 @@ async def engine_start(payload: Optional[Dict[str, Any]] = None) -> Any:
                 cfg.source.path = cand
         coupled = (current_side() == "bus" and payload.get("with_branch", True) and cfg.branch.enabled
                    and cfg.source.kind == "csv_file")
+        cfg.source.play_end_time = ""          # 终点只由公共时间段自动给出，用户配置里不存在这个概念
+        play_user: Optional[Tuple[str, str, str]] = None
         if current_side() == "bus":
             COMMON_WINDOW.clear(); COMMON_WINDOW["enabled"] = False
-            _restore_auto_play("bus", cfg)
         if coupled and cfg.branch.common_window:
             br_cfg = RUNNERS["branch"].cfg
             if br_cfg.source.kind != "csv_file" or not br_cfg.source.path:
                 raise ConfigError("启用「只播放公共时间段」需要分路侧已配置离线文件")
             w = _compute_common_window(cfg, br_cfg)        # 失败 → 400，两侧都不启动
             COMMON_WINDOW.update(w)
+            play_user = _play_fields(cfg)
             _apply_window_to_source(cfg, w["bus"], w["play_start"], w["t_end"], side="bus")
         clock = PaceClock(cfg.source.file_speed) if cfg.source.kind == "csv_file" else None
-        RUNNER.start(cfg, duration_s=payload.get("duration_s"), pace_clock=clock)
-        out: Dict[str, Any] = {"ok": True, "side": current_side(), "config": cfg.to_dict()}
+        RUNNER.start(cfg, duration_s=payload.get("duration_s"), pace_clock=clock, play_user=play_user)
+        out: Dict[str, Any] = {"ok": True, "side": current_side(), "config": RUNNER.cfg.to_dict()}
         if COMMON_WINDOW.get("enabled"):
             out["common_window"] = {k: v for k, v in COMMON_WINDOW.items() if k not in ("bus", "branch")}
         if current_side() == "bus" and payload.get("with_branch", True):

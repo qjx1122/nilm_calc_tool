@@ -305,3 +305,47 @@ def test_r15_1_pace_sync_and_merged_result(client, tmp_path):
     pc = a["source"]["pace_clock"]; assert pc["done"].get("branch") and pc["done"].get("bus")
     full = client.get("/api/result?full=false").json()
     assert {"voltage", "power", "fundamental", "harmonic"} <= set(k for k, v in full["quantities"].items() if v.get("ok"))
+
+
+def test_r15_3_auto_play_fields_never_leak(client, tmp_path):
+    """v0.15.3：公共时间段自动写入的 play_start/play_end 只进引擎，不进 /api/config、不被持久化；
+    旧版本泄漏到配置文件里的残留值在加载时被清理（否则下次播放别的文件会按时标扫到文件尾才开始）。"""
+    from elec_tool.selftest import build_signal, HarmSpec
+    from tests.conftest import write_csv
+    import app.server as srv
+    from elec_tool.config import AppConfig
+    specs = [HarmSpec(1, 57.735, 5.0, phi_deg=0.0)]
+    fs = 6400.0; T0 = 1_760_000_000.0
+    t, u, i = build_signal(specs, fs, 2.0, t0=T0); write_csv(str(tmp_path / "bus.csv"), t, u, i)
+    t2, u2, i2 = build_signal(specs, fs, 2.0, t0=T0 + 0.5); write_csv(str(tmp_path / "br.csv"), t2, u2, i2)
+    client.post("/api/engine/stop"); client.post("/api/branch/engine/stop")
+    client.put("/api/config", json={"branch": {"enabled": True, "common_window": True, "common_start": ""},
+                                    "source": {"kind": "csv_file", "path": str(tmp_path / "bus.csv"), "play_start_mode": "begin", "play_start_value": ""}})
+    client.put("/api/branch/config", json={"source": {"kind": "csv_file", "path": str(tmp_path / "br.csv"), "custom_time": False}})
+    r = client.post("/api/engine/start", json={"kind": "csv_file", "path": str(tmp_path / "bus.csv"), "file_speed": 0}).json()
+    assert r["ok"] and r["common_window"]["enabled"], r
+    # 运行中：引擎按公共时间段播放（引擎配置里是 time 起点），但对外配置仍是用户的 begin
+    st = client.get("/api/state").json()
+    assert st["source"]["play_start_mode"] == "time"                      # 引擎（数据源 info）确实在按时标起点播
+    c = client.get("/api/config").json()["source"]
+    assert c["play_start_mode"] == "begin" and c["play_start_value"] == "" and c["play_end_time"] == ""
+    assert r["config"]["source"]["play_start_mode"] == "begin"
+    bc = client.get("/api/branch/config").json()["source"]
+    assert bc["play_start_mode"] == "begin" and bc["play_end_time"] == ""
+    # 运行中保存别的设置，也不会把自动值带出去
+    client.put("/api/config", json={"branch": {"common_start": ""}})
+    c = client.get("/api/config").json()["source"]
+    assert c["play_start_mode"] == "begin" and c["play_end_time"] == ""
+    for _ in range(50):
+        time.sleep(0.1)
+        a = client.get("/api/state").json()
+        if not a["running"]:
+            break
+    assert abs(a["engine"]["samples_in"] - 1.5 * fs) <= 640                # 公共段 1.5 s 仍然生效
+    # 旧版本泄漏的配置文件：加载时清理
+    cfg = AppConfig(); cfg.source.kind = "csv_file"
+    cfg.source.play_start_mode = "time"; cfg.source.play_start_value = "1792044861.0"; cfg.source.play_end_time = "1792044865.41"
+    notes = srv._sanitize_leaked_play(cfg, "bus")
+    assert len(notes) == 2 and cfg.source.play_start_mode == "begin" and cfg.source.play_end_time == ""
+    cfg.source.play_start_mode = "time"; cfg.source.play_start_value = "2026-10-15 08:00:00"
+    assert srv._sanitize_leaked_play(cfg, "bus") == [] and cfg.source.play_start_mode == "time"   # 人填的时标不动
