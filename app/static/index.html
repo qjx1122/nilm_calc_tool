@@ -650,17 +650,6 @@
         <canvas id="nilm-chart" height="240"></canvas>
       </div>
       <div class="panel">
-        <h3 class="curvehdr"><span>导出指定时间段的原始周波数据（每周波 P / Q / I × 三相总 / A / B / C）</span><span class="navhint" id="nilm-keep-range"></span></h3>
-        <div class="row">
-          <label>开始时间 <input type="text" id="nilm-exp-from" placeholder="2026-10-15 14:14:20.5 或 epoch 秒；空＝保留区起点" style="width:230px"></label>
-          <label>结束时间 <input type="text" id="nilm-exp-to" placeholder="空＝保留区终点" style="width:230px"></label>
-          <button id="btn-nilm-exp-fill" title="把保留区的起止时间填入上面两个框">填入保留区范围</button>
-          <button id="btn-nilm-export" class="primary">导出到 CSV</button>
-          <a id="nilm-exp-download" href="#" target="_blank" title="按上面的时间段直接下载 CSV（不落盘）">直接下载</a>
-        </div>
-        <div id="nilm-exp-note" class="notes muted">写入 output/cycles_&lt;起&gt;_&lt;止&gt;.csv；总线侧导出且启用分路侧时，分路侧同一时间段的周波写进同一文件（source_id 列 0＝总线侧、1＝分路侧，按时间排序）。数据来自内存保留区（参数「原始周波保留数」），重新启动播放后保留区清空。</div>
-      </div>
-      <div class="panel">
         <h3 class="curvehdr"><span>事件列表（最近 <span id="nilm-total">0</span> 条；时刻＝数据时间，方向 ↑投入 / ↓切除，幅值＝事件后稳态 − 事件前稳态）</span>
           <span class="toggle">
             <label>算法 <select id="nilm-filter"><option value="">全部</option></select></label>
@@ -682,7 +671,6 @@
             <label><input type="checkbox" id="nilm-ch-C"> C 相</label></span></label>
           <label>周波窗长（周波数，≥30）<input type="number" step="1" min="30" id="nilm-window_cycles"></label>
           <label>同算法同对象最小事件间隔（周波）<input type="number" step="1" min="0" id="nilm-min_gap_cycles"></label>
-          <label>原始周波保留数（周波；供导出指定时间段，180000≈1h@50Hz，每侧约 19 MB；0＝不保留）<input type="number" step="1" min="0" id="nilm-cycle_keep_cycles"></label>
           <label>相对容差 rel_tol_pct（% 窗内 |P| 中位数；作用于容差/漂移/噪声类参数）<input type="number" step="0.1" min="0" max="50" id="nilm-rel_tol_pct"></label>
           <label>相对最小幅值 min_delta_pct（% 窗内 |P| 中位数；0＝只用各算法绝对值）<input type="number" step="0.1" min="0" max="100" id="nilm-min_delta_pct"></label>
         </div>

@@ -428,10 +428,6 @@ class NilmDetector:
         self._last_end: Dict[Tuple[str, str], int] = {}    # (algo, channel) → 已确认事件的终点全局序号
         self.counts: Dict[str, int] = {a: 0 for a in NILM_ALGO_DEFAULTS}
         self.errors: List[str] = []
-        # v0.21：原始周波数据保留区（独立于检测窗）：分块列表，按 cycle_keep_cycles 从头裁剪
-        self._keep: List[Dict[str, np.ndarray]] = []
-        self._keep_n = 0
-        self._keep_g0 = 0                   # 保留区第 0 个周波的全局序号
 
     # ---- 配置热更新：换阈值不清历史；fs/f_nom 变化重建周波切分
     def update_config(self, cfg: AppConfig) -> None:
@@ -455,7 +451,6 @@ class NilmDetector:
             if m == 0:
                 return []
             self.cycles_total += m
-            self._keep_push(f, m)
             self._t = np.concatenate([self._t, f["t"]])
             self._p = np.concatenate([self._p, f["p"]], axis=1)
             self._q = np.concatenate([self._q, f["q"]], axis=1)
@@ -540,50 +535,6 @@ class NilmDetector:
         evs.reverse()
         return [e.to_dict() for e in evs]
 
-    # ---- 原始周波数据保留 / 按时间段导出（v0.21）
-    def _keep_push(self, f: Dict[str, np.ndarray], m: int) -> None:
-        K = int(getattr(self.ncfg, "cycle_keep_cycles", 0) or 0)
-        if K <= 0:
-            self._keep = []; self._keep_n = 0; self._keep_g0 = self.cycles_total
-            return
-        self._keep.append({"t": f["t"].copy(), "p": f["p"].copy(), "q": f["q"].copy(), "i": f["i"].copy()})
-        self._keep_n += m
-        while self._keep_n > K and self._keep:
-            over = self._keep_n - K
-            head = self._keep[0]
-            hn = int(head["t"].shape[0])
-            if hn <= over:
-                self._keep.pop(0); self._keep_n -= hn; self._keep_g0 += hn
-            else:
-                self._keep[0] = {"t": head["t"][over:], "p": head["p"][:, over:], "q": head["q"][:, over:], "i": head["i"][:, over:]}
-                self._keep_n -= over; self._keep_g0 += over
-                break
-
-    def keep_info(self) -> Dict[str, Any]:
-        with self._lock:
-            if not self._keep_n:
-                return {"cycles": 0, "keep_cycles": int(getattr(self.ncfg, "cycle_keep_cycles", 0) or 0), "t_first": None, "t_last": None}
-            return {"cycles": int(self._keep_n), "keep_cycles": int(getattr(self.ncfg, "cycle_keep_cycles", 0) or 0),
-                    "t_first": float(self._keep[0]["t"][0]), "t_last": float(self._keep[-1]["t"][-1])}
-
-    def cycles_between(self, t_from: Optional[float], t_to: Optional[float]) -> Dict[str, Any]:
-        """保留区内 [t_from, t_to] 的全部周波：{"t": (M,), "p"/"q"/"i": (4, M), "idx": (M,) 全局周波序号}。"""
-        with self._lock:
-            if not self._keep_n:
-                return {"t": np.zeros(0), "p": np.zeros((4, 0)), "q": np.zeros((4, 0)), "i": np.zeros((4, 0)), "idx": np.zeros(0, dtype=np.int64)}
-            t = np.concatenate([c["t"] for c in self._keep])
-            p = np.concatenate([c["p"] for c in self._keep], axis=1)
-            q = np.concatenate([c["q"] for c in self._keep], axis=1)
-            i = np.concatenate([c["i"] for c in self._keep], axis=1)
-            g0 = self._keep_g0
-        idx = np.arange(g0, g0 + t.shape[0], dtype=np.int64)
-        mask = np.ones(t.shape[0], dtype=bool)
-        if t_from is not None:
-            mask &= t >= float(t_from)
-        if t_to is not None:
-            mask &= t <= float(t_to)
-        return {"t": t[mask], "p": p[:, mask], "q": q[:, mask], "i": i[:, mask], "idx": idx[mask]}
-
     def cycles(self, n: int = 300) -> Dict[str, Any]:
         """最近 n 个周波的 P/Q/I 序列（界面画图用）。"""
         with self._lock:
@@ -615,9 +566,6 @@ class NilmDetector:
                     "window_cycles": int(self.ncfg.window_cycles), "n_cycle_samples": self.feat.n_cycle,
                     "channels": list(self.ncfg.channels), "algorithms_enabled": enabled_algos,
                     "algorithm_names": NILM_ALGO_NAMES, "writer": self.writer.info(), "errors": list(self.errors),
-                    "keep": {"cycles": int(self._keep_n), "keep_cycles": int(getattr(self.ncfg, "cycle_keep_cycles", 0) or 0),
-                             "t_first": (float(self._keep[0]["t"][0]) if self._keep_n else None),
-                             "t_last": (float(self._keep[-1]["t"][-1]) if self._keep_n else None)},
                     "notes": notes}
 
     def load_events(self, rows: List[Dict[str, Any]], replace: bool = True) -> int:

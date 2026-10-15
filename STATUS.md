@@ -81,7 +81,6 @@
 - 范围边界：~~本 session 不写业务代码~~ ❌**已失效**（该边界属上一任务；本任务即为写代码）；仍然遵守：不新建台账外散文件、不把数据/产物入库
 
 ## 已完成
-- **v0.21**：导出指定时间段原始周波数据（P/Q/I×4 对象）到 CSV，两侧共用文件 source_id 区分；`nilm.cycle_keep_cycles` 保留区；`POST/GET /api/nilm/cycles/export`；负荷辨识页面板。
 - **v0.20.1**：总览分相 Q/S 曲线「散点」修复——去掉虚线样式，改实线 + 量基色亮/原/暗三档。
 - **v0.20**：重启后各子界面自动恢复上次运行数据——`output/last_result.json`（两侧共用、source_id 分键）保存最新电气量；启动时 `_autoload_last()` 读回 CSV + 快照；`output.autoload_last` 开关。
 - **v0.19**：总览 P/Q/S 趋势增加分相 Pa..Sc 曲线（默认隐藏、图例勾选显示，总 P/Q/S 默认显示）；power 趋势记录新增 9 个分相字段。
