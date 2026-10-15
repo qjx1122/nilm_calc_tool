@@ -122,3 +122,5 @@ body.side-branch header{box-shadow:inset 0 3px 0 var(--warn)}
 .card .v .tag{display:inline-block;font-size:10px;font-weight:600;padding:0 5px;border-radius:4px;margin-right:6px;vertical-align:middle}
 .card .v .tag.bus{background:#12304a;color:var(--acc)}.card .v .tag.branch{background:#3a2d12;color:var(--warn)}
 .card .v.dual{font-size:15px;line-height:1.35}
+/* v0.15.2 总览：总线侧/分路侧曲线分开两列（左总线、右分路），分路侧未启用时只剩总线侧一列 */
+.ov-curves.no-branch .ov-br-panel{display:none}

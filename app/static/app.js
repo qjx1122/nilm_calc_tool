@@ -794,15 +794,6 @@ function ovBranchActive() {
   return !!(br.enabled || br.running || br.finished);
 }
 
-/* 分路侧曲线叠加到总线侧时间轴：优先按 config.branch.time_offset_s 平移；若与总线区间无交集则按起点对齐 */
-function ovBranchX(brPts, busPts) {
-  if (!brPts.length) return { shift: 0, note: '' };
-  const off = (((S.state || {}).config || {}).branch || {}).time_offset_s || 0;
-  if (!busPts.length) return { shift: off, note: '' };
-  const b0 = busPts[0].t, b1 = busPts[busPts.length - 1].t, r0 = brPts[0].t + off, r1 = brPts[brPts.length - 1].t + off;
-  if (r1 >= b0 && r0 <= b1) return { shift: off, note: off ? `分路侧曲线已按时标偏移 ${num(off, 3)} s 平移` : '' };
-  return { shift: b0 - brPts[0].t, note: '两侧时间轴无交集：分路侧曲线按起点对齐叠加（可在数据源页设置时标偏移或启用公共时间段）' };
-}
 
 /* ------------------------------------------------------------------ 历史曲线 */
 
@@ -1033,45 +1024,55 @@ function renderOverview() {
   const hv = S.histCache.voltage || [], hi = S.histCache.current || [], hp = S.histCache.power || [], hh = S.histCache.harmonic || [];
   const tref = (arr) => arr.length ? arr[0].t : 0;
   // 分路侧曲线（虚线）叠加到同一张图
-  const act2 = act;
-  const bhv = act2 ? (OVB.hist.voltage || []) : [], bhi = act2 ? (OVB.hist.current || []) : [], bhp = act2 ? (OVB.hist.power || []) : [], bhh = act2 ? (OVB.hist.harmonic || []) : [];
-  const DASH = [5, 4];
-  const brSeries = (brPts, busPts, fields) => {
-    if (!brPts.length) return [];
-    const { shift } = ovBranchX(brPts, busPts);
-    const t0 = tref(busPts.length ? busPts : brPts.map(p => ({ t: p.t + shift })));
-    return fields.map(([f, color, label]) => ({ name: `${label}(分路)`, color, dash: DASH, data: brPts.map(p => [p.t + shift - t0, p[f]]) }));
-  };
-  const xo = (busPts, brPts) => {       // 总线无点时以分路侧（平移后）为时间基准
-    if (busPts.length) return tref(busPts);
-    const { shift } = ovBranchX(brPts, busPts); return brPts.length ? brPts[0].t + shift : 0;
-  };
-  const t0u = xo(hv, bhv), t0i = xo(hi, bhi), t0p = xo(hp, bhp), t0h = xo(hh, bhh);
+  // v0.15.2：总线侧与分路侧曲线**分开**画（左列总线、右列分路），各用各的时间轴，不再叠在同一坐标系里
+  const bhv = act ? (OVB.hist.voltage || []) : [], bhi = act ? (OVB.hist.current || []) : [], bhp = act ? (OVB.hist.power || []) : [], bhh = act ? (OVB.hist.harmonic || []) : [];
+  const grid = $('#ov-curves');
+  if (grid) grid.classList.toggle('no-branch', !act);
+  const br = (S.state || {}).branch || {};
+  const brNote = !act ? '' : br.running ? '播放中' : br.finished ? '已播放完毕（数据停在终值）' : (br.error ? '错误' : '未启动');
+  document.querySelectorAll('#ov-curves .ov-br-note').forEach(el => { el.textContent = brNote; });
+  const t0u = tref(hv), t0i = tref(hi), t0p = tref(hp), t0h = tref(hh);
   drawLine($('#ov-u'), [{ name: 'Ua', color: COLORS.A, data: hv.map(p => [p.t - t0u, p.Ua]) },
                         { name: 'Ub', color: COLORS.B, data: hv.map(p => [p.t - t0u, p.Ub]) },
-                        { name: 'Uc', color: COLORS.C, data: hv.map(p => [p.t - t0u, p.Uc]) },
-                        ...brSeries(bhv, hv, [['Ua', COLORS.A, 'Ua'], ['Ub', COLORS.B, 'Ub'], ['Uc', COLORS.C, 'Uc']])],
+                        { name: 'Uc', color: COLORS.C, data: hv.map(p => [p.t - t0u, p.Uc]) }],
            { ylabel: 'V', fmtX: x => tsX(x + t0u, spanOf('voltage')), fmtTip: x => ts(x + t0u), tbase: t0u, empty: '暂无电压趋势（需累计 ≥2 个窗）' });
   drawLine($('#ov-i'), [{ name: 'Ia', color: COLORS.A, data: hi.map(p => [p.t - t0i, p.Ia]) },
                         { name: 'Ib', color: COLORS.B, data: hi.map(p => [p.t - t0i, p.Ib]) },
-                        { name: 'Ic', color: COLORS.C, data: hi.map(p => [p.t - t0i, p.Ic]) },
-                        ...brSeries(bhi, hi, [['Ia', COLORS.A, 'Ia'], ['Ib', COLORS.B, 'Ib'], ['Ic', COLORS.C, 'Ic']])],
+                        { name: 'Ic', color: COLORS.C, data: hi.map(p => [p.t - t0i, p.Ic]) }],
            { ylabel: 'A', fmtX: x => tsX(x + t0i, spanOf('current')), fmtTip: x => ts(x + t0i), tbase: t0i });
   drawLine($('#ov-p'), [{ name: 'P', color: COLORS.P, data: hp.map(p => [p.t - t0p, p.P]) },
                         { name: 'Q', color: COLORS.Q, data: hp.map(p => [p.t - t0p, p.Q]) },
-                        { name: 'S', color: COLORS.S, data: hp.map(p => [p.t - t0p, p.S]) },
-                        ...brSeries(bhp, hp, [['P', COLORS.P, 'P'], ['Q', COLORS.Q, 'Q'], ['S', COLORS.S, 'S']])],
+                        { name: 'S', color: COLORS.S, data: hp.map(p => [p.t - t0p, p.S]) }],
            { ylabel: 'W/var/VA', fmtX: x => tsX(x + t0p, spanOf('power')), fmtTip: x => ts(x + t0p), tbase: t0p });
   drawLine($('#ov-thd'), [{ name: 'THD_U', color: COLORS.A, data: hh.map(p => [p.t - t0h, p.THD_U]) },
-                          { name: 'THD_I', color: COLORS.C, data: hh.map(p => [p.t - t0h, p.THD_I]) },
-                          ...brSeries(bhh, hh, [['THD_U', COLORS.A, 'THD_U'], ['THD_I', COLORS.C, 'THD_I']])],
+                          { name: 'THD_I', color: COLORS.C, data: hh.map(p => [p.t - t0h, p.THD_I]) }],
            { ylabel: '%', fmtX: x => tsX(x + t0h, spanOf('harmonic')), fmtTip: x => ts(x + t0h), tbase: t0h, zero: true });
+  if (act) {
+    const brEmpty = br.running ? '分路侧暂无趋势（等待计算结果…）' : '分路侧暂无数据（启动数据源后显示）';
+    const b0u = tref(bhv), b0i = tref(bhi), b0p = tref(bhp), b0h = tref(bhh);
+    const bspan = (pts) => pts.length > 1 ? pts[pts.length - 1].t - pts[0].t : 0;
+    drawLine($('#ov-u-br'), [{ name: 'Ua', color: COLORS.A, data: bhv.map(p => [p.t - b0u, p.Ua]) },
+                             { name: 'Ub', color: COLORS.B, data: bhv.map(p => [p.t - b0u, p.Ub]) },
+                             { name: 'Uc', color: COLORS.C, data: bhv.map(p => [p.t - b0u, p.Uc]) }],
+             { ylabel: 'V', fmtX: x => tsX(x + b0u, bspan(bhv)), fmtTip: x => ts(x + b0u), tbase: b0u, empty: brEmpty });
+    drawLine($('#ov-i-br'), [{ name: 'Ia', color: COLORS.A, data: bhi.map(p => [p.t - b0i, p.Ia]) },
+                             { name: 'Ib', color: COLORS.B, data: bhi.map(p => [p.t - b0i, p.Ib]) },
+                             { name: 'Ic', color: COLORS.C, data: bhi.map(p => [p.t - b0i, p.Ic]) }],
+             { ylabel: 'A', fmtX: x => tsX(x + b0i, bspan(bhi)), fmtTip: x => ts(x + b0i), tbase: b0i, empty: brEmpty });
+    drawLine($('#ov-p-br'), [{ name: 'P', color: COLORS.P, data: bhp.map(p => [p.t - b0p, p.P]) },
+                             { name: 'Q', color: COLORS.Q, data: bhp.map(p => [p.t - b0p, p.Q]) },
+                             { name: 'S', color: COLORS.S, data: bhp.map(p => [p.t - b0p, p.S]) }],
+             { ylabel: 'W/var/VA', fmtX: x => tsX(x + b0p, bspan(bhp)), fmtTip: x => ts(x + b0p), tbase: b0p, empty: brEmpty });
+    drawLine($('#ov-thd-br'), [{ name: 'THD_U', color: COLORS.A, data: bhh.map(p => [p.t - b0h, p.THD_U]) },
+                               { name: 'THD_I', color: COLORS.C, data: bhh.map(p => [p.t - b0h, p.THD_I]) }],
+             { ylabel: '%', fmtX: x => tsX(x + b0h, bspan(bhh)), fmtTip: x => ts(x + b0h), tbase: b0h, zero: true, empty: brEmpty });
+  }
   renderCurveSave();
   refreshOverviewBranch(false);
   const hn = $('#ov-histnote');
   if (hn) {
     const hrs = ((((S.state || {}).config || {}).output || {}).history_hours) || 24;
-    const ovn = act ? ovBranchX(OVB.hist.power || [], hp).note : '';
+    const ovn = act ? '总线侧与分路侧曲线分列显示（左总线、右分路），各用各的时间轴；两侧按时标对齐与差值见「跨侧对比」页。' : '';
     hn.innerHTML = notes([...(ovn ? [ovn] : []), `趋势曲线显示<b>最近 ${hrs} 小时</b>的数据（按数据时间计；不足 ${hrs} 小时则显示全部）。` +
       `每条曲线最多传输 ${HIST_MAX_POINTS} 点（超出按峰谷保形抽稀，面板标题处标注）。` +
       `曲线面板右上角「保存曲线」＝保存曲线数据时是否包含该曲线。`]);

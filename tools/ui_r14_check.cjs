@@ -123,8 +123,9 @@ async function main() {
   check('总览有两侧状态卡', /总线侧数据源/.test($('ov-sides').textContent) && /分路侧设备数据源/.test($('ov-sides').textContent) && /运行中/.test($('ov-sides').textContent), $('ov-sides').textContent.slice(0, 80));
   check('分路侧分组标题徽标=运行中', $('nav-br-state').textContent === '运行中', $('nav-br-state').textContent);
   await sleep(5000);   // 0.5× 下分路侧 voltage 首次出结果 ≈3 s 墙钟 + 总览分路刷新节流
+  check('总览曲线两侧分开：分路侧四张独立画布可见且已绘制（不与总线侧同轴）', !$('ov-curves').classList.contains('no-branch') && ['ov-u-br', 'ov-i-br', 'ov-p-br', 'ov-thd-br'].every(id => $(id) && $(id).closest('.ov-br-panel')) && !!($('ov-p-br').__chart) && !!($('ov-p').__chart) && $('ov-p').__chart.pts.every(s => !/分路/.test(s.name)), `${$('ov-p-br').__chart ? '分路 P 图 ' + $('ov-p-br').__chart.pts.length + ' 条' : '分路 P 图未绘制'}`);
+  check('分路侧未启用时分路曲线列隐藏（CSS 类）', /\.ov-curves\.no-branch \.ov-br-panel\{display:none\}/.test(require('fs').readFileSync(path.join(ROOT, 'app/static/style.css'), 'utf8')));
   check('总览卡片两侧放一起（总线/分路标签 + 总线−分路）', /总线/.test($('ov-cards').textContent) && /分路/.test($('ov-cards').textContent) && /总线−分路/.test($('ov-cards').textContent) && !$('ov-br-cards'), $('ov-cards').textContent.slice(0, 80));
-  check('总览曲线叠加分路侧（图例含 (分路)）', !!($('ov-p').__chart && $('ov-p').__chart.pts.some(s => /\(分路\)/.test(s.name))), $('ov-p').__chart ? $('ov-p').__chart.pts.map(s => s.name).join(',') : 'no chart');
   // 增量刷新：相同内容不触碰 DOM
   const probeEl = $('ov-cards'); const before = probeEl.firstElementChild; const html0 = probeEl.innerHTML;
   probeEl.innerHTML = html0;
@@ -161,7 +162,9 @@ async function main() {
   click($('btn-br-common-preview')); await sleep(1500);
   check('预览公共时间段输出', /公共时间段：/.test($('br-common-out').textContent) && /总时长/.test($('br-common-out').textContent), $('br-common-out').textContent.slice(0, 100));
   const pv = await api('/api/common_window?preview=1');
-  check('公共时间段 ≈ 4 s（总线 5 s，分路起点晚 ~1 s、长 6 s；起始文本按秒取整）', pv.ok && pv.duration_s > 3.9 && pv.duration_s < 4.35, `${pv.duration_s}`);
+  // 公共段 = 总线终点 − 分路起点；分路起点 = floor(总线起点 + 1)（起始文本按秒取整），与样例文件的秒内相位有关
+  const cwExpect = (pb.t_first + 5.0) - Math.floor(pb.t_first + 1);
+  check('公共时间段 = 总线终点 − 分路起点（起始文本按秒取整）', pv.ok && Math.abs(pv.duration_s - cwExpect) < 0.15, `${pv.duration_s} vs 期望 ${cwExpect.toFixed(3)}`);
   $('src-file-speed').value = '0'; change($('src-file-speed'));
   const rs2 = await api('/api/engine/start', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ kind: 'csv_file', path: 'data/sample_6400hz.csv', file_speed: 0 }) });
   check('联动启动返回公共时间段且分路侧启动', rs2.ok && rs2.common_window && rs2.common_window.enabled && rs2.branch && rs2.branch.ok, JSON.stringify(rs2.branch));

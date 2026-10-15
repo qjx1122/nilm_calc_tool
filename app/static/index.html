@@ -99,11 +99,15 @@
       <div class="cards" id="ov-sides"></div>
       <h3 class="ovsub">最新电气量 <span class="navhint">每张卡片：<span class="sidename bus">总线侧</span> / <span class="sidename branch">分路侧设备</span>（分路侧未启用时只显示总线侧）<span id="ov-br-hint"></span></span></h3>
       <div class="cards" id="ov-cards"></div>
-      <div class="grid2">
-        <div class="panel"><h3 class="curvehdr"><span>三相电压趋势（实线＝总线侧，虚线＝分路侧）</span><label class="curvesave" title="勾选＝「保存曲线数据」时包含本曲线；不勾选＝保存时跳过本曲线"><input type="checkbox" class="curve-save" data-curve="voltage"> 保存曲线</label><span class="curvespan" data-curve="voltage"></span></h3><canvas id="ov-u" height="200"></canvas></div>
-        <div class="panel"><h3 class="curvehdr"><span>三相电流趋势（实线＝总线侧，虚线＝分路侧）</span><label class="curvesave" title="勾选＝「保存曲线数据」时包含本曲线；不勾选＝保存时跳过本曲线"><input type="checkbox" class="curve-save" data-curve="current"> 保存曲线</label><span class="curvespan" data-curve="current"></span></h3><canvas id="ov-i" height="200"></canvas></div>
-        <div class="panel"><h3 class="curvehdr"><span>P / Q / S 趋势（实线＝总线侧，虚线＝分路侧）</span><label class="curvesave" title="勾选＝「保存曲线数据」时包含本曲线；不勾选＝保存时跳过本曲线"><input type="checkbox" class="curve-save" data-curve="power"> 保存曲线</label><span class="curvespan" data-curve="power"></span></h3><canvas id="ov-p" height="200"></canvas></div>
-        <div class="panel"><h3 class="curvehdr"><span>THD 趋势（实线＝总线侧，虚线＝分路侧）</span><label class="curvesave" title="勾选＝「保存曲线数据」时包含本曲线；不勾选＝保存时跳过本曲线"><input type="checkbox" class="curve-save" data-curve="harmonic"> 保存曲线</label><span class="curvespan" data-curve="harmonic"></span></h3><canvas id="ov-thd" height="200"></canvas></div>
+      <div class="grid2 ov-curves" id="ov-curves">
+        <div class="panel"><h3 class="curvehdr"><span><span class="sidename bus">总线侧</span> 三相电压趋势</span><label class="curvesave" title="勾选＝「保存曲线数据」时包含本曲线；不勾选＝保存时跳过本曲线"><input type="checkbox" class="curve-save" data-curve="voltage"> 保存曲线</label><span class="curvespan" data-curve="voltage"></span></h3><canvas id="ov-u" height="200"></canvas></div>
+        <div class="panel ov-br-panel"><h3 class="curvehdr"><span><span class="sidename branch">分路侧</span> 三相电压趋势</span><span class="navhint ov-br-note"></span></h3><canvas id="ov-u-br" height="200"></canvas></div>
+        <div class="panel"><h3 class="curvehdr"><span><span class="sidename bus">总线侧</span> 三相电流趋势</span><label class="curvesave" title="勾选＝「保存曲线数据」时包含本曲线；不勾选＝保存时跳过本曲线"><input type="checkbox" class="curve-save" data-curve="current"> 保存曲线</label><span class="curvespan" data-curve="current"></span></h3><canvas id="ov-i" height="200"></canvas></div>
+        <div class="panel ov-br-panel"><h3 class="curvehdr"><span><span class="sidename branch">分路侧</span> 三相电流趋势</span><span class="navhint ov-br-note"></span></h3><canvas id="ov-i-br" height="200"></canvas></div>
+        <div class="panel"><h3 class="curvehdr"><span><span class="sidename bus">总线侧</span> P / Q / S 趋势</span><label class="curvesave" title="勾选＝「保存曲线数据」时包含本曲线；不勾选＝保存时跳过本曲线"><input type="checkbox" class="curve-save" data-curve="power"> 保存曲线</label><span class="curvespan" data-curve="power"></span></h3><canvas id="ov-p" height="200"></canvas></div>
+        <div class="panel ov-br-panel"><h3 class="curvehdr"><span><span class="sidename branch">分路侧</span> P / Q / S 趋势</span><span class="navhint ov-br-note"></span></h3><canvas id="ov-p-br" height="200"></canvas></div>
+        <div class="panel"><h3 class="curvehdr"><span><span class="sidename bus">总线侧</span> THD 趋势</span><label class="curvesave" title="勾选＝「保存曲线数据」时包含本曲线；不勾选＝保存时跳过本曲线"><input type="checkbox" class="curve-save" data-curve="harmonic"> 保存曲线</label><span class="curvespan" data-curve="harmonic"></span></h3><canvas id="ov-thd" height="200"></canvas></div>
+        <div class="panel ov-br-panel"><h3 class="curvehdr"><span><span class="sidename branch">分路侧</span> THD 趋势</span><span class="navhint ov-br-note"></span></h3><canvas id="ov-thd-br" height="200"></canvas></div>
       </div>
       <div id="ov-histnote" class="notes"></div>
       <div class="panel"><h3>告警与提示</h3><div id="ov-notes" class="notes"></div></div>
