@@ -115,7 +115,16 @@ class RealtimeCurveWriter:
             if head and head[:3] == list(self.FIXED):
                 existing_fields = head[3:]
             elif head and head[:2] == list(self.FIXED_LEGACY):
-                existing_fields = head[2:]; legacy = True
+                # v0.17.2：旧版（无 source_id 列）文件不再续写——两侧共用一个文件后没有来源号就无法区分，
+                # 把旧文件改名为 <名>.v016.csv 保留，新建带 source_id 的文件
+                bak = path[:-4] + ".v016.csv"
+                try:
+                    if not os.path.exists(bak):
+                        os.replace(path, bak)
+                    else:
+                        legacy = True; existing_fields = head[2:]      # 备份名已占用：退回续写旧结构
+                except OSError:
+                    legacy = True; existing_fields = head[2:]
         fh = open(path, "a", encoding="utf-8-sig" if existing_fields is None else "utf-8", newline="")
         w = csv.writer(fh)
         if existing_fields is None:

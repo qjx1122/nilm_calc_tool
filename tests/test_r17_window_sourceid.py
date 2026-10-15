@@ -214,12 +214,22 @@ def test_events_and_nilm_csv_source_id(tmp_path):
     assert ev._CSV_FIELDS[0] == "source_id" and nm._CSV_FIELDS[0] == "source_id"
 
 
-def test_realtime_writer_legacy_header_kept(tmp_path):
-    """旧版（2 列固定头）文件追加时不插 source_id 列，不破坏旧文件结构。"""
-    from elec_tool.realtime_writer import RealtimeCurveWriter as RealtimeWriter
-    import inspect
-    src = inspect.getsource(RealtimeWriter)
-    assert "legacy" in src and "source_id" in src
+def test_realtime_writer_legacy_file_rotated(tmp_path, monkeypatch):
+    """v0.17.2：旧版（无 source_id 列）实时落盘文件不再续写——改名为 <名>.v016.csv，新建带 source_id 的同名文件。"""
+    import time as _t
+    from elec_tool.config import AppConfig
+    from elec_tool.realtime_writer import RealtimeCurveWriter
+    monkeypatch.delenv("ELEC_TOOL_REALTIME_DIR", raising=False)
+    d = tmp_path / "rt"; d.mkdir()
+    (d / "voltage_20261015.csv").write_text("t_epoch_s,time_local,window_s,Ua\r\n1.0,x,1,2\r\n", encoding="utf-8-sig")
+    cfg = AppConfig(); cfg.output.realtime_dir = str(d)
+    w = RealtimeCurveWriter(cfg)
+    t = _t.mktime((2026, 10, 15, 12, 0, 0, 0, 0, -1))
+    w._append("voltage", t, {"window_s": 1, "Ua": 3.0}); w.close()
+    assert sorted(p.name for p in d.iterdir()) == ["voltage_20261015.csv", "voltage_20261015.v016.csv"]
+    rows = list(csv.reader(open(d / "voltage_20261015.csv", encoding="utf-8-sig")))
+    assert rows[0] == ["t_epoch_s", "time_local", "source_id", "window_s", "Ua"] and rows[1][2] == "0" and len(rows) == 2
+    assert open(d / "voltage_20261015.v016.csv", encoding="utf-8-sig").read().startswith("t_epoch_s,time_local,window_s")
 
 
 # ---------- ② 前端契约 ----------
