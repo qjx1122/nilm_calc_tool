@@ -146,24 +146,31 @@ def test_common_window_end(client, files):
 def test_source_id_in_realtime_events_nilm_and_curve_csv(client, files, tmp_path):
     """两侧启动（分路启用、非公共时间段）→ realtime/curves save 的 CSV 带 source_id（0 总线 / 1 分路），分路曲线保存到 branch/。"""
     import os
-    os.environ.pop("ELEC_TOOL_REALTIME_DIR", None)                 # conftest 的整体改写会把两侧指到同一目录，这里按各侧 realtime_dir
+    os.environ.pop("ELEC_TOOL_REALTIME_DIR", None)                 # 按配置里的 realtime_dir 落盘
     client.post("/api/engine/stop"); client.post("/api/branch/engine/stop")
-    rt_bus = tmp_path / "rt_bus"; rt_br = tmp_path / "rt_br"
+    rt = tmp_path / "rt_shared"
     client.put("/api/config", json={"branch": {"enabled": True, "common_window": False},
-                                    "output": {"realtime_save": True, "realtime_dir": str(rt_bus), "source_id": 1,   # 用户填 1 也被服务端改回 0
+                                    "output": {"realtime_save": True, "realtime_dir": str(rt), "source_id": 1,   # 用户填 1 也被服务端改回 0
                                                "curve_save": {"voltage": True, "power": True}}})
     client.put("/api/branch/config", json={"source": {"kind": "csv_file", "path": str(files / "br.csv"), "file_speed": 0, "custom_time": False, "play_window": False},
-                                           "output": {"realtime_save": True, "realtime_dir": str(rt_br), "source_id": 0,
+                                           "output": {"realtime_save": True, "realtime_dir": str(tmp_path / "ignored_br_dir"), "source_id": 0,
                                                       "curve_save": {"voltage": True, "power": False}}})
     assert client.get("/api/config").json()["output"]["source_id"] == 0
-    assert client.get("/api/branch/config").json()["output"]["source_id"] == 1
+    bcfg = client.get("/api/branch/config").json()
+    assert bcfg["output"]["source_id"] == 1
+    assert bcfg["output"]["realtime_dir"] == str(rt)                # v0.17.2：分路侧目录强制与总线侧相同
     r = client.post("/api/engine/start", json={"kind": "csv_file", "path": str(files / "bus.csv"), "file_speed": 0, "play_window": False}).json()
     assert r["ok"] and r["branch"]["ok"], r
     _wait_done(client); _wait_done(client, "/api/branch/state")
-    for d, sid in ((rt_bus, "0"), (rt_br, "1")):
-        f = next(d.glob("voltage_*.csv"))
-        rows = list(csv.reader(open(f, encoding="utf-8-sig")))
-        assert rows[0][:3] == ["t_epoch_s", "time_local", "source_id"] and rows[1][2] == sid, (f, rows[0], rows[1][:3])
+    vfiles = list(rt.glob("voltage_*.csv"))
+    assert len(vfiles) == 1, vfiles                                 # 同一个文件
+    rows = list(csv.reader(open(vfiles[0], encoding="utf-8-sig")))
+    assert rows[0][:3] == ["t_epoch_s", "time_local", "source_id"]
+    assert sum(1 for rr in rows if rr[:3] == rows[0][:3]) == 1       # 表头只有一行
+    sids = [rr[2] for rr in rows[1:]]
+    assert set(sids) == {"0", "1"}, set(sids)
+    assert all(len(rr) == len(rows[0]) for rr in rows[1:])          # 行不交错
+    assert not (tmp_path / "ignored_br_dir").exists()
     # 曲线保存：总线目录含 voltage/power（source_id 0），branch/ 子目录只含分路勾选的 voltage（source_id 1）
     out = tmp_path / "curves"
     r = client.post("/api/curves/save", json={"dir": str(out)}).json()

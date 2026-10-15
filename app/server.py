@@ -130,6 +130,7 @@ class EngineRunner:
 
     def set_cfg(self, cfg: AppConfig) -> None:
         cfg.output.source_id = SIDE_SOURCE_ID[self.side]        # v0.17：数据来源号按侧别强制（0 总线 / 1 分路）
+        _share_output_dirs(cfg, self.side)
         cfg.validate()
         with self.lock:
             self._cfg_view = None
@@ -148,6 +149,17 @@ class EngineRunner:
                 self.engine.on_event = self._on_event
                 self.engine.on_nilm_event = self._on_nilm_event
                 self.latest = None
+
+        # v0.17.2：总线侧改了落盘/导出目录 → 分路侧跟着改（两侧共用同一文件）
+        if self.side == "bus" and "RUNNERS" in globals():
+            br = RUNNERS.get("branch")
+            if br is not None and br.cfg is not None and (
+                    br.cfg.output.realtime_dir != cfg.output.realtime_dir or br.cfg.events.events_dir != cfg.events.events_dir
+                    or br.cfg.nilm.nilm_dir != cfg.nilm.nilm_dir or br.cfg.output.export_dir != cfg.output.export_dir):
+                try:
+                    br.set_cfg(AppConfig.from_dict(br.cfg.to_dict()))
+                except Exception as exc:
+                    log.warning("分路侧输出目录同步失败：%s", exc)
 
     # ---------- 事件 ----------
     def _on_event(self, changed: List[Dict[str, Any]]) -> None:
@@ -206,6 +218,7 @@ class EngineRunner:
               play_user: Optional[Tuple[str, str, str]] = None) -> Dict[str, Any]:
         """play_user：若本次运行的播放起点/终点是自动算出来的（公共时间段），这里传用户原来的设置，对外呈现/持久化都用它。"""
         cfg.output.source_id = SIDE_SOURCE_ID[self.side]
+        _share_output_dirs(cfg, self.side)
         cfg.validate()
         # 先在**锁外**回收旧线程：join 时若仍持有 self.lock，旧线程正好卡在
         # 「append 结果要拿锁」上就会互等到超时（2s），旧线程存活后继续轮询
@@ -567,9 +580,21 @@ def _default_branch_cfg() -> AppConfig:
     cfg = AppConfig()
     cfg.name = "分路侧设备电气量"
     cfg.source.kind = "simulator"; cfg.source.path = ""        # 出厂占位：界面「数据源」页改成 csv_file + 路径
-    cfg.output.realtime_dir = "output/branch/realtime"; cfg.output.export_dir = "output/branch"
-    cfg.events.events_dir = "output/branch/events"; cfg.nilm.nilm_dir = "output/branch/nilm"
-    return cfg
+    return cfg                                   # v0.17.2：输出目录与总线侧共用（启动/保存时由 _share_output_dirs 强制同步）
+
+
+def _share_output_dirs(cfg: AppConfig, side: str) -> None:
+    """v0.17.2：分路侧的落盘/导出目录一律与总线侧相同——两侧数据写进同一个 CSV 文件，只用 source_id 区分。"""
+    if side != "branch":
+        return
+    bus = RUNNERS.get("bus") if "RUNNERS" in globals() else None
+    if bus is None or bus.cfg is None:
+        return
+    b = bus.cfg
+    cfg.output.realtime_dir = b.output.realtime_dir
+    cfg.output.export_dir = b.output.export_dir
+    cfg.events.events_dir = b.events.events_dir
+    cfg.nilm.nilm_dir = b.nilm.nilm_dir
 
 
 def _resolve_branch_cfg_paths(bus_cfg: Optional[AppConfig]) -> Tuple[str, str]:

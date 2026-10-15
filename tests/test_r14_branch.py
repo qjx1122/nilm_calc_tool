@@ -64,9 +64,10 @@ def test_sides_and_independent_configs(client):
     assert client.get("/api/state").json()["side"] == "bus"
     b = client.get("/api/branch/state").json()
     assert b["side"] == "branch" and b["branch"] is None
-    # 分路侧出厂：输出目录分开
-    bc = client.get("/api/branch/config").json()
-    assert bc["output"]["realtime_dir"].startswith("output/branch") and bc["nilm"]["nilm_dir"].startswith("output/branch")
+    # v0.17.2：分路侧输出目录与总线侧相同（两侧写同一文件，按 source_id 区分）
+    bc = client.get("/api/branch/config").json(); cc = client.get("/api/config").json()
+    assert bc["output"]["realtime_dir"] == cc["output"]["realtime_dir"] and bc["nilm"]["nilm_dir"] == cc["nilm"]["nilm_dir"]
+    assert bc["events"]["events_dir"] == cc["events"]["events_dir"] and "output/branch" not in bc["output"]["realtime_dir"]
     # 改分路侧 PT/CT 不影响总线侧；改总线侧不影响分路侧
     r = client.put("/api/branch/config", json={"transform": {"pt_ratio": 10.0}})
     assert r.status_code == 200 and r.json()["config"]["transform"]["pt_ratio"] == 10.0

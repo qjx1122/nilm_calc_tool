@@ -15,6 +15,8 @@ import csv
 import io
 import os
 import threading
+
+from .filelock import SHARED_FILE_LOCK
 import time
 from typing import Any, Dict, List, Optional
 
@@ -86,19 +88,20 @@ class RealtimeCurveWriter:
     # ---------- 内部 ----------
     def _append(self, key: str, t: float, rec: Dict[str, Any]) -> None:
         day = local_day(t)
-        f = self._files.get(key)
-        if f is None or f["day"] != day:
-            if f is not None:
-                f["fh"].close()
-            f = self._open(key, day, list(rec.keys()))
-            self._files[key] = f
-        row = [repr(t), _time_local(t)] + ([] if f.get("legacy") else [self.source_id])
-        for name in f["fields"]:
-            v = rec.get(name)
-            row.append("" if v is None else v)
-        f["writer"].writerow(row)
-        f["fh"].flush()
-        f["rows"] += 1
+        with SHARED_FILE_LOCK:                      # v0.17.2：两侧共用同一文件，表头/整行写入互斥
+            f = self._files.get(key)
+            if f is None or f["day"] != day:
+                if f is not None:
+                    f["fh"].close()
+                f = self._open(key, day, list(rec.keys()))
+                self._files[key] = f
+            row = [repr(t), _time_local(t)] + ([] if f.get("legacy") else [self.source_id])
+            for name in f["fields"]:
+                v = rec.get(name)
+                row.append("" if v is None else v)
+            f["writer"].writerow(row)
+            f["fh"].flush()
+            f["rows"] += 1
         self.rows_written[key] = self.rows_written.get(key, 0) + 1
 
     def _open(self, key: str, day: str, fields: List[str]) -> Dict[str, Any]:

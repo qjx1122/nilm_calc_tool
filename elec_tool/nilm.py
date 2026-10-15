@@ -24,6 +24,8 @@ from __future__ import annotations
 import csv
 import math
 import os
+
+from .filelock import SHARED_FILE_LOCK
 import threading
 import time
 from dataclasses import asdict, dataclass
@@ -363,13 +365,14 @@ class NilmWriter:
         if self._fh is not None and self._path == path:
             return
         self.close()
-        os.makedirs(self.dir, exist_ok=True)
-        new = not os.path.exists(path) or os.path.getsize(path) == 0
-        self._fh = open(path, "a", encoding="utf-8-sig" if new else "utf-8", newline="")
-        self._path = path
-        if new:
-            csv.writer(self._fh).writerow(_CSV_FIELDS)
-            self._fh.flush()
+        with SHARED_FILE_LOCK:                  # v0.17.2：两侧共用同一文件，表头只写一次
+            os.makedirs(self.dir, exist_ok=True)
+            new = not os.path.exists(path) or os.path.getsize(path) == 0
+            self._fh = open(path, "a", encoding="utf-8-sig" if new else "utf-8", newline="")
+            self._path = path
+            if new:
+                csv.writer(self._fh).writerow(_CSV_FIELDS)
+                self._fh.flush()
 
     def write(self, ev: NilmEvent) -> None:
         if not self.cfg.save:
@@ -382,8 +385,9 @@ class NilmWriter:
                    f"{d['duration_s']:.4f}", d["cycles"], d["direction"],
                    f"{d['magnitude_w']:.3f}", f"{d['delta_p_w']:.3f}", f"{d['delta_q_var']:.3f}", f"{d['delta_i_a']:.4f}",
                    f"{d['pre_p_w']:.3f}", f"{d['post_p_w']:.3f}", f"{d['score']:.4g}"]
-            csv.writer(self._fh).writerow(row)
-            self._fh.flush()
+            with SHARED_FILE_LOCK:
+                csv.writer(self._fh).writerow(row)
+                self._fh.flush()
             self.rows_written += 1
         except Exception as exc:
             msg = f"负荷事件落盘失败：{type(exc).__name__}: {exc}"

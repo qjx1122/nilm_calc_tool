@@ -151,7 +151,7 @@
     "history_len": 600,
     "history_hours": 24.0,
     "history_max_points": 500000,
-    "export_dir": "output/branch",
+    "export_dir": "output",
     "spectrum_max_points": 1600,
     "curve_save": {
       "voltage": true,
@@ -164,13 +164,13 @@
       "dc": true
     },
     "realtime_save": true,
-    "realtime_dir": "output/branch/realtime"
+    "realtime_dir": "output/realtime"
   },
   "events": {
     "enabled": true,
     "hysteresis": 0.95,
     "save": true,
-    "events_dir": "output/branch/events",
+    "events_dir": "output/events",
     "max_log": 2000,
     "limits_secondary": true,
     "u_nom": 57.74,
@@ -196,7 +196,7 @@
   "nilm": {
     "enabled": true,
     "save": true,
-    "nilm_dir": "output/branch/nilm",
+    "nilm_dir": "output/nilm",
     "max_log": 5000,
     "channels": [
       "total"

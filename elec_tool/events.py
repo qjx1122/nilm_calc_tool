@@ -19,6 +19,8 @@ from __future__ import annotations
 import csv
 import math
 import os
+
+from .filelock import SHARED_FILE_LOCK
 import threading
 import time
 from collections import deque
@@ -100,13 +102,14 @@ class EventWriter:
         if self._fh is not None and self._path == path:
             return
         self.close()
-        os.makedirs(self.dir, exist_ok=True)
-        new = not os.path.exists(path) or os.path.getsize(path) == 0
-        self._fh = open(path, "a", encoding="utf-8-sig" if new else "utf-8", newline="")
-        self._path = path
-        if new:
-            csv.writer(self._fh).writerow(_CSV_FIELDS)
-            self._fh.flush()
+        with SHARED_FILE_LOCK:                  # v0.17.2：两侧共用同一文件，表头只写一次
+            os.makedirs(self.dir, exist_ok=True)
+            new = not os.path.exists(path) or os.path.getsize(path) == 0
+            self._fh = open(path, "a", encoding="utf-8-sig" if new else "utf-8", newline="")
+            self._path = path
+            if new:
+                csv.writer(self._fh).writerow(_CSV_FIELDS)
+                self._fh.flush()
 
     def write(self, ev: Event, status: str) -> None:
         if not self.cfg.save:
@@ -119,8 +122,9 @@ class EventWriter:
                    ("" if d["end_t"] is None else f"{d['end_t']:.3f}"), _ts(d["end_t"]),
                    ("" if d["duration_s"] is None else f"{d['duration_s']:.3f}"),
                    f"{d['value_start']:.6g}", f"{d['value_peak']:.6g}", f"{d['limit']:.6g}", d["unit"], d["direction"], d["detail"]]
-            csv.writer(self._fh).writerow(row)
-            self._fh.flush()
+            with SHARED_FILE_LOCK:
+                csv.writer(self._fh).writerow(row)
+                self._fh.flush()
             self.rows_written += 1
         except Exception as exc:                     # 落盘失败不影响检测
             msg = f"事件落盘失败：{type(exc).__name__}: {exc}"
