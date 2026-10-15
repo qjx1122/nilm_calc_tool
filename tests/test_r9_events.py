@@ -339,8 +339,8 @@ def test_frontend_has_new_views_and_wiring():
         assert f'data-view="{v}"' in html and f'id="view-{v}"' in html
     for i in ("ih-bar-u", "ih-table-i", "ih-trend", "dc-cards", "dc-trend", "ev-active", "ev-table", "ev-form", "btn-ev-save", "btn-ev-clear"):
         assert f'id="{i}"' in html, i
-    boxes = re.findall(r'class="curve-save" data-curve="([a-z_]+)"', html)
-    assert sorted(boxes) == sorted(CURVE_KEYS)
+    boxes = re.findall(r'class="curve-save" data-curve="([a-z_]+)"(?! data-side="branch")', html)
+    assert sorted(boxes) == sorted(CURVE_KEYS)                   # 总线侧每条曲线一个；分路侧（data-side=branch）另计
     for f in ("renderInterharmonic", "renderDC", "renderEvents", "saveEventConfig", "onEventPush", "/api/events"):
         assert f in js
     assert "'interharmonic', 'dc'" in js                                    # CURVE_KEYS 同步

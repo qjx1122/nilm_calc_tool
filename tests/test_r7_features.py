@@ -380,9 +380,10 @@ def test_frontend_play_start_select_matches_backend_modes():
     opts = re.findall(r'value="([^"]+)"', m.group(1))
     assert opts == list(PLAY_START_MODES), opts
     assert 'id="src-playvalue"' in INDEX
-    assert "'src-playmode': kind === 'csv_file'" in APP_JS
-    assert "'src-playvalue': kind === 'csv_file' && $('#src-playmode').value !== 'begin'" in APP_JS
-    assert "p.play_start_mode = $('#src-playmode').value" in APP_JS
+    # v0.16：表单函数按 id 前缀参数化（src-/br-），两侧共用
+    assert "'playmode': kind === 'csv_file'" in APP_JS
+    assert "'playvalue': kind === 'csv_file' && (srcEl(pre, 'playmode') || {}).value !== 'begin'" in APP_JS
+    assert "p.play_start_mode = (srcEl(pre, 'playmode') || {}).value" in APP_JS
     assert "$('#src-playmode').addEventListener('change'" in APP_JS
     for mode in PLAY_START_MODES:
         assert re.search(rf"\b{mode}: '", APP_JS.split("const PLAY_PLACEHOLDER")[1].split("};")[0]), f"缺 {mode} 的占位说明"

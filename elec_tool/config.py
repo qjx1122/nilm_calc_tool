@@ -564,8 +564,23 @@ class OutputConfig:
     # 实时落盘：每算出一个曲线点就追加到 realtime_dir/<曲线>_<数据日期>.csv（受 curve_save 勾选过滤）
     realtime_save: bool = True
     realtime_dir: str = "output/realtime"
+    # 界面曲线分线显示开关（v0.16）：键＝图表 id（如 "ov-u"），值＝被隐藏的曲线名列表（如 ["Ub","Uc"]）；
+    # 只影响显示，不影响计算/保存。随配置持久化，重开页面仍保持。
+    series_hidden: Dict[str, List[str]] = field(default_factory=dict)
 
     def validate(self) -> None:
+        if not isinstance(self.series_hidden, dict):
+            raise ConfigError("output.series_hidden 必须是 {图表id: [曲线名, ...]} 字典")
+        clean: Dict[str, List[str]] = {}
+        for k, v in self.series_hidden.items():
+            if v is None:
+                continue
+            if not isinstance(v, (list, tuple)):
+                raise ConfigError(f"output.series_hidden[{k!r}] 必须是曲线名列表")
+            names = [str(x) for x in v if str(x).strip()]
+            if names:
+                clean[str(k)] = names
+        self.series_hidden = clean
         if not str(self.realtime_dir).strip():
             raise ConfigError("output.realtime_dir 不能为空")
         if self.history_hours <= 0:

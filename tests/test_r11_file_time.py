@@ -147,5 +147,5 @@ def test_frontend_wiring():
     html = (ROOT / "app/static/index.html").read_text(encoding="utf-8")
     js = (ROOT / "app/static/app.js").read_text(encoding="utf-8")
     assert 'id="src-utc"' in html
-    assert "cfg.source.file_time_utc" in js and "p.file_time_utc" in js
-    assert "'src-utc': (kind === 'csv_file' && !$('#src-customtime').checked)" in js
+    assert "chk('utc', src.file_time_utc)" in js and "p.file_time_utc" in js
+    assert "'utc': (kind === 'csv_file' && !ct) || kind === 'csv_tail'" in js

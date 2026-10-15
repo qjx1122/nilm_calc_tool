@@ -776,33 +776,37 @@ def _apply_window_to_source(cfg: AppConfig, rng: Dict[str, Any], play_start: flo
 
 
 def _start_branch_if_enabled(bus_cfg: AppConfig, pace_clock=None) -> Optional[Dict[str, Any]]:
-    """总线侧启动后联动分路侧（仅 enabled 时）。返回分路侧启动结果；失败只记录、不影响总线侧。"""
+    """总线侧启动后联动分路侧（仅 enabled 时）。返回分路侧启动结果；失败只记录、不影响总线侧。
+
+    v0.16：分路侧输入方式与总线侧同样有 4 种（csv_file / csv_tail / tcp / simulator），各自独立配置；
+    两侧都是离线文件时共用节拍钟（倍速同步、严格同步播放）并可按公共时间段播放；其它组合各自按自身配置启动。
+    """
     if not bus_cfg.branch.enabled:
         return {"ok": False, "skipped": True, "reason": "分路侧未启用"}
-    if bus_cfg.source.kind != "csv_file":
-        return {"ok": False, "skipped": True, "reason": f"分路侧仅在离线文件输入方式下同时播放（总线侧当前为 {bus_cfg.source.kind}）"}
     br = RUNNERS["branch"]
     try:
         cfg = AppConfig.from_dict(br.cfg.to_dict())
-        if cfg.source.kind != "csv_file":
-            raise ConfigError(f"分路侧数据源必须是离线文件 csv_file（当前 {cfg.source.kind}）")
-        if not cfg.source.path:
-            raise ConfigError("分路侧离线文件路径未配置")
+        if cfg.source.kind in ("csv_file", "csv_tail") and not cfg.source.path:
+            raise ConfigError(f"分路侧 {cfg.source.kind} 需要文件路径（source.path）")
         if cfg.source.kind in ("csv_file", "csv_tail") and cfg.source.path and not os.path.isabs(cfg.source.path):
             cand = os.path.join(ROOT, cfg.source.path)
             if os.path.exists(cand):
                 cfg.source.path = cand
-        # 播放速率与总线侧保持一致（需求：两侧倍速一致）
-        cfg.source.file_speed = float(bus_cfg.source.file_speed or 0.0)
-        cw = COMMON_WINDOW if COMMON_WINDOW.get("enabled") else None
+        both_file = bus_cfg.source.kind == "csv_file" and cfg.source.kind == "csv_file"
+        clock = None
+        if both_file:
+            # 播放速率与总线侧保持一致（需求：两侧倍速一致），共用节拍钟
+            cfg.source.file_speed = float(bus_cfg.source.file_speed or 0.0)
+            clock = pace_clock
+        cw = COMMON_WINDOW if (both_file and COMMON_WINDOW.get("enabled")) else None
         cfg.source.play_end_time = ""
         play_user: Optional[Tuple[str, str, str]] = None
         if cw:
             play_user = _play_fields(cfg)
             _apply_window_to_source(cfg, cw["branch"], cw["play_start"], cw["t_end"], side="branch")
-        br.start(cfg, pace_clock=pace_clock, play_user=play_user)      # 与总线侧共用节拍钟：两侧严格同步播放
+        br.start(cfg, pace_clock=clock, play_user=play_user)
         br.error = None
-        return {"ok": True, "source_kind": cfg.source.kind, "path": cfg.source.path}
+        return {"ok": True, "source_kind": cfg.source.kind, "path": cfg.source.path, "synced_pace": both_file}
     except Exception as exc:
         msg = f"{type(exc).__name__}: {exc}"
         br.error = f"分路侧启动失败：{msg}"
@@ -1054,25 +1058,31 @@ async def engine_start(payload: Optional[Dict[str, Any]] = None) -> Any:
             cand = os.path.join(ROOT, cfg.source.path)
             if os.path.exists(cand):
                 cfg.source.path = cand
-        coupled = (current_side() == "bus" and payload.get("with_branch", True) and cfg.branch.enabled
-                   and cfg.source.kind == "csv_file")
+        coupled = (current_side() == "bus" and payload.get("with_branch", True) and cfg.branch.enabled)
         cfg.source.play_end_time = ""          # 终点只由公共时间段自动给出，用户配置里不存在这个概念
         play_user: Optional[Tuple[str, str, str]] = None
+        cw_note: Optional[str] = None
         if current_side() == "bus":
             COMMON_WINDOW.clear(); COMMON_WINDOW["enabled"] = False
         if coupled and cfg.branch.common_window:
             br_cfg = RUNNERS["branch"].cfg
-            if br_cfg.source.kind != "csv_file" or not br_cfg.source.path:
-                raise ConfigError("启用「只播放公共时间段」需要分路侧已配置离线文件")
-            w = _compute_common_window(cfg, br_cfg)        # 失败 → 400，两侧都不启动
-            COMMON_WINDOW.update(w)
-            play_user = _play_fields(cfg)
-            _apply_window_to_source(cfg, w["bus"], w["play_start"], w["t_end"], side="bus")
+            if cfg.source.kind != "csv_file" or br_cfg.source.kind != "csv_file":
+                # 公共时间段只对「两侧都是离线文件」有意义；其它组合按各自配置启动，不报错（v0.16）
+                cw_note = (f"公共时间段仅在两侧都是离线文件时生效（总线侧 {cfg.source.kind}，分路侧 {br_cfg.source.kind}），本次按各自配置播放")
+            elif not br_cfg.source.path:
+                raise ConfigError("启用「只播放公共时间段」需要分路侧已配置离线文件路径")
+            else:
+                w = _compute_common_window(cfg, br_cfg)        # 失败 → 400，两侧都不启动
+                COMMON_WINDOW.update(w)
+                play_user = _play_fields(cfg)
+                _apply_window_to_source(cfg, w["bus"], w["play_start"], w["t_end"], side="bus")
         clock = PaceClock(cfg.source.file_speed) if cfg.source.kind == "csv_file" else None
         RUNNER.start(cfg, duration_s=payload.get("duration_s"), pace_clock=clock, play_user=play_user)
         out: Dict[str, Any] = {"ok": True, "side": current_side(), "config": RUNNER.cfg.to_dict()}
         if COMMON_WINDOW.get("enabled"):
             out["common_window"] = {k: v for k, v in COMMON_WINDOW.items() if k not in ("bus", "branch")}
+        elif cw_note:
+            out["common_window"] = {"enabled": False, "reason": cw_note}
         if current_side() == "bus" and payload.get("with_branch", True):
             out["branch"] = _start_branch_if_enabled(cfg, pace_clock=clock)
         return out

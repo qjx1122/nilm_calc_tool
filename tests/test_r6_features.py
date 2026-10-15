@@ -386,13 +386,15 @@ SERVER = (ROOT / "app/server.py").read_text(encoding="utf-8")
 
 def test_frontend_has_custom_time_controls_wired():
     for el in ("src-customtime", "src-customstart"):
-        assert f'id="{el}"' in HTML and f"'#{el}'" in APPJS
+        assert f'id="{el}"' in HTML
+    # v0.16：表单按前缀参数化，字段名 customtime / customstart 经 srcEl(pre, name) 取用
+    assert "chk('customtime', src.custom_time)" in APPJS and "set('customstart', src.custom_time_start || '')" in APPJS
     assert "custom_time_start" in APPJS and '"custom_time", "custom_time_start"' in SERVER   # start 白名单
 
 
 def test_frontend_has_one_save_checkbox_per_curve():
-    boxes = re.findall(r'class="curve-save" data-curve="([a-z_]+)"', HTML)
-    assert sorted(boxes) == sorted(CURVE_KEYS)                   # 六条趋势曲线各一个、不多不少
+    boxes = re.findall(r'class="curve-save" data-curve="([a-z_]+)"(?! data-side="branch")', HTML)
+    assert sorted(boxes) == sorted(CURVE_KEYS)                   # 总线侧每条趋势曲线各一个、不多不少（分路侧另计）
     assert 'id="curve-save-list"' in HTML and 'id="btn-save-curves"' in HTML
     assert "/api/curves/save" in APPJS and "curve_save" in APPJS
 

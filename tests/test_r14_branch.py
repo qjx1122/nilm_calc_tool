@@ -86,16 +86,27 @@ def test_coupled_start_pause_resume_stop(client):
     bus_p = _csv(client.dir / "bus.csv", 6.0, amp_i=7.07)
     br_p = _csv(client.dir / "br.csv", 6.0, amp_i=1.414)
     client.post("/api/engine/stop")
-    # 离线文件限定：总线侧为模拟器时即使启用也不联动
+    # v0.16：两侧输入方式各自独立——总线侧为模拟器、分路侧为离线文件也同时启动（不共用节拍钟）
     client.put("/api/branch/config", json={"source": {"kind": "csv_file", "path": br_p, "file_speed": 1}})
     client.put("/api/config", json={"branch": {"enabled": True}})
     r = client.post("/api/engine/start", json={"kind": "simulator"})
-    assert r.status_code == 200 and r.json()["branch"]["skipped"] and "离线文件" in r.json()["branch"]["reason"]
+    assert r.status_code == 200 and r.json()["branch"]["ok"] and r.json()["branch"]["synced_pace"] is False
+    time.sleep(0.5)
+    assert client.get("/api/branch/state").json()["running"] is True
     client.post("/api/engine/stop")
-    # 分路侧路径未配置 → 启动时报错、不影响总线
+    assert client.get("/api/branch/state").json()["running"] is False
+    # 分路侧为模拟器：总线侧离线文件 + 分路侧模拟器同时跑
     client.put("/api/branch/config", json={"source": {"kind": "simulator", "path": ""}})
     r = client.post("/api/engine/start", json={"kind": "csv_file", "path": bus_p, "file_speed": 0})
-    assert r.status_code == 200 and r.json()["branch"]["ok"] is False and "csv_file" in r.json()["branch"]["error"]
+    assert r.status_code == 200 and r.json()["branch"]["ok"] and r.json()["branch"]["source_kind"] == "simulator"
+    client.post("/api/engine/stop")
+    # 分路侧 csv_file 但文件不存在 → 启动时报错、不影响总线
+    client.put("/api/branch/config", json={"source": {"kind": "csv_file", "path": str(client.dir / "nope.csv")}})
+    r = client.post("/api/engine/start", json={"kind": "csv_file", "path": bus_p, "file_speed": 0})
+    assert r.status_code == 200
+    time.sleep(0.5)
+    bst = client.get("/api/branch/state").json()
+    assert bst["running"] is False and bst.get("error")
     client.post("/api/engine/stop")
     # 未启用：总线启动不带动分路侧
     client.put("/api/config", json={"branch": {"enabled": False}})

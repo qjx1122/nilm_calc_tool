@@ -96,5 +96,5 @@ def test_frontend_has_speed_selector_and_guarded_toggle():
     html = (ROOT / "app" / "static" / "index.html").read_text(encoding="utf-8")
     js = (ROOT / "app" / "static" / "app.js").read_text(encoding="utf-8")
     assert 'id="src-file-speed"' in html and 'value="0">不限速' in html
-    assert "p.file_speed = parseFloat($('#src-file-speed').value)" in js
+    assert "p.file_speed = parseFloat((srcEl(pre, 'file-speed') || {}).value)" in js
     assert "暂停/恢复仅支持离线文件（csv_file）源" in js and "离线文件未在播放，无法暂停" in js
