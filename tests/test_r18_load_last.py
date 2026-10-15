@@ -154,3 +154,19 @@ def test_frontend_contract_load_last():
               "$('#btn-load-last').addEventListener('click', loadLastData);", "$('#btn-load-last2').addEventListener('click', loadLastData);",
               "b.disabled = !!eng.running"):
         assert s in js, s
+
+
+def test_r19_power_history_has_per_phase_and_overview_series():
+    """v0.19：power 趋势记录含分相 Pa..Sc；总览 P/Q/S 图分相曲线默认隐藏。"""
+    from elec_tool.metrics import _EXTRACTORS
+    q = {"p_total": 3.0, "q_total": 1.5, "s_total": 3.4,
+         "p_per_phase": {"A": 1.0, "B": 1.0, "C": 1.0}, "q_per_phase": {"A": .5, "B": .5, "C": .5},
+         "s_per_phase": {"A": 1.1, "B": 1.1, "C": 1.2}}
+    import types
+    rec = _EXTRACTORS["power"](None, types.SimpleNamespace(ok=True, values=q))
+    assert list(rec)[:3] == ["P", "Q", "S"] and rec["Pa"] == 1.0 and rec["Qc"] == .5 and rec["Sc"] == 1.2
+    js = (ROOT / "app" / "static" / "app.js").read_text(encoding="utf-8")
+    for s in ("function pqsSeries(hp, t0)", "defaultHidden: true", "const SER_NONE = '*none*'",
+              "drawLine($('#ov-p'), pqsSeries(hp, t0p)", "drawLine($('#ov-p-br'), pqsSeries(bhp, b0p)",
+              "function seriesHiddenSet(cv, series)"):
+        assert s in js, s

@@ -153,7 +153,11 @@ _EXTRACTORS: Dict[str, Any] = {
     "current": lambda r, q: {"Ia": _pick(q, "rms", "A"), "Ib": _pick(q, "rms", "B"),
                              "Ic": _pick(q, "rms", "C"), "In": _pick(q, "neutral_rms"),
                              "unbalance_pct": _pick(q, "unbalance_pct")},
-    "power": lambda r, q: {"P": _pick(q, "p_total"), "Q": _pick(q, "q_total"), "S": _pick(q, "s_total")},
+    # v0.19：三相总 P/Q/S 之后追加分相 Pa/Pb/Pc、Qa/Qb/Qc、Sa/Sb/Sc（总览 P/Q/S 趋势图可按相显示）
+    "power": lambda r, q: {"P": _pick(q, "p_total"), "Q": _pick(q, "q_total"), "S": _pick(q, "s_total"),
+                           "Pa": _pick(q, "p_per_phase", "A"), "Pb": _pick(q, "p_per_phase", "B"), "Pc": _pick(q, "p_per_phase", "C"),
+                           "Qa": _pick(q, "q_per_phase", "A"), "Qb": _pick(q, "q_per_phase", "B"), "Qc": _pick(q, "q_per_phase", "C"),
+                           "Sa": _pick(q, "s_per_phase", "A"), "Sb": _pick(q, "s_per_phase", "B"), "Sc": _pick(q, "s_per_phase", "C")},
     "power_factor": lambda r, q: {"PF": _pick(q, "pf_total"), "DPF": _pick(q, "dpf"),
                                   "phi1_deg": _pick(q, "phi1_deg")},
     "fundamental": lambda r, q: {"f": r.f_used, "U1": _pick(q, "u1_rms_total"),

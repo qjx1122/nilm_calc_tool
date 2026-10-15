@@ -426,12 +426,17 @@ function chartSig(cv, series, opt) {
 
 /* 曲线分线显示开关（v0.16，需求⑤）：多条曲线的图在画布下方给出图例勾选，取消＝该线不画（不影响计算/保存）。
    勾选状态按「图表 id → 隐藏曲线名列表」存入 config.output.series_hidden（随配置持久化，重开页面仍保持）。 */
-function seriesHiddenSet(cv) {
+/* v0.19：曲线可带 defaultHidden:true（如总览 P/Q/S 图的分相曲线）——配置里没有该图的记录时默认不画；
+   用户一旦勾选过，以配置为准；「全部显示」用哨兵 SER_NONE 记录（空列表会被配置清洗掉，否则又回到默认隐藏）。 */
+const SER_NONE = '*none*';
+function seriesHiddenSet(cv, series) {
   const id = cv && cv.id; if (!id) return new Set();
+  const ser = series || (cv && cv.__series) || [];
   const local = S.seriesLocal && S.seriesLocal[id];
-  if (local) return new Set(local);
   const m = ((((S.state || {}).config || {}).output || {}).series_hidden) || {};
-  return new Set(m[id] || []);
+  const saved = local || m[id];
+  if (!saved) return new Set(ser.filter(s => s && s.defaultHidden).map(s => s.name));
+  return new Set(saved.filter(n => n !== SER_NONE));
 }
 function renderSeriesLegend(cv, series, hidden) {
   if (!cv || !cv.id || !cv.parentNode) return;
@@ -453,6 +458,7 @@ async function setSeriesVisible(chartId, name, on) {
   const cur = seriesHiddenSet(cv);
   if (on) cur.delete(name); else cur.add(name);
   const list = [...cur];
+  if (!list.length && (cv.__series || []).some(s => s && s.defaultHidden)) list.push(SER_NONE);
   S.seriesLocal = S.seriesLocal || {}; S.seriesLocal[chartId] = list;
   if (cv.__redraw) cv.__redraw();
   try {
@@ -469,7 +475,8 @@ async function setSeriesVisible(chartId, name, on) {
 }
 
 function drawLine(cv, series, opt = {}) {
-  const hidden = seriesHiddenSet(cv);
+  cv.__series = series;
+  const hidden = seriesHiddenSet(cv, series);
   const zoom = zoomOf(cv);
   const sig = chartSig(cv, series, opt) + '#' + [...hidden].join(',') + '#' + JSON.stringify(zoom);
   renderSeriesLegend(cv, series, hidden);
@@ -905,6 +912,20 @@ async function switchView(v, side) {
 
 /* ------------------------------------------------------------------ 总览：分路侧数据（第 15 轮补充） */
 
+/* v0.19：总览 P/Q/S 趋势 = 三相总 P/Q/S（默认显示）+ 分相 Pa/Pb/Pc、Qa/Qb/Qc、Sa/Sb/Sc（默认隐藏，图例勾选显示）。
+   分相线颜色沿用相色（A 蓝 / B 绿 / C 橙），P 实线、Q 短虚线、S 点划线以区分量类。 */
+const PQS_DASH = { P: [], Q: [5, 3], S: [2, 2] };
+function pqsSeries(hp, t0) {
+  const out = [{ name: 'P', color: COLORS.P, data: hp.map(p => [p.t - t0, p.P]) },
+               { name: 'Q', color: COLORS.Q, data: hp.map(p => [p.t - t0, p.Q]) },
+               { name: 'S', color: COLORS.S, data: hp.map(p => [p.t - t0, p.S]) }];
+  ['P', 'Q', 'S'].forEach(k => ['A', 'B', 'C'].forEach(ph => {
+    const f = k + ph.toLowerCase();
+    out.push({ name: f, color: COLORS[ph], dash: PQS_DASH[k], width: 1.1, defaultHidden: true, data: hp.map(p => [p.t - t0, p[f]]) });
+  }));
+  return out;
+}
+
 const OVB = { result: null, hist: {}, meta: {}, at: 0, busy: false, keys: ['voltage', 'current', 'power', 'harmonic'] };
 window.OVB = OVB;   // 调试/自检脚本可读（tools/ui_r14_check.cjs）
 
@@ -1216,9 +1237,7 @@ function renderOverview() {
                         { name: 'Ib', color: COLORS.B, data: hi.map(p => [p.t - t0i, p.Ib]) },
                         { name: 'Ic', color: COLORS.C, data: hi.map(p => [p.t - t0i, p.Ic]) }],
            { ylabel: 'A', fmtX: x => tsX(x + t0i, spanOf('current')), fmtTip: x => ts(x + t0i), tbase: t0i });
-  drawLine($('#ov-p'), [{ name: 'P', color: COLORS.P, data: hp.map(p => [p.t - t0p, p.P]) },
-                        { name: 'Q', color: COLORS.Q, data: hp.map(p => [p.t - t0p, p.Q]) },
-                        { name: 'S', color: COLORS.S, data: hp.map(p => [p.t - t0p, p.S]) }],
+  drawLine($('#ov-p'), pqsSeries(hp, t0p),
            { ylabel: 'W/var/VA', fmtX: x => tsX(x + t0p, spanOf('power')), fmtTip: x => ts(x + t0p), tbase: t0p });
   drawLine($('#ov-thd'), [{ name: 'THD_U', color: COLORS.A, data: hh.map(p => [p.t - t0h, p.THD_U]) },
                           { name: 'THD_I', color: COLORS.C, data: hh.map(p => [p.t - t0h, p.THD_I]) }],
@@ -1235,9 +1254,7 @@ function renderOverview() {
                              { name: 'Ib', color: COLORS.B, data: bhi.map(p => [p.t - b0i, p.Ib]) },
                              { name: 'Ic', color: COLORS.C, data: bhi.map(p => [p.t - b0i, p.Ic]) }],
              { ylabel: 'A', fmtX: x => tsX(x + b0i, bspan(bhi)), fmtTip: x => ts(x + b0i), tbase: b0i, empty: brEmpty });
-    drawLine($('#ov-p-br'), [{ name: 'P', color: COLORS.P, data: bhp.map(p => [p.t - b0p, p.P]) },
-                             { name: 'Q', color: COLORS.Q, data: bhp.map(p => [p.t - b0p, p.Q]) },
-                             { name: 'S', color: COLORS.S, data: bhp.map(p => [p.t - b0p, p.S]) }],
+    drawLine($('#ov-p-br'), pqsSeries(bhp, b0p),
              { ylabel: 'W/var/VA', fmtX: x => tsX(x + b0p, bspan(bhp)), fmtTip: x => ts(x + b0p), tbase: b0p, empty: brEmpty });
     drawLine($('#ov-thd-br'), [{ name: 'THD_U', color: COLORS.A, data: bhh.map(p => [p.t - b0h, p.THD_U]) },
                                { name: 'THD_I', color: COLORS.C, data: bhh.map(p => [p.t - b0h, p.THD_I]) }],
