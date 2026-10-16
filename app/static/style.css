@@ -197,3 +197,9 @@ body.no-branch-nav .badge-br{display:none !important}
 .card.ovc .ovrows td.v .sep{color:var(--mut)}
 .card.ovc .ovrows td.v .u{margin-left:4px}
 #ov-cards{grid-template-columns:repeat(auto-fill,minmax(210px,1fr))}
+
+/* v0.29：放大后平移按钮 */
+.zoombar .panlbl{margin-left:8px}
+.zoombar .pan-btn{padding:0 5px}
+.zoombar .pan-btn:disabled{opacity:.35;cursor:not-allowed}
+canvas:focus{outline:none}

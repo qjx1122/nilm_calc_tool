@@ -284,3 +284,5 @@
 - **[2026-10-16] v0.27**（用户：①功率/功率因数/基波/谐波/间谐波/直流偏置 增加三相分相实时数据保存；②功率与功率因数支持分相曲线、曲线可选）。`_EXTRACTORS` 追加 PFa/b/c、U1a/b/c、I1a/b/c、phiB/phiC、THD_Ua..Ic、TIHD_Ua..Ic、Ua_dc_pct..Ic_dc_pct（历史/实时落盘/保存曲线三处共用，两侧同文件按 source_id 区分）；实时落盘旧表头文件轮转为 `.pre-v027.csv`；功率页新增 `#p-trend`（复用 `pqsSeries`，分相默认隐藏图例勾选）、`#pf-trend` 加 PFa/b/c；新增 `tests/test_r27_phase_curves.py`，ui_r24 44/44，全量 pytest 316 passed。角色：工程实现工程师（混合模式）。
 
 - **[2026-10-16] v0.28**（用户修正：谐波/间谐波/直流/基波增加分相趋势线；功率页是分相瞬时功率波形而非趋势线；总览卡片重排为 U/I/P/Q/S/PF/f/THD_U/THD_I 九张、行格式「总线数据 / 分路数据」、U/I 分三相、P/Q/S/PF 分三相+总）。`metrics.py` 放行 `series.p_per_phase`；`#p-trend` 删除 → `#p-wave-ph`；新增 `#h-trend`、`#f-u1-trend`、`#f-i1-trend`；`#ih-trend` 加 6 条分相；总览 `mcard/row` 多行卡片 + `.card.ovc` 样式。ui_r24 53/53、全量 pytest 317 passed；ui_r14 首项为 v0.26 起的历史失败。
+
+- **[2026-10-16] v0.29**（用户：曲线放大后可上下/左右移动坐标轴）。缩放模块加 `zoomPan/zoomPanFrac`：放大后左键拖动＝平移（Ctrl+拖选才框选）、工具条 ◀▶▲▼、方向键、Alt+滚轮；边界夹全图、倍率不变。ui_r17 +11 项 47/47，全量 pytest 317 passed。沙箱重置一次已恢复。

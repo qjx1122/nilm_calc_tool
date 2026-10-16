@@ -137,7 +137,7 @@ async function main() {
   await nav('overview'); await sleep(2500);
   const cv = $('ov-u');
   const c0 = cv.__chart;
-  check('折线图有缩放工具条（X＋ X－ Y＋ Y－ 复位）', !!cv.__zoombar && cv.__zoombar.querySelectorAll('button.zoom-btn').length === 5 && cv.__zoombar.isConnected);
+  check('折线图有缩放工具条（X＋ X－ Y＋ Y－ 复位）', !!cv.__zoombar && cv.__zoombar.querySelectorAll('button.zoom-btn:not(.pan-btn)').length === 5 && cv.__zoombar.isConnected);
   check('初始无缩放：xfull/yfull 与视窗一致', c0 && c0.xmin === c0.xfull[0] && c0.xmax === c0.xfull[1] && !c0.zoom);
   const W = c0.w, pad = c0.pad;
   const midX = pad.l + (W - pad.l - pad.r) / 2, midY = pad.t + (c0.h - pad.t - pad.b) / 2;
@@ -155,17 +155,53 @@ async function main() {
   check('双击 → 复位（视窗回到全图、ZOOM 清除）', !c3.zoom && c3.xmin === c0.xmin && c3.xmax === c0.xmax && c3.ymin === c0.ymin && !window.ZOOM['ov-u']);
   // 拖选：水平 25%→50%
   const x0 = pad.l + (W - pad.l - pad.r) * 0.25, x1 = pad.l + (W - pad.l - pad.r) * 0.5;
-  const mouse = (type, x, y) => cv.dispatchEvent(new window.MouseEvent(type, { clientX: x, clientY: y, button: 0, bubbles: true, cancelable: true }));
+  const mouse = (type, x, y, ctrl) => cv.dispatchEvent(new window.MouseEvent(type, { clientX: x, clientY: y, button: 0, ctrlKey: !!ctrl, bubbles: true, cancelable: true }));
   mouse('mousedown', x0, midY); mouse('mousemove', x1, midY + 2); await sleep(50);
   check('拖选中绘制选框（__drag）', !!cv.__drag && Math.abs(cv.__drag.x1 - x1) < 1e-6);
   mouse('mouseup', x1, midY + 2); await sleep(100);
   const c4 = cv.__chart;
   const expA = c0.xAt(x0), expB = c0.xAt(x1);
   check('松开 → 只显示拖选区间（X 25%→50%，Y 不变）', c4.zoom && c4.zoom.x && Math.abs(c4.xmin - expA) < 1e-6 && Math.abs(c4.xmax - expB) < 1e-6 && !c4.zoom.y, `${c4.xmin}~${c4.xmax} vs ${expA}~${expB}`);
-  // 矩形拖选（含 Y）
-  mouse('mousedown', x0, pad.t + 20); mouse('mousemove', x1, pad.t + 60); mouse('mouseup', x1, pad.t + 60); await sleep(100);
+  // 矩形拖选（含 Y）——v0.29：已放大后需 Ctrl+拖选（普通拖动＝平移）
+  mouse('mousedown', x0, pad.t + 20, true); mouse('mousemove', x1, pad.t + 60, true); mouse('mouseup', x1, pad.t + 60, true); await sleep(100);
   const c5 = cv.__chart;
-  check('矩形拖选 → X、Y 同时限定', c5.zoom && c5.zoom.x && c5.zoom.y && c5.ymax < c0.ymax && c5.ymin > c0.ymin, `${c5.ymin}~${c5.ymax}`);
+  check('Ctrl+矩形拖选 → X、Y 同时限定', c5.zoom && c5.zoom.x && c5.zoom.y && c5.ymax < c0.ymax && c5.ymin > c0.ymin, `${c5.ymin}~${c5.ymax}`);
+  console.log('v0.29 放大后平移坐标轴');
+  const pbtn = (z) => click(cv.__zoombar.querySelector(`button.zoom-btn[data-z="${z}"]`));
+  const pw = (z) => (z[1] - z[0]);
+  const zx0 = [...window.ZOOM['ov-u'].x], zy0 = [...window.ZOOM['ov-u'].y];
+  check('平移按钮 ◀▶▲▼ 存在且放大后可用', ['pl', 'pr', 'pu', 'pd'].every(a => { const b = cv.__zoombar.querySelector(`button.pan-btn[data-z="${a}"]`); return b && !b.disabled; }));
+  check('提示文字说明可拖动 / 方向键移动坐标轴', /移动坐标轴/.test(cv.__zoombar.textContent) && cv.style.cursor === 'grab', cv.__zoombar.textContent);
+  // 拖动图面向左 → 视窗右移（X 区间整体 +，宽度不变）
+  mouse('mousedown', midX, midY); mouse('mousemove', midX - 40, midY); mouse('mouseup', midX - 40, midY); await sleep(100);
+  const zx1 = window.ZOOM['ov-u'].x;
+  const expShift = c5.xAt(midX) - c5.xAt(midX - 40);
+  check('放大后左键拖动 → X 视窗平移（量＝像素对应的数据差、宽度不变、不产生选框）', zx1[0] > zx0[0] && Math.abs((zx1[0] - zx0[0]) - expShift) < 1e-6 * Math.max(1, Math.abs(expShift)) && Math.abs(pw(zx1) - pw(zx0)) < 1e-9 && !cv.__drag && !cv.__pan, `${zx1[0] - zx0[0]} vs ${expShift}`);
+  // 拖动向下 → Y 视窗上移？向下拖动图面 = 内容下移 = 视窗向上（ymin 减小）
+  const zy1 = window.ZOOM['ov-u'].y;
+  mouse('mousedown', midX, midY); mouse('mousemove', midX, midY + 30); mouse('mouseup', midX, midY + 30); await sleep(100);
+  const zy2 = window.ZOOM['ov-u'].y;
+  check('向下拖动 → Y 视窗整体下移（ymin 变大… 即内容跟随鼠标向下、可见区间上移）', zy2[0] > zy1[0] && Math.abs(pw(zy2) - pw(zy1)) < 1e-9, `${zy1} → ${zy2}`);
+  // 按钮：◀ 平移 1/4 视窗
+  const zxA = [...window.ZOOM['ov-u'].x]; pbtn('pl'); await sleep(100); const zxB = window.ZOOM['ov-u'].x;
+  check('◀ 按钮 → X 视窗左移 1/4 宽度', Math.abs((zxA[0] - zxB[0]) - pw(zxA) * 0.25) < 1e-6 && Math.abs(pw(zxB) - pw(zxA)) < 1e-9, `${zxA[0] - zxB[0]} vs ${pw(zxA) * 0.25}`);
+  const zyA = [...window.ZOOM['ov-u'].y]; pbtn('pu'); await sleep(100); const zyB = window.ZOOM['ov-u'].y;
+  check('▲ 按钮 → Y 视窗上移 1/4 高度', Math.abs((zyB[0] - zyA[0]) - pw(zyA) * 0.25) < 1e-6);
+  // 方向键
+  const zxC = [...window.ZOOM['ov-u'].x];
+  cv.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true, cancelable: true })); await sleep(100);
+  const zxD = window.ZOOM['ov-u'].x;
+  check('→ 键 → X 视窗右移 15%', Math.abs((zxD[0] - zxC[0]) - pw(zxC) * 0.15) < 1e-6);
+  // 边界：连点 ◀ 多次不越过全图左端
+  for (let k = 0; k < 40; k++) pbtn('pl'); await sleep(150);
+  const zxE = window.ZOOM['ov-u'].x, cE = cv.__chart, tbE = cE.opt.tbase || 0;
+  check('平移夹在全图范围内（左端 = xfull[0]、宽度不变）', Math.abs(zxE[0] - (cE.xfull[0] + tbE)) < 1e-6 && Math.abs(pw(zxE) - pw(zxC)) < 1e-9, `${zxE[0]} vs ${cE.xfull[0] + tbE}`);
+  // 未放大：拖动仍是框选
+  pbtn('reset'); await sleep(100);
+  check('复位后平移按钮禁用、光标恢复十字', cv.__zoombar.querySelector('button.pan-btn[data-z="pl"]').disabled && cv.style.cursor === 'crosshair');
+  mouse('mousedown', x0, midY); mouse('mousemove', x1, midY); await sleep(30);
+  check('未放大时拖动仍为框选（__drag）', !!cv.__drag && !cv.__pan); mouse('mouseup', x1, midY); await sleep(100);
+  check('→ 框选放大生效', !!cv.__chart.zoom && !!cv.__chart.zoom.x);
   const btn = (z) => click(cv.__zoombar.querySelector(`button.zoom-btn[data-z="${z}"]`));
   btn('reset'); await sleep(100);
   check('「复位」按钮', !cv.__chart.zoom);

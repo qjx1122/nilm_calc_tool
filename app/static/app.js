@@ -379,22 +379,62 @@ function zoomAxis(cv, axis, factor, center) {
   setZoom(cv, z);
 }
 function zoomReset(cv) { setZoom(cv, null); }
+/* v0.29：放大后平移坐标轴。axis='x'|'y'，delta＝数据坐标位移（X 为绝对坐标差）；视窗整体平移、不改变缩放倍率，边界夹在全图范围内。
+   frac 形式（zoomPanFrac）＝按当前视窗宽度的比例平移（按钮 / 方向键用）。 */
+function zoomPan(cv, axis, delta, chart) {
+  const c = chart || cv.__chart; if (!c) return false;
+  const z = Object.assign({ x: null, y: null }, zoomOf(cv) || {});
+  if (!z[axis] || !isNum(delta) || delta === 0) return false;           // 该轴未放大 ⇒ 已是全图，无可平移
+  const tb = isNum(c.opt.tbase) ? c.opt.tbase : 0;
+  const full = axis === 'x' ? [c.xfull[0] + tb, c.xfull[1] + tb] : c.yfull;
+  let [lo, hi] = z[axis]; const w = hi - lo;
+  if (!(w > 0) || !(full[1] - full[0] > w)) return false;
+  lo += delta; hi += delta;
+  if (lo < full[0]) { lo = full[0]; hi = lo + w; }
+  if (hi > full[1]) { hi = full[1]; lo = hi - w; }
+  if (Math.abs(lo - z[axis][0]) < 1e-12 * Math.max(1, Math.abs(lo))) return false;
+  z[axis] = [lo, hi];
+  setZoom(cv, z);
+  return true;
+}
+function zoomPanFrac(cv, axis, frac) {
+  const z = zoomOf(cv); if (!z || !z[axis]) return false;
+  return zoomPan(cv, axis, (z[axis][1] - z[axis][0]) * frac);
+}
+window.zoomPan = zoomPan; window.zoomPanFrac = zoomPanFrac;
 function bindHover(cv) {
   if (cv.__hoverBound) return;
   cv.__hoverBound = true;
   const pos = (e) => { const r = cv.getBoundingClientRect(); return { mx: e.clientX - r.left, my: e.clientY - r.top }; };
+  const setCursor = () => { cv.style.cursor = cv.__pan ? 'grabbing' : (zoomOf(cv) ? 'grab' : 'crosshair'); };
+  cv.__setCursor = setCursor;
   cv.addEventListener('mousemove', (e) => {
     cv.__hover = pos(e);
+    if (cv.__pan) {                                          // v0.29：放大后按住左键拖动＝平移视窗（捕获拖动起点时的坐标系，边拖边重绘）
+      const pn = cv.__pan, c = pn.c, p = cv.__hover;
+      const z = Object.assign({ x: null, y: null }, pn.z);
+      const tb = isNum(c.opt.tbase) ? c.opt.tbase : 0;
+      const full = { x: [c.xfull[0] + tb, c.xfull[1] + tb], y: c.yfull };
+      const clamp = (axis, lo, hi) => { const w = hi - lo; if (lo < full[axis][0]) { lo = full[axis][0]; hi = lo + w; } if (hi > full[axis][1]) { hi = full[axis][1]; lo = hi - w; } return [lo, hi]; };
+      if (z.x) { const d = c.xAt(pn.x0) - c.xAt(p.mx); z.x = clamp('x', pn.z.x[0] + d, pn.z.x[1] + d); }
+      if (z.y) { const d = c.yAt(pn.y0) - c.yAt(p.my); z.y = clamp('y', pn.z.y[0] + d, pn.z.y[1] + d); }
+      pn.moved = pn.moved || Math.abs(p.mx - pn.x0) > 2 || Math.abs(p.my - pn.y0) > 2;
+      if (pn.moved) { setZoom(cv, z); return; }
+    }
     if (cv.__drag) { cv.__drag.x1 = cv.__hover.mx; cv.__drag.y1 = cv.__hover.my; }
     if (cv.__redraw) cv.__redraw();
   });
-  cv.addEventListener('mouseleave', () => { cv.__hover = null; cv.__hoverInfo = null; cv.__drag = null; if (cv.__redraw) cv.__redraw(); });
+  cv.addEventListener('mouseleave', () => { cv.__hover = null; cv.__hoverInfo = null; cv.__drag = null; cv.__pan = null; setCursor(); if (cv.__redraw) cv.__redraw(); });
   cv.addEventListener('mousedown', (e) => {
     if (e.button !== 0 || !cv.__chart) return;
-    const p = pos(e); cv.__drag = { x0: p.mx, y0: p.my, x1: p.mx, y1: p.my };
+    const p = pos(e);
+    // v0.29：已放大且未按 Ctrl ⇒ 左键拖动平移；未放大或 Ctrl+拖动 ⇒ 框选放大（原行为）
+    if (zoomOf(cv) && !e.ctrlKey) { cv.__pan = { x0: p.mx, y0: p.my, c: cv.__chart, z: JSON.parse(JSON.stringify(zoomOf(cv))), moved: false }; setCursor(); e.preventDefault(); return; }
+    cv.__drag = { x0: p.mx, y0: p.my, x1: p.mx, y1: p.my };
     e.preventDefault();
   });
   const finish = (e) => {
+    if (cv.__pan) { cv.__pan = null; setCursor(); if (cv.__redraw) cv.__redraw(); return; }
     const d = cv.__drag, c = cv.__chart; cv.__drag = null;
     if (!d || !c) return;
     const dx = Math.abs(d.x1 - d.x0), dy = Math.abs(d.y1 - d.y0);
@@ -413,10 +453,23 @@ function bindHover(cv) {
     const c = cv.__chart; if (!c) return;
     e.preventDefault();
     const p = pos(e), f = e.deltaY > 0 ? 1.25 : 0.8;
+    // v0.29：Alt+滚轮＝左右平移、Alt+Shift+滚轮＝上下平移；触控板横向滚动（deltaX）＝左右平移
+    if (e.altKey && zoomOf(cv)) { zoomPanFrac(cv, e.shiftKey ? 'y' : 'x', (e.deltaY > 0 ? 1 : -1) * (e.shiftKey ? -0.15 : 0.15)); return; }
+    if (!e.shiftKey && Math.abs(e.deltaX) > Math.abs(e.deltaY) && zoomOf(cv)) { zoomPanFrac(cv, 'x', e.deltaX > 0 ? 0.15 : -0.15); return; }
     if (e.shiftKey) zoomAxis(cv, 'y', f, c.yAt(p.my));
     else zoomAxis(cv, 'x', f, c.xAt(p.mx) + (isNum(c.opt.tbase) ? c.opt.tbase : 0));
   }, { passive: false });
-  cv.style.cursor = 'crosshair';
+  // v0.29：鼠标悬停在图上时方向键平移（←→ X 轴、↑↓ Y 轴；Shift 加速）
+  cv.tabIndex = 0;
+  cv.addEventListener('keydown', (e) => {
+    if (!zoomOf(cv)) return;
+    const k = e.key, step = e.shiftKey ? 0.5 : 0.15;
+    const m = { ArrowLeft: ['x', -step], ArrowRight: ['x', step], ArrowUp: ['y', step], ArrowDown: ['y', -step] }[k];
+    if (!m) return;
+    e.preventDefault(); zoomPanFrac(cv, m[0], m[1]);
+  });
+  cv.addEventListener('mouseenter', () => { try { if (document.activeElement && /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName)) return; cv.focus({ preventScroll: true }); } catch (e) {} });
+  setCursor();
 }
 function renderZoomBar(cv) {
   // 图例行末尾的缩放按钮（每张图一个，动态插入；无图例时单独一行）
@@ -426,11 +479,14 @@ function renderZoomBar(cv) {
     bar = document.createElement('span'); bar.className = 'zoombar'; bar.dataset.chart = cv.id;
     bar.innerHTML = '<span class="muted">缩放：</span>' + [['x-', 'X＋', '放大 X 轴（滚轮）'], ['x+', 'X－', '缩小 X 轴'], ['y-', 'Y＋', '放大 Y 轴（Shift+滚轮）'], ['y+', 'Y－', '缩小 Y 轴'], ['reset', '复位', '恢复全图（双击图面）']]
       .map(([a, t, tip]) => `<button type="button" class="zoom-btn" data-z="${a}" title="${tip}">${t}</button>`).join('') +
+      '<span class="muted panlbl">移动：</span>' + [['pl', '◀', '向左移动 X 轴（放大后拖动图面 / ← 键 / Alt+滚轮）'], ['pr', '▶', '向右移动 X 轴（→ 键）'], ['pu', '▲', '向上移动 Y 轴（↑ 键 / Alt+Shift+滚轮）'], ['pd', '▼', '向下移动 Y 轴（↓ 键）']]
+      .map(([a, t, tip]) => `<button type="button" class="zoom-btn pan-btn" data-z="${a}" title="${tip}">${t}</button>`).join('') +
       '<span class="zoomtip muted">拖选区间＝只显示该区间</span>';
     bar.addEventListener('click', (ev) => {
       const b = ev.target.closest('button.zoom-btn'); if (!b) return;
       const a = b.dataset.z;
       if (a === 'reset') zoomReset(cv);
+      else if (a[0] === 'p') zoomPanFrac(cv, (a === 'pl' || a === 'pr') ? 'x' : 'y', (a === 'pl' || a === 'pd') ? -0.25 : 0.25);   // v0.29：平移 1/4 视窗
       else zoomAxis(cv, a[0], a[1] === '-' ? 0.5 : 2);
     });
     cv.__zoombar = bar;
@@ -443,8 +499,10 @@ function renderZoomBar(cv) {
   }
   const z = zoomOf(cv);
   bar.classList.toggle('active', !!z);
+  bar.querySelectorAll('.pan-btn').forEach(b => { const ax = (b.dataset.z === 'pl' || b.dataset.z === 'pr') ? 'x' : 'y'; b.disabled = !(z && z[ax]); });
+  if (cv.__setCursor && !cv.__pan) cv.__setCursor();
   const tip = bar.querySelector('.zoomtip');
-  if (tip) tip.textContent = z ? ('已缩放' + (z.x ? ' X' : '') + (z.y ? ' Y' : '') + '（双击复位）') : '拖选区间＝只显示该区间';
+  if (tip) tip.textContent = z ? ('已缩放' + (z.x ? ' X' : '') + (z.y ? ' Y' : '') + '：拖动图面 / 方向键 / ◀▶▲▼ 移动坐标轴，Ctrl+拖选再放大，双击复位') : '拖选区间＝只显示该区间';
 }
 
 /* 公共时间段模式：时间轴固定为 [公共起点, 公共终点]（相对 tbase），段外的点不画 —— 两侧、各子界面坐标轴一致 */
