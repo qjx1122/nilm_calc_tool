@@ -81,6 +81,7 @@
 - 范围边界：~~本 session 不写业务代码~~ ❌**已失效**（该边界属上一任务；本任务即为写代码）；仍然遵守：不新建台账外散文件、不把数据/产物入库
 
 ## 已完成
+- **v0.22.1**：总线多设备情形——`nilm_check` 幅值带归属（`--mag-w/--signature-from`、真值 `其它`）、`gen_nilm_sample --bus`、手册路线 A/B 与 §5-B。
 - **v0.22**：NILM_TUNING_GUIDE.md 重写为现场实施版 7 步流程；新增 `tools/nilm_replay.py`（离线回放）、`tools/nilm_check.py`（真值对账 + 上线结论）。
 - **v0.21.1**：原始数据导出两侧独立——总线侧 / 分路侧各自面板、各自 API 前缀、各自文件 `raw_<起>_<止>_src<sid>.csv`，去掉联动。
 - **v0.21（重做版）**：从离线文件 CSV 按时间段切片原始采样行到新 CSV（两侧同文件、尾列 source_id）——`elec_tool/raw_export.py`、`/api/source/export_range`、数据源页面板；原 NILM 周波保留区版 v0.21 已 revert。
