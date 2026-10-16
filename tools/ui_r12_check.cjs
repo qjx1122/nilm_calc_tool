@@ -76,7 +76,7 @@ async function main() {
   const txt = $('nilm-table').textContent || '';
   check('事件表含 6 种算法', ['阈值差分', '双滑窗', 'CUSUM', 'GLR', '稳态分段', '中值滤波'].every(n => txt.includes(n)), txt.slice(0, 120));
   check('事件表含方向 ↑投入 与 ↓切除', txt.includes('投入') && txt.includes('切除'));
-  check('事件表含幅值 kW 量级', /\d+(\.\d+)?\s*kW/.test(txt));
+  check('事件表幅值列表头带 kW/MW 单位、单元格纯数字（v0.25 单位进表头）', /幅值 \|ΔP\| \([kM]W\)/.test(txt) && !/\d+(\.\d+)?\s*[kM]?W(?!\))/.test(txt), (txt.match(/幅值[^）]*?\)/) || [''])[0]);
   const cards = $('nilm-cards').textContent;
   check('卡片含累计条数与周波窗', /累计 \d+ 条/.test(cards) && /周波/.test(cards));
   check('周波窗曲线有点', +$('nilm-win-n').textContent > 0, $('nilm-win-n').textContent);

@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>电力系统电气量计算工具</title>
+<title>电力电气量计算与负荷辨识工具 · 总线侧 / 分路侧</title>
 <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
@@ -11,8 +11,8 @@
   <div class="brand">
     <span class="logo">⚡</span>
     <div>
-      <h1>电力系统电气量计算工具 <span id="side-title" class="sidetag">总线侧</span></h1>
-      <div class="sub" id="subtitle">nilm_calc_tool · elec_tool</div>
+      <h1>电力电气量计算与负荷辨识工具 <span id="side-title" class="sidetag">总线侧</span></h1>
+      <div class="sub" id="subtitle">三相电压/电流 · 功率 · 谐波 · 事件 · 负荷辨识 ｜ 总线侧与分路侧并列显示</div>
     </div>
   </div>
   <div class="topstats-wrap">
@@ -55,35 +55,35 @@
 
 <div id="layout">
   <nav id="navbar">
-    <div class="navgroup">总览</div>
-    <button class="navitem active" data-view="overview" data-side="bus">📊 总览面板</button>
-    <button class="navitem" data-view="source" data-side="bus">🔌 数据源与控制</button>
+    <div class="navgroup">总览与数据源</div>
+    <button class="navitem active" data-view="overview" data-side="bus">📊 总览（两侧实时值 + 趋势）</button>
+    <button class="navitem" data-view="source" data-side="bus">🔌 数据源与播放控制</button>
     <button class="navitem" data-view="compare" data-side="bus">⚖️ 跨侧对比（总线 − 分路）</button>
-    <div class="navgroup navgroup-elec">电气量 <span class="navhint">左：总线侧 ｜ 右：分路侧（未启用时隐藏）</span></div>
-    <button class="navitem" data-view="voltage" data-side="bus">🔆 三相电压</button>
-    <button class="navitem" data-view="current" data-side="bus">🔌 三相电流</button>
-    <button class="navitem" data-view="power" data-side="bus">⚙️ 有功 / 无功 / 视在</button>
-    <button class="navitem" data-view="power_factor" data-side="bus">📐 功率因数</button>
-    <button class="navitem" data-view="fundamental" data-side="bus">〰️ 基波</button>
-    <button class="navitem" data-view="harmonic" data-side="bus">📶 谐波 (2–50 次)</button>
-    <button class="navitem" data-view="interharmonic" data-side="bus">🎚 间谐波</button>
-    <button class="navitem" data-view="dc" data-side="bus">➖ 直流偏置</button>
-    <button class="navitem" data-view="spectrum" data-side="bus">🌈 频谱</button>
-    <div class="navgroup navgroup-bus">事件 / 负荷辨识 / 配置 <span class="navhint">左：总线侧 ｜ 右：分路侧</span> <span class="badge" id="nav-br-state" style="display:none"></span></div>
-    <button class="navitem" data-view="events" data-side="bus">🚨 事件 <span class="badge" id="nav-ev-badge" style="display:none">0</span><span class="badge badge-br" id="nav-ev-badge-br" style="display:none" title="分路侧活动事件">0</span></button>
-    <button class="navitem" data-view="nilm" data-side="bus">🧩 负荷辨识 <span class="badge" id="nav-nilm-badge" style="display:none">0</span><span class="badge badge-br" id="nav-nilm-badge-br" style="display:none" title="分路侧负荷事件">0</span></button>
-    <button class="navitem" data-view="windows" data-side="bus">⏱ 窗口配置</button>
-    <button class="navitem" data-view="export" data-side="bus">💾 导出与日志</button>
+    <div class="navgroup navgroup-elec">电气量（左总线侧 ｜ 右分路侧） <span class="navhint">分路侧未启用时只显示总线侧</span></div>
+    <button class="navitem" data-view="voltage" data-side="bus">🔆 三相电压（有效值 / 峰值 / 不平衡）</button>
+    <button class="navitem" data-view="current" data-side="bus">🔌 三相电流（有效值 / 零线 / 不平衡）</button>
+    <button class="navitem" data-view="power" data-side="bus">⚙️ 功率（P / Q / S）</button>
+    <button class="navitem" data-view="power_factor" data-side="bus">📐 功率因数（PF / DPF）</button>
+    <button class="navitem" data-view="fundamental" data-side="bus">〰️ 基波（幅值 / 相位 / 频率 / 相序）</button>
+    <button class="navitem" data-view="harmonic" data-side="bus">📶 谐波（2–50 次 · THD）</button>
+    <button class="navitem" data-view="interharmonic" data-side="bus">🎚 间谐波（IEC 分组）</button>
+    <button class="navitem" data-view="dc" data-side="bus">➖ 直流分量</button>
+    <button class="navitem" data-view="spectrum" data-side="bus">🌈 频谱（0 ~ Nyquist）</button>
+    <div class="navgroup navgroup-bus">事件 · 负荷辨识 · 配置（左总线侧 ｜ 右分路侧） <span class="badge" id="nav-br-state" style="display:none"></span></div>
+    <button class="navitem" data-view="events" data-side="bus">🚨 电能质量事件 <span class="badge" id="nav-ev-badge" style="display:none">0</span><span class="badge badge-br" id="nav-ev-badge-br" style="display:none" title="分路侧活动事件">0</span></button>
+    <button class="navitem" data-view="nilm" data-side="bus">🧩 负荷辨识（设备启停事件）<span class="badge" id="nav-nilm-badge" style="display:none">0</span><span class="badge badge-br" id="nav-nilm-badge-br" style="display:none" title="分路侧负荷事件">0</span></button>
+    <button class="navitem" data-view="windows" data-side="bus">⏱ 计算窗口配置</button>
+    <button class="navitem" data-view="export" data-side="bus">💾 导出 / 落盘 / 运行日志</button>
     <div class="navgroup">工具</div>
-    <button class="navitem" data-view="selftest">✅ 算法自检</button>
-    <button class="navitem" data-view="process">🧮 数据处理</button>
+    <button class="navitem" data-view="selftest">✅ 算法自检（解析解对账）</button>
+    <button class="navitem" data-view="process">🧮 数据处理（波形重采样）</button>
     <div class="navfoot" id="nav-foot">—</div>
   </nav>
 
   <main id="content">
     <!-- 总览 -->
     <section class="view active" id="view-overview">
-      <h2>总览面板</h2>
+      <h2>总览 · 总线侧与分路侧实时电气量、趋势曲线</h2>
       <div class="cards" id="ov-sides"></div>
       <h3 class="ovsub">最新电气量 <span class="navhint">每张卡片：<span class="sidename bus">总线侧</span> / <span class="sidename branch">分路侧设备</span>（分路侧未启用时只显示总线侧）<span id="ov-br-hint"></span></span></h3>
       <div class="cards" id="ov-cards"></div>
@@ -103,7 +103,7 @@
 
     <!-- 跨侧对比 -->
     <section class="view" id="view-compare">
-      <h2>跨侧对比：总线侧 − 分路侧设备</h2>
+      <h2>跨侧对比 · 总线侧 − 分路侧（按时标对齐的差值与占比）</h2>
       <div class="panel">
         <div class="form">
           <div class="row">
@@ -129,7 +129,7 @@
 
     <!-- 数据源与控制 -->
     <section class="view" id="view-source">
-      <h2>数据源与控制（需求④：实时采集 + 离线文件）<span class="navhint">左列＝<span class="sidename bus">总线侧</span>，右列＝<span class="sidename branch">分路侧设备</span>（启用分路侧后显示）；同类配置左右同行</span></h2>
+      <h2>数据源与播放控制（实时采集 / 离线 CSV 回放）<span class="navhint">左列＝<span class="sidename bus">总线侧</span>，右列＝<span class="sidename branch">分路侧设备</span>（启用分路侧后显示）；同类配置左右同行</span></h2>
 
       <!-- 两侧联动（跨侧设置，存总线侧 config.branch） -->
       <div class="panel" id="panel-link">
@@ -440,7 +440,7 @@
 
     <!-- 三相电压 -->
     <section class="view" id="view-voltage">
-      <h2>三相电压</h2>
+      <h2>三相电压 · 有效值 / 峰值 / 不平衡度 / 趋势</h2>
       <div class="cards" id="v-cards"></div>
       <div class="panel"><h3>电压波形（一次侧，抽稀显示）</h3><canvas id="v-wave" height="240"></canvas></div>
       <div class="grid2">
@@ -452,7 +452,7 @@
 
     <!-- 三相电流 -->
     <section class="view" id="view-current">
-      <h2>三相电流</h2>
+      <h2>三相电流 · 有效值 / 零线电流 / 不平衡度 / 趋势</h2>
       <div class="cards" id="i-cards"></div>
       <div class="panel"><h3>电流波形（一次侧，抽稀显示）</h3><canvas id="i-wave" height="240"></canvas></div>
       <div class="grid2">
@@ -464,7 +464,7 @@
 
     <!-- 功率 -->
     <section class="view" id="view-power">
-      <h2>有功 / 无功 / 视在功率</h2>
+      <h2>功率 · 有功 P / 无功 Q / 视在 S（总量与分相）</h2>
       <div class="cards" id="p-cards"></div>
       <div class="panel"><h3>瞬时功率波形 p(t)=Σu·i</h3><canvas id="p-wave" height="220"></canvas></div>
       <div class="grid2">
@@ -476,7 +476,7 @@
 
     <!-- 功率因数 -->
     <section class="view" id="view-power_factor">
-      <h2>功率因数</h2>
+      <h2>功率因数 · PF / 位移因数 DPF / 象限</h2>
       <div class="cards" id="pf-cards"></div>
       <div class="grid2">
         <div class="panel"><h3 class="curvehdr"><span>PF / DPF 趋势</span><label class="curvesave" title="勾选＝「保存曲线数据」时包含本曲线；不勾选＝保存时跳过本曲线"><input type="checkbox" class="curve-save" data-curve="power_factor"> 保存曲线</label><span class="curvespan" data-curve="power_factor"></span></h3><canvas id="pf-trend" height="220"></canvas></div>
@@ -487,7 +487,7 @@
 
     <!-- 基波 -->
     <section class="view" id="view-fundamental">
-      <h2>基波（幅值 / 相位 / 频率 / 相序）</h2>
+      <h2>基波 · 幅值 / 相位 / 频率 / 相序 / 对称分量</h2>
       <div class="cards" id="f-cards"></div>
       <div class="grid2">
         <div class="panel"><h3>基波相量（RMS，cos 参考）</h3><div id="f-phasor" class="tablewrap"></div></div>
@@ -499,7 +499,7 @@
 
     <!-- 谐波 -->
     <section class="view" id="view-harmonic">
-      <h2>谐波（2–50 次）</h2>
+      <h2>谐波 · 2–50 次含有率 / 幅值 / THD</h2>
       <div class="cards" id="h-cards"></div>
       <div class="panel">
         <h3>电压谐波
@@ -529,7 +529,7 @@
 
     <!-- 间谐波 -->
     <section class="view" id="view-interharmonic">
-      <h2>间谐波（IEC 61000-4-7 分组：0~50 次之间的 50 个间谐波组）</h2>
+      <h2>间谐波 · IEC 61000-4-7 分组（0~50 次之间的 50 个间谐波组）/ TIHD</h2>
       <div class="cards" id="ih-cards"></div>
       <div class="panel">
         <h3>电压间谐波组
@@ -559,7 +559,7 @@
 
     <!-- 直流偏置 -->
     <section class="view" id="view-dc">
-      <h2>直流偏置（三相电压 / 电流直流分量）</h2>
+      <h2>直流分量 · 三相电压 / 电流 / 零线的直流偏置</h2>
       <div class="cards" id="dc-cards"></div>
       <div class="grid2">
         <div class="panel"><h3>电压直流分量</h3><div id="dc-table-u" class="tablewrap"></div></div>
@@ -576,7 +576,7 @@
 
     <!-- 频谱 -->
     <section class="view" id="view-spectrum">
-      <h2>频谱（0 ~ Nyquist）</h2>
+      <h2>频谱 · 单通道幅值谱（0 ~ Nyquist）</h2>
       <div class="row pad">
         <label>通道
           <select id="sp-chan"><option>Ua</option><option>Ub</option><option>Uc</option><option>Ia</option><option>Ib</option><option>Ic</option></select>
@@ -595,7 +595,7 @@
 
     <!-- 事件 -->
     <section class="view" id="view-events">
-      <h2>事件（基波相量 / 谐波相量 / 间谐波相量 / 频率 / 频率变化率 超限 · 功率振荡）</h2>
+      <h2>电能质量事件 · 基波 / 谐波 / 间谐波相量超限 · 频率 / 频率变化率超限 · 功率振荡</h2>
       <div class="cards" id="ev-cards"></div>
       <div class="panel">
         <h3>活动事件（判据仍满足、尚未复归）</h3>
@@ -653,7 +653,7 @@
 
     <!-- 负荷辨识（第 12 轮） -->
     <section class="view" id="view-nilm">
-      <h2>负荷辨识 · 事件检测（逐周波 P/Q/I 突变：阈值差分 / 双滑窗 / CUSUM / GLR / 稳态分段 / 中值滤波差分）</h2>
+      <h2>负荷辨识 · 设备启停事件检测（逐周波 P/Q/I 突变：阈值差分 / 双滑窗 / CUSUM / GLR / 稳态分段 / 中值滤波差分）</h2>
       <div class="cards" id="nilm-cards"></div>
       <div class="panel">
         <h3 class="curvehdr"><span>P / Q / S 趋势（与总览面板同一曲线；竖线＝各算法检测到的负荷事件起点，颜色＝算法，图内 <span id="nilm-pqs-n">0</span> 条）<span class="curvespan" data-curve="power"></span></span>
@@ -705,7 +705,7 @@
 
     <!-- 窗口配置 -->
     <section class="view" id="view-windows">
-      <h2>窗口配置（需求⑥：各电气量分别配置计算时间段）</h2>
+      <h2>计算窗口配置 · 各电气量独立的窗长 / 步长 / 截断 / 窗函数</h2>
       <p class="hint">每个电气量独立配置「计算时间段（窗长）」与「输出步长」：例如电压有效值可设 1s，也可设 5s；谐波可设 0.2s 快速刷新。FFT 类量（基波/谐波/频谱）强制整周期截断以避免频谱泄漏。</p>
       <div class="panel"><div id="w-table" class="tablewrap"></div>
         <div class="row pad">
@@ -721,7 +721,7 @@
 
     <!-- 导出与日志 -->
     <section class="view" id="view-export">
-      <h2>导出与日志</h2>
+      <h2>导出 / 落盘 / 运行日志 · 结果导出、实时落盘、曲线保存、运行状态</h2>
       <div class="panel">
         <h3>导出</h3>
         <div class="row">
@@ -763,7 +763,7 @@
 
     <!-- 自检 -->
     <section class="view" id="view-selftest">
-      <h2>算法自检（解析解对账）</h2>
+      <h2>算法自检 · 合成信号与解析解对账</h2>
       <p class="hint">在<b>当前运行环境</b>构造已知幅值/相位的三相谐波信号，用公式算出理论期望值，与工具计算结果逐项比对。不需要任何真实数据，是验收算法实现正确性的第一道关。</p>
       <div class="panel">
         <div class="form">
@@ -784,7 +784,7 @@
     </section>
 
     <section id="view-process" class="view">
-      <h2>数据处理 · 离线波形重采样</h2>
+      <h2>数据处理 · 离线波形 CSV 重采样</h2>
       <div class="grid2">
         <div class="panel">
           <h3>重采样参数</h3>

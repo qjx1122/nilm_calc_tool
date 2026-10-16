@@ -119,7 +119,7 @@ def test_state_lists_all_seven_quantities(client):
 
 def test_index_page_has_nav_and_one_subview_per_quantity(client):
     html = client.get("/").text
-    assert "电力系统" in html and "电气量" in html
+    assert "负荷辨识工具" in html and "电气量" in html   # v0.25 标题：电力电气量计算与负荷辨识工具
     # 需求③：导航条（每个子界面一个 navitem，data-view 绑定切换）
     assert 'id="navbar"' in html
     assert html.count('class="navitem') >= 11

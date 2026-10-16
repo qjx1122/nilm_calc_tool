@@ -1,4 +1,4 @@
-/* app.js —— 电力系统电气量计算工具 前端（原生 JS + Canvas，无外部 CDN 依赖）
+/* app.js —— 电力电气量计算与负荷辨识工具 前端（原生 JS + Canvas，无外部 CDN 依赖）
  *
  * 结构：导航条切换子界面（需求③）；每个电气量一个子界面（需求②）；
  *       WebSocket 实时推送，失败自动降级为轮询（保证代理环境下也能用）。
@@ -164,6 +164,13 @@ function card(k, v, unit, sub) {
   return `<div class="card"><div class="k">${k}</div><div class="v">${v}${unit ? `<span class="u">${unit}</span>` : ''}</div>${sub ? `<div class="s">${sub}</div>` : ''}</div>`;
 }
 
+/* v0.25：列表单位统一放表头、单元格只放数字。unitScale 按整列最大值选一个 SI 前缀，返回表头单位与格式函数 */
+function unitScale(vals, unit = '', d = 4) {
+  const m = Math.max(0, ...(vals || []).filter(v => isNum(+v)).map(v => Math.abs(+v)));
+  const [k, pfx] = m >= 1e9 ? [1e9, 'G'] : m >= 1e6 ? [1e6, 'M'] : m >= 1e3 ? [1e3, 'k'] : (m > 0 && m < 1e-3) ? [1e-3, 'm'] : [1, ''];
+  const u = pfx + unit;
+  return { u, hdr: (name) => (u ? `${name} (${u})` : name), f: (v, dd = d) => (v === null || v === undefined || !isNum(+v)) ? '—' : (+v / k).toFixed(dd) };
+}
 function table(headers, rows) {
   if (!rows || !rows.length) return '<div class="notes">暂无数据</div>';
   return `<table><thead><tr>${headers.map(h => `<th>${h}</th>`).join('')}</tr></thead><tbody>${
@@ -765,7 +772,7 @@ function sideLabel() { return S.side === 'branch' ? '分路侧设备' : '总线�
 
 function applySideUI() {
   document.body.classList.toggle('side-branch', S.side === 'branch');
-  const t = $('#side-title'); if (t) t.textContent = sideLabel();
+  renderModeTag();
 }
 
 async function api(path, opt, side = sideOf()) {
@@ -815,7 +822,7 @@ function renderTop() {
       $('#st-cw-play').textContent = ts(cw.play_start) + (cw.play_start_source === '自定义播放起始时间' ? '（自定义）' : '');
     }
   }
-  $('#subtitle').textContent = `elec_tool v${st.version || '?'} · ${S.wsOk ? 'WebSocket 实时' : '轮询'} · 缓冲 ${eng.buffer_fill || 0}/${eng.buffer_capacity || 0}`;
+  $('#subtitle').textContent = `三相 U/I · 功率 · 谐波 · 电能质量事件 · 负荷辨识　|　v${st.version || '?'} · ${S.wsOk ? 'WebSocket 实时' : '轮询'} · 缓冲 ${eng.buffer_fill || 0}/${eng.buffer_capacity || 0}`;
   $('#btn-start').disabled = !!eng.running;
   $('#btn-stop').disabled = !eng.running;
   ['#btn-load-last', '#btn-load-last2'].forEach(sel => { const b = $(sel); if (b) b.disabled = !!eng.running; });
@@ -893,7 +900,16 @@ function sideStatusText(x) {
   return x.enabled === false ? '未启用' : '未启动';
 }
 
+/* 顶栏模式标签：分路侧启用 → 「总线侧 ＋ 分路侧」，否则「总线侧」 */
+function renderModeTag() {
+  const t = document.getElementById('side-title'); if (!t) return;
+  if (S.side === 'branch') { t.textContent = '分路侧设备'; return; }
+  const br = (S.state || {}).branch || {};
+  t.textContent = (br.enabled || br.running) ? '总线侧 ＋ 分路侧' : '总线侧';
+}
+
 function renderNavBranchState(br) {
+  renderModeTag();
   const b = $('#nav-br-state'); if (!b) return;
   if (S.side === 'branch') { br = S.state || null; if (br) br = { error: br.error, paused: br.paused, running: br.running, finished: br.finished, enabled: true }; }
   // v0.23：分路侧数据源未启用 → 导航里的「分路侧」分组整体隐藏（正在分路侧子界面时不隐藏，避免当前页消失）
@@ -1268,15 +1284,16 @@ function renderCompare() {
     const rows = [];
     CURVE_KEYS.forEach(k => {
       const q = sm.quantities[k]; const L = q && q.latest;
-      if (!L) { rows.push(`<tr><td>${CURVE_NAME[k]}</td><td colspan="5" class="muted">无对齐点（已对齐 ${q ? q.aligned_count : 0}）</td></tr>`); return; }
+      if (!L) { rows.push(`<tr><td>${CURVE_NAME[k]}</td><td colspan="6" class="muted">无对齐点（已对齐 ${q ? q.aligned_count : 0}）</td></tr>`); return; }
       Object.keys(L.bus).forEach(f => {
         const u = CMP_UNIT[f] || '';
         const b = L.bus[f], r = L.branch[f], df = L.diff[f], rt = L.ratio_pct ? L.ratio_pct[f] : undefined;
-        rows.push(`<tr><td>${CURVE_NAME[k]} · ${f}</td><td>${ts(L.t)}</td><td>${isNum(b) ? si(b, u) : '—'}</td><td>${isNum(r) ? si(r, u) : '—'}</td>` +
-          `<td>${isNum(df) ? si(df, u) : '—'}</td><td>${isNum(rt) ? num(rt, 2) + ' %' : ''}</td></tr>`);
+        const sc = unitScale([b, r, df], u);
+        rows.push(`<tr><td>${CURVE_NAME[k]} · ${f}</td><td>${ts(L.t)}</td><td>${sc.f(b)}</td><td>${sc.f(r)}</td>` +
+          `<td>${sc.f(df)}</td><td>${sc.u || '—'}</td><td>${isNum(rt) ? num(rt, 2) : ''}</td></tr>`);
       });
     });
-    $('#cmp-table').innerHTML = `<table class="cmptbl"><thead><tr><th>电气量</th><th>时刻（总线）</th><th>总线侧</th><th>分路侧</th><th>差值 总线−分路</th><th>占比 分路/总线</th></tr></thead><tbody>${rows.join('')}</tbody></table>`;
+    $('#cmp-table').innerHTML = `<table class="cmptbl"><thead><tr><th>电气量</th><th>时刻（总线）</th><th>总线侧</th><th>分路侧</th><th>差值 总线−分路</th><th>单位</th><th>占比 分路/总线 (%)</th></tr></thead><tbody>${rows.join('')}</tbody></table>`;
   }
 
   // 曲线
@@ -1427,21 +1444,22 @@ function waveData(qq, key) {
 
 function perCycleTable(pc, unit) {
   if (!pc) return '<div class="notes">无逐周期数据</div>';
-  return table(['相', '周期数', '均值', '最大', '最小', '标准差', '丢弃点'],
+  const sc = unitScale(PH.flatMap(k => [(pc[k] || {}).mean, (pc[k] || {}).max, (pc[k] || {}).min]), unit);
+  return table(['相', '周期数', sc.hdr('均值'), sc.hdr('最大'), sc.hdr('最小'), sc.hdr('标准差'), '丢弃点'],
     PH.map(k => {
       const s = pc[k] || {};
-      return [k + ' 相', num(s.n_cycles, 0), si(s.mean, unit), si(s.max, unit), si(s.min, unit), num(s.std, 4), num(s.n_dropped, 0)];
+      return [k, num(s.n_cycles, 0), sc.f(s.mean), sc.f(s.max), sc.f(s.min), sc.f(s.std), num(s.n_dropped, 0)];
     }));
 }
 
 function seqTable(s, unit) {
   if (!s) return '<div class="notes">无序分量数据</div>';
-  return table(['项目', '数值', '说明'], [
-    ['正序 ' + (unit === 'V' ? 'U1' : 'I1'), si(s.U1, unit), '对称分量法（基波相量）'],
-    ['负序 ' + (unit === 'V' ? 'U2' : 'I2'), si(s.U2, unit), `不平衡度 ${num(s.negative_seq_pct, 3)} %`],
-    ['零序 ' + (unit === 'V' ? 'U0' : 'I0'), si(s.U0, unit), `零序含量 ${num(s.zero_seq_pct, 3)} %`],
-    ['正序相角', num(s.U1_angle_deg, 2) + '°', ''],
-    ['负序相角', num(s.U2_angle_deg, 2) + '°', ''],
+  const sc = unitScale([s.U1, s.U2, s.U0], unit);
+  const X = unit === 'V' ? 'U' : 'I';
+  return table(['分量', sc.hdr('幅值'), '相角 (°)', '占正序比 (%)', '说明'], [
+    [`正序 ${X}1`, sc.f(s.U1), num(s.U1_angle_deg, 2), '100', '对称分量法（基波相量）'],
+    [`负序 ${X}2`, sc.f(s.U2), num(s.U2_angle_deg, 2), num(s.negative_seq_pct, 3), '不平衡度'],
+    [`零序 ${X}0`, sc.f(s.U0), '—', num(s.zero_seq_pct, 3), '零序含量'],
   ]);
 }
 
@@ -1459,7 +1477,7 @@ function renderVoltage() {
   $('#v-cards').innerHTML = cards.join('') || card('状态', '尚无结果', '', '请先启动数据源');
   drawLine($('#v-wave'), waveData(v), { ylabel: 'V', unit: 'V', zero: true, fmtX: x => x.toFixed(3) + 's', height: 240 });
   $('#v-percycle').innerHTML = v ? perCycleTable(v.values.per_cycle, 'V') : '';
-  $('#v-seq').innerHTML = v ? seqTable(v.values.sequence, 'V') + table(['相', '基波有效值'], PH.map(k => [k + ' 相', si(v.values.fundamental_rms[k], 'V')])) : '';
+  $('#v-seq').innerHTML = v ? seqTable(v.values.sequence, 'V') + (() => { const sc = unitScale(PH.map(k => v.values.fundamental_rms[k]), 'V'); return table(['相', sc.hdr('基波有效值')], PH.map(k => [k, sc.f(v.values.fundamental_rms[k])])); })() : '';
   $('#v-win').innerHTML = winNotes('voltage');
 }
 
@@ -1475,8 +1493,8 @@ function renderCurrent() {
   $('#i-cards').innerHTML = cards.join('') || card('状态', '尚无结果', '', '请先启动数据源');
   drawLine($('#i-wave'), waveData(i), { ylabel: 'A', unit: 'A', zero: true, fmtX: x => x.toFixed(3) + 's', height: 240 });
   $('#i-percycle').innerHTML = i ? perCycleTable(i.values.per_cycle, 'A') : '';
-  $('#i-seq').innerHTML = i ? seqTable(i.values.sequence, 'A') + table(['相', '基波有效值', '波峰系数'],
-    PH.map(k => [k + ' 相', si(i.values.fundamental_rms[k], 'A'), num(i.values.crest_factor[k], 3)])) : '';
+  $('#i-seq').innerHTML = i ? seqTable(i.values.sequence, 'A') + (() => { const sc = unitScale(PH.map(k => i.values.fundamental_rms[k]), 'A'); return table(['相', sc.hdr('基波有效值'), '波峰系数'],
+    PH.map(k => [k, sc.f(i.values.fundamental_rms[k]), num(i.values.crest_factor[k], 3)])); })() : '';
   $('#i-win').innerHTML = winNotes('current');
 }
 
@@ -1497,19 +1515,26 @@ function renderPower() {
   $('#p-cards').innerHTML = cards.join('') || card('状态', '尚无结果', '', '请先启动数据源');
   const ser = (p && p.series && p.series.p_total) ? [{ name: 'p(t) 总瞬时功率', color: COLORS.P, data: p.series.p_total.map((v2, k) => [k * (p.series.stride || 1) / (((curState().config || {}).sampling || {}).fs || 6400), v2]) }] : [];
   drawLine($('#p-wave'), ser, { ylabel: 'W', unit: 'W', zero: true, fmtX: x => x.toFixed(3) + 's', height: 220 });
-  $('#p-phase').innerHTML = p ? table(['相', 'P (W)', 'Q (var)', 'S (VA)', 'PF', 'U (V)', 'I (A)'],
-    PH.map(k => [k + ' 相', si(p.values.p_per_phase[k], 'W'), si(p.values.q_per_phase[k], 'var'),
-                 si(p.values.s_per_phase[k], 'VA'), num(p.values.pf_per_phase[k], 4),
-                 si(p.values.u_rms[k], 'V'), si(p.values.i_rms[k], 'A')])) : '';
-  $('#p-fund').innerHTML = p && p.values.fundamental && p.values.fundamental.enabled ? table(['项目', 'A 相', 'B 相', 'C 相', '合计'], [
-    ['基波有功 P1 (W)', ...PH.map(k => si(p.values.fundamental.p1_per_phase[k], 'W')), si(p.values.fundamental.p1_total, 'W')],
-    ['基波无功 Q1 (var)', ...PH.map(k => si(p.values.fundamental.q1_per_phase[k], 'var')), si(p.values.fundamental.q1_total, 'var')],
-    ['基波视在 S1 (VA)', ...PH.map(k => si(p.values.fundamental.s1_per_phase[k], 'VA')), si(p.values.fundamental.s1_total, 'VA')],
-    ['基波电压 U1 (V)', ...PH.map(k => si(p.values.fundamental.u1_rms[k], 'V')), '—'],
-    ['基波电流 I1 (A)', ...PH.map(k => si(p.values.fundamental.i1_rms[k], 'A')), '—'],
-    ['位移因数 DPF', '—', '—', '—', num(p.values.fundamental.dpf, 4)],
-    ['φ1 (deg)', '—', '—', '—', num(p.values.fundamental.phi1_deg, 2)],
-  ]) + notes(p.values.notes) : '';
+  $('#p-phase').innerHTML = p ? (() => {
+    const pv = p.values, col = (o, u) => unitScale(PH.map(k => (o || {})[k]), u);
+    const sP = col(pv.p_per_phase, 'W'), sQ = col(pv.q_per_phase, 'var'), sS = col(pv.s_per_phase, 'VA'), sU = col(pv.u_rms, 'V'), sI = col(pv.i_rms, 'A');
+    return table(['相', sP.hdr('P'), sQ.hdr('Q'), sS.hdr('S'), 'PF', sU.hdr('U'), sI.hdr('I')],
+      PH.map(k => [k, sP.f(pv.p_per_phase[k]), sQ.f(pv.q_per_phase[k]), sS.f(pv.s_per_phase[k]), num(pv.pf_per_phase[k], 4), sU.f(pv.u_rms[k]), sI.f(pv.i_rms[k])]));
+  })() : '';
+  $('#p-fund').innerHTML = p && p.values.fundamental && p.values.fundamental.enabled ? (() => {
+    const fd = p.values.fundamental;
+    // 行标题带单位（每行一个量），单元格只放数字；同一行共用一个前缀
+    const row = (name, unit, per, total) => { const sc = unitScale([...PH.map(k => per[k]), total], unit); return [`${name} (${sc.u})`, ...PH.map(k => sc.f(per[k])), total === undefined ? '—' : sc.f(total)]; };
+    return table(['项目 (单位)', 'A 相', 'B 相', 'C 相', '合计'], [
+      row('基波有功 P1', 'W', fd.p1_per_phase, fd.p1_total),
+      row('基波无功 Q1', 'var', fd.q1_per_phase, fd.q1_total),
+      row('基波视在 S1', 'VA', fd.s1_per_phase, fd.s1_total),
+      row('基波电压 U1', 'V', fd.u1_rms),
+      row('基波电流 I1', 'A', fd.i1_rms),
+      ['位移因数 DPF', '—', '—', '—', num(fd.dpf, 4)],
+      ['φ1 (°)', '—', '—', '—', num(fd.phi1_deg, 2)],
+    ]) + notes(p.values.notes);
+  })() : '';
   $('#p-win').innerHTML = winNotes('power');
 }
 
@@ -1532,7 +1557,7 @@ function renderPF() {
   renderCurveSave();
   drawQuadrant($('#pf-quad'), p ? p.values.p_total : NaN, p ? p.values.q_total : NaN);
   $('#pf-quadtxt').innerHTML = p && p.values.quadrant ? notes([`${p.values.quadrant.name}：${p.values.quadrant.meaning}`]) : '';
-  $('#pf-phase').innerHTML = pf ? table(['相', 'PF', '说明'], PH.map(k => [k + ' 相', num(pf.values.pf_per_phase[k], 4), '分相 P/S'])) : '';
+  $('#pf-phase').innerHTML = pf ? table(['相', 'PF', '说明'], PH.map(k => [k, num(pf.values.pf_per_phase[k], 4), '分相 P/S'])) : '';
 }
 
 function renderFundamental() {
@@ -1548,9 +1573,11 @@ function renderFundamental() {
     cards.push(card('电流不平衡度', num(v.unbalance_i_pct, 3), '%', `负序 I2=${si(v.i_sequence.I2, 'V')}`));
   }
   $('#f-cards').innerHTML = cards.join('') || card('状态', '尚无结果', '', '请先启动数据源');
-  $('#f-phasor').innerHTML = f ? table(['相', 'U1 (V)', '∠U1 (°)', 'I1 (A)', '∠I1 (°)', 'φ=∠U−∠I (°)'],
-    PH.map(k => [k, si(f.values.u1_rms[k], 'V'), num(f.values.u1_angle_deg[k], 2),
-                 si(f.values.i1_rms[k], 'A'), num(f.values.i1_angle_deg[k], 2), num(f.values.phi_deg[k], 2)])) : '';
+  $('#f-phasor').innerHTML = f ? (() => {
+    const sU = unitScale(PH.map(k => f.values.u1_rms[k]), 'V'), sI = unitScale(PH.map(k => f.values.i1_rms[k]), 'A');
+    return table(['相', sU.hdr('U1'), '∠U1 (°)', sI.hdr('I1'), '∠I1 (°)', 'φ=∠U−∠I (°)'],
+      PH.map(k => [k, sU.f(f.values.u1_rms[k]), num(f.values.u1_angle_deg[k], 2), sI.f(f.values.i1_rms[k]), num(f.values.i1_angle_deg[k], 2), num(f.values.phi_deg[k], 2)]));
+  })() : '';
   $('#f-seq').innerHTML = f ? `<h3 style="margin-top:6px">电压序分量</h3>${seqTable(f.values.u_sequence, 'V')}<h3 style="margin-top:10px">电流序分量</h3>${seqTable(f.values.i_sequence, 'A')}` : '';
   const hf = curHist('fundamental');
   const t0 = hf.length ? hf[0].t : 0;
@@ -1581,12 +1608,13 @@ function renderHarmonic() {
              { xlabel: '谐波次数', ylabel: modeU === 'hr' ? '含有率 %' : '幅值 V', height: 230 });
     drawBars($('#h-bar-i'), orders, PH.map(k => ({ name: k + ' 相', color: COLORS[k], data: srcI[k] || [] })),
              { xlabel: '谐波次数', ylabel: modeI === 'hr' ? '含有率 %' : '幅值 A', height: 230 });
-    const rowsU = orders.map((o, idx) => [o + ' 次', ...PH.map(k => num((h.series.rms_u[k] || [])[idx], 4)),
+    const sU = unitScale(PH.flatMap(k => h.series.rms_u[k] || []), 'V'), sI = unitScale(PH.flatMap(k => h.series.rms_i[k] || []), 'A');
+    const rowsU = orders.map((o, idx) => [o, ...PH.map(k => sU.f((h.series.rms_u[k] || [])[idx])),
                                           ...PH.map(k => num((h.series.hr_u_pct[k] || [])[idx], 3))]);
-    $('#h-table-u').innerHTML = table(['次数', 'UA (V)', 'UB (V)', 'UC (V)', 'HR A (%)', 'HR B (%)', 'HR C (%)'], rowsU);
-    const rowsI = orders.map((o, idx) => [o + ' 次', ...PH.map(k => num((h.series.rms_i[k] || [])[idx], 4)),
+    $('#h-table-u').innerHTML = table(['次数', sU.hdr('UA'), sU.hdr('UB'), sU.hdr('UC'), 'HR A (%)', 'HR B (%)', 'HR C (%)'], rowsU);
+    const rowsI = orders.map((o, idx) => [o, ...PH.map(k => sI.f((h.series.rms_i[k] || [])[idx])),
                                           ...PH.map(k => num((h.series.hr_i_pct[k] || [])[idx], 3))]);
-    $('#h-table-i').innerHTML = table(['次数', 'IA (A)', 'IB (A)', 'IC (A)', 'HR A (%)', 'HR B (%)', 'HR C (%)'], rowsI);
+    $('#h-table-i').innerHTML = table(['次数', sI.hdr('IA'), sI.hdr('IB'), sI.hdr('IC'), 'HR A (%)', 'HR B (%)', 'HR C (%)'], rowsI);
   }
   $('#h-win').innerHTML = winNotes('harmonic');
 }
@@ -1607,14 +1635,15 @@ function renderSpectrum() {
   drawLine($('#sp-chart'), [{ name: `${ch} 幅值谱`, color: COLORS.A, data }],
            { ylabel: scale === 'db' ? 'dB' : (ch[0] === 'U' ? 'V' : 'A'), fmtX: x => x.toFixed(0) + 'Hz', fmtTip: x => x.toFixed(2) + ' Hz', height: 300, legend: true });
   const pk = (sp.values.peaks || {})[ch] || {};
-  $('#sp-info').innerHTML = table(['项目', '数值'], [
-    ['主峰频率', num(pk.freq_hz, 3) + ' Hz'],
-    ['主峰幅值(RMS)', si(pk.amp_rms, ch[0] === 'U' ? 'V' : 'A')],
-    ['约当次数', num(pk.order_approx, 2) + ' 次'],
-    ['频率分辨率', num(sp.values.freq_resolution_hz, 4) + ' Hz'],
-    ['Nyquist', num(sp.values.nyquist_hz, 0) + ' Hz'],
-    ['窗函数', sp.values.window_fn],
-    ['输出点数', (c.freqs || []).length],
+  const sA = unitScale([pk.amp_rms], ch[0] === 'U' ? 'V' : 'A');
+  $('#sp-info').innerHTML = table(['项目', '数值', '单位'], [
+    ['主峰频率', num(pk.freq_hz, 3), 'Hz'],
+    ['主峰幅值 (RMS)', sA.f(pk.amp_rms), sA.u],
+    ['约当次数', num(pk.order_approx, 2), '次'],
+    ['频率分辨率', num(sp.values.freq_resolution_hz, 4), 'Hz'],
+    ['Nyquist', num(sp.values.nyquist_hz, 0), 'Hz'],
+    ['窗函数', sp.values.window_fn, ''],
+    ['输出点数', (c.freqs || []).length, '点'],
   ]);
   $('#sp-notes').innerHTML = notes(sp.values.notes);
 }
@@ -2070,15 +2099,16 @@ function renderInterharmonic() {
              { xlabel: '间谐波组号（第 h 组 = h 次与 h+1 次谐波之间）', ylabel: modeU === 'pct' ? '含有率 %' : '组有效值 V', height: 230 });
     drawBars($('#ih-bar-i'), groups, PH.map(k => ({ name: k + ' 相', color: COLORS[k], data: srcI[k] || [] })),
              { xlabel: '间谐波组号', ylabel: modeI === 'pct' ? '含有率 %' : '组有效值 A', height: 230 });
-    const rows = (top, unit) => {
+    const ihTable = (top, unit) => {
+      const all = PH.flatMap(k => top[k] || []);
+      const sc = unitScale(all.flatMap(g => [g.dom_rms, g.rms, g.subgroup_rms]), unit);
       const out = [];
-      PH.forEach(k => (top[k] || []).forEach(g => out.push([k, `第 ${g.h} 组`, `${num(g.f_lo, 0)}~${num(g.f_hi, 0)}`,
-        num(g.dom_freq_hz, 1), si(g.dom_rms, unit), num(g.dom_angle_deg, 2), si(g.rms, unit), si(g.subgroup_rms, unit), num(g.pct, 3)])));
-      return out;
+      PH.forEach(k => (top[k] || []).forEach(g => out.push([k, g.h, `${num(g.f_lo, 0)}~${num(g.f_hi, 0)}`,
+        num(g.dom_freq_hz, 1), sc.f(g.dom_rms), num(g.dom_angle_deg, 2), sc.f(g.rms), sc.f(g.subgroup_rms), num(g.pct, 3)])));
+      return table(['相', '组号', '频带 (Hz)', '主导频率 (Hz)', sc.hdr('主导幅值 RMS'), '主导相角 (°)', sc.hdr('组有效值'), sc.hdr('中心子组'), '含有率 (%)'], out);
     };
-    const hdr = (unit) => ['相', '组', '频带 (Hz)', '主导频率 (Hz)', `主导幅值 (${unit} RMS)`, '主导相角 (°)', `组有效值 (${unit})`, `中心子组 (${unit})`, '含有率 (%)'];
-    $('#ih-table-u').innerHTML = table(hdr('V'), rows(h.values.top_u || {}, 'V'));
-    $('#ih-table-i').innerHTML = table(hdr('A'), rows(h.values.top_i || {}, 'A'));
+    $('#ih-table-u').innerHTML = ihTable(h.values.top_u || {}, 'V');
+    $('#ih-table-i').innerHTML = ihTable(h.values.top_i || {}, 'A');
   }
   const hh = curHist('interharmonic');
   const t0 = hh.length ? hh[0].t : 0;
@@ -2102,12 +2132,14 @@ function renderDC() {
   $('#dc-cards').innerHTML = cards.join('') || card('状态', '尚无结果', '', '请先启动数据源');
   if (d) {
     const v = d.values;
-    const drift = (o) => `${si(o.min)} ~ ${si(o.max)}（σ ${si(o.std)}）`;
-    $('#dc-table-u').innerHTML = table(['相', 'DC (V)', '相对 U1 (%)', 'U1 (V)', '逐周期均值范围'],
-      PH.map(k => [k, si(v.u_dc[k], 'V'), num(v.u_dc_pct[k], 3), si(v.u1_rms[k], 'V'), drift(v.u_dc_drift[k])]));
-    $('#dc-table-i').innerHTML = table(['相', 'DC (A)', '相对 I1 (%)', 'I1 (A)', '逐周期均值范围'],
-      [...PH.map(k => [k, si(v.i_dc[k], 'A'), num(v.i_dc_pct[k], 3), si(v.i1_rms[k], 'A'), drift(v.i_dc_drift[k])]),
-       ['N (Ia+Ib+Ic)', si(v.in_dc, 'A'), '—', '—', '—']]);
+    const g = (o, k) => (o && o[k]) || {};
+    const sDu = unitScale(PH.flatMap(k => [v.u_dc[k], g(v.u_dc_drift, k).min, g(v.u_dc_drift, k).max]), 'V'), sU1 = unitScale(PH.map(k => v.u1_rms[k]), 'V');
+    $('#dc-table-u').innerHTML = table(['相', sDu.hdr('DC'), '相对 U1 (%)', sU1.hdr('U1'), sDu.hdr('逐周期均值 最小'), sDu.hdr('最大'), sDu.hdr('σ')],
+      PH.map(k => [k, sDu.f(v.u_dc[k]), num(v.u_dc_pct[k], 3), sU1.f(v.u1_rms[k]), sDu.f(g(v.u_dc_drift, k).min), sDu.f(g(v.u_dc_drift, k).max), sDu.f(g(v.u_dc_drift, k).std)]));
+    const sDi = unitScale([...PH.flatMap(k => [v.i_dc[k], g(v.i_dc_drift, k).min, g(v.i_dc_drift, k).max]), v.in_dc], 'A'), sI1 = unitScale(PH.map(k => v.i1_rms[k]), 'A');
+    $('#dc-table-i').innerHTML = table(['相', sDi.hdr('DC'), '相对 I1 (%)', sI1.hdr('I1'), sDi.hdr('逐周期均值 最小'), sDi.hdr('最大'), sDi.hdr('σ')],
+      [...PH.map(k => [k, sDi.f(v.i_dc[k]), num(v.i_dc_pct[k], 3), sI1.f(v.i1_rms[k]), sDi.f(g(v.i_dc_drift, k).min), sDi.f(g(v.i_dc_drift, k).max), sDi.f(g(v.i_dc_drift, k).std)]),
+       ['N (Ia+Ib+Ic)', sDi.f(v.in_dc), '—', '—', '—', '—', '—']]);
     const cyc = (d.series && d.series.cycle) || [];
     drawLine($('#dc-cyc-u'), PH.map(k => ({ name: k + ' 相', color: COLORS[k], data: cyc.map((c, i) => [c, (d.series.u_per_cycle[k] || [])[i]]) })),
              { ylabel: 'V', fmtX: x => '#' + x.toFixed(0), fmtTip: x => '第 ' + x.toFixed(0) + ' 周期', height: 200, legend: true });
@@ -2174,11 +2206,11 @@ async function saveEventConfig(side = sideOf()) {
 }
 
 function evRow(e) {
-  const dur = e.duration_s === null || e.duration_s === undefined ? '进行中' : fmtDur(e.duration_s);
+  // v0.25：持续时间统一为秒；触发值 / 峰值 / 阈值 不带单位，单位单列（各类事件单位不同：V / A / % / Hz / Hz/s / W）
+  const dur = e.duration_s === null || e.duration_s === undefined ? '进行中' : num(e.duration_s, 1);
   return [e.id, `<span class="badge ${e.active ? 'bad' : ''}">${e.active ? '活动' : '已结束'}</span>`, EVENT_NAME[e.type] || e.type, esc(e.subject),
           ts(e.start_t), e.end_t ? ts(e.end_t) : '—', dur,
-          `${fmtVal(e.value_start)} ${esc(e.unit)}`, `${fmtVal(e.value_peak)} ${esc(e.unit)}`,
-          `${e.direction === 'low' ? '<' : '>'} ${fmtVal(e.limit)} ${esc(e.unit)}`, esc(e.detail || '')];
+          fmtVal(e.value_start), fmtVal(e.value_peak), `${e.direction === 'low' ? '<' : '>'} ${fmtVal(e.limit)}`, esc(e.unit), esc(e.detail || '')];
 }
 
 function renderEvents() {
@@ -2198,7 +2230,7 @@ function renderEvents() {
                   isNum(osc.dom_freq_hz) ? `主导 ${num(osc.dom_freq_hz, 3)} Hz · 峰峰 ${si(osc.amp_pp, 'W')} · ${osc.points} 点` : (osc.note || `${osc.points || 0} 点`)));
   $('#ev-cards').innerHTML = cards.join('');
   if (isNum(sm.active)) setEventBadge(sm.active);
-  const hdr = ['#', '状态', '类型', '对象', '开始（数据时间）', '结束', '持续', '触发值', '峰值', '阈值', '说明'];
+  const hdr = ['#', '状态', '类型', '对象', '开始（数据时间）', '结束', '持续 (s)', '触发值', '峰值', '阈值', '单位', '说明'];
   const active = st.events.filter(e => e.active);
   $('#ev-active').innerHTML = active.length ? table(hdr, active.map(evRow)) : '<div class="notes ok">当前无活动事件</div>';
   $('#ev-total').textContent = String(sm.total || st.events.length);
@@ -2599,9 +2631,9 @@ async function runSelftest() {
       `通过率 ${num(r.pass_rate_pct, 2)}%，最差相对误差 ${r.worst_rel_err.toExponential(3)}，耗时 ${r.duration_s}s`,
       `工况：fs=${r.conditions.fs}Hz，f=${r.conditions.f_nom}Hz，PT=${r.conditions.pt}，CT=${r.conditions.ct}，窗长=${r.conditions.window_s}s`,
     ], (r.failures || []).map(f => `✗ ${f.id} ${f.name}：期望 ${f.expected} 实际 ${f.actual}（相对误差 ${(f.rel_err * 100).toFixed(4)}%）`));
-    $('#self-table').innerHTML = table(['编号', '项目', '期望值', '实际值', '相对误差', '容差', '单位', '结论'],
-      r.checks.map(c => [c.id, c.name, num(c.expected, 6), num(c.actual, 6),
-        (c.rel_err * 100).toFixed(5) + '%', (c.tol_rel * 100).toFixed(3) + '%', c.unit,
+    $('#self-table').innerHTML = table(['编号', '项目', '期望值', '实际值', '单位', '相对误差 (%)', '容差 (%)', '结论'],
+      r.checks.map(c => [c.id, c.name, num(c.expected, 6), num(c.actual, 6), c.unit,
+        (c.rel_err * 100).toFixed(5), (c.tol_rel * 100).toFixed(3),
         c.ok ? '<span class="badge ok">PASS</span>' : '<span class="badge bad">FAIL</span>']));
     toast(r.all_ok ? '算法自检全部通过' : '自检存在失败项，请查看明细', r.all_ok ? 'ok' : 'err');
   } catch (e) {
@@ -2897,12 +2929,19 @@ async function clearNilm(side = sideOf()) {
   catch (e) { toast(e.message, 'err'); }
 }
 
-function nilmRow(e) {
+/* v0.25：整表共用一组单位（按全部事件的最大值选前缀），表头带单位、单元格只放数字 */
+function nilmScales(events) {
+  return { D: unitScale(events.map(e => e.magnitude_w), 'W', 3), P: unitScale(events.flatMap(e => [e.pre_p_w, e.post_p_w]), 'W', 3),
+           Q: unitScale(events.map(e => e.delta_q_var), 'var', 3), I: unitScale(events.map(e => e.delta_i_a), 'A', 3) };
+}
+function nilmHeader(sc) {
+  return ['#', '算法', '对象', '开始（数据时间）', '结束', '持续 (s)', '周波数', '方向', sc.D.hdr('幅值 |ΔP|'), sc.Q.hdr('ΔQ'), sc.I.hdr('ΔI'), sc.P.hdr('事件前 P'), sc.P.hdr('事件后 P'), '检验量'];
+}
+function nilmRow(e, sc) {
   const dir = e.direction === 'up' ? '<span class="badge bad">↑ 投入</span>' : '<span class="badge">↓ 切除</span>';
   return [e.id, `<span style="color:${NILM_COLORS[e.algorithm] || '#fff'}">■</span> ${esc(e.algorithm_name || e.algorithm)}`, esc(e.channel),
-          ts(e.t_start), ts(e.t_end), fmtDur(e.duration_s || 0) + `（${e.cycles} 周波）`, dir,
-          si(e.magnitude_w, 'W'), si(e.delta_q_var, 'var'), si(e.delta_i_a, 'A'),
-          `${si(e.pre_p_w, 'W')} → ${si(e.post_p_w, 'W')}`, isNum(e.score) ? num(e.score, 3) : ''];
+          ts(e.t_start), ts(e.t_end), num(e.duration_s || 0, 2), e.cycles, dir,
+          sc.D.f(e.magnitude_w), sc.Q.f(e.delta_q_var), sc.I.f(e.delta_i_a), sc.P.f(e.pre_p_w), sc.P.f(e.post_p_w), isNum(e.score) ? num(e.score, 3) : ''];
 }
 
 /* v0.24：P/Q/S 趋势（与总览同一数据 /api/history/power、同一 pqsSeries）+ 各算法事件竖线 */
@@ -2948,9 +2987,9 @@ function renderNilm() {
                      label: `${e.direction === 'up' ? '↑' : '↓'}${si(e.magnitude_w, 'W', 3)}` }));
   drawLine($('#nilm-chart'), [{ name: `${chn === 'total' ? '三相总' : chn + ' 相'} ${qty.toUpperCase()}（逐周波）`, color: '#4ea1ff', data: tt.map((x, i) => [x - t0, chd[i]]) }],
            { ylabel: unit, fmtX: x => ts(x + t0), fmtTip: x => ts(x + t0), height: 240, marks, empty: '暂无周波数据（启动数据源后显示）' });
-  const hdr = ['#', '算法', '对象', '开始（数据时间）', '结束', '持续', '方向', '幅值 |ΔP|', 'ΔQ', 'ΔI', '前 → 后', '检验量'];
+  const nsc = nilmScales(NL.events);
   $('#nilm-total').textContent = String(sm.total || NL.events.length);
-  $('#nilm-table').innerHTML = NL.events.length ? table(hdr, NL.events.map(nilmRow)) : '<div class="notes">暂无事件</div>';
+  $('#nilm-table').innerHTML = NL.events.length ? table(nilmHeader(nsc), NL.events.map(e => nilmRow(e, nsc))) : '<div class="notes">暂无事件</div>';
   const cfg = curState().config || {};
   fillNilmForm(cfg.nilm);
   $('#nilm-notes').innerHTML = notes((sm.notes || []).concat(sm.errors || []), [
