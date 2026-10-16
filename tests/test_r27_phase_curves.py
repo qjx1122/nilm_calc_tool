@@ -130,8 +130,31 @@ def test_realtime_writer_rotates_file_with_old_header(tmp_path, monkeypatch):
 
 
 def test_frontend_contract():
-    assert 'id="p-trend"' in HTML and 'class="curve-save" data-curve="power"' in HTML.split('id="view-power"')[1].split("</section>")[0]
-    assert "drawLine($('#p-trend'), pqsSeries(hpw, t0p)" in APP_JS
+    # v0.28：功率页不再是趋势线，而是分相瞬时功率波形 #p-wave-ph；谐波/间谐波/基波趋势含分相线（默认隐藏、图例勾选）
+    assert 'id="p-wave-ph"' in HTML and 'id="p-trend"' not in HTML
+    assert "drawLine($('#p-wave-ph'), serPh" in APP_JS and "p.series.p_per_phase" in APP_JS
     assert "name: 'PF' + ph.toLowerCase()" in APP_JS and "defaultHidden: true, data: hp.map(x => [x.t - t0, x['PF' + ph.toLowerCase()]])" in APP_JS
-    # 功率页进入/定时刷新历史
-    assert "['overview', 'power', 'power_factor', 'fundamental', 'interharmonic', 'dc', 'nilm'].includes(v)" in APP_JS
+    for cid in ("h-trend", "f-u1-trend", "f-i1-trend"):
+        assert f'id="{cid}"' in HTML and f"drawLine($('#{cid}')" in APP_JS, cid
+    for f in ("THD_U${k.toLowerCase()}", "THD_I${k.toLowerCase()}", "TIHD_U${k.toLowerCase()}", "TIHD_I${k.toLowerCase()}"):
+        assert f in APP_JS, f
+    assert "['overview', 'power_factor', 'fundamental', 'harmonic', 'interharmonic', 'dc', 'nilm'].includes(v)" in APP_JS
+
+
+def test_power_series_has_per_phase(client, tmp_path, monkeypatch):
+    """v0.28：/api/result 的 power.series 带 p_per_phase（A/B/C 各一条、与 p_total 同长度、逐点之和≈p_total）。"""
+    from elec_tool.selftest import build_signal, HarmSpec
+    from tests.conftest import write_csv, FS
+    t, u, i = build_signal([HarmSpec(1, 57.735, 5.0, phi_deg=20.0)], FS, 2.0)
+    write_csv(str(tmp_path / "bus2.csv"), t, u, i)
+    r = client.post("/api/engine/start", json={"kind": "csv_file", "path": str(tmp_path / "bus2.csv"), "file_speed": 0, "custom_time": False})
+    assert r.status_code == 200 and r.json()["ok"], r.text
+    try:
+        assert _wait(client, lambda: "power" in client.get("/api/result?full=true").json().get("quantities", {}))
+        ser = client.get("/api/result?full=true").json()["quantities"]["power"]["series"]
+        pp = ser["p_per_phase"]
+        assert set(pp) == {"A", "B", "C"} and all(len(pp[k]) == len(ser["p_total"]) for k in pp) and len(ser["p_total"]) > 10
+        for j in range(0, len(ser["p_total"]), 97):
+            assert abs(pp["A"][j] + pp["B"][j] + pp["C"][j] - ser["p_total"][j]) < 1e-6 * max(1.0, abs(ser["p_total"][j]))
+    finally:
+        client.post("/api/engine/stop")

@@ -186,3 +186,14 @@ body.no-branch-nav .badge-br{display:none !important}
 /* v0.26.2：卡片副文本中的路径允许任意位置换行，避免长路径溢出卡片 */
 .card .s{overflow-wrap:anywhere;word-break:break-all;white-space:normal}
 .card .s .path{display:block;font-family:ui-monospace,Consolas,monospace;font-size:10.5px;line-height:1.35;color:#9fb0d3}
+
+/* v0.28：总览「最新电气量」多行卡片：每行 标签｜总线数据 / 分路数据 */
+.card.ovc .k .fmt{float:right;font-size:10px;color:var(--mut);opacity:.8}
+.card.ovc .ovrows{width:100%;border-collapse:collapse;margin-top:4px;font-variant-numeric:tabular-nums}
+.card.ovc .ovrows td{padding:1px 0;border:0;font-size:14px;line-height:1.35;white-space:nowrap}
+.card.ovc .ovrows td.l{color:var(--mut);font-size:11px;width:34px;padding-right:6px}
+.card.ovc .ovrows td.v .bus{color:var(--acc)}
+.card.ovc .ovrows td.v .br{color:var(--warn)}
+.card.ovc .ovrows td.v .sep{color:var(--mut)}
+.card.ovc .ovrows td.v .u{margin-left:4px}
+#ov-cards{grid-template-columns:repeat(auto-fill,minmax(210px,1fr))}

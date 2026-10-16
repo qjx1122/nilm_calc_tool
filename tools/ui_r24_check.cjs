@@ -167,25 +167,45 @@ async function main() {
   check('右列「保存曲线数据」→ POST /api/branch/curves/save', calls.slice(b2).some(c => c.method === 'POST' && c.url === '/api/branch/curves/save') && /已保存|✗/.test($('curves-out-br').textContent));
   check('右列实时落盘状态来自 /api/branch/realtime', calls.some(c => c.url === '/api/branch/realtime') && $('rt-out-br').textContent.includes('状态'));
 
-  console.log('v0.27 功率页 P/Q/S 趋势 + 功率因数页分相 PF 曲线（图例可选）');
-  await put('/api/config', { output: { series_hidden: { 'p-trend': [], 'pf-trend': [] } } });   // 清掉上次运行残留的图例勾选状态，验证默认值
+  console.log('v0.28 功率页分相瞬时功率波形 / 谐波·间谐波·基波分相趋势线 / 功率因数分相曲线 / 总览多行卡片');
+  await put('/api/config', { output: { series_hidden: { 'h-trend': [], 'pf-trend': [], 'f-u1-trend': [] } } });   // 清掉上次运行残留的图例勾选状态，验证默认值
   await nav('power'); await sync(); await sleep(800);
-  const pBoxes = [...document.querySelectorAll('.ser-vis[data-chart="p-trend"]')];
-  const pNames = pBoxes.map(b => b.dataset.name);
-  check('功率页 #p-trend 图例含 P/Q/S 与 Pa..Sc 共 12 条', ['P', 'Q', 'S', 'Pa', 'Pb', 'Pc', 'Qa', 'Qb', 'Qc', 'Sa', 'Sb', 'Sc'].every(n => pNames.includes(n)), pNames.join(','));
-  check('分相 Pa..Sc 默认不勾选（隐藏），P/Q/S 默认勾选', pBoxes.filter(b => /^[PQS]$/.test(b.dataset.name)).every(b => b.checked) && pBoxes.filter(b => /^[PQS][abc]$/.test(b.dataset.name)).every(b => !b.checked));
-  const pa = pBoxes.find(b => b.dataset.name === 'Pa'); pa.checked = true; change(pa); await sleep(600);
-  const paNow = document.querySelector('.ser-vis[data-chart="p-trend"][data-name="Pa"]');   // 重绘后图例重建，需重新取元素
-  check('勾选 Pa → 该曲线可见（图例重建后仍勾选）并写入配置（PUT /api/config output.series_hidden["p-trend"]）',
-        calls.some(c => c.method === 'PUT' && c.url === '/api/config' && /p-trend/.test(c.body || '')) && paNow && paNow.checked && !paNow.closest('label').classList.contains('off'));
-  paNow.checked = false; change(paNow); await sleep(400);
-  check('取消 Pa → 恢复隐藏', !document.querySelector('.ser-vis[data-chart="p-trend"][data-name="Pa"]').checked);
+  check('功率页无 P/Q/S 趋势画布、有分相瞬时功率画布 #p-wave-ph', !$('p-trend') && !!$('p-wave-ph'));
+  const pwp = $('p-wave-ph').__chart;
+  check('分相瞬时功率波形已绘制 A/B/C 三条且点数 = 总瞬时功率点数', !!pwp && pwp.pts.length === 3 && pwp.pts.every(s => s.data.length === $('p-wave').__chart.pts[0].data.length && s.data.length > 10), pwp ? `n=${pwp.pts.map(s => s.data.length)}` : '未绘制');
+  const pwNames = [...document.querySelectorAll('.ser-vis[data-chart="p-wave-ph"]')].map(b => b.dataset.name);
+  check('分相瞬时功率图例 3 项可勾选', pwNames.length === 3 && pwNames.every(n => /^p[ABC]\(t\)/.test(n)), pwNames.join(','));
+  await nav('harmonic'); await sync(); await sleep(800);
+  const hNames = [...document.querySelectorAll('.ser-vis[data-chart="h-trend"]')];
+  check('谐波页 #h-trend 图例含最劣相 THD_U/THD_I + 分相 THD_Ua..Ic 共 8 条', hNames.length === 8 && ['THD_Ua', 'THD_Ub', 'THD_Uc', 'THD_Ia', 'THD_Ib', 'THD_Ic'].every(n => hNames.some(b => b.dataset.name === n)), hNames.map(b => b.dataset.name).join(','));
+  check('分相 THD 默认隐藏、最劣相默认显示', hNames.filter(b => /^THD_[UI][abc]$/.test(b.dataset.name)).every(b => !b.checked) && hNames.filter(b => /最劣相/.test(b.dataset.name)).every(b => b.checked));
+  const tua = hNames.find(b => b.dataset.name === 'THD_Ua'); tua.checked = true; change(tua); await sleep(600);
+  check('勾选 THD_Ua → 显示并 PUT 持久化 series_hidden["h-trend"]', calls.some(c => c.method === 'PUT' && c.url === '/api/config' && /h-trend/.test(c.body || '')) && document.querySelector('.ser-vis[data-chart="h-trend"][data-name="THD_Ua"]').checked);
+  const t2 = document.querySelector('.ser-vis[data-chart="h-trend"][data-name="THD_Ua"]'); t2.checked = false; change(t2); await sleep(300);
+  await nav('interharmonic'); await sync(); await sleep(800);
+  const ihNames = [...document.querySelectorAll('.ser-vis[data-chart="ih-trend"]')].map(b => b.dataset.name);
+  check('间谐波页 #ih-trend 图例含分相 TIHD_Ua..Ic', ['TIHD_Ua', 'TIHD_Ub', 'TIHD_Uc', 'TIHD_Ia', 'TIHD_Ib', 'TIHD_Ic'].every(n => ihNames.includes(n)), ihNames.join(','));
+  await nav('fundamental'); await sync(); await sleep(800);
+  const u1 = [...document.querySelectorAll('.ser-vis[data-chart="f-u1-trend"]')].map(b => b.dataset.name), i1 = [...document.querySelectorAll('.ser-vis[data-chart="f-i1-trend"]')].map(b => b.dataset.name);
+  check('基波页 U1/I1 趋势图例含三相总 + 分相', ['U1 三相', 'U1a', 'U1b', 'U1c'].every(n => u1.includes(n)) && ['I1 三相', 'I1a', 'I1b', 'I1c'].every(n => i1.includes(n)), u1.join(',') + ' | ' + i1.join(','));
   await nav('power_factor'); await sync(); await sleep(800);
   const pfBoxes = [...document.querySelectorAll('.ser-vis[data-chart="pf-trend"]')]; const pfNames = pfBoxes.map(b => b.dataset.name);
   check('功率因数页 #pf-trend 图例含 PF/DPF/PFa/PFb/PFc', ['PF', 'DPF', 'PFa', 'PFb', 'PFc'].every(n => pfNames.includes(n)), pfNames.join(','));
   check('PFa/PFb/PFc 默认隐藏、PF/DPF 默认显示', pfBoxes.filter(b => /^PF[abc]$/.test(b.dataset.name)).every(b => !b.checked) && pfBoxes.filter(b => /^D?PF$/.test(b.dataset.name)).every(b => b.checked));
   const hpf = await api('/api/history/power_factor');
   check('功率因数历史点含 PFa/PFb/PFc 数值', hpf.count > 0 && ['PFa', 'PFb', 'PFc'].every(k => typeof hpf.points[hpf.points.length - 1][k] === 'number'));
+  // 总览多行卡片
+  await nav('overview'); await sync(); await sleep(1200);
+  const ovTitles = [...document.querySelectorAll('#ov-cards .card.ovc .k')].map(e => e.firstChild.textContent.trim());
+  check('总览最新电气量 9 张卡片：电压/电流/P/Q/S/PF/频率/THD_U/THD_I', ovTitles.length === 9 && ['电压', '电流', '有功 P', '无功 Q', '视在 S', '功率因数 PF', '频率', 'THD_U', 'THD_I'].every(t => ovTitles.some(x => x.startsWith(t))), ovTitles.join(' | '));
+  const rowsOf = (t) => [...document.querySelectorAll('#ov-cards .card.ovc')].find(c => c.querySelector('.k').textContent.startsWith(t)).querySelectorAll('.ovrows tr');
+  check('电压 / 电流卡片各 3 行（A/B/C 相）', rowsOf('电压').length === 3 && rowsOf('电流').length === 3 && [...rowsOf('电压')].map(r => r.querySelector('.l').textContent).join('') === 'A 相B 相C 相');
+  check('P / Q / S / PF 卡片各 4 行（A/B/C 相 + 总）', ['有功 P', '无功 Q', '视在 S', '功率因数 PF'].every(t => rowsOf(t).length === 4 && rowsOf(t)[3].querySelector('.l').textContent === '总'));
+  const act = ovTitles.length && document.querySelector('#ov-cards .ovrows td.v .br');
+  check('分路侧启用时每行格式「总线数据 / 分路数据」（.bus + " / " + .br）', !!act && [...document.querySelectorAll('#ov-cards .ovrows td.v')].every(td => td.querySelector('.bus') && td.querySelector('.br') && td.querySelector('.sep').textContent === ' / '));
+  const vA = rowsOf('电压')[0].querySelector('td.v'), busApiU = (await api('/api/result?full=false')).quantities.voltage.values.rms.A, brApiU = (await api('/api/branch/result?full=false')).quantities.voltage.values.rms.A;
+  const numOf = (txt) => { const m = txt.match(/([\d.]+)\s*(k?)V/); return m ? +m[1] * (m[2] ? 1e3 : 1) : NaN; };
+  check('电压 A 相行：左值 = /api/result、右值 = /api/branch/result', Math.abs(numOf(vA.querySelector('.bus').textContent) - busApiU) / busApiU < 0.01 && Math.abs(numOf(vA.querySelector('.br').textContent) - brApiU) / brApiU < 0.01, `${vA.textContent} vs ${busApiU}/${brApiU}`);
 
   console.log('E4 事件阈值保存');
   await nav('events'); await sync(); await brSync();

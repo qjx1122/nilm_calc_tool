@@ -395,7 +395,7 @@ def test_frontend_has_custom_time_controls_wired():
 
 def test_frontend_has_one_save_checkbox_per_curve():
     boxes = re.findall(r'class="curve-save" data-curve="([a-z_]+)"(?! data-side="branch")', HTML)
-    assert sorted(boxes) == sorted(CURVE_KEYS)                   # 总线侧每条趋势曲线各一个、不多不少（分路侧另计）
+    assert set(boxes) == set(CURVE_KEYS) and boxes.count("harmonic") == 2   # 总线侧每条趋势曲线至少一个（v0.28 谐波页 THD 趋势与总览共用同一保存开关 → 2 个）；分路侧另计
     assert 'id="curve-save-list"' in HTML and 'id="btn-save-curves"' in HTML
     assert "/api/curves/save" in APPJS and "curve_save" in APPJS
 

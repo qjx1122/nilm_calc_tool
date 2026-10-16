@@ -959,7 +959,7 @@ async function switchView(v, side) {
   $$('.navitem').forEach(b => b.classList.toggle('active', b.dataset.view === v && (b.dataset.side || 'bus') === S.side));
   $$('.view').forEach(s => s.classList.toggle('active', s.id === 'view-' + v));
   render();
-  if (['overview', 'power', 'power_factor', 'fundamental', 'interharmonic', 'dc', 'nilm'].includes(v)) refreshHistory();
+  if (['overview', 'power_factor', 'fundamental', 'harmonic', 'interharmonic', 'dc', 'nilm'].includes(v)) refreshHistory();
   if (v === 'events') refreshEvents('bus');
   if (v === 'nilm') refreshNilm('bus');
   if (['events', 'nilm'].includes(v)) { BRD.evAt = 0; BRD.nlAt = 0; }
@@ -1342,33 +1342,35 @@ function renderOverview() {
   const act = ovBranchActive();
   const bv = act ? qb('voltage') : null, bi = act ? qb('current') : null, bp = act ? qb('power') : null,
         bpf = act ? qb('power_factor') : null, bf = act ? qb('fundamental') : null, bh = act ? qb('harmonic') : null;
-  // 双值卡片：总线侧 / 分路侧放在同一张卡里（需求：两侧实时数据放一起）
-  const dual = (k, busV, brV, unit, sub) => act
-    ? `<div class="card"><div class="k">${k}</div><div class="v dual"><span class="tag bus">总线</span>${busV}${unit ? `<span class="u">${unit}</span>` : ''}<br><span class="tag branch">分路</span>${brV}${unit && brV !== '—' ? `<span class="u">${unit}</span>` : ''}</div>${sub ? `<div class="s">${sub}</div>` : ''}</div>`
-    : card(k, busV, unit, sub);
+  // v0.28：多行卡片——每行「标签：总线数据 / 分路数据」（分路侧未启用时只显示总线数据）
   const g = (o, fn) => { try { const x = o ? fn(o) : null; return x === null || x === undefined ? '—' : x; } catch (e) { return '—'; } };
+  const row = (lab, busV, brV, unit) => `<tr><td class="l">${lab}</td><td class="v"><span class="bus">${busV}</span>${act ? `<span class="sep"> / </span><span class="br">${brV}</span>` : ''}${unit ? `<span class="u">${unit}</span>` : ''}</td></tr>`;
+  const mcard = (title, rows, sub) => `<div class="card ovc"><div class="k">${title}${act ? '<span class="fmt">总线 / 分路</span>' : ''}</div><table class="ovrows">${rows.join('')}</table>${sub ? `<div class="s">${sub}</div>` : ''}</div>`;
   const cards = [];
-  if (v || bv) PH.forEach(k => cards.push(dual(`${k} 相电压`, g(v, o => si(o.values.rms[k], 'V')), g(bv, o => si(o.values.rms[k], 'V')), '',
-    `峰值 ${g(v, o => si(o.values.peak[k], 'V'))}` + (bv ? ` / ${g(bv, o => si(o.values.peak[k], 'V'))}` : ''))));
-  if (i || bi) PH.forEach(k => cards.push(dual(`${k} 相电流`, g(i, o => si(o.values.rms[k], 'A')), g(bi, o => si(o.values.rms[k], 'A')), '',
-    `零线 ${g(i, o => si(o.values.neutral_rms, 'A'))}` + (bi ? ` / ${g(bi, o => si(o.values.neutral_rms, 'A'))}` : ''))));
+  if (v || bv) cards.push(mcard('电压（有效值）', PH.map(k => row(`${k} 相`, g(v, o => si(o.values.rms[k], 'V')), g(bv, o => si(o.values.rms[k], 'V'))))));
+  if (i || bi) cards.push(mcard('电流（有效值）', PH.map(k => row(`${k} 相`, g(i, o => si(o.values.rms[k], 'A')), g(bi, o => si(o.values.rms[k], 'A')))),
+    `零线 ${g(i, o => si(o.values.neutral_rms, 'A'))}` + (act ? ` / ${g(bi, o => si(o.values.neutral_rms, 'A'))}` : '')));
   if (p || bp) {
     const dP = (p && bp && isNum(p.values.p_total) && isNum(bp.values.p_total)) ? p.values.p_total - bp.values.p_total : null;
     const rP = (dP !== null && Math.abs(p.values.p_total) > 1e-9) ? bp.values.p_total / p.values.p_total * 100 : null;
-    cards.push(dual('有功 P', g(p, o => si(o.values.p_total, 'W')), g(bp, o => si(o.values.p_total, 'W')), '',
-      dP === null ? `分相和 ${g(p, o => si(sumVals(o.values.p_per_phase, PH), 'W'))}` : `总线−分路 ${si(dP, 'W')}${rP === null ? '' : '　分路占 ' + num(rP, 2) + ' %'}（最新值）`));
-    cards.push(dual('无功 Q', g(p, o => si(o.values.q_total, 'var')), g(bp, o => si(o.values.q_total, 'var')), '', g(p, o => o.values.quadrant ? o.values.quadrant.q_sign : '')));
-    cards.push(dual('视在 S', g(p, o => si(o.values.s_total, 'VA')), g(bp, o => si(o.values.s_total, 'VA')), '', g(p, o => o.values.modes ? o.values.modes.apparent_note : '')));
+    const pq = (title, key, tot, unit, sub) => mcard(title, [
+      ...PH.map(k => row(`${k} 相`, g(p, o => si(o.values[key][k], unit)), g(bp, o => si(o.values[key][k], unit)))),
+      row('总', g(p, o => si(o.values[tot], unit)), g(bp, o => si(o.values[tot], unit)))], sub);
+    cards.push(pq('有功 P', 'p_per_phase', 'p_total', 'W', dP === null ? '' : `总线−分路 ${si(dP, 'W')}${rP === null ? '' : '　分路占 ' + num(rP, 2) + ' %'}（最新值）`));
+    cards.push(pq('无功 Q', 'q_per_phase', 'q_total', 'var', g(p, o => o.values.quadrant ? o.values.quadrant.q_sign : '')));
+    cards.push(pq('视在 S', 's_per_phase', 's_total', 'VA', g(p, o => o.values.modes ? o.values.modes.apparent_note : '')));
   }
-  if (pf || bpf) cards.push(dual('功率因数 PF', g(pf, o => num(o.values.pf_total, 4)), g(bpf, o => num(o.values.pf_total, 4)), '',
-    `DPF ${g(pf, o => num(o.values.dpf, 4))}` + (bpf ? ` / ${g(bpf, o => num(o.values.dpf, 4))}` : '')));
-  if (f || bf) cards.push(dual('频率', g(f, o => num(o.values.freq_hz, 3)), g(bf, o => num(o.values.freq_hz, 3)), 'Hz',
+  if (pf || bpf) cards.push(mcard('功率因数 PF', [
+    ...PH.map(k => row(`${k} 相`, g(pf, o => num(o.values.pf_per_phase[k], 4)), g(bpf, o => num(o.values.pf_per_phase[k], 4)))),
+    row('总', g(pf, o => num(o.values.pf_total, 4)), g(bpf, o => num(o.values.pf_total, 4)))],
+    `DPF ${g(pf, o => num(o.values.dpf, 4))}` + (act ? ` / ${g(bpf, o => num(o.values.dpf, 4))}` : '')));
+  if (f || bf) cards.push(mcard('频率', [row('f', g(f, o => num(o.values.freq_hz, 3)), g(bf, o => num(o.values.freq_hz, 3)), 'Hz')],
     g(f, o => `${o.values.phase_sequence || ''} · 来源 ${o.values.freq_source}`)));
   if (h || bh) {
-    cards.push(dual('THD_U（最劣相）', g(h, o => num(o.values.thd_u_worst_pct, 2)), g(bh, o => num(o.values.thd_u_worst_pct, 2)), '%',
-      `最劣相 ${g(h, o => o.values.worst_phase_u || '—')}` + (bh ? ` / ${g(bh, o => o.values.worst_phase_u || '—')}` : '')));
-    cards.push(dual('THD_I（最劣相）', g(h, o => num(o.values.thd_i_worst_pct, 2)), g(bh, o => num(o.values.thd_i_worst_pct, 2)), '%',
-      `最劣相 ${g(h, o => o.values.worst_phase_i || '—')}` + (bh ? ` / ${g(bh, o => o.values.worst_phase_i || '—')}` : '')));
+    cards.push(mcard('THD_U（最劣相）', [row('THD_U', g(h, o => num(o.values.thd_u_worst_pct, 2)), g(bh, o => num(o.values.thd_u_worst_pct, 2)), '%')],
+      `最劣相 ${g(h, o => o.values.worst_phase_u || '—')}` + (act ? ` / ${g(bh, o => o.values.worst_phase_u || '—')}` : '')));
+    cards.push(mcard('THD_I（最劣相）', [row('THD_I', g(h, o => num(o.values.thd_i_worst_pct, 2)), g(bh, o => num(o.values.thd_i_worst_pct, 2)), '%')],
+      `最劣相 ${g(h, o => o.values.worst_phase_i || '—')}` + (act ? ` / ${g(bh, o => o.values.worst_phase_i || '—')}` : '')));
   }
   if (!cards.length) cards.push(card('状态', '尚无结果', '', '请到「数据源与控制」启动数据源'));
   const hint = $('#ov-br-hint');
@@ -1523,10 +1525,11 @@ function renderPower() {
   $('#p-cards').innerHTML = cards.join('') || card('状态', '尚无结果', '', '请先启动数据源');
   const ser = (p && p.series && p.series.p_total) ? [{ name: 'p(t) 总瞬时功率', color: COLORS.P, data: p.series.p_total.map((v2, k) => [k * (p.series.stride || 1) / (((curState().config || {}).sampling || {}).fs || 6400), v2]) }] : [];
   drawLine($('#p-wave'), ser, { ylabel: 'W', unit: 'W', zero: true, fmtX: x => x.toFixed(3) + 's', height: 220 });
-  // v0.27：P/Q/S 趋势（与总览同一数据与线型：总量默认显示、分相默认隐藏、图例勾选可改并持久化）
-  const hpw = curHist('power'); const t0p = hpw.length ? hpw[0].t : 0;
-  drawLine($('#p-trend'), pqsSeries(hpw, t0p), { ylabel: 'W/var/VA', fmtX: x => tsX(x + t0p, spanOf('power')), fmtTip: x => ts(x + t0p), tbase: t0p, height: 240, empty: '暂无 P/Q/S 趋势（需累计 ≥2 个窗）' });
-  renderCurveSave();
+  // v0.28：三相分相瞬时功率波形 pA/pB/pC(t)=u_k·i_k（同一抽稀步长；图例勾选选相）
+  const pph = (p && p.series && p.series.p_per_phase) || {};
+  const fsP = ((curState().config || {}).sampling || {}).fs || 6400, stP = (p && p.series && p.series.stride) || 1;
+  const serPh = PH.filter(k => Array.isArray(pph[k]) && pph[k].length).map(k => ({ name: `p${k}(t) ${k} 相`, color: COLORS[k], data: pph[k].map((v2, j) => [j * stP / fsP, v2]) }));
+  drawLine($('#p-wave-ph'), serPh, { ylabel: 'W', unit: 'W', zero: true, fmtX: x => x.toFixed(3) + 's', height: 220, legend: true, empty: '暂无分相瞬时功率（需服务端 v0.28+ 结果）' });
   $('#p-phase').innerHTML = p ? (() => {
     const pv = p.values, col = (o, u) => unitScale(PH.map(k => (o || {})[k]), u);
     const sP = col(pv.p_per_phase, 'W'), sQ = col(pv.q_per_phase, 'var'), sS = col(pv.s_per_phase, 'VA'), sU = col(pv.u_rms, 'V'), sI = col(pv.i_rms, 'A');
@@ -1597,6 +1600,11 @@ function renderFundamental() {
   const t0 = hf.length ? hf[0].t : 0;
   drawLine($('#f-trend'), [{ name: '频率 (Hz)', color: COLORS.A, data: hf.map(x => [x.t - t0, x.f]) }],
            { ylabel: 'Hz', fmtX: x => tsX(x + t0, spanOf('fundamental')), fmtTip: x => ts(x + t0), tbase: t0, height: 200 });
+  // v0.28：基波有效值分相趋势（总量默认显示，分相默认隐藏、图例勾选）
+  const phSer = (tot, pre, unit) => [{ name: `${tot} 三相`, color: COLORS.P, data: hf.map(x => [x.t - t0, x[tot]]) },
+    ...PH.map(k => ({ name: `${pre}${k.toLowerCase()}`, color: COLORS[k], width: 1.3, defaultHidden: true, data: hf.map(x => [x.t - t0, x[`${pre}${k.toLowerCase()}`]]) }))];
+  drawLine($('#f-u1-trend'), phSer('U1', 'U1', 'V'), { ylabel: 'V', fmtX: x => tsX(x + t0, spanOf('fundamental')), fmtTip: x => ts(x + t0), tbase: t0, height: 200, legend: true });
+  drawLine($('#f-i1-trend'), phSer('I1', 'I1', 'A'), { ylabel: 'A', fmtX: x => tsX(x + t0, spanOf('fundamental')), fmtTip: x => ts(x + t0), tbase: t0, height: 200, legend: true });
   renderCurveSave();
   $('#f-win').innerHTML = winNotes('fundamental');
 }
@@ -1630,6 +1638,14 @@ function renderHarmonic() {
                                           ...PH.map(k => num((h.series.hr_i_pct[k] || [])[idx], 3))]);
     $('#h-table-i').innerHTML = table(['次数', sI.hdr('IA'), sI.hdr('IB'), sI.hdr('IC'), 'HR A (%)', 'HR B (%)', 'HR C (%)'], rowsI);
   }
+  // v0.28：THD 趋势（最劣相 THD_U/THD_I 默认显示；分相 THD_Ua..Ic 默认隐藏、图例勾选）
+  const hh = curHist('harmonic'); const t0h = hh.length ? hh[0].t : 0;
+  drawLine($('#h-trend'), [{ name: 'THD_U 最劣相 (%)', color: COLORS.P, data: hh.map(x => [x.t - t0h, x.THD_U]) },
+                           { name: 'THD_I 最劣相 (%)', color: COLORS.B, data: hh.map(x => [x.t - t0h, x.THD_I]) },
+                           ...PH.map(k => ({ name: `THD_U${k.toLowerCase()}`, color: COLORS[k], width: 1.3, defaultHidden: true, data: hh.map(x => [x.t - t0h, x[`THD_U${k.toLowerCase()}`]]) })),
+                           ...PH.map(k => ({ name: `THD_I${k.toLowerCase()}`, color: shadeColor(COLORS[k], 0.55), width: 1.3, dash: [4, 3], defaultHidden: true, data: hh.map(x => [x.t - t0h, x[`THD_I${k.toLowerCase()}`]]) }))],
+           { ylabel: '%', fmtX: x => tsX(x + t0h, spanOf('harmonic')), fmtTip: x => ts(x + t0h), tbase: t0h, height: 220, legend: true });
+  renderCurveSave();
   $('#h-win').innerHTML = winNotes('harmonic');
 }
 
@@ -2127,7 +2143,10 @@ function renderInterharmonic() {
   const hh = curHist('interharmonic');
   const t0 = hh.length ? hh[0].t : 0;
   drawLine($('#ih-trend'), [{ name: 'TIHD_U (%)', color: COLORS.A, data: hh.map(x => [x.t - t0, x.TIHD_U]) },
-                            { name: 'TIHD_I (%)', color: COLORS.B, data: hh.map(x => [x.t - t0, x.TIHD_I]) }],
+                            { name: 'TIHD_I (%)', color: COLORS.B, data: hh.map(x => [x.t - t0, x.TIHD_I]) },
+                            // v0.28：分相 TIHD 默认隐藏、图例勾选
+                            ...PH.map(k => ({ name: `TIHD_U${k.toLowerCase()}`, color: COLORS[k], width: 1.3, defaultHidden: true, data: hh.map(x => [x.t - t0, x[`TIHD_U${k.toLowerCase()}`]]) })),
+                            ...PH.map(k => ({ name: `TIHD_I${k.toLowerCase()}`, color: shadeColor(COLORS[k], 0.55), width: 1.3, dash: [4, 3], defaultHidden: true, data: hh.map(x => [x.t - t0, x[`TIHD_I${k.toLowerCase()}`]]) }))],
            { ylabel: '%', fmtX: x => tsX(x + t0, spanOf('interharmonic')), fmtTip: x => ts(x + t0), tbase: t0, height: 200, legend: true });
   renderCurveSave();
   $('#ih-win').innerHTML = winNotes('interharmonic');
@@ -2799,7 +2818,7 @@ function bind() {
   window.addEventListener('resize', () => { clearTimeout(window._rz); window._rz = setTimeout(render, 180); });
   setInterval(() => { refreshBranchDual(false); }, 1000);
   setInterval(() => {
-    if (['overview', 'power', 'power_factor', 'fundamental', 'interharmonic', 'dc'].includes(S.view)) refreshHistory();
+    if (['overview', 'power_factor', 'fundamental', 'harmonic', 'interharmonic', 'dc'].includes(S.view)) refreshHistory();
     if (S.view === 'events') refreshEvents('bus');     // 摘要（计数/振荡评估/落盘行数）随数据刷新；分路侧列由 refreshBranchDual 刷新
     if (S.view === 'source' && ($('#br-enabled') || {}).checked) refreshBranchState(true);   // 分路侧数据源状态栏
     if (S.view === 'nilm') { refreshNilm('bus'); refreshHistory(); }   // 周波窗、事件与 P/Q/S 趋势随数据刷新

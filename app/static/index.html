@@ -85,7 +85,7 @@
     <section class="view active" id="view-overview">
       <h2>总览面板 · 总线侧与分路侧实时电气量、趋势曲线</h2>
       <div class="cards" id="ov-sides"></div>
-      <h3 class="ovsub">最新电气量 <span class="navhint">每张卡片：<span class="sidename bus">总线侧</span> / <span class="sidename branch">分路侧设备</span>（分路侧未启用时只显示总线侧）<span id="ov-br-hint"></span></span></h3>
+      <h3 class="ovsub">最新电气量 <span class="navhint">每张卡片每行：<span class="sidename bus">总线数据</span> / <span class="sidename branch">分路数据</span>（分路侧未启用时只显示总线数据）；电压 / 电流分三相，P / Q / S / PF 分三相 + 总<span id="ov-br-hint"></span></span></h3>
       <div class="cards" id="ov-cards"></div>
       <div class="grid2 ov-curves" id="ov-curves">
         <div class="panel"><h3 class="curvehdr"><span><span class="sidename bus">总线侧</span> 三相电压趋势</span><label class="curvesave" title="勾选＝「保存曲线数据」时包含本曲线；不勾选＝保存时跳过本曲线"><input type="checkbox" class="curve-save" data-curve="voltage"> 保存曲线</label><span class="curvespan" data-curve="voltage"></span></h3><canvas id="ov-u" height="200"></canvas></div>
@@ -466,8 +466,8 @@
     <section class="view" id="view-power">
       <h2>有功 / 无功 / 视在 · P / Q / S（总量与分相）</h2>
       <div class="cards" id="p-cards"></div>
-      <div class="panel"><h3 class="curvehdr"><span>P / Q / S 趋势（三相总 + 分相 Pa/Pb/Pc、Qa/Qb/Qc、Sa/Sb/Sc；图例勾选选择要显示的曲线）</span><label class="curvesave" title="勾选＝「保存曲线数据」时包含本曲线；不勾选＝保存时跳过本曲线"><input type="checkbox" class="curve-save" data-curve="power"> 保存曲线</label><span class="curvespan" data-curve="power"></span></h3><canvas id="p-trend" height="240"></canvas></div>
       <div class="panel"><h3>瞬时功率波形 p(t)=Σu·i</h3><canvas id="p-wave" height="220"></canvas></div>
+      <div class="panel"><h3>分相瞬时功率波形 pA(t)=uA·iA、pB(t)=uB·iB、pC(t)=uC·iC（图例勾选选择要显示的相）</h3><canvas id="p-wave-ph" height="220"></canvas></div>
       <div class="grid2">
         <div class="panel"><h3>分相功率</h3><div id="p-phase" class="tablewrap"></div></div>
         <div class="panel"><h3>基波功率 / 口径说明</h3><div id="p-fund" class="tablewrap"></div></div>
@@ -495,6 +495,10 @@
         <div class="panel"><h3>序分量（正/负/零）</h3><div id="f-seq" class="tablewrap"></div></div>
       </div>
       <div class="panel"><h3 class="curvehdr"><span>频率趋势</span><label class="curvesave" title="勾选＝「保存曲线数据」时包含本曲线；不勾选＝保存时跳过本曲线"><input type="checkbox" class="curve-save" data-curve="fundamental"> 保存曲线</label><span class="curvespan" data-curve="fundamental"></span></h3><canvas id="f-trend" height="200"></canvas></div>
+      <div class="grid2">
+        <div class="panel"><h3>基波电压有效值趋势 U1（三相总 + U1a / U1b / U1c；图例勾选）</h3><canvas id="f-u1-trend" height="200"></canvas></div>
+        <div class="panel"><h3>基波电流有效值趋势 I1（三相总 + I1a / I1b / I1c；图例勾选）</h3><canvas id="f-i1-trend" height="200"></canvas></div>
+      </div>
       <div class="panel"><h3>窗口与口径</h3><div id="f-win" class="notes"></div></div>
     </section>
 
@@ -502,6 +506,7 @@
     <section class="view" id="view-harmonic">
       <h2>谐波 · 2–50 次含有率 / 幅值 / THD</h2>
       <div class="cards" id="h-cards"></div>
+      <div class="panel"><h3 class="curvehdr"><span>THD 趋势（最劣相 THD_U / THD_I + 分相 THD_Ua/Ub/Uc、THD_Ia/Ib/Ic；图例勾选）</span><label class="curvesave" title="勾选＝「保存曲线数据」时包含本曲线；不勾选＝保存时跳过本曲线"><input type="checkbox" class="curve-save" data-curve="harmonic"> 保存曲线</label><span class="curvespan" data-curve="harmonic"></span></h3><canvas id="h-trend" height="220"></canvas></div>
       <div class="panel">
         <h3>电压谐波
           <span class="toggle">
@@ -554,7 +559,7 @@
         <div class="panel"><h3>电压间谐波相量（各相最大的前 10 组：组号 / 频带 / 主导频率 / 幅值 / 相角）</h3><div id="ih-table-u" class="tablewrap scroll"></div></div>
         <div class="panel"><h3>电流间谐波相量（各相最大的前 10 组）</h3><div id="ih-table-i" class="tablewrap scroll"></div></div>
       </div>
-      <div class="panel"><h3 class="curvehdr"><span>TIHD 趋势（总间谐波畸变率，最劣相）</span><label class="curvesave" title="勾选＝「保存曲线数据」时包含本曲线；不勾选＝保存时跳过本曲线"><input type="checkbox" class="curve-save" data-curve="interharmonic"> 保存曲线</label><span class="curvespan" data-curve="interharmonic"></span></h3><canvas id="ih-trend" height="200"></canvas></div>
+      <div class="panel"><h3 class="curvehdr"><span>TIHD 趋势（最劣相 TIHD_U / TIHD_I + 分相 TIHD_Ua/Ub/Uc、TIHD_Ia/Ib/Ic；图例勾选）</span><label class="curvesave" title="勾选＝「保存曲线数据」时包含本曲线；不勾选＝保存时跳过本曲线"><input type="checkbox" class="curve-save" data-curve="interharmonic"> 保存曲线</label><span class="curvespan" data-curve="interharmonic"></span></h3><canvas id="ih-trend" height="200"></canvas></div>
       <div class="panel"><h3>窗口与口径</h3><div id="ih-win" class="notes"></div></div>
     </section>
 

@@ -604,6 +604,7 @@ class MetricsCalculator:
                      "s_total_for_reference": "VA"}
             return values, units, {}
         series = {"p_total": full.get("series", {}).get("p_total", []),
+                  "p_per_phase": full.get("series", {}).get("p_per_phase", {}),     # v0.28：分相瞬时功率 pA/pB/pC(t)
                   "stride": full.get("series", {}).get("stride", 1)}
         values = {k: v for k, v in full.items() if k != "series"}
         return values, units, series
