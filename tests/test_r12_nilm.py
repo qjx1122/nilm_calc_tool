@@ -239,5 +239,5 @@ def test_frontend_wiring():
         for k in NILM_ALGO_DEFAULTS[a]:
             if k != "enabled":
                 assert f"{k}:" in js, (a, k)
-    assert "case 'nilm': renderNilm(); break;" in js and "m.type === 'nilm_event'" in js
+    assert "case 'nilm': renderDual(renderNilm); break;" in js and "m.type === 'nilm_event'" in js
     assert "JSON.stringify({ nilm: payload })" in js and "/api/nilm/cycles" in js and "opt.marks" in js

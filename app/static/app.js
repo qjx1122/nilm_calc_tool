@@ -8,6 +8,21 @@
 /* v0.23：渲染上下文。电气量子界面合并为「左：总线侧 / 右：分路侧」——同一套 render 函数跑两遍，
    分路侧那遍 RC.side='branch'：$ 选择器自动落到克隆列里带 -br 后缀的元素，q()/curHist() 等取分路侧数据（BRD）。 */
 const RC = { side: 'bus' };
+/* 当前生效的侧别：整页切到分路侧（旧 setSide 路径）或右列渲染中 → 'branch' */
+function sideOf() { return S.side === 'branch' ? 'branch' : RC.side; }
+/* 按侧别取元素（分路侧 → id 加 -br 后缀；不存在则退回原元素）。异步函数 await 之后 RC.side 已复位，必须用它而不是 $() */
+function E(side, id) {
+  if (side === 'branch') { const el = document.getElementById(id + '-br'); if (el) return el; }
+  return document.getElementById(id);
+}
+/* v0.24：事件 / 负荷辨识 / 实时落盘 等按侧别各自一份状态（左列总线侧、右列分路侧） */
+function _sideStore() {
+  return { events: [], evSummary: null, evLoaded: false, evDirty: false, realtime: null, rtDirty: false,
+           nl: { events: [], summary: null, cycles: null, loaded: false, dirty: false, formBuilt: false } };
+}
+const SD = { bus: _sideStore(), branch: _sideStore() };
+window.SD = SD;
+function sd(side) { return SD[side || sideOf()]; }
 function $(sel) {
   if (RC.side === 'branch' && typeof sel === 'string' && sel[0] === '#' && !/[\s>.\[:]/.test(sel)) {
     const el = document.querySelector(sel + '-br');
@@ -36,10 +51,7 @@ const S = {
   formDirty: false, srcDirty: false, cfgDirty: false,
   // 趋势曲线元数据（/api/history 返回的 count_total/span_s/hours 等）与「保存曲线」勾选的本地镜像
   histMeta: {}, curveLocal: null, curvePending: false,
-  // 实时落盘面板（/api/realtime 快照 + 表单脏标记）
-  realtime: null, rtDirty: false,
-  // 事件子界面：列表缓存 / 摘要 / 阈值表单脏标记
-  events: [], evSummary: null, evDirty: false, evLoaded: false,
+  // 实时落盘 / 事件 / 负荷辨识的列表与脏标记按侧别放在 SD.bus / SD.branch（v0.24）
 };
 /* ------------------------------------------------------------------ 增量刷新（v0.15）
  * 界面每秒收到 state/result 推送；大多数区域内容并未变化。这里让 innerHTML / textContent 的写入
@@ -690,7 +702,7 @@ function connectWS() {
   S.ws.onmessage = (ev) => {
     let m; try { m = JSON.parse(ev.data); } catch (e) { return; }
     if (m.type === 'hello' || m.type === 'state') {
-      S.state = m.data; renderTop(); if (S.view === 'source' || S.view === 'export') render();
+      S.state = m.data; renderTop(); if (S.view === 'source' || S.view === 'export' || S.view === 'windows') render();
       if (S.view === 'compare' && Date.now() - CMP.at > 3000) refreshCompare();
       if (S.view === 'overview') refreshOverviewBranch(false);
       if (DUAL_VIEWS.includes(S.view)) { const a = branchDualActive(); if (a !== BRD.lastActive) { BRD.lastActive = a; render(); refreshBranchDual(true); } }
@@ -698,9 +710,9 @@ function connectWS() {
     else if (m.type === 'result' || m.type === 'snapshot') { S.result = mergeResult(S.result, m.data); renderTop(); render(); }
     else if (m.type === 'error') { toast('服务端错误：' + m.message, 'err'); }
     else if (m.type === 'event') { onEventPush(m.data || []); }
-    else if (m.type === 'events_cleared') { S.events = []; S.evSummary = null; if (S.view === 'events') refreshEvents(); }
+    else if (m.type === 'events_cleared') { SD.bus.events = []; SD.bus.evSummary = null; if (S.view === 'events') refreshEvents('bus'); }
     else if (m.type === 'nilm_event') { onNilmPush(m.data || []); }
-    else if (m.type === 'nilm_cleared') { NL.events = []; NL.summary = null; if (S.view === 'nilm') refreshNilm(); }
+    else if (m.type === 'nilm_cleared') { SD.bus.nl.events = []; SD.bus.nl.summary = null; if (S.view === 'nilm') refreshNilm('bus'); }
   };
   S.ws.onerror = () => { S.wsOk = false; };
   S.ws.onclose = () => {
@@ -723,8 +735,8 @@ function startPolling() {
 }
 
 /* 侧别前缀（第 14 轮）：分路侧时 /api/xxx → /api/branch/xxx、/ws → /ws/branch；其余代码不感知侧别 */
-function apiUrl(path) {
-  if (S.side === 'branch' && typeof path === 'string' && path.startsWith('/api/') && !path.startsWith('/api/branch/') && !path.startsWith('/api/sides')) {
+function apiUrl(path, side = sideOf()) {
+  if (side === 'branch' && typeof path === 'string' && path.startsWith('/api/') && !path.startsWith('/api/branch/') && !path.startsWith('/api/sides')) {
     return '/api/branch/' + path.slice(5);
   }
   return path;
@@ -736,8 +748,8 @@ async function setSide(side, opts = {}) {
   S.side = side;
   // 丢弃另一侧的所有缓存，重新连接推送
   S.state = null; S.result = null; S.histCache = {}; S.histAt = {};
-  S.events = []; S.evSummary = null; S.evLoaded = false;
-  if (typeof NL !== 'undefined') { NL.events = []; NL.summary = null; NL.cycles = null; NL.loaded = false; NL.formBuilt = false; }
+  Object.assign(SD.bus, { events: [], evSummary: null, evLoaded: false, realtime: null });
+  Object.assign(SD.bus.nl, { events: [], summary: null, cycles: null, loaded: false });
   S.formDirty = false; S.srcDirty = false; S.cfgDirty = false;
   if (S.ws) { try { S.ws.onclose = null; S.ws.close(); } catch (e) { /* ignore */ } S.ws = null; S.wsOk = false; }
   applySideUI();
@@ -756,8 +768,8 @@ function applySideUI() {
   const t = $('#side-title'); if (t) t.textContent = sideLabel();
 }
 
-async function api(path, opt) {
-  const res = await fetch(apiUrl(path), opt);
+async function api(path, opt, side = sideOf()) {
+  const res = await fetch(apiUrl(path, side), opt);
   let data = null;
   try { data = await res.json(); } catch (e) { data = { ok: false, error: 'HTTP ' + res.status }; }
   if (!res.ok) throw new Error((data && data.error) || ('HTTP ' + res.status));
@@ -910,9 +922,9 @@ function renderOverviewSides() {
 }
 
 function setEventBadge(n, side) {
-  const badge = $((side || S.side) === 'branch' ? '#nav-ev-badge-br' : '#nav-ev-badge');
+  const badge = document.getElementById((side || sideOf()) === 'branch' ? 'nav-ev-badge-br' : 'nav-ev-badge');
   if (!badge) return;
-  badge.textContent = String(n); badge.style.display = n ? '' : 'none'; badge.className = 'badge' + (n ? ' bad' : '');
+  badge.textContent = String(n); badge.style.display = n ? '' : 'none'; badge.classList.toggle('bad', !!n);
 }
 
 async function switchView(v, side) {
@@ -923,8 +935,10 @@ async function switchView(v, side) {
   $$('.navitem').forEach(b => b.classList.toggle('active', b.dataset.view === v && (b.dataset.side || 'bus') === S.side));
   $$('.view').forEach(s => s.classList.toggle('active', s.id === 'view-' + v));
   render();
-  if (['overview', 'power_factor', 'fundamental', 'interharmonic', 'dc'].includes(v)) refreshHistory();
-  if (v === 'events') refreshEvents();
+  if (['overview', 'power_factor', 'fundamental', 'interharmonic', 'dc', 'nilm'].includes(v)) refreshHistory();
+  if (v === 'events') refreshEvents('bus');
+  if (v === 'nilm') refreshNilm('bus');
+  if (['events', 'nilm'].includes(v)) { BRD.evAt = 0; BRD.nlAt = 0; }
   if (v === 'compare') refreshCompare();
   if (v === 'overview') refreshOverviewBranch(true);
   if (DUAL_VIEWS.includes(v)) refreshBranchDual(true);
@@ -990,7 +1004,9 @@ async function refreshOverviewBranch(force) {
 }
 
 /* ------------------------------------------------------------------ v0.23：电气量子界面双列（左总线 / 右分路） */
-const DUAL_VIEWS = ['voltage', 'current', 'power', 'power_factor', 'fundamental', 'harmonic', 'interharmonic', 'dc', 'spectrum'];
+const ELEC_VIEWS = ['voltage', 'current', 'power', 'power_factor', 'fundamental', 'harmonic', 'interharmonic', 'dc', 'spectrum'];
+/* v0.24：事件 / 负荷辨识 / 窗口配置 / 导出与日志 也合并为双列 */
+const DUAL_VIEWS = ELEC_VIEWS.concat(['events', 'nilm', 'windows', 'export']);
 const BRD = { result: null, state: null, histCache: {}, histMeta: {}, at: 0, histAt: 0, busy: false, built: false };
 window.BRD = BRD;
 
@@ -1002,7 +1018,7 @@ function branchDualActive() {
 
 async function refreshBranchDual(force) {
   if (S.side !== 'bus' || !DUAL_VIEWS.includes(S.view)) return;
-  if (!branchDualActive()) { if (BRD.result || BRD.state) { BRD.result = null; BRD.state = null; BRD.histCache = {}; BRD.histMeta = {}; } return; }
+  if (!branchDualActive()) { if (BRD.result || BRD.state) { BRD.result = null; BRD.state = null; BRD.histCache = {}; BRD.histMeta = {}; SD.branch = _sideStore(); SD.branch.nl.formBuilt = true; } return; }
   if (BRD.busy || (!force && Date.now() - BRD.at < 900)) return;
   BRD.busy = true;
   try {
@@ -1025,6 +1041,8 @@ async function refreshBranchDual(force) {
     }
     if (!BR.loaded) loadBranchForm(false);
     BRD.at = Date.now();
+    if (S.view === 'events' && Date.now() - (BRD.evAt || 0) > 2500) { BRD.evAt = Date.now(); refreshEvents('branch'); }
+    if (S.view === 'nilm' && Date.now() - (BRD.nlAt || 0) > 2500) { BRD.nlAt = Date.now(); refreshNilm('branch'); }
     if (DUAL_VIEWS.includes(S.view)) render();
   } finally { BRD.busy = false; }
 }
@@ -1033,6 +1051,7 @@ async function refreshBranchDual(force) {
 function buildDualViews() {
   if (BRD.built) return; BRD.built = true;
   DUAL_VIEWS.forEach(v => {
+    if (v === 'nilm') buildNilmForm('bus');          // 动态表单先建好再克隆，右列才有同样的控件
     const sec = document.querySelector('#view-' + v); if (!sec) return;
     const kids = Array.from(sec.children).filter(el => el.tagName !== 'H2');
     const wrap = document.createElement('div'); wrap.className = 'dual'; wrap.dataset.view = v;
@@ -1048,12 +1067,16 @@ function buildDualViews() {
         if (n.getAttribute && n.getAttribute('for')) n.setAttribute('for', n.getAttribute('for') + '-br');
       });
       c.querySelectorAll('.curve-save,.curvespan').forEach(n => { n.dataset.side = 'branch'; });
+      // 导出页的下载链接：右列指向分路侧 API
+      c.querySelectorAll('a[href^="/api/"]').forEach(a => { a.setAttribute('href', a.getAttribute('href').replace(/^\/api\//, '/api/branch/')); });
       right.appendChild(c); left.appendChild(el);
     });
-    // 右列的下拉/单选变化 → 重画（克隆不带监听器；用委托）
-    right.addEventListener('change', (ev) => { const t = ev.target; if (t && !t.classList.contains('curve-save') && !t.classList.contains('ser-vis')) render(); });
+    // 电气量页右列的下拉/单选变化 → 重画（克隆不带监听器；用委托）。事件/负荷辨识/窗口/导出页按钮由 bindSideViews('branch') 单独绑定
+    if (ELEC_VIEWS.includes(v)) right.addEventListener('change', (ev) => { const t = ev.target; if (t && !t.classList.contains('curve-save') && !t.classList.contains('ser-vis')) render(); });
     wrap.appendChild(left); wrap.appendChild(right); sec.appendChild(wrap);
   });
+  SD.branch.nl.formBuilt = true;                    // 克隆已带上算法参数表单
+  bindSideViews('branch');
 }
 
 function renderDual(fn) {
@@ -1126,11 +1149,12 @@ function renderCurveSave() {
   $$('.curvespan').forEach(el => { el.textContent = curveSpanText(el.dataset.curve, el.dataset.side); });
   const list = $('#curve-save-list');
   if (list && !list.children.length) {
+    const br = sideOf() === 'branch';
     list.innerHTML = CURVE_KEYS.map(k =>
-      `<label><input type="checkbox" class="curve-save" data-curve="${k}"> ${CURVE_NAME[k]}（${k}）</label>`).join('');
-    $$('#curve-save-list .curve-save').forEach(el => { el.checked = !!m[el.dataset.curve]; });
+      `<label><input type="checkbox" class="curve-save" data-curve="${k}"${br ? ' data-side="branch"' : ''}> ${CURVE_NAME[k]}（${k}）</label>`).join('');
+    list.querySelectorAll('.curve-save').forEach(el => { el.checked = !!(br ? mb : m)[el.dataset.curve]; });
   }
-  const on = CURVE_KEYS.filter(k => m[k]);
+  const on = CURVE_KEYS.filter(k => (sideOf() === 'branch' ? mb : m)[k]);
   const lnk = $('#lnk-curves-dl');
   if (lnk) lnk.textContent = `下载已勾选曲线（${on.length}/${CURVE_KEYS.length}，合并 CSV）`;
 }
@@ -1168,10 +1192,10 @@ async function setCurveSave(key, on, side) {
   } finally { S.curvePending = false; S.curveLocal = null; renderCurveSave(); }
 }
 
-async function saveCurves() {
-  const out = $('#curves-out');
+async function saveCurves(side = sideOf()) {
+  const out = E(side, 'curves-out');
   try {
-    const d = await api('/api/curves/save', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+    const d = await api('/api/curves/save', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }, side);
     // notes() 会转义 HTML（告警文本来自服务端，必须转义），这里是纯文本列表即可
     const lines = d.files.map(f => `✓ ${CURVE_NAME[f.quantity] || f.quantity}：${f.path}（${f.rows} 点${f.rows_branch ? `＝总线 ${f.rows_bus} + 分路 ${f.rows_branch}，同一文件按 source_id 区分` : ''}，${ts(f.t_first)} → ${ts(f.t_last)}）`);
     (d.skipped || []).forEach(k => lines.push(`－ ${CURVE_NAME[k] || k}：未勾选，已跳过`));
@@ -1596,7 +1620,7 @@ function renderSpectrum() {
 }
 
 function renderWindows() {
-  const cfg = (S.state || {}).config;
+  const cfg = curState().config;
   if (!cfg) { $('#w-table').innerHTML = ''; return; }
   const rows = Object.keys(cfg.windows).map(k => {
     const w = cfg.windows[k];
@@ -1616,7 +1640,7 @@ function renderWindows() {
   $('#w-table').innerHTML = `<table><thead><tr>${
     ['电气量', '计算时间段 (s)', '输出步长 (s)', '截断策略', '窗函数', '去直流', '样本数'].map(h => `<th>${h}</th>`).join('')
   }</tr></thead><tbody>${rows.join('')}</tbody></table>`;
-  const emits = ((S.state || {}).engine || {}).emits || {};
+  const emits = (curState().engine || {}).emits || {};
   $('#w-emits').innerHTML = table(['电气量', '窗长 (s)', '步长 (s)', '本次运行输出次数'],
     Object.keys(cfg.windows).map(k => [k, num(cfg.windows[k].length_s, 3),
       num(cfg.windows[k].step_s === null ? cfg.windows[k].length_s : cfg.windows[k].step_s, 3), emits[k] || 0]));
@@ -1972,12 +1996,12 @@ function renderSource() {
 }
 
 /* 实时落盘面板：开关/目录 走 PUT /api/config（热更新即时生效），状态来自 GET /api/realtime */
-async function refreshRealtime() {
-  const out = $('#rt-out');
+async function refreshRealtime(side = sideOf()) {
+  const out = E(side, 'rt-out');
   if (!out) return;
   try {
-    const d = await api('/api/realtime');
-    S.realtime = d;
+    const d = await api('/api/realtime', undefined, side);
+    SD[side].realtime = d;
     const total = Object.values(d.rows_written || {}).reduce((a, b) => a + (b || 0), 0);
     const lines = [`状态：${d.enabled ? '已启用' : '未启用'}　目录：${d.dir_display || d.dir}　本次会话已写 ${total} 行`];
     (d.files || []).forEach(f => lines.push(`✓ ${CURVE_NAME[f.quantity] || f.quantity}：${f.path}（本次 ${f.rows_this_session} 行）`));
@@ -1988,27 +2012,28 @@ async function refreshRealtime() {
   } catch (e) { out.innerHTML = notes(['✗ ' + e.message]); }
 }
 
-async function saveRealtime() {
-  const on = !!$('#rt-enable').checked, dir = ($('#rt-dir').value || '').trim();
+async function saveRealtime(side = sideOf()) {
+  const on = !!E(side, 'rt-enable').checked, dir = (E(side, 'rt-dir').value || '').trim();
   const body = { output: { realtime_save: on } };
   if (dir) body.output.realtime_dir = dir;
   try {
-    await api('/api/config', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-    S.rtDirty = false;
-    toast(`实时落盘已${on ? '启用' : '关闭'}（已写入配置）`, 'ok');
-    refreshRealtime();
+    await api('/api/config', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }, side);
+    SD[side].rtDirty = false;
+    if (side === 'branch') BR.loaded = false;
+    toast(`${side === 'branch' ? '分路侧' : '总线侧'}实时落盘已${on ? '启用' : '关闭'}（已写入配置）`, 'ok');
+    refreshRealtime(side);
   } catch (e) { toast('实时落盘设置失败：' + e.message, 'err'); }
 }
 
 function renderExport() {
-  const st = S.state || {};
+  const st = curState();
   renderCurveSave();
   const outCfg = (st.config || {}).output;
-  if (outCfg && !S.rtDirty) {              // 开关/目录回填服务端配置；用户正在编辑（rtDirty）时不覆盖
+  if (outCfg && !sd().rtDirty) {              // 开关/目录回填服务端配置；用户正在编辑（rtDirty）时不覆盖
     if ($('#rt-enable')) $('#rt-enable').checked = outCfg.realtime_save !== false;
     if ($('#rt-dir')) $('#rt-dir').value = outCfg.realtime_dir || 'output/realtime';
   }
-  if (!S.realtime) refreshRealtime();
+  if (!sd().realtime) refreshRealtime();
   $('#ex-state').textContent = JSON.stringify(st.engine || {}, null, 2);
   const notesArr = [];
   ((st.engine || {}).notes || []).forEach(n => notesArr.push(n));
@@ -2016,7 +2041,8 @@ function renderExport() {
   ((st.engine || {}).gaps || []).forEach(g => notesArr.push(`⚠ 数据缺口 t=${ts(g.t)} 时长 ${num(g.gap_s * 1000, 1)}ms（约 ${num(g.missing_samples, 0)} 点）`));
   if (st.error) notesArr.push('✗ ' + st.error);
   $('#ex-notes').innerHTML = notes(notesArr);
-  $('#ex-json').textContent = S.result ? JSON.stringify(S.result, null, 1).split('\n').slice(0, 200).join('\n') : '（无结果）';
+  const cr = curResult();
+  $('#ex-json').textContent = cr ? JSON.stringify(cr, null, 1).split('\n').slice(0, 200).join('\n') : '（无结果）';
 }
 
 /* ------------------------------------------------------------------ 间谐波 / 直流偏置 / 事件（第 9 轮） */
@@ -2098,50 +2124,53 @@ function renderDC() {
   $('#dc-win').innerHTML = winNotes('dc');
 }
 
-function onEventPush(list) {
+function onEventPush(list, side = 'bus') {
+  const st = SD[side];
   list.forEach(e => {
-    const idx = S.events.findIndex(x => x.id === e.id);
-    if (idx >= 0) S.events[idx] = e; else S.events.unshift(e);
+    const idx = st.events.findIndex(x => x.id === e.id);
+    if (idx >= 0) st.events[idx] = e; else st.events.unshift(e);
     // 不再逐条弹 toast（事件多时右下角被刷屏）：活动数走导航徽标，明细进「事件」页表格
   });
-  if (S.events.length > 2000) S.events.length = 2000;
-  setEventBadge(S.events.filter(x => x.active).length);
-  if (S.view === 'events') renderEvents();
+  if (st.events.length > 2000) st.events.length = 2000;
+  setEventBadge(st.events.filter(x => x.active).length, side);
+  if (S.view === 'events') render();
 }
 
-async function refreshEvents() {
+async function refreshEvents(side = sideOf()) {
+  const st = SD[side];
   try {
-    const typ = $('#ev-filter').value;
-    const act = $('#ev-only-active').checked;
-    const d = await api(`/api/events?limit=1000${act ? '&active=1' : ''}${typ ? '&types=' + typ : ''}`);
-    S.events = d.events || []; S.evSummary = d.summary || null; S.evLoaded = true;
-  } catch (e) { toast('事件列表获取失败：' + e.message, 'err'); }
-  if (S.view === 'events') renderEvents();
+    const typ = E(side, 'ev-filter').value;
+    const act = E(side, 'ev-only-active').checked;
+    const d = await api(`/api/events?limit=1000${act ? '&active=1' : ''}${typ ? '&types=' + typ : ''}`, undefined, side);
+    st.events = d.events || []; st.evSummary = d.summary || null; st.evLoaded = true;
+  } catch (e) { toast((side === 'branch' ? '分路侧' : '') + '事件列表获取失败：' + e.message, 'err'); }
+  if (S.view === 'events') render();
 }
 
-async function clearEvents() {
-  try { await api('/api/events/clear', { method: 'POST' }); toast('事件列表已清空', 'ok'); S.events = []; await refreshEvents(); }
+async function clearEvents(side = sideOf()) {
+  try { await api('/api/events/clear', { method: 'POST' }, side); toast((side === 'branch' ? '分路侧' : '总线侧') + '事件列表已清空', 'ok'); SD[side].events = []; await refreshEvents(side); }
   catch (e) { toast(e.message, 'err'); }
 }
 
 function fillEventForm(ev) {
-  if (!ev || S.evDirty) return;
+  if (!ev || sd().evDirty) return;
   EV_FIELDS.forEach(f => {
-    const el = document.getElementById(`ev-${f}`); if (!el) return;
+    const el = $(`#ev-${f}`); if (!el) return;
     if (el.type === 'checkbox') el.checked = !!ev[f]; else el.value = ev[f];
   });
 }
 
-async function saveEventConfig() {
+async function saveEventConfig(side = sideOf()) {
   const payload = {};
-  EV_FIELDS.forEach(f => { const el = document.getElementById(`ev-${f}`); if (!el) return; payload[f] = el.type === 'checkbox' ? el.checked : +el.value; });
+  EV_FIELDS.forEach(f => { const el = E(side, `ev-${f}`); if (!el) return; payload[f] = el.type === 'checkbox' ? el.checked : +el.value; });
+  const note = E(side, 'ev-form-note');
   try {
-    const d = await api('/api/config', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ events: payload }) });
-    S.evDirty = false; $('#ev-form-note').textContent = '已保存并热生效 ' + new Date().toLocaleTimeString();
-    toast('事件阈值已保存', 'ok');
-    if (d && d.config && S.state) { S.state.config = d.config; }
-    refreshEvents();
-  } catch (e) { $('#ev-form-note').textContent = '保存失败：' + e.message; toast(e.message, 'err'); }
+    const d = await api('/api/config', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ events: payload }) }, side);
+    SD[side].evDirty = false; note.textContent = '已保存并热生效 ' + new Date().toLocaleTimeString();
+    toast((side === 'branch' ? '分路侧' : '总线侧') + '事件阈值已保存', 'ok');
+    if (d && d.config) { if (side === 'branch') { if (BRD.state) BRD.state.config = d.config; BR.loaded = false; } else if (S.state) S.state.config = d.config; }
+    refreshEvents(side);
+  } catch (e) { note.textContent = '保存失败：' + e.message; toast(e.message, 'err'); }
 }
 
 function evRow(e) {
@@ -2153,8 +2182,9 @@ function evRow(e) {
 }
 
 function renderEvents() {
-  if (!S.evLoaded) { S.evLoaded = true; refreshEvents(); return; }
-  const sm = S.evSummary || {};
+  const st = sd();
+  if (!st.evLoaded) { st.evLoaded = true; refreshEvents(); return; }
+  const sm = st.evSummary || {};
   const counts = sm.counts || {};
   const abt = sm.active_by_type || {};
   const cards = Object.keys(EVENT_NAME).map(k => card(EVENT_NAME[k], String(counts[k] || 0), '次', `活动 ${abt[k] || 0}`));
@@ -2169,11 +2199,11 @@ function renderEvents() {
   $('#ev-cards').innerHTML = cards.join('');
   if (isNum(sm.active)) setEventBadge(sm.active);
   const hdr = ['#', '状态', '类型', '对象', '开始（数据时间）', '结束', '持续', '触发值', '峰值', '阈值', '说明'];
-  const active = S.events.filter(e => e.active);
+  const active = st.events.filter(e => e.active);
   $('#ev-active').innerHTML = active.length ? table(hdr, active.map(evRow)) : '<div class="notes ok">当前无活动事件</div>';
-  $('#ev-total').textContent = String(sm.total || S.events.length);
-  $('#ev-table').innerHTML = table(hdr, S.events.map(evRow));
-  const cfg = (S.state || {}).config || {};
+  $('#ev-total').textContent = String(sm.total || st.events.length);
+  $('#ev-table').innerHTML = table(hdr, st.events.map(evRow));
+  const cfg = curState().config || {};
   fillEventForm(cfg.events);
   $('#ev-notes').innerHTML = notes(sm.notes || [], [
     '口径：基波相量＝U1 相对 U_nom 的百分比上下限、I1 绝对上限；谐波相量＝单次含有率 HR_h 或 THD；间谐波相量＝IEC 61000-4-7 间谐波组含有率；' +
@@ -2195,12 +2225,12 @@ function render() {
       case 'harmonic': renderDual(renderHarmonic); break;
       case 'interharmonic': renderDual(renderInterharmonic); break;
       case 'dc': renderDual(renderDC); break;
-      case 'events': renderEvents(); break;
-      case 'nilm': renderNilm(); break;
+      case 'events': renderDual(renderEvents); break;
+      case 'nilm': renderDual(renderNilm); break;
       case 'spectrum': renderDual(renderSpectrum); break;
-      case 'windows': renderWindows(); break;
+      case 'windows': renderDual(renderWindows); break;
       case 'source': renderSource(); break;
-      case 'export': renderExport(); break;
+      case 'export': renderDual(renderExport); break;
       case 'process': renderProcess(); break;
       default: break;
     }
@@ -2364,9 +2394,9 @@ function collectConfigPayload() {
   };
 }
 
-function collectWindowPayload() {
+function collectWindowPayload(side = sideOf()) {
   const out = {};
-  $$('[data-w]').forEach(el => {
+  E(side, 'w-table').querySelectorAll('[data-w]').forEach(el => {
     const k = el.dataset.w, f = el.dataset.f;
     out[k] = out[k] || {};
     if (el.type === 'checkbox') out[k][f] = el.checked;
@@ -2394,8 +2424,8 @@ async function loadLastData() {
     if (r.branch && r.branch.ok) parts.push(`分路侧：${fmt(r.branch)}`);
     else if (r.branch && r.branch.error) parts.push(`分路侧：${r.branch.error}`);
     toast('已加载上次播放数据 — ' + parts.join('；'), 'ok');
-    S.histCache = {}; S.histAt = {}; S.histMeta = {}; OVB.hist = {}; OVB.meta = {}; OVB.at = 0; OVB.doneFetched = false; S.events = []; NL.events = [];
-    await Promise.all([refreshHistory(), refreshEvents(), refreshNilm(), refreshOverviewBranch(true)]);
+    S.histCache = {}; S.histAt = {}; S.histMeta = {}; OVB.hist = {}; OVB.meta = {}; OVB.at = 0; OVB.doneFetched = false; SD.bus.events = []; SD.bus.nl.events = []; SD.branch.events = []; SD.branch.nl.events = [];
+    await Promise.all([refreshHistory(), refreshEvents('bus'), refreshNilm('bus'), refreshOverviewBranch(true), refreshBranchDual(true)]);
     try {
       S.state = await api('/api/state');
       if (r.result) { const rr = await fetch(apiUrl('/api/result?full=false')); if (rr.ok) S.result = await rr.json(); }
@@ -2512,18 +2542,19 @@ async function saveConfig() {
   } catch (e) { toast('保存失败：' + e.message, 'err'); }
 }
 
-async function saveWindows() {
+async function saveWindows(side = sideOf()) {
   try {
     await api('/api/config', { method: 'PUT', headers: { 'Content-Type': 'application/json' },
-                               body: JSON.stringify(collectWindowPayload()) });
-    toast('窗口配置已保存（各量按新时间段计算）', 'ok');
-    S.state = await api('/api/state'); render();
+                               body: JSON.stringify(collectWindowPayload(side)) }, side);
+    toast((side === 'branch' ? '分路侧' : '总线侧') + '窗口配置已保存（各量按新时间段计算）', 'ok');
+    if (side === 'branch') { BRD.state = await api('/api/state', undefined, 'branch'); BR.loaded = false; }
+    else S.state = await api('/api/state', undefined, 'bus');
+    render();
   } catch (e) { toast('保存失败：' + e.message, 'err'); }
 }
 
-function applyPreset(sec) {
-  $$('[data-w][data-f=length_s]').forEach(el => { el.value = sec; });
-  $$('[data-w][data-f=step_s]').forEach(el => { el.value = sec; });
+function applyPreset(sec, side = sideOf()) {
+  E(side, 'w-table').querySelectorAll('[data-w][data-f=length_s],[data-w][data-f=step_s]').forEach(el => { el.value = sec; });
 }
 
 async function probe() {
@@ -2578,14 +2609,41 @@ async function runSelftest() {
   }
 }
 
-async function saveCfgFile() {
+async function saveCfgFile(side = sideOf()) {
   try {
-    const cfg = await api('/api/config');
-    await api('/api/config', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(cfg) });
-    const cp = ((S.state || {}).engine || {}).config_path || 'configs/runtime.json';
-    $('#exp-out').innerHTML = notes([`✓ 当前配置已写入 ${cp}（下次启动自动加载；出厂模板 configs/default.json 未被改动）`]);
+    const cfg = await api('/api/config', undefined, side);
+    await api('/api/config', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(cfg) }, side);
+    const stx = side === 'branch' ? (BRD.state || {}) : (S.state || {});
+    const cp = (stx.engine || {}).config_path || (side === 'branch' ? 'configs/branch.json' : 'configs/runtime.json');
+    E(side, 'exp-out').innerHTML = notes([`✓ 当前${side === 'branch' ? '分路侧' : '总线侧'}配置已写入 ${cp}（下次启动自动加载；出厂模板 configs/default.json 未被改动）`]);
     toast('配置已持久化', 'ok');
-  } catch (e) { $('#exp-out').innerHTML = notes(['✗ ' + e.message]); }
+  } catch (e) { E(side, 'exp-out').innerHTML = notes(['✗ ' + e.message]); }
+}
+
+/* v0.24：事件 / 负荷辨识 / 窗口配置 / 导出页的按钮与过滤器——左右两列各绑一份（side 固定在闭包里） */
+function bindSideViews(side) {
+  const on = (id, ev, fn) => { const el = E(side, id); if (el) el.addEventListener(ev, fn); };
+  // 窗口配置
+  on('btn-save-win', 'click', () => saveWindows(side));
+  on('btn-preset-fast', 'click', () => applyPreset(0.2, side));
+  on('btn-preset-std', 'click', () => applyPreset(1, side));
+  on('btn-preset-slow', 'click', () => applyPreset(5, side));
+  // 导出与日志
+  on('btn-save-cfgfile', 'click', () => saveCfgFile(side));
+  on('btn-save-curves', 'click', () => saveCurves(side));
+  on('btn-rt-save', 'click', () => saveRealtime(side));
+  on('btn-rt-refresh', 'click', () => refreshRealtime(side));
+  ['rt-enable', 'rt-dir'].forEach(id => { on(id, 'input', () => { SD[side].rtDirty = true; }); on(id, 'change', () => { SD[side].rtDirty = true; }); });
+  // 事件
+  on('btn-ev-refresh', 'click', () => refreshEvents(side));
+  on('btn-ev-clear', 'click', () => clearEvents(side));
+  on('btn-ev-save', 'click', () => saveEventConfig(side));
+  on('ev-filter', 'change', () => refreshEvents(side));
+  on('ev-only-active', 'change', () => refreshEvents(side));
+  const evf = E(side, 'ev-form');
+  if (evf) evf.querySelectorAll('input').forEach(el => { const mark = () => { SD[side].evDirty = true; }; el.addEventListener('input', mark); el.addEventListener('change', mark); });
+  // 负荷辨识
+  bindNilm(side);
 }
 
 /* ------------------------------------------------------------------ 初始化 */
@@ -2666,12 +2724,7 @@ function bind() {
   $('#btn-br-map-default').addEventListener('click', () => fillColmapDefault('branch'));
   $('#btn-br-map-fromprobe').addEventListener('click', () => fillColmapFromProbe('branch'));
   $('#btn-br-map-save').addEventListener('click', () => saveColumns('branch'));
-  $('#btn-save-win').addEventListener('click', saveWindows);
-  $('#btn-preset-fast').addEventListener('click', () => applyPreset(0.2));
-  $('#btn-preset-std').addEventListener('click', () => applyPreset(1));
-  $('#btn-preset-slow').addEventListener('click', () => applyPreset(5));
   $('#btn-selftest').addEventListener('click', runSelftest);
-  $('#btn-save-cfgfile').addEventListener('click', saveCfgFile);
   ['sp-chan', 'sp-scale', 'sp-limit'].forEach(id => $('#' + id).addEventListener('change', render));
   // 数据源下拉框联动：选 kind 切换可用字段与填写说明；选 frame=binary 才放开 struct 两项
   $('#src-kind').addEventListener('change', () => { S.srcDirty = true; S.formDirty = true; syncSourceForm(); });
@@ -2683,10 +2736,6 @@ function bind() {
     if (el && el.classList && el.classList.contains('curve-save')) setCurveSave(el.dataset.curve, el.checked, el.dataset.side);
     if (el && el.classList && el.classList.contains('ser-vis')) setSeriesVisible(el.dataset.chart, el.dataset.name, el.checked);
   });
-  $('#btn-save-curves').addEventListener('click', saveCurves);
-  $('#btn-rt-save').addEventListener('click', saveRealtime);
-  $('#btn-rt-refresh').addEventListener('click', refreshRealtime);
-  ['rt-enable', 'rt-dir'].forEach(id => { $('#' + id).addEventListener('input', () => { S.rtDirty = true; }); $('#' + id).addEventListener('change', () => { S.rtDirty = true; }); });
   $('#src-playmode').addEventListener('change', () => { S.srcDirty = true; S.formDirty = true; syncSourceForm(); });
   $('#src-file-speed').addEventListener('change', () => { S.fileSpeedChosen = parseFloat($('#src-file-speed').value) || 0; });
   // 任何用户输入都置脏：否则 0.2s 一次的推送会把正在编辑的字段改回服务端配置
@@ -2700,20 +2749,14 @@ function bind() {
   $$('input[name=ihmode-u],input[name=ihmode-i]').forEach(el => el.addEventListener('change', render));
   $$('input[name=dcmode]').forEach(el => el.addEventListener('change', render));
   // 事件子界面
-  $('#btn-ev-refresh').addEventListener('click', refreshEvents);
-  $('#btn-ev-clear').addEventListener('click', clearEvents);
-  $('#btn-ev-save').addEventListener('click', saveEventConfig);
-  $('#ev-filter').addEventListener('change', refreshEvents);
-  $('#ev-only-active').addEventListener('change', refreshEvents);
-  $$('#ev-form input').forEach(el => { const mark = () => { S.evDirty = true; }; el.addEventListener('input', mark); el.addEventListener('change', mark); });
-  bindNilm();
+  bindSideViews('bus');
   window.addEventListener('resize', () => { clearTimeout(window._rz); window._rz = setTimeout(render, 180); });
   setInterval(() => { refreshBranchDual(false); }, 1000);
   setInterval(() => {
     if (['overview', 'power_factor', 'fundamental', 'interharmonic', 'dc'].includes(S.view)) refreshHistory();
-    if (S.view === 'events') refreshEvents();          // 摘要（计数/振荡评估/落盘行数）随数据刷新
+    if (S.view === 'events') refreshEvents('bus');     // 摘要（计数/振荡评估/落盘行数）随数据刷新；分路侧列由 refreshBranchDual 刷新
     if (S.view === 'source' && ($('#br-enabled') || {}).checked) refreshBranchState(true);   // 分路侧数据源状态栏
-    if (S.view === 'nilm') refreshNilm();              // 周波窗与事件随数据刷新
+    if (S.view === 'nilm') { refreshNilm('bus'); refreshHistory(); }   // 周波窗、事件与 P/Q/S 趋势随数据刷新
   }, 3000);
 }
 
@@ -2721,7 +2764,8 @@ function bind() {
 
 /* ------------------------------------------------------------------ 负荷辨识（第 12 轮） */
 
-const NL = { events: [], summary: null, cycles: null, loaded: false, dirty: false, formBuilt: false };
+/* NL：当前侧别的负荷辨识状态（SD[side].nl 的别名，随 sideOf() 变化） */
+function NLs(side) { return SD[side || sideOf()].nl; }
 const NILM_ALGOS = {
   threshold:    { name: '阈值差分', desc: '相邻周波 ΔP ≥ 门槛为起点；随后 settle 个周波极差 ≤ 容差为终点',
                   params: { min_delta_w: '最小幅值 (W)', settle_cycles: '稳定周波数', settle_tol_w: '稳定容差 (W)', max_rise_cycles: '最长暂态 (周波)' } },
@@ -2740,10 +2784,11 @@ const NILM_COLORS = { threshold: '#ff6b6b', two_window: '#ffa94d', cusum: '#ffd4
 const NILM_FIELDS = ['enabled', 'save', 'window_cycles', 'min_gap_cycles', 'rel_tol_pct', 'min_delta_pct'];
 const NILM_CH = ['total', 'A', 'B', 'C'];
 
-function buildNilmForm() {
-  if (NL.formBuilt) return;
-  NL.formBuilt = true;
-  const host = $('#nilm-algos');
+function buildNilmForm(side = sideOf()) {
+  const nl = NLs(side);
+  if (nl.formBuilt) return;
+  nl.formBuilt = true;
+  const host = E(side, 'nilm-algos');
   host.innerHTML = Object.keys(NILM_ALGOS).map(a => {
     const sp = NILM_ALGOS[a];
     const inputs = Object.keys(sp.params).map(k =>
@@ -2754,86 +2799,101 @@ function buildNilmForm() {
   }).join('');
   normalizeConfigForms(host);
   const opts = Object.keys(NILM_ALGOS).map(a => `<option value="${a}">${NILM_ALGOS[a].name}</option>`).join('');
-  $('#nilm-filter').insertAdjacentHTML('beforeend', opts); domTouched($('#nilm-filter'));
-  $('#nilm-mark').insertAdjacentHTML('beforeend', opts); domTouched($('#nilm-mark'));
-  $$('#nilm-form input, #nilm-algos input').forEach(el => { const mark = () => { NL.dirty = true; }; el.addEventListener('input', mark); el.addEventListener('change', mark); });
+  E(side, 'nilm-filter').insertAdjacentHTML('beforeend', opts); domTouched(E(side, 'nilm-filter'));
+  E(side, 'nilm-mark').insertAdjacentHTML('beforeend', opts); domTouched(E(side, 'nilm-mark'));
+  // P/Q/S 趋势图的「标注算法」多选：默认全部勾选
+  const pa = E(side, 'nilm-pqs-algos');
+  if (pa) { pa.innerHTML = Object.keys(NILM_ALGOS).map(a => `<label title="${NILM_ALGOS[a].desc}"><input type="checkbox" class="nilm-pqs-algo" data-algo="${a}" checked> <span style="color:${NILM_COLORS[a]}">■</span>${NILM_ALGOS[a].name}</label>`).join(''); domTouched(pa); }
+  bindNilmForm(side);
 }
 
-function fillNilmForm(nc) {
-  if (!nc || NL.dirty) return;
+function bindNilmForm(side) {
+  [E(side, 'nilm-form'), E(side, 'nilm-algos')].forEach(h => h && h.querySelectorAll('input').forEach(el => {
+    const mark = () => { NLs(side).dirty = true; }; el.addEventListener('input', mark); el.addEventListener('change', mark);
+  }));
+}
+
+function fillNilmForm(nc, side = sideOf()) {
+  if (!nc || NLs(side).dirty) return;
   NILM_FIELDS.forEach(f => {
-    const el = document.getElementById(`nilm-${f}`); if (!el) return;
+    const el = E(side, `nilm-${f}`); if (!el) return;
     if (el.type === 'checkbox') el.checked = !!nc[f]; else el.value = nc[f];
   });
-  NILM_CH.forEach(c => { const el = document.getElementById(`nilm-ch-${c}`); if (el) el.checked = (nc.channels || []).includes(c); });
+  NILM_CH.forEach(c => { const el = E(side, `nilm-ch-${c}`); if (el) el.checked = (nc.channels || []).includes(c); });
   const algos = nc.algorithms || {};
   Object.keys(NILM_ALGOS).forEach(a => {
     const prm = algos[a] || {};
-    const en = document.getElementById(`nilm-${a}-enabled`); if (en) en.checked = prm.enabled !== false;
-    Object.keys(NILM_ALGOS[a].params).forEach(k => { const el = document.getElementById(`nilm-${a}-${k}`); if (el && prm[k] !== undefined) el.value = prm[k]; });
+    const en = E(side, `nilm-${a}-enabled`); if (en) en.checked = prm.enabled !== false;
+    Object.keys(NILM_ALGOS[a].params).forEach(k => { const el = E(side, `nilm-${a}-${k}`); if (el && prm[k] !== undefined) el.value = prm[k]; });
   });
 }
 
-function collectNilmPayload() {
+function collectNilmPayload(side = sideOf()) {
   const p = { algorithms: {} };
-  NILM_FIELDS.forEach(f => { const el = document.getElementById(`nilm-${f}`); if (!el) return; p[f] = el.type === 'checkbox' ? el.checked : +el.value; });
-  p.channels = NILM_CH.filter(c => { const el = document.getElementById(`nilm-ch-${c}`); return el && el.checked; });
+  NILM_FIELDS.forEach(f => { const el = E(side, `nilm-${f}`); if (!el) return; p[f] = el.type === 'checkbox' ? el.checked : +el.value; });
+  p.channels = NILM_CH.filter(c => { const el = E(side, `nilm-ch-${c}`); return el && el.checked; });
   Object.keys(NILM_ALGOS).forEach(a => {
-    const prm = { enabled: !!document.getElementById(`nilm-${a}-enabled`).checked };
-    Object.keys(NILM_ALGOS[a].params).forEach(k => { const v = parseFloat(document.getElementById(`nilm-${a}-${k}`).value); if (Number.isFinite(v)) prm[k] = v; });
+    const prm = { enabled: !!E(side, `nilm-${a}-enabled`).checked };
+    Object.keys(NILM_ALGOS[a].params).forEach(k => { const v = parseFloat(E(side, `nilm-${a}-${k}`).value); if (Number.isFinite(v)) prm[k] = v; });
     p.algorithms[a] = prm;
   });
   return p;
 }
 
-async function saveNilmConfig() {
-  const payload = collectNilmPayload();
+async function saveNilmConfig(side = sideOf()) {
+  const payload = collectNilmPayload(side);
+  const note = E(side, 'nilm-form-note');
   if (!payload.channels.length) { toast('至少勾选一个检测对象', 'err'); return; }
   const lim = { rel_tol_pct: [0, 50], min_delta_pct: [0, 100], window_cycles: [30, 1e9], min_gap_cycles: [0, 1e9] };
   for (const [k, [lo, hi]] of Object.entries(lim)) {
     const v = payload[k];
     if (!isNum(v) || v < lo || v > hi) {
       const msg = `${k} 必须在 ${lo}~${hi === 1e9 ? '∞' : hi}（当前 ${v}）；` + (k.endsWith('_pct') ? '它是「占窗内 |P| 中位数的百分比」，不是 W；只用绝对值请填 0' : '');
-      $('#nilm-form-note').textContent = '保存失败：' + msg; toast(msg, 'err');
-      const el = document.getElementById(`nilm-${k}`); if (el) el.focus();
+      note.textContent = '保存失败：' + msg; toast(msg, 'err');
+      const el = E(side, `nilm-${k}`); if (el) el.focus();
       return;
     }
   }
   try {
-    const d = await api('/api/config', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ nilm: payload }) });
-    NL.dirty = false; $('#nilm-form-note').textContent = '已保存并热生效 ' + new Date().toLocaleTimeString();
-    toast('负荷辨识参数已保存', 'ok');
-    if (d && d.config && S.state) { S.state.config = d.config; fillNilmForm(d.config.nilm); }
-    refreshNilm();
-  } catch (e) { $('#nilm-form-note').textContent = '保存失败：' + e.message; toast(e.message, 'err'); }
+    const d = await api('/api/config', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ nilm: payload }) }, side);
+    NLs(side).dirty = false; note.textContent = '已保存并热生效 ' + new Date().toLocaleTimeString();
+    toast((side === 'branch' ? '分路侧' : '总线侧') + '负荷辨识参数已保存', 'ok');
+    if (d && d.config) {
+      if (side === 'branch') { if (BRD.state) BRD.state.config = d.config; BR.loaded = false; } else if (S.state) S.state.config = d.config;
+      fillNilmForm(d.config.nilm, side);
+    }
+    refreshNilm(side);
+  } catch (e) { note.textContent = '保存失败：' + e.message; toast(e.message, 'err'); }
 }
 
-function onNilmPush(list) {
-  list.forEach(e => { if (!NL.events.some(x => x.id === e.id)) NL.events.unshift(e); });
-  if (NL.events.length > 5000) NL.events.length = 5000;
-  setNilmBadge(NL.summary ? (NL.summary.total || 0) + list.length : NL.events.length);
-  if (S.view === 'nilm') renderNilm();
+function onNilmPush(list, side = 'bus') {
+  const nl = NLs(side);
+  list.forEach(e => { if (!nl.events.some(x => x.id === e.id)) nl.events.unshift(e); });
+  if (nl.events.length > 5000) nl.events.length = 5000;
+  setNilmBadge(nl.summary ? (nl.summary.total || 0) + list.length : nl.events.length, side);
+  if (S.view === 'nilm') render();
 }
 
 function setNilmBadge(n, side) {
-  const b = $((side || S.side) === 'branch' ? '#nav-nilm-badge-br' : '#nav-nilm-badge'); if (!b) return;
+  const b = document.getElementById((side || sideOf()) === 'branch' ? 'nav-nilm-badge-br' : 'nav-nilm-badge'); if (!b) return;
   b.textContent = String(n); b.style.display = n > 0 ? '' : 'none';
 }
 
-async function refreshNilm() {
+async function refreshNilm(side = sideOf()) {
+  const nl = NLs(side);
   try {
-    const algo = $('#nilm-filter').value, ch = $('#nilm-chfilter').value;
+    const algo = E(side, 'nilm-filter').value, ch = E(side, 'nilm-chfilter').value;
     const [d, c] = await Promise.all([
-      api(`/api/nilm/events?limit=1000${algo ? '&algos=' + algo : ''}${ch ? '&channel=' + ch : ''}`),
-      api('/api/nilm/cycles?n=2000'),
+      api(`/api/nilm/events?limit=1000${algo ? '&algos=' + algo : ''}${ch ? '&channel=' + ch : ''}`, undefined, side),
+      api('/api/nilm/cycles?n=2000', undefined, side),
     ]);
-    NL.events = d.events || []; NL.summary = d.summary || null; NL.cycles = c; NL.loaded = true;
-  } catch (e) { toast('负荷辨识数据获取失败：' + e.message, 'err'); }
-  if (S.view === 'nilm') renderNilm();
+    nl.events = d.events || []; nl.summary = d.summary || null; nl.cycles = c; nl.loaded = true;
+  } catch (e) { toast((side === 'branch' ? '分路侧' : '') + '负荷辨识数据获取失败：' + e.message, 'err'); }
+  if (S.view === 'nilm') render();
 }
 
-async function clearNilm() {
-  try { await api('/api/nilm/clear', { method: 'POST' }); toast('负荷事件列表已清空', 'ok'); NL.events = []; await refreshNilm(); }
+async function clearNilm(side = sideOf()) {
+  try { await api('/api/nilm/clear', { method: 'POST' }, side); toast((side === 'branch' ? '分路侧' : '总线侧') + '负荷事件列表已清空', 'ok'); NLs(side).events = []; await refreshNilm(side); }
   catch (e) { toast(e.message, 'err'); }
 }
 
@@ -2845,8 +2905,25 @@ function nilmRow(e) {
           `${si(e.pre_p_w, 'W')} → ${si(e.post_p_w, 'W')}`, isNum(e.score) ? num(e.score, 3) : ''];
 }
 
+/* v0.24：P/Q/S 趋势（与总览同一数据 /api/history/power、同一 pqsSeries）+ 各算法事件竖线 */
+function renderNilmPqs(nl) {
+  const cv = $('#nilm-pqs'); if (!cv) return;
+  const hp = curHist('power'); const t0 = hp.length ? hp[0].t : 0;
+  const box = $('#nilm-pqs-algos');
+  const chosen = box ? Array.from(box.querySelectorAll('.nilm-pqs-algo')).filter(c => c.checked).map(c => c.dataset.algo) : Object.keys(NILM_ALGOS);
+  const chSel = $('#nilm-pqs-ch'); const ch = chSel ? chSel.value : '';
+  const tEnd = hp.length ? hp[hp.length - 1].t : 0;
+  const evs = nl.events.filter(e => chosen.includes(e.algorithm) && (!ch || e.channel === ch) && isNum(e.t_start) && e.t_start >= t0 && e.t_start <= tEnd);
+  const marks = evs.map(e => ({ x: e.t_start - t0, color: NILM_COLORS[e.algorithm], row: Object.keys(NILM_ALGOS).indexOf(e.algorithm),
+                                label: `${e.direction === 'up' ? '↑' : '↓'}${si(e.magnitude_w, 'W', 3)}${ch ? '' : ' ' + e.channel}` }));
+  const nEl = $('#nilm-pqs-n'); if (nEl) nEl.textContent = String(marks.length);
+  drawLine(cv, pqsSeries(hp, t0), { ylabel: 'W/var/VA', fmtX: x => tsX(x + t0, spanOf('power')), fmtTip: x => ts(x + t0), tbase: t0, height: 260, marks,
+                                   empty: '暂无 P/Q/S 趋势（需累计 ≥2 个 power 窗）' });
+}
+
 function renderNilm() {
   buildNilmForm();
+  const NL = NLs();
   if (!NL.loaded) { NL.loaded = true; refreshNilm(); return; }
   const sm = NL.summary || {};
   const counts = sm.counts || {};
@@ -2859,6 +2936,7 @@ function renderNilm() {
   cards.push(card('事件落盘', w.enabled ? '开' : '关', '', w.current_file ? `${w.rows_written} 行 → ${w.current_file.split(/[\\/]/).pop()}` : (w.dir || '')));
   $('#nilm-cards').innerHTML = cards.join('');
   if (isNum(sm.total)) setNilmBadge(sm.total);
+  renderNilmPqs(NL);
   // 周波窗曲线 + 事件竖线
   const c = NL.cycles || {}; const chn = $('#nilm-ch').value, qty = $('#nilm-qty').value, mk = $('#nilm-mark').value;
   const chd = ((c.channels || {})[chn] || {})[qty] || [];
@@ -2873,7 +2951,7 @@ function renderNilm() {
   const hdr = ['#', '算法', '对象', '开始（数据时间）', '结束', '持续', '方向', '幅值 |ΔP|', 'ΔQ', 'ΔI', '前 → 后', '检验量'];
   $('#nilm-total').textContent = String(sm.total || NL.events.length);
   $('#nilm-table').innerHTML = NL.events.length ? table(hdr, NL.events.map(nilmRow)) : '<div class="notes">暂无事件</div>';
-  const cfg = (S.state || {}).config || {};
+  const cfg = curState().config || {};
   fillNilmForm(cfg.nilm);
   $('#nilm-notes').innerHTML = notes((sm.notes || []).concat(sm.errors || []), [
     '口径：每周波 P=mean(u·i)，Q=基波单频 DFT 无功，I=周波有效值；各算法在最近 window_cycles 个周波的窗上评估，同算法同对象按终点序号去重，终点之后需再看到足够周波才确认（所以事件会滞后几个周波出现）。',
@@ -2882,13 +2960,16 @@ function renderNilm() {
   ]);
 }
 
-function bindNilm() {
-  $('#btn-nilm-refresh').addEventListener('click', refreshNilm);
-  $('#btn-nilm-clear').addEventListener('click', clearNilm);
-  $('#btn-nilm-save').addEventListener('click', saveNilmConfig);
-  $('#nilm-filter').addEventListener('change', refreshNilm);
-  $('#nilm-chfilter').addEventListener('change', refreshNilm);
-  ['nilm-ch', 'nilm-qty', 'nilm-mark'].forEach(id => $('#' + id).addEventListener('change', renderNilm));
+function bindNilm(side) {
+  const on = (id, ev, fn) => { const el = E(side, id); if (el) el.addEventListener(ev, fn); };
+  on('btn-nilm-refresh', 'click', () => refreshNilm(side));
+  on('btn-nilm-clear', 'click', () => clearNilm(side));
+  on('btn-nilm-save', 'click', () => saveNilmConfig(side));
+  on('nilm-filter', 'change', () => refreshNilm(side));
+  on('nilm-chfilter', 'change', () => refreshNilm(side));
+  ['nilm-ch', 'nilm-qty', 'nilm-mark', 'nilm-pqs-ch'].forEach(id => on(id, 'change', render));
+  const pa = E(side, 'nilm-pqs-algos'); if (pa) pa.addEventListener('change', render);
+  if (side === 'branch') bindNilmForm('branch');   // 克隆列的表单输入 → 分路侧脏标记
 }
 
 /* ------------------------------------------------------------------ 数据处理：离线 CSV 重采样 */

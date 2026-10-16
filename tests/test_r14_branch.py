@@ -189,8 +189,12 @@ def test_frontend_wiring():
     # v0.23：电气量 9 个子界面合并为「左总线/右分路」双列，导航只保留一组（data-side=bus）；分路侧分组只剩事件/负荷辨识/窗口/导出
     for v in ("voltage", "current", "power", "power_factor", "fundamental", "harmonic", "interharmonic", "dc", "spectrum"):
         assert f'data-view="{v}" data-side="bus"' in html and f'data-view="{v}" data-side="branch"' not in html, v
+    # v0.24：事件/负荷辨识/窗口/导出也合并为双列，导航不再有分路侧专属项；分路侧徽标并入同一按钮
     for v in ("events", "nilm", "windows", "export"):
-        assert f'data-view="{v}" data-side="branch"' in html, v
+        assert f'data-view="{v}" data-side="bus"' in html and f'data-view="{v}" data-side="branch"' not in html, v
+    assert 'id="nav-ev-badge-br"' in html and 'id="nav-nilm-badge-br"' in html and 'id="nilm-pqs"' in html and 'id="nilm-pqs-algos"' in html
+    for s in ("function bindSideViews", "function renderNilmPqs", "const SD = ", "function E(side, id)", "case 'events': renderDual(renderEvents)", "case 'windows': renderDual(renderWindows)"):
+        assert s in js, s
     for s in ("const DUAL_VIEWS", "function buildDualViews", "function renderDual", "function branchDualActive", "function refreshBranchDual", "'no-branch-nav'"):
         assert s in js, s
     assert 'data-view="source" data-side="branch"' not in html      # 分路侧配置集中在总览的数据源页

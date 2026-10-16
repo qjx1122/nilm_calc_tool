@@ -69,16 +69,11 @@
     <button class="navitem" data-view="interharmonic" data-side="bus">🎚 间谐波</button>
     <button class="navitem" data-view="dc" data-side="bus">➖ 直流偏置</button>
     <button class="navitem" data-view="spectrum" data-side="bus">🌈 频谱</button>
-    <div class="navgroup navgroup-bus">总线侧 <span class="navhint">事件 / 负荷辨识 / 窗口 / 导出</span></div>
-    <button class="navitem" data-view="events" data-side="bus">🚨 事件 <span class="badge" id="nav-ev-badge" style="display:none">0</span></button>
-    <button class="navitem" data-view="nilm" data-side="bus">🧩 负荷辨识 <span class="badge" id="nav-nilm-badge" style="display:none">0</span></button>
+    <div class="navgroup navgroup-bus">事件 / 负荷辨识 / 配置 <span class="navhint">左：总线侧 ｜ 右：分路侧</span> <span class="badge" id="nav-br-state" style="display:none"></span></div>
+    <button class="navitem" data-view="events" data-side="bus">🚨 事件 <span class="badge" id="nav-ev-badge" style="display:none">0</span><span class="badge badge-br" id="nav-ev-badge-br" style="display:none" title="分路侧活动事件">0</span></button>
+    <button class="navitem" data-view="nilm" data-side="bus">🧩 负荷辨识 <span class="badge" id="nav-nilm-badge" style="display:none">0</span><span class="badge badge-br" id="nav-nilm-badge-br" style="display:none" title="分路侧负荷事件">0</span></button>
     <button class="navitem" data-view="windows" data-side="bus">⏱ 窗口配置</button>
     <button class="navitem" data-view="export" data-side="bus">💾 导出与日志</button>
-    <div class="navgroup navgroup-branch">分路侧 <span class="navhint">事件 / 负荷辨识 / 窗口 / 导出</span> <span class="badge" id="nav-br-state" style="display:none"></span></div>
-    <button class="navitem" data-view="events" data-side="branch">🚨 事件 <span class="badge" id="nav-ev-badge-br" style="display:none">0</span></button>
-    <button class="navitem" data-view="nilm" data-side="branch">🧩 负荷辨识 <span class="badge" id="nav-nilm-badge-br" style="display:none">0</span></button>
-    <button class="navitem" data-view="windows" data-side="branch">⏱ 窗口配置</button>
-    <button class="navitem" data-view="export" data-side="branch">💾 导出与日志</button>
     <div class="navgroup">工具</div>
     <button class="navitem" data-view="selftest">✅ 算法自检</button>
     <button class="navitem" data-view="process">🧮 数据处理</button>
@@ -660,6 +655,14 @@
     <section class="view" id="view-nilm">
       <h2>负荷辨识 · 事件检测（逐周波 P/Q/I 突变：阈值差分 / 双滑窗 / CUSUM / GLR / 稳态分段 / 中值滤波差分）</h2>
       <div class="cards" id="nilm-cards"></div>
+      <div class="panel">
+        <h3 class="curvehdr"><span>P / Q / S 趋势（与总览面板同一曲线；竖线＝各算法检测到的负荷事件起点，颜色＝算法，图内 <span id="nilm-pqs-n">0</span> 条）<span class="curvespan" data-curve="power"></span></span>
+          <span class="toggle">
+            <label>对象 <select id="nilm-pqs-ch"><option value="">全部</option><option value="total">三相总</option><option value="A">A 相</option><option value="B">B 相</option><option value="C">C 相</option></select></label>
+            <span class="toggle" id="nilm-pqs-algos" title="只标注勾选算法检测到的事件（默认全部）"></span>
+          </span></h3>
+        <canvas id="nilm-pqs" height="260"></canvas>
+      </div>
       <div class="panel">
         <h3 class="curvehdr"><span>周波窗（最近 <span id="nilm-win-n">0</span> 个周波，竖线＝检测到的事件起点）</span>
           <span class="toggle">

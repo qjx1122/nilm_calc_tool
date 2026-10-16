@@ -62,7 +62,7 @@ async function main() {
   const html = fs.readFileSync(path.join(ROOT, 'app/static/index.html'), 'utf8');
   console.log('D1 导航结构');
   check('电气量 9 项只在一组且 data-side=bus', VIEWS.every(v => html.includes(`data-view="${v}" data-side="bus"`) && !html.includes(`data-view="${v}" data-side="branch"`)));
-  check('分路侧分组只剩 事件/负荷辨识/窗口/导出', ['events', 'nilm', 'windows', 'export'].every(v => html.includes(`data-view="${v}" data-side="branch"`)) && (html.match(/navitem" data-view="\w+" data-side="branch"/g) || []).length === 4);
+  check('v0.24：导航不再有任何分路侧专属项（事件/负荷辨识/窗口/导出也合并为双列）', (html.match(/navitem" data-view="\w+" data-side="branch"/g) || []).length === 0 && ['events', 'nilm', 'windows', 'export'].every(v => html.includes(`data-view="${v}" data-side="bus"`)));
 
   const calls = [];
   const dom = makeDom(calls);

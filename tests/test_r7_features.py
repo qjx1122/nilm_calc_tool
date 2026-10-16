@@ -392,10 +392,10 @@ def test_frontend_play_start_select_matches_backend_modes():
 def test_frontend_realtime_panel_wired():
     for el in ("rt-enable", "rt-dir", "btn-rt-save", "btn-rt-refresh", "rt-out"):
         assert f'id="{el}"' in INDEX, el
-    assert "api('/api/realtime')" in APP_JS
+    assert "api('/api/realtime', undefined, side)" in APP_JS
     assert "realtime_save: on" in APP_JS
-    assert "$('#btn-rt-save').addEventListener('click', saveRealtime)" in APP_JS
-    assert "!S.rtDirty" in APP_JS            # 用户编辑中不被实时推送覆盖
+    assert "on('btn-rt-save', 'click', () => saveRealtime(side))" in APP_JS   # v0.24：两列各绑一份
+    assert "!sd().rtDirty" in APP_JS            # 用户编辑中不被实时推送覆盖
 
 
 def test_frontend_hover_tooltip_contract():
@@ -408,7 +408,7 @@ def test_frontend_hover_tooltip_contract():
     assert "cv.addEventListener('mousemove'" in APP_JS and "cv.addEventListener('mouseleave'" in APP_JS
     assert "if (cv.__hoverBound) return;" in APP_JS
     # 趋势图的提示用完整时刻（含毫秒），而不是刻度上的 HH:MM:SS
-    assert APP_JS.count("fmtTip: x => ts(x + ") == 15                     # 6 条原趋势 + R9 TIHD/直流 + R12 负荷辨识 + R15 跨侧对比两图 + v0.15.2 总览分路侧独立四图
+    assert APP_JS.count("fmtTip: x => ts(x + ") == 16                     # 6 条原趋势 + R9 TIHD/直流 + R12 负荷辨识 + R15 跨侧对比两图 + v0.15.2 总览分路侧独立四图 + v0.24 负荷辨识 P/Q/S
     assert "fmtTip: x => x.toFixed(2) + ' Hz'" in APP_JS
     # 最近点查找：有序二分
     assert "function nearestIdx(data, x)" in APP_JS and "while (hi - lo > 1)" in APP_JS
