@@ -2825,8 +2825,9 @@ function buildNilmForm(side = sideOf()) {
     const sp = NILM_ALGOS[a];
     const inputs = Object.keys(sp.params).map(k =>
       `<label>${sp.params[k]}<input type="number" step="any" min="0" id="nilm-${a}-${k}"></label>`).join('');
-    return `<div class="panel" style="margin-top:8px"><h3 class="curvehdr"><span style="color:${NILM_COLORS[a]}">■</span>
-      <label class="check"><input type="checkbox" id="nilm-${a}-enabled"> ${sp.name}</label><span class="mut" style="font-weight:normal">${sp.desc}</span></h3>
+    // v0.26.1：标题行＝色块 + 勾选框 + 算法名（紧挨），算法说明单独一行
+    return `<div class="panel nilm-algo" style="margin-top:8px"><h3 class="algohdr"><label class="check"><input type="checkbox" id="nilm-${a}-enabled"><span class="sw" style="color:${NILM_COLORS[a]}">■</span>${sp.name}</label></h3>
+      <div class="algodesc mut">${sp.desc}</div>
       <div class="row2">${inputs}</div></div>`;
   }).join('');
   normalizeConfigForms(host);

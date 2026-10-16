@@ -175,3 +175,10 @@ body.no-branch-nav .navgroup-branch,body.no-branch-nav .navitem[data-side="branc
 body.no-branch-nav .badge-br{display:none !important}
 .dual .tablewrap{overflow:auto}
 #nilm-pqs-algos label,#nilm-pqs-algos-br label{margin-right:6px;white-space:nowrap}
+
+/* v0.26.1：负荷辨识算法卡片——勾选框紧挨色块与算法名，说明文字另起一行 */
+.nilm-algo h3.algohdr{display:block;margin:0 0 4px}
+.nilm-algo h3.algohdr label.check{display:inline-flex;align-items:center;gap:6px;cursor:pointer;font-weight:600}
+.nilm-algo h3.algohdr label.check>input{width:15px;height:15px;margin:0;flex:0 0 auto}
+.nilm-algo h3.algohdr .sw{font-size:13px;line-height:1}
+.nilm-algo .algodesc{display:block;font-weight:normal;font-size:12px;line-height:1.5;margin:0 0 6px 21px}

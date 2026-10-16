@@ -47,7 +47,7 @@ async function main() {
   const html = fs.readFileSync(path.join(ROOT, 'app/static/index.html'), 'utf8');
   check('<title> 与 h1 体现「电气量计算 + 负荷辨识」', /<title>[^<]*负荷辨识[^<]*<\/title>/.test(html) && /<h1>[^<]*负荷辨识/.test(html));
   check('标题/h2 不再含内部编号「需求④/⑥」', !/<h2>[^<]*需求[①-⑩]/.test(html));
-  check('导航四组：总览 / 实时监测 / 事件与分析 / 工具（v0.26 用户指定）', ['>总览<', '实时监测', '事件与分析', '>工具 <'].every(t => html.includes(t)) && (html.match(/class="navgroup/g) || []).length === 4);
+  check('导航四组：总览 / 实时监测 / 事件与分析 / 工具（v0.26 用户指定）', ['>总览<', '实时监测', '事件与分析', '>工具<'].every(t => html.includes(t)) && (html.match(/class="navgroup/g) || []).length === 4);
   check('导航项按用户指定归组', (() => { const grp = {}; let g = ''; for (const m of html.matchAll(/class="navgroup[^"]*">([^<]+)|data-view="(\w+)"/g)) { if (m[1]) g = m[1].trim(); else (grp[g] = grp[g] || []).push(m[2]); }
     return JSON.stringify(grp['总览']) === JSON.stringify(['overview', 'source', 'compare']) && JSON.stringify(grp['实时监测']) === JSON.stringify(['voltage', 'current', 'power', 'power_factor', 'fundamental', 'harmonic', 'interharmonic', 'dc', 'spectrum'])
       && JSON.stringify(grp['事件与分析']) === JSON.stringify(['events', 'nilm']) && JSON.stringify(grp['工具']) === JSON.stringify(['windows', 'export', 'selftest', 'process']); })());

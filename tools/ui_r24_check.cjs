@@ -87,6 +87,12 @@ async function main() {
   check('负荷辨识页：两列都有 P/Q/S 画布与 6 个「标注算法」勾选（默认全选）', !!$('nilm-pqs') && !!$('nilm-pqs-br') &&
     $('nilm-pqs-algos').querySelectorAll('.nilm-pqs-algo').length === 6 && $('nilm-pqs-algos-br').querySelectorAll('.nilm-pqs-algo').length === 6 &&
     Array.from(document.querySelectorAll('.nilm-pqs-algo')).every(c => c.checked));
+  check('v0.26.1：算法卡片标题＝勾选框紧挨色块与算法名，说明另起一行（两列各 6 个）', ['nilm-algos', 'nilm-algos-br'].every(id => {
+    const cards = Array.from($(id).querySelectorAll('.nilm-algo'));
+    return cards.length === 6 && cards.every(c => { const lab = c.querySelector('h3.algohdr label.check'); const inp = lab && lab.querySelector('input[type=checkbox]');
+      return inp && inp.nextElementSibling && inp.nextElementSibling.classList.contains('sw') && lab.textContent.trim().length > 0 && c.querySelector('.algodesc') && !lab.contains(c.querySelector('.algodesc')); });
+  }));
+  check('导航三组标题无说明后缀', (() => { const t = Array.from(document.querySelectorAll('.navgroup')).map(g => Array.from(g.childNodes).filter(n => n.nodeType === 3).map(n => n.textContent).join('').trim());   /* 只看文字节点，排除状态徽标 */ return t.includes('实时监测') && t.includes('事件与分析') && t.includes('工具'); })(), Array.from(document.querySelectorAll('.navgroup')).map(g => g.textContent.trim()).join(' | '));
   check('负荷辨识页：两列都有 6 组算法参数表单（右列 id 带 -br）', $('nilm-algos').querySelectorAll('input[id$="-enabled"]').length === 6 && $('nilm-algos-br').querySelectorAll('input[id$="-enabled-br"]').length === 6);
 
   console.log('E2 未启用分路侧');
