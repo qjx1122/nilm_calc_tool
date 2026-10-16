@@ -1,198 +1,342 @@
-# 负荷辨识 · 事件检测算法调参手册（运维版）
+# 负荷辨识 · 新设备接入与事件检测调参手册（现场实施版）
 
-> 适用：`README.md` §3.1「负荷辨识子界面」的 6 种事件检测算法（v0.11 起）。
-> 面向**现场调参运维人员**：不讲推导，只讲「每个参数管什么、先量什么、填多少、怎么验证、出了什么现象往哪调」。
-> 配套工具：`python tools/nilm_tune.py --file <背景数据.csv> [--min-load-w N]`——自动量噪声并给一套起点参数。
-
----
-
-## 0. 五分钟结论
-
-1. **所有阈值的单位都是 W、口径＝计算口径**：启用 PT/CT 变换时填一次侧数值（样例里 1 MW 级），未启用填二次侧（W 级）。填错量级是最常见的"全漏报 / 全误报"原因。
-2. **先量两个数，再填参数**：
-   - **σ**：逐周波有功的噪声标准差（`nilm_tune.py` 的 `sigma`），决定所有"容差 / 漂移 / 噪声"类参数；
-   - **Δ_min**：现场**最小关心负荷**的有功（kW 铭牌 × 功率因数，或从历史曲线读台阶高度），决定所有 `min_delta_w`。
-3. **通用口诀**：`min_delta_w ≈ Δ_min / 2`，但**不得低于 6σ**；容差类（`settle_tol_w` / `tol_w`）≈ 5 周波极差的 95 分位 ×1.2（≈ 4~5σ）。两者之比 `min_delta_w / 容差 ≥ 3` 时检测才稳。
-4. **不确定就先用相对门槛**：`nilm.rel_tol_pct`（容差＝窗内基荷的百分比）和 `nilm.min_delta_pct`（最小幅值＝基荷的百分比）与绝对值取**大者**生效，所以把它们设成"够用的下限"，可避免量级填错；想精细控制再改各算法绝对值。
-5. **验证闭环**：用含已知投切的文件离线回放 →「负荷辨识」页看 6 算法事件数是否一致 → 导出 CSV 对账 → 只调一个参数再回放。参数热更新即生效，不必重启。
+> **给谁看**：工程师、运维、交付、现场实施——**不需要懂算法**。
+> **需要会什么**：① 复制粘贴 PowerShell 命令；② 用 Excel 打开 / 另存 CSV；③ 看懂"开 / 关"。
+> **能做到什么**：把一个从未见过的新设备，从"只有两份 CSV"开始，一步步配好 6 种事件检测算法的参数，并**用数字判断它能不能上线**。
+> **配套脚本**（都在仓库 `tools/` 下，本手册会告诉你每一步敲什么）：`nilm_tune.py`（量噪声给参数）、`nilm_replay.py`（离线回放跑检测）、`nilm_check.py`（和真实开关表对账、出结论）。
+> 想看算法推导的同学直接跳到 [附录 E](#附录-e进阶参数是怎么算出来的)。
 
 ---
 
-## 1. 调参前必须知道的 4 个机制
+## 0. 先搞懂 3 句话
 
-| 机制 | 对调参的影响 |
-|---|---|
-| **逐周波特征** | 检测对象是每个工频周波（20 ms）的 P（也记录 Q、I）。所以时间分辨率＝1 周波；"5 个周波"＝100 ms。所有 `*_cycles` 参数都按 20 ms 一格换算。 |
-| **滚动窗** `nilm.window_cycles`（默认 300＝6 s） | 算法只看最近这么多周波。窗必须**装得下一个完整事件 + 前后稳态**：电机软启动 2 s 就需要 ≥ 100 周波暂态 + 两侧稳态。窗越长，CPU 越多、GLR/稳态分段越稳。≥ 30 为合法值；建议 300~1000。 |
-| **相对门槛** `rel_tol_pct` / `min_delta_pct` | 生效值 = max(绝对参数, 窗内 \|P\| 中位数 × 百分比)。`rel_tol_pct` 作用于 `settle_tol_w / tol_w / drift_w / noise_w / threshold_w`，`min_delta_pct` 作用于每个算法的 `min_delta_w`。默认 1.0 / 0：即容差至少是基荷的 1%。**基荷 1 MW 时容差 ≥ 10 kW，比 10 kW 还小的波动都算"稳态"**——如果要检 5 kW 的小负荷，必须把 `rel_tol_pct` 降到 0.1~0.2。 |
-| **去重与确认** `nilm.min_gap_cycles`（默认 10） | 同一算法同一对象，两次事件终点相距 < 10 周波则只报第一条；事件要等终点之后再看到"确认周波数"（阈值类＝`settle_cycles`，双滑窗＝`post_cycles`，GLR＝`window_cycles`，稳态分段＝`min_steady_cycles`）才出现，因此界面滞后 0.1~0.3 s 属正常。连续快速投切（< 200 ms）要把它调小。 |
+1. **软件在看什么**：它把电流电压算成"每 20 毫秒一个点的有功功率 P"（叫**一个周波**）。设备**开**，P 突然**升**一个台阶；设备**关**，P 突然**降**一个台阶。6 种算法都是在找这种台阶，只是找法不同。
+2. **调参调的是什么**：只有两个概念——
+   - **台阶多高才算事件**（参数名里带 `min_delta`）：填小了把噪声当事件（**误报**），填大了把真设备漏掉（**漏报**）。
+   - **多"平"才算平稳**（参数名里带 `tol` / `noise` / `drift`）：这个由数据里的噪声决定，**脚本会替你量出来**，你不用猜。
+3. **怎么知道配对了**：拿一段**明知道设备什么时候开、什么时候关**的数据回放一遍，软件报出来的开关时刻和你知道的一一对上、而且没有多报，就是配对了。本手册的 `nilm_check.py` 会直接打印 ✅ / ⚠ / ✗。
 
-**幅值定义**：事件后稳态均值 − 事件前稳态均值（都取 `settle_cycles` 个周波），暂态冲击（电机起动电流）**不计入幅值**，所以同一台电机的"幅值"是其稳态有功，不是起动峰值。
+> **单位提醒（最常见的坑）**：所有阈值的单位都是 **W（瓦）**。如果配置里启用了 PT/CT 变比（`transform.enabled=true`），阈值要按**一次侧**填（比如 1 台 500 kW 的电机就是 500000）；没启用就按二次侧 W 填。脚本的输出会告诉你当前是哪种口径，照抄即可。
 
 ---
 
-## 2. 先量数：`tools/nilm_tune.py`
+## 1. 开工前准备清单
 
-```bash
-# 用一段尽量没有投切的背景数据（30 s~10 min 均可；文件含事件也行，脚本用稳健统计）
-.venv/bin/python tools/nilm_tune.py --file data/背景.csv --config configs/现场.json --min-load-w 3000
+| # | 要准备的东西 | 从哪里来 | 没有怎么办 |
+|---|---|---|---|
+| A | **总线侧背景文件** `bus_bg.csv`：进线处录的 30 s ~ 10 min 波形 CSV，**最好**没有设备开关 | 软件数据源页「导出指定时间段的原始数据」（总线侧面板）切一段，或采集装置直接导出 | 有零星开关也能用（脚本用的是抗干扰统计），见 §3 的 ⚠ 说明 |
+| B | **设备侧带启停文件** `dev_onoff.csv`：这台新设备支路（或总线）录的、**里面有它至少 2 次开、2 次关**的波形 CSV | 同上，分路侧面板切一段 | 至少要 1 开 1 关；越多次结论越可靠 |
+| C | **真值表** `truth.csv`：设备每次开 / 关的真实时刻（看操作记录 / 盯现场记下来 / 看分路电流曲线读出来） | 用 Excel 填，§4 有模板 | 没有真值表就没法判断能否上线——这是**必备**项 |
+| D | **PT / CT 变比、采样率** | 现场接线图 / 采集装置参数 | 样例数据：PT=100、CT=15、6400 Hz |
+| E | 一台装好本软件的 Windows 电脑（PowerShell）或 Linux 机器 | 见 `README.md` §安装 | — |
+
+CSV 格式与数据源一致：`时间戳,A相电压,A相电流,B相电压,B相电流,C相电压,C相电流`，时间戳可以是 `0/00/00 09:12:30.1234` 这种只有时刻的写法。
+
+**文件放哪**：把 A、B、C 三个文件拷到软件目录的 `data\` 文件夹里（下文命令都假设软件装在 `D:\nilm_calc_tool`，请按实际路径改）。
+
+---
+
+## 2. 第一步：打开 PowerShell、进入软件目录
+
+```powershell
+# 开始菜单搜 "PowerShell"，右键"以管理员身份运行"不是必须的，普通打开即可
+cd D:\nilm_calc_tool
+.\.venv\Scripts\python.exe --version     # 看到 Python 3.x 就对了
 ```
 
-输出中要抄下来的数：
+> Linux / macOS 把下文所有 `.\.venv\Scripts\python.exe` 换成 `.venv/bin/python`，路径里的 `\` 换成 `/`。
+> 若提示"无法加载脚本 / 禁止运行"，本手册的命令**不需要**激活 venv，直接用上面的完整路径调用 python 即可绕过。
 
-| 输出 | 含义 | 用在 |
+---
+
+## 3. 第二步：量噪声，拿到一套"起点参数"
+
+```powershell
+# 把 bus_bg.csv 换成你的总线侧背景文件；--min-load-w 填这台设备的额定有功（W，一次侧口径）
+.\.venv\Scripts\python.exe tools\nilm_tune.py --file data\bus_bg.csv --config configs\default.json --min-load-w 300000
+```
+
+屏幕会打印两块内容，你只需要看 **3 个地方**：
+
+```
+文件 data/bus_bg.csv  对象 total  周波 15000  时长 300.0 s  口径 一次侧(PT/CT)      ← ① 口径：和你填的 --min-load-w 单位要一致
+—— 噪声统计（W）——
+  基荷 |P| 中位数        level      = 1.5e+06
+  单周波噪声 σ(稳健)     sigma      = 28.3  (0.002 % 基荷)                        ← ② σ：数据有多"毛"，后面所有容差都从它来
+  相邻周波最大 |ΔP|      max|diff|  = 7.5e+05   ⚠ >10σ：段内含事件/尖峰，统计已用稳健口径   ← 有 ⚠ 说明这段里有开关，见下方说明
+  ...
+—— 建议参数（起点，按 NILM_TUNING_GUIDE.md 复核）——
+  min_delta_w = max(最小关心负荷/2, 6σ)                                            ← ③ 这一行若出现 ⚠，设备太小检不出来，见下
+  nilm.rel_tol_pct = 0.05   nilm.min_delta_pct = 0.01
+  threshold     min_delta_w=150000  settle_cycles=5  settle_tol_w=150 ...
+  （后面 5 行是另外 5 种算法的建议，不用看懂）
+```
+
+**然后把建议存成文件**（机器可读，后面的步骤直接用它，不用手抄）：
+
+```powershell
+New-Item -ItemType Directory -Force output | Out-Null
+.\.venv\Scripts\python.exe tools\nilm_tune.py --file data\bus_bg.csv --config configs\default.json --min-load-w 300000 --json > output\tune.json
+```
+
+**怎么判断这一步的结果靠不靠谱：**
+
+| 看到什么 | 含义 | 怎么办 |
+|---|---|---|
+| ③ 处写 `min_delta_w = max(最小关心负荷/2, 6σ)`，无 ⚠ | 设备幅值远大于噪声，好检 | 继续 |
+| ③ 处写 `⚠ 最小关心负荷 … 的一半低于噪声底 …` | **这台设备太小，淹没在总线噪声里**，在总线侧基本检不出来 | 改在**分路侧**检（用 `dev_onoff.csv` 重新跑本步骤，分路噪声小得多）；仍有 ⚠ 则该设备不适合上线 |
+| `max|diff|` 行有 ⚠ | 背景段里混了开关 | 可以用（见下），但建议把 `bus_bg.csv` 从中间切成两半各跑一次，两次 `sigma` 相差 < 20% 就放心 |
+| `sigma_cycle_pct` > 1 % | 噪声异常大 | 检查采样率 / 列映射是否配错（`README.md` §数据源）；波形有缺口也会这样 |
+
+> **背景段里有别的设备开关可以用吗？** 可以。σ 用的是"中位数"类统计，几次开关只污染几个点，不影响结果。前提是开关是"偶发"的（粗略：30 s 的段里不超过 7 次，5 min 的段里不超过 70 次），而且段内多数时间处于同一基荷。反例：变频器一直在调速、电机一直在软启动——这种"一直在变"的段换一段再量。
+
+---
+
+## 4. 第三步：用 Excel 填真值表
+
+新建 Excel，按下面填，**另存为 → "CSV UTF-8 (逗号分隔)"** → 文件名 `truth.csv` 放到 `data\`：
+
+| 时间 | 动作 | 备注 |
+|---|---|---|
+| 2026-10-15 09:12:30 | 开 | 1# 空压机 |
+| 2026-10-15 09:20:05 | 关 | 1# 空压机 |
+| 09:35:10 | 开 | 1# 空压机（只写时刻也行） |
+| 09:41:00.5 | 关 | 1# 空压机 |
+
+规则：
+- 第 1 行是表头，随便写；从第 2 行开始每行一次动作。
+- 「时间」：精确到秒（能到 0.1 s 更好）。只写 `时:分:秒` 时按数据文件里的日期补齐。
+- 「动作」：`开` / `关`（也认 on/off、投入/切除、1/0）。
+- 「备注」随意，会原样出现在对账结果里。
+- 时间对不准怎么办？打开软件 → 数据源页播放 `dev_onoff.csv` → 「负荷辨识」页看周波 P 曲线，台阶出现的时刻就是真值；或 Excel 打开 `dev_onoff.csv` 看电流列突然变大 / 变小的那行的时间戳。
+
+---
+
+## 5. 第四步：回放 + 对账（核心一步）
+
+```powershell
+# 5-1 用建议参数回放设备侧文件，6 种算法同时跑，事件写到 output\replay_events.csv
+.\.venv\Scripts\python.exe tools\nilm_replay.py --file data\dev_onoff.csv --config configs\default.json --params output\tune.json --out output\replay_events.csv
+
+# 5-2 和真值表对账（时刻允许差 1 秒；想严一点改 --tol-s 0.5）
+.\.venv\Scripts\python.exe tools\nilm_check.py --events output\replay_events.csv --truth data\truth.csv --tol-s 1 --out output\replay_check.csv
+```
+
+5-1 打印每种算法报了几条事件（↑投入 / ↓切除）；5-2 打印**结论表**，长这样：
+
+```
+  算法            真值  命中  漏报  误报   命中率  结论
+  threshold         4    4    0    0   100%  ✅ 可上线   (阈值差分)
+  two_window        4    4    0    1   100%  ⚠ 有 1 条误报：调高 min_delta_w / 容差，或核对误报时刻是否为其它设备
+  cusum             4    4    0    0   100%  ✅ 可上线
+  glr               4    3    1    0    75%  ✗ 漏 1 条：调低 min_delta_w（不低于 6σ），或加长 window/pre/post
+  steady_state      4    4    0    0   100%  ✅ 可上线
+  median_diff       4    4    0    0   100%  ✅ 可上线
+—— 设备特征（命中事件的 |ΔP| 均值，W）——
+  threshold      2.96e+05 （4 次）          ← 这就是软件"看到"的设备功率，应接近铭牌 × 功率因数
+—— 总结论 ——
+  ✅ 4 种算法全部命中且 0 误报（threshold, cusum, steady_state, median_diff）：该设备可以上线；建议生产只保留这几种，其余关闭。
+```
+
+- **命中**：真值时刻 ±1 s 内报了同方向（开→↑ / 关→↓）的事件。
+- **漏报**：真值时刻附近什么都没报。
+- **误报**：报了事件，但真值表里没有这次动作。**先别急着调参**——用 Excel 打开 `output\replay_check.csv`，看"误报"行的事件时间，去现场记录核对：很可能是**别的设备**真的在那一刻动了（真值表漏写了），那就补进真值表重跑 5-2，不用改参数。
+- `output\replay_check.csv` 是逐条明细（算法 / 真值时间 / 结果 / 事件时间 / ΔP / ΔQ / 时刻误差），Excel 打开按"结果"列筛选即可。
+
+---
+
+## 6. 第五步：不达标怎么调（只改一个，改完回到 §5 重跑）
+
+每次**只改一个参数**，用 `--set 算法.参数=值` 叠加在建议参数上，**不用手工编辑任何文件**：
+
+```powershell
+# 例：threshold 漏报 → 把它的最小台阶从 150000 降到 100000
+.\.venv\Scripts\python.exe tools\nilm_replay.py --file data\dev_onoff.csv --config configs\default.json --params output\tune.json --set threshold.min_delta_w=100000 --out output\replay_events.csv
+.\.venv\Scripts\python.exe tools\nilm_check.py --events output\replay_events.csv --truth data\truth.csv --tol-s 1
+```
+
+**症状 → 动作对照表**（参数值参考 `output\tune.json` 里的建议值和 `sigma`）：
+
+| 症状（nilm_check 的结论） | 最可能的原因 | 改哪个（每种算法对应的名字） | 改多少 |
+|---|---|---|---|
+| 6 种**全部**"全漏" | 单位 / 口径填错（二次侧 W 当一次侧填、或反过来） | 重做 §3，核对 `口径` 字样与 `--min-load-w` | — |
+| 6 种**全部**"全漏"，口径没错 | 设备幅值 < 6σ（§3 ③ 有 ⚠） | 换**分路侧**数据检；或接受"该设备不可检" | — |
+| 某算法**漏报** | 台阶门槛偏高 | 该算法的 `min_delta_w` | 每次 ×0.7，**不低于 6×sigma** |
+| 某算法漏报，且设备是**慢启动**（电机、风机 > 1 s 才稳） | 暂态比窗长 | `two_window.pre_cycles/post_cycles`、`glr.window_cycles` 调到 ≥ 暂态周波数（1 s = 50 周波）；`threshold/median_diff.max_rise_cycles` ≥ 暂态周波数；`steady_state.max_transient_cycles` ≥ 暂态周波数 | 按暂态时长换算 |
+| 某算法**误报**，误报时刻**没有**任何设备动作 | 门槛偏低 / 容差偏小 | 先调 `min_delta_w` ×1.5；仍误报再调容差：`threshold/median_diff.settle_tol_w`、`steady_state.tol_w` ×1.5，`cusum.threshold_w` ×1.5，`glr.threshold` 25→40 | 一次一个 |
+| 误报时刻**确有**其它设备动作 | 不是误报，真值表漏写 | 补真值表 | — |
+| 同一次开关被报成 **2 条**（相隔 < 0.5 s） | 暂态被当成两次 | `nilm.min_gap_cycles` 10→25；或 `settle_cycles` 5→10 | — |
+| 事件报出来**幅值明显偏小**（只有铭牌的一半） | 前后稳态窗没覆盖完暂态 | `settle_cycles` 5→10；`two_window.post_cycles` 10→25 | — |
+| 只在大负荷时段误报 | 基荷大、相对容差 1% 太粗 | `nilm.rel_tol_pct` 1.0→0.2（§3 建议值通常已经给了） | — |
+
+关掉某种算法：`--set glr.enabled=0`。改总开关参数：`--set nilm.rel_tol_pct=0.2`、`--set nilm.min_gap_cycles=25`。
+
+**停止条件**：至少 **2 种**算法 ✅（命中 100% 且 0 误报）。不必追求 6 种全 ✅——生产上只开达标的几种即可。
+
+---
+
+## 7. 第六步：把参数写进生产（Web 界面）
+
+### 7-1 把最终参数存成配置文件
+
+把 §6 里最后一次成功的那条 `nilm_replay.py` 命令，**原样再加上** `--save-config output\site.json` 跑一遍：
+
+```powershell
+.\.venv\Scripts\python.exe tools\nilm_replay.py --file data\dev_onoff.csv --config configs\default.json --params output\tune.json --set threshold.min_delta_w=100000 --set glr.enabled=0 --save-config output\site.json --out output\replay_events.csv
+```
+
+### 7-2 推送给正在运行的软件（不用重启）
+
+软件地址按实际改（下例为本机 8000 端口）。**总线侧**推 `/api/config`，**分路侧**推 `/api/branch/config`——两侧参数独立，设备在哪一侧检就推哪一侧：
+
+```powershell
+$cfg  = Get-Content output\site.json -Raw -Encoding UTF8 | ConvertFrom-Json
+$body = [System.Text.Encoding]::UTF8.GetBytes((@{ nilm = $cfg.nilm } | ConvertTo-Json -Depth 10))
+# 总线侧：
+Invoke-RestMethod -Method Put -Uri http://localhost:8000/api/config -ContentType 'application/json; charset=utf-8' -Body $body | Select-Object ok
+# 分路侧（设备支路）：
+Invoke-RestMethod -Method Put -Uri http://localhost:8000/api/branch/config -ContentType 'application/json; charset=utf-8' -Body $body | Select-Object ok
+```
+
+看到 `ok : True` 即生效（参数热更新，不清历史事件）。软件默认会把界面改动持久化到 `configs\runtime.json`，重启后仍在。
+
+### 7-3 在界面上确认
+
+打开浏览器 → 左侧导航「负荷辨识」（总线侧 / 分路侧各一个）→ 下方「检测参数」：各算法的数值应与 `output\site.json` 一致，关掉的算法勾选框为空。
+再用数据源页播放一遍 `dev_onoff.csv`（离线文件、不限速），「负荷辨识」页事件表里应出现与 §5 相同的事件；表里每行有 `算法 / 方向 / 幅值 / 起止时间`，与真值表核对一次。
+
+---
+
+## 8. 第七步：能不能上线——打勾清单
+
+全部打勾才算"可上线"；任何一项打叉，回到对应章节。
+
+- [ ] §3 建议行**没有** ⚠（设备幅值 ≥ 噪声底）—— 否则该设备在该侧不可检
+- [ ] 真值表 ≥ **2 开 2 关**（越多越可信）
+- [ ] §5 对账：至少 **2 种**算法 ✅（命中 100%、误报 0）
+- [ ] 换**另一段**包含该设备开关的数据（不同日期 / 不同时段）再跑一次 §5，结论仍 ✅ —— 防止参数只对一段数据有效
+- [ ] 用一段**不含**该设备开关的长数据（≥ 10 min）跑 §5-1，达标算法的事件数应为 0（或都能对应到其它设备）—— 验证不会误报
+- [ ] "设备特征 |ΔP|" 与铭牌功率 × 功率因数同一量级（相差 < 30 %）—— 否则口径或变比可能错
+- [ ] §7 已推送、界面「检测参数」与 `site.json` 一致，重启软件后仍一致
+- [ ] 把 `output\site.json`、`output\tune.json`、`data\truth.csv`、`output\replay_check.csv` 四个文件归档到项目资料里（下次调参 / 排障的依据）
+
+---
+
+## 附录 A：6 种算法一句话 + 各自参数怎么填
+
+> 所有算法共用：`enabled`（开关）、`min_delta_w`（**台阶多高才算事件**，W）。下表只列各自独有的。"建议值"指 `nilm_tune.py` 给的起点。
+
+| 算法 | 人话解释 | 擅长 / 不擅长 | 独有参数（含义 → 怎么填） |
+|---|---|---|---|
+| `threshold` 阈值差分 | 相邻两个点一跳超过门槛就算开始，之后连续几个点"平"了算结束 | 干净的阶跃最准最快；怕尖峰 | `settle_cycles`（几个点平了算结束，默认 5）；`settle_tol_w`（多平算平，= 建议值）；`max_rise_cycles`（最多等多久变平，≥ 暂态周波数） |
+| `median_diff` 中值滤波差分 | 先把尖刺抹掉再做阈值差分 | 同上但不怕尖峰 | 多一个 `median_cycles`（抹尖刺窗，默认 5；暂态很长的设备可到 9） |
+| `two_window` 双滑窗均值差 | 比较"前 10 个点平均"和"后 10 个点平均" | 噪声大时稳；两次开关挨太近会合并 | `pre_cycles`/`post_cycles`（窗长，≥ 暂态周波数、≤ 两次开关最小间隔）；`k_sigma`（均值差要超过几倍噪声，默认 3，误报多改 4） |
+| `cusum` 累积和 | 把偏离累加起来，累到门限就报 | 能捉**慢慢爬升**的负荷 | `drift_w`（多小的偏差忽略，= 建议值）；`threshold_w`（累到多少报，= 建议值；误报 ×1.5） |
+| `glr` 广义似然比 | 统计学意义上"前后两段是不是两个不同平均值" | 对噪声尺度最敏感、最"讲理" | `window_cycles`（看多宽，默认 15）；`threshold`（门限，无单位，回放 15~25，无人值守 30~50）；`noise_w`（= 量出的 σ） |
+| `steady_state` 稳态分段 | 先把曲线切成一段段"平的"，相邻两段平均值差多少就是事件 | 幅值最准；暂态超长会丢 | `tol_w`（多平算一段，= 建议值）；`min_steady_cycles`（至少平几个点，默认 10）；`max_transient_cycles`（两段之间最多允许多长暂态，≥ 暂态周波数） |
+
+**全局参数**（`nilm.*`）：
+
+| 参数 | 含义 | 建议 |
+|---|---|---|
+| `channels` | 检测对象：`total` 三相总有功 / `A` `B` `C` 分相 | 三相设备用 `total`；单相设备用它所在的相 |
+| `window_cycles` | 算法只看最近多少个点（默认 300 = 6 s） | ≥ 2 × 暂态周波数 + 100；电机软启动 2 s → ≥ 300 |
+| `min_gap_cycles` | 同一算法两次事件最小间隔（默认 10 = 0.2 s） | 重复报 → 调大；快速连续投切 → 调小 |
+| `rel_tol_pct` | 容差至少是基荷的百分之几（默认 1.0） | 基荷大、设备小时降到 0.1~0.3；`nilm_tune` 会给 |
+| `min_delta_pct` | 最小台阶至少是基荷的百分之几（默认 0） | 一般用 `nilm_tune` 给的值 |
+
+---
+
+## 附录 B：常见报错与现象
+
+| 现象 | 原因 | 处理 |
+|---|---|---|
+| `无法将".\.venv\Scripts\python.exe"识别…` | 不在软件目录，或没装 venv | `cd D:\nilm_calc_tool`；按 README 安装 |
+| `没有读到整周波数据` | 文件太短 / 列映射错 / 采样率配错 | `.\.venv\Scripts\python.exe cli.py sources --file data\xxx.csv` 探查；文件至少 1 s |
+| `真值表「动作」不认识` | 动作列写了别的字 | 只写 开/关 |
+| `真值表只写了时刻但事件文件为空` | 回放一条事件都没有，无法补日期 | 真值表写完整日期；同时说明门槛太高（§6） |
+| nilm_check 全是漏报，但界面播放明明能看到台阶 | 真值表时间与文件时间轴差了固定值（时区 / 日期） | 用界面「负荷辨识」页读台阶时刻重填真值表；或回放加 `--custom-time-start "2026-10-15 09:00:00"` 对齐 |
+| 事件幅值是铭牌的 100 倍 / 百分之一 | PT/CT 口径 | 检查 `transform.enabled` 与变比；`--min-load-w` 要同口径 |
+| 中文乱码 | Excel 打开 CSV 未识别 UTF-8 | 本工具输出带 BOM，Excel 可直接双击；若仍乱码用"数据 → 从文本/CSV → UTF-8" |
+| PowerShell 里 `ConvertTo-Json` 后参数丢了一层 | Windows PowerShell 5 默认深度 2 | 命令里必须带 `-Depth 10`（§7-2 已带） |
+
+---
+
+## 附录 C：命令速查（复制整段即可）
+
+```powershell
+cd D:\nilm_calc_tool
+# 1 量噪声（总线侧背景；--min-load-w = 设备额定有功 W，一次侧口径）
+.\.venv\Scripts\python.exe tools\nilm_tune.py --file data\bus_bg.csv --config configs\default.json --min-load-w 300000 --json > output\tune.json
+# 2 回放设备侧文件
+.\.venv\Scripts\python.exe tools\nilm_replay.py --file data\dev_onoff.csv --config configs\default.json --params output\tune.json --out output\replay_events.csv
+# 3 对账
+.\.venv\Scripts\python.exe tools\nilm_check.py --events output\replay_events.csv --truth data\truth.csv --tol-s 1 --out output\replay_check.csv
+# 4 微调（示例）后重复 2、3
+.\.venv\Scripts\python.exe tools\nilm_replay.py --file data\dev_onoff.csv --config configs\default.json --params output\tune.json --set threshold.min_delta_w=100000 --out output\replay_events.csv
+# 5 定稿 + 推送
+.\.venv\Scripts\python.exe tools\nilm_replay.py --file data\dev_onoff.csv --config configs\default.json --params output\tune.json --set threshold.min_delta_w=100000 --save-config output\site.json --out output\replay_events.csv
+$cfg = Get-Content output\site.json -Raw -Encoding UTF8 | ConvertFrom-Json
+$body = [System.Text.Encoding]::UTF8.GetBytes((@{ nilm = $cfg.nilm } | ConvertTo-Json -Depth 10))
+Invoke-RestMethod -Method Put -Uri http://localhost:8000/api/branch/config -ContentType 'application/json; charset=utf-8' -Body $body | Select-Object ok
+```
+
+想先用自带样例走一遍流程（1 分钟）：
+
+```powershell
+.\.venv\Scripts\python.exe tools\gen_nilm_sample.py                      # 生成 data\nilm_steps.csv：2.0 s 开(+500 W 二次侧)、4.4 s 关(-300 W)、3.0 s 一个尖峰
+"时间,动作,备注`n2026-10-13 08:00:02,开,样例`n08:00:04.4,关,样例" | Set-Content data\truth_sample.csv -Encoding UTF8
+.\.venv\Scripts\python.exe tools\nilm_tune.py --file data\nilm_steps.csv --min-load-w 300000 --json > output\tune.json
+.\.venv\Scripts\python.exe tools\nilm_replay.py --file data\nilm_steps.csv --params output\tune.json --out output\replay_events.csv
+.\.venv\Scripts\python.exe tools\nilm_check.py --events output\replay_events.csv --truth data\truth_sample.csv --tol-s 0.5
+```
+期望：6 种算法全部 ✅（用出厂默认参数回放时 `two_window` 会把 3.0 s 的尖峰误报 1 条——这正是"先量噪声再定参数"的意义）。
+
+---
+
+## 附录 D：数据怎么切、用哪一侧
+
+- **切片**：软件 → 数据源页 → 左列「总线侧 导出指定时间段的原始数据」/ 右列「分路侧 …」→ 点「填入文件时间范围」看文件覆盖的时间 → 改成想要的起止（可只写 `09:12:00`）→「导出到新 CSV」，文件在 `output\raw_<起>_<止>_src0.csv`（总线）/ `_src1.csv`（分路）。两侧互不影响。
+- **量噪声用哪侧**：设备最终在哪一侧检，就用哪一侧的背景量 σ。总线侧 σ 通常比分路侧大 5~50 倍。
+- **设备侧文件也能量噪声吗**：能——`nilm_tune.py --file data\dev_onoff.csv` 会自动忽略开关点，并在 `max|diff|` 行提示 ⚠。
+- **线上落盘的事件也能对账**：生产运行时事件在 `output\nilm\nilm_events_<日期>.csv`（两侧同文件，`source_id` 0/1 区分），用 `nilm_check.py --events 该文件 --source-id 1 --truth ...` 即可做事后复核。
+
+---
+
+## 附录 E（进阶）：参数是怎么算出来的
+
+> 给想知道"为什么"的同学；现场实施不需要看。`nilm_tune.py` 内置的就是这些规则，自测 `tests/test_nilm_tune_tool.py` 证明：在同一噪声水平下，建议参数能检出恰等于最小关心负荷的阶跃，且 3000 个纯噪声周波 0 误报。
+
+**量出来的 5 个数**（都按周波 P 序列算，稳健统计）：
+
+| 量 | 定义 | 用途 |
 |---|---|---|
 | `level` | 窗内 \|P\| 中位数（基荷） | 相对门槛换算、量级自检 |
-| `sigma` | 单周波噪声 σ（用相邻差分的 MAD 稳健估计，不受偶发事件影响） | 一切"噪声尺度" |
-| `range5` / `range10` | 连续 5 / 10 个周波的极差 95 分位 | `settle_tol_w` / `tol_w` |
-| `sigma_m10` | 相邻两个 10 周波均值之差的 σ | 判断双滑窗、GLR 的灵敏度 |
-| `max|diff|` 带 ⚠ | 相邻周波最大跳变 > 10σ → 段内含事件/尖峰 | 提醒你这段不是纯背景 |
+| `sigma` σ | 相邻差分的 MAD × 1.4826 / √2 | 一切噪声尺度 |
+| `range5` / `range10` | 连续 5 / 10 周波极差的 95 分位，再与 2×中位数取小 | `settle_tol_w` / `tol_w` |
+| `sigma_m10` | 相邻两个 10 周波均值之差的 MAD σ | 双滑窗 / GLR 灵敏度参考 |
+| `max|diff|` | 相邻周波最大跳变；> 10σ 提示段内含事件 | 只是提醒 |
 
-脚本随后给出 6 种算法的**起点参数**和一行提示（没给 `--min-load-w` 时按 max(6σ, 2% 基荷) 取最小幅值）。
-它内置的规则就是下文各节的"推荐公式"；自测用例 `tests/test_nilm_tune_tool.py` 证明：在同一噪声水平下，建议参数能检出**恰等于最小关心负荷**的阶跃，且 3000 个纯噪声周波 0 误报。
+**推荐公式**（Δ_min = 最小关心负荷有功）：
 
-> 没有命令行环境时，也可以在界面「负荷辨识」页看周波曲线：稳态时曲线上下抖动的**全高**≈ 4~5σ；`GET /api/nilm/cycles?n=1000` 可取数自行计算。
-
----
-
-## 3. 逐算法参数说明
-
-每节格式：参数 → 作用 → **怎么定** → 偏大/偏小的现象。公式中 σ、Δ_min 见 §0。
-
-### 3.1 `threshold` 阈值差分（最直观、首选基准）
-
-工作方式：相邻周波差 |ΔP| ≥ max(min_delta_w/2, settle_tol_w) 视为"起点候选"；向后找第一个"连续 settle_cycles 个周波极差 ≤ settle_tol_w"的位置作为终点；前后稳态均值差 ≥ min_delta_w 才报；起点精修到越过中线的周波。
-
-| 参数 | 默认 | 作用 | 怎么定 |
-|---|---|---|---|
-| `min_delta_w` | 50 | 最小事件幅值 | **Δ_min / 2，且 ≥ 6σ**。取一半是为了让幅值恰为 Δ_min 的负荷在噪声下也稳定过线；≥ 6σ 保证纯噪声不触发（触发门槛是它的一半＝3σ，再被 `settle_tol_w` 兜底）。 |
-| `settle_tol_w` | 20 | 稳态判据：settle 个周波的极差上限；同时是起点触发的下限 | **range5 × 1.2**（≈ 4.5σ）。太小→事件永远"找不到终点"（暂态未结束，不报或 `max_rise_cycles` 后放弃）；太大→把缓慢爬坡当稳态，终点提前、幅值偏小。 |
-| `settle_cycles` | 5 | 判稳需要连续几个周波 | 纯阻性负荷 3~5；含变频/整流波动大的负荷 8~10（同时把 tol 按 `range10` 定）。越大幅值越准、报出越慢。 |
-| `max_rise_cycles` | 40 | 从起点起最多等多少周波找稳态（0.8 s） | **≥ 现场最长暂态**：直接起动电机 0.5~3 s → 50~150；软起动/变频升速 5~10 s → 250~500（同时 `window_cycles` 要 ≥ 它的 2 倍）。超过后该候选被放弃——现象是"大电机起动不报，小负荷正常"。 |
-
-**现象→对策**：
-- 一次投切报 2 条（间隔几周波）：`settle_tol_w` 偏小或 `min_gap_cycles` 偏小。
-- 幅值明显小于铭牌：`settle_cycles`/`settle_tol_w` 让终点落在暂态内，增大 `settle_cycles` 或减小 `settle_tol_w`。
-- 稳态时零星误报：看 `score` 列（＝ΔP），把 `min_delta_w` 抬到这些误报幅值的 1.5 倍以上。
-
-### 3.2 `median_diff` 中值滤波差分（抗尖峰版阈值法）
-
-先做 `median_cycles` 点中值滤波，再跑 3.1 的逻辑。参数同 3.1，另加：
-
-| 参数 | 默认 | 怎么定 |
+| 算法 | 参数 | 公式 |
 |---|---|---|
-| `median_cycles` | 5（偶数自动 +1） | **要滤掉的尖峰宽度 × 2 + 1**：单周波尖峰（整流器换相、采样丢点）→ 3；2 周波→ 5；电焊/冲击负荷持续 3~4 周波但不想当事件→ 9。副作用：阶跃的起点时刻会被"抹平"半个窗（≈ `median_cycles/2` 周波），对时精度要求高的场合用 3。 |
+| 所有 | `min_delta_w` | max(Δ_min / 2, 6σ) |
+| threshold / median_diff | `settle_tol_w` | max(range5 × 1.2, 4σ) |
+| two_window | `k_sigma` | 3（均值差 ≥ 3 × 前窗 std） |
+| cusum | `drift_w` k | max(min_delta_w / 4, 0.5σ) |
+| cusum | `threshold_w` h | max(2 × (min_delta_w − k), 5σ)（恰为最小台阶约 2 周波触发） |
+| glr | `noise_w` | σ |
+| glr | `threshold` | 25（等价均值差 ≥ √(4·thr/w)·σ ≈ 2.6σ @ w=15） |
+| steady_state | `tol_w` | max(range10 × 1.2, 5σ) |
+| 全局 | `rel_tol_pct` | 100 × settle_tol_w / level（夹在 0.05~5） |
+| 全局 | `min_delta_pct` | 100 × min_delta_w / level |
 
-适用：周波曲线有"毛刺"但真正的投切又很干净的现场。若双滑窗/CUSUM 在尖峰处报 几十 kW 的小事件而本算法不报，就是它在起作用。
+**关键比例**：`min_delta_w / 容差 ≥ 3` 时检测才稳；`min_delta_w ≥ 6σ` 保证纯噪声不触发（触发门槛是它的一半，3σ 单侧误报率约 0.13 %/周波，再经 settle 确认后实际远低于此）。
 
-### 3.3 `two_window` 双滑窗均值差（对慢变化最敏感）
-
-比较前窗均值与后窗均值，|差| ≥ max(min_delta_w, k_sigma × 前窗标准差) 时，在超限连续段取最大处作起点。
-
-| 参数 | 默认 | 怎么定 |
-|---|---|---|
-| `pre_cycles` / `post_cycles` | 10 / 10 | **≥ 事件暂态长度**（否则暂态被摊进后窗，幅值偏小）；**≤ 两次投切的最小间隔**（否则两次事件被同一个后窗覆盖合成一条）。常用 10~25。噪声大时窗越长越稳：均值噪声 ≈ σ/√n。 |
-| `min_delta_w` | 50 | 同 3.1；因为比较的是均值，可以比阈值法低一些（Δ_min / 2 即可），下限 **≥ 4σ/√pre_cycles** 没有意义，实际由下一项兜底。 |
-| `k_sigma` | 3 | 自适应项：门槛 ≥ k × 前窗标准差 | 2.5~4。稳态噪声正态时 3 对应单点误报率约 0.3%，但窗滑动会多次比较，建议 **3.5~4** 用于无人值守，3 用于回放分析。 |
-
-**特性**：对单周波尖峰会报一个"幅值 ≈ 尖峰高度 / post_cycles"的小事件（样例里 60 kW）。处理：`min_delta_pct` 设 5% 或在事件表按算法过滤；它是**唯一能较好捕捉缓慢爬坡**（变频器升速）的算法，爬坡场景保留它。
-
-### 3.4 `cusum` CUSUM 累积和（对小幅持续偏移最灵敏）
-
-相对参考均值 μ 的偏差累积：S⁺ = max(0, S⁺ + (x−μ) − k)，S⁻ 同理；任一超过 h 触发；起点＝累积量最后一次归零处；触发后找稳态、μ 重置为新稳态。
-
-| 参数 | 默认 | 怎么定 |
-|---|---|---|
-| `drift_w` (k) | 10 | 允许漂移：小于 k 的偏差被"吃掉"不累积 | 教科书取 k = Δ_min / 2；本工具的 `min_delta_w` 已做幅值把关，k 可放宽到 **`min_delta_w` / 4**（更能捕捉缓慢爬坡），但 **≥ 0.5σ**，否则噪声正半边会持续累积。 |
-| `threshold_w` (h) | 200 | 累积量门限 | **h ≈ 2 × (min_delta_w − k)**：恰为最小幅值的阶跃约 2 个周波触发；**≥ 5σ**。h 越大越不误报、越迟报。平均误报间隔随 h/σ 指数增长：h = 5σ 已足够；h = 8σ 几乎绝不误报。 |
-| `min_delta_w` | 50 | 最终幅值把关 | 同 3.1。 |
-| `settle_cycles` | 5 | 触发后判稳周波数（稳态容差固定为 2k） | 同 3.1；注意稳态容差＝2k，k 太小会"找不到稳态"退回触发点作终点，幅值偏小→ 这时抬高 k。 |
-
-**现象→对策**：
-- 事件起点比真实早几个周波：k 太小，噪声让累积量提前离零；抬 k。
-- 爬坡被切成多条：h 偏小（每段爬坡都触发一次），抬 h 或改看双滑窗。
-- 基荷阶跃后一段时间内连续误报：μ 重置点落在暂态里，增大 `settle_cycles`。
-
-### 3.5 `glr` GLR 广义似然比（统计上最优的"是否突变"判决）
-
-在每个候选点比较前后各 `window_cycles` 个周波的均值差，用两侧方差估计 σ²（不低于 noise_w²），似然比 = w/4 × (m1−m0)² / σ² ≥ threshold 且 |m1−m0| ≥ min_delta_w。
-
-| 参数 | 默认 | 怎么定 |
-|---|---|---|
-| `window_cycles` (w) | 15 | 两侧比较窗 | 同 3.3 的窗：≥ 暂态长度、≤ 最小投切间隔。**确认延迟＝w**，w 太大报出慢。 |
-| `threshold` | 25 | 对数似然比门限（无量纲） | 门限等价于 (m1−m0)/σ ≥ √(4·thr/w)；默认 w=15、thr=25 → 均值差 ≥ 2.6σ。**无人值守 30~50**，回放分析 15~25。它是 6 个算法里唯一"无量纲"的门限，换现场基本不用改，改 `noise_w` 即可。 |
-| `noise_w` | 10 | σ 的下限 | **= 量出来的 σ**（取整）。作用：稳态异常"干净"时方差估计趋近 0，似然比会爆炸——`noise_w` 防止这类误报。填得比真实 σ 大 → 灵敏度下降（相当于抬 threshold）。 |
-| `min_delta_w` | 50 | 幅值把关 | 同 3.1。 |
-| `settle_cycles` | 5 | 终点＝起点 + settle（GLR 不做稳态搜索） | 阶跃型负荷 3~5；暂态长的负荷把它设成暂态长度，幅值才取到稳态。 |
-
-### 3.6 `steady_state` 稳态分段（Hart 1992，经典 NILM）
-
-把序列切成"连续 ≥ min_steady_cycles 个周波、极差 ≤ tol_w"的稳态段；相邻两段均值差 ≥ min_delta_w 即事件，起点＝前段结束，终点＝后段开始（两段间隔 > max_transient_cycles 则不配对）。
-
-| 参数 | 默认 | 怎么定 |
-|---|---|---|
-| `tol_w` | 30 | 稳态极差上限（整段！不是相邻差） | **range10 × 1.2（≈ 5σ）**，且要考虑**慢漂移**：负荷随温度/电压缓慢变化时，长稳态段的极差会超过纯噪声极差，表现为"稳态被切碎→漏报"。碎段现象出现时抬 tol_w，或减小 `min_steady_cycles`。 |
-| `min_steady_cycles` | 10 | 稳态最短长度 | 两次投切之间最短的平稳时间（周波）。10＝200 ms。越大越不受暂态干扰，但快速连续投切会漏。 |
-| `min_delta_w` | 50 | 幅值把关 | 同 3.1。 |
-| `max_transient_cycles` | 100 | 两稳态之间最长暂态（2 s） | 同 `max_rise_cycles`：≥ 现场最长起动过程。 |
-
-**特点**：幅值最准（整段均值）、对尖峰天然免疫（尖峰不是稳态）、但**要求事件前后都有足够长的平稳段**，上下游连续波动（电弧炉、轧机）时基本不可用——此时关掉它，看双滑窗 + CUSUM。
-
----
-
-## 4. 典型现场的参数套路
-
-| 现场 | 关键差异 | 建议 |
-|---|---|---|
-| 商业楼宇 / 照明空调（阶跃干净，σ 小） | 负荷多、幅值小、投切随机 | 全开 6 算法；`min_delta_w = Δ_min/2`；`rel_tol_pct` 0.1~0.3（基荷大时默认 1% 会把小负荷淹没）；`min_gap_cycles` 5。 |
-| 泵站 / 风机（直接起动大电机） | 暂态 0.5~3 s，起动冲击 5~7 倍 | `max_rise_cycles`、`max_transient_cycles` ≥ 150；`settle_cycles` 8~10；`two_window.post_cycles`、`glr.window_cycles` 30~50；`window_cycles` 600。 |
-| 变频驱动 / 软起动（爬坡 5~10 s） | 没有阶跃，只有斜坡 | 以 `two_window`（窗 50~100）和 `cusum`（小 k、大 h）为主；阈值类会漏或切碎，`median_diff`、`steady_state` 可关闭；接受起点时刻定义为"爬坡中点附近"。 |
-| 整流 / 焊机 / 冲击负荷 | 大量尖峰与短脉冲 | `median_diff`（`median_cycles` 5~9）+ `steady_state` 为主；`min_delta_pct` 5~10%；双滑窗、CUSUM 容易把脉冲当事件，可关闭或抬门限。 |
-| 分相检测（`channels` 含 A/B/C） | 单相负荷在 total 上只有 1/3 的相对幅值 | 分相 `min_delta_w` 按单相负荷定，`rel_tol_pct` 按分相基荷换算（分相基荷≈总基荷/3，默认 1% 容差也随之变小）。注意三相量同时触发时 total + A/B/C 会各报一条。 |
-
----
-
-## 5. 验证与回归流程（每次改参数都做）
-
-1. **准备两段文件**：① 纯背景 30 s 以上；② 含 ≥ 3 次已知投切（记录铭牌功率与大致时刻）。
-2. **背景段回放**（离线文件源）→「负荷辨识」页 6 个计数卡片应全为 0。不为 0：按 `score`、`magnitude_w` 找最大的误报，抬对应算法的门限（§3 各节"现象→对策"）。
-3. **事件段回放** → 事件表按算法过滤，逐条对照：时刻误差 ≤ 2 周波（40 ms）、幅值误差 ≤ 10%、6 算法一致。某一算法独缺：该算法参数偏严；独多：偏松或该算法对尖峰/爬坡的固有特性（§3.3、§3.4）。
-4. **导出 CSV**（`output/nilm/nilm_events_<日期>.csv`）归档为"该参数版本的基准结果"；参数保存到 `configs/<现场>.json`（`PUT /api/config` 已写回配置文件）。
-5. **上线后**每周抽查：同一基准文件重放，事件数与基准文件 diff 应为空。
-
-**一次只动一个参数**；先动 `min_delta_w`（决定报不报），再动容差类（决定报得准不准），最后动周波数类（决定报得快不快）。
-
----
-
-## 6. 快速对照表（默认值 vs. 公式）
-
-| 算法 | 参数 | 默认 | 推荐公式 |
-|---|---|---|---|
-| 通用 | `window_cycles` | 300 | ≥ 2 × 最长暂态 + 2 × 稳态判据，≥ 300 |
-| 通用 | `min_gap_cycles` | 10 | 最小投切间隔 / 2 |
-| 通用 | `rel_tol_pct` | 1.0 | 100 × range5×1.2 / 基荷（≈ 0.05~2） |
-| 通用 | `min_delta_pct` | 0 | 100 × Δ_min/2 / 基荷，或留 0 只用绝对值 |
-| threshold / median_diff | `min_delta_w` | 50 | max(Δ_min/2, 6σ) |
-| | `settle_tol_w` | 20 | range5 × 1.2 |
-| | `settle_cycles` | 5 | 3~10 |
-| | `max_rise_cycles` | 40 | ≥ 最长暂态周波数 |
-| median_diff | `median_cycles` | 5 | 尖峰宽度 × 2 + 1 |
-| two_window | `pre/post_cycles` | 10/10 | ≥ 暂态，≤ 最小间隔 |
-| | `k_sigma` | 3 | 3（回放）/ 3.5~4（在线） |
-| cusum | `drift_w` | 10 | max(min_delta_w/4, 0.5σ) |
-| | `threshold_w` | 200 | max(2×(min_delta_w − drift_w), 5σ) |
-| glr | `window_cycles` | 15 | 同 two_window |
-| | `threshold` | 25 | 25（回放）/ 30~50（在线） |
-| | `noise_w` | 10 | σ |
-| steady_state | `tol_w` | 30 | range10 × 1.2 |
-| | `min_steady_cycles` | 10 | 最短平稳期 |
-| | `max_transient_cycles` | 100 | ≥ 最长暂态 |
-
----
-
-## 7. 已知限制（调参解决不了的）
-
-- 周波按额定频率定长切分，频率偏离 ±0.5 Hz 以上时逐周波 P 会出现微小拍频，表现为 σ 偏大——按量出来的 σ 填即可，不必追求理论值。
-- 两台负荷在同一周波内同时投切会合成一条事件；幅值接近的两台负荷无法区分（本版本只做事件检测，不做负荷分类）。
-- 幅值取稳态差，起动冲击能量不在输出中；需要冲击特征时看界面周波曲线或 `GET /api/nilm/cycles`。
-- 相对门槛用的是"窗内 |P| 中位数"，窗内发生大幅基荷切换时，门槛在随后 `window_cycles` 内会跟着变；要稳定门槛就把相对门槛设 0、只用绝对值。
+**机制备忘**：
+- 幅值 = 事件后稳态均值 − 事件前稳态均值（各取 `settle_cycles`），电机起动冲击不计入。
+- 相对门槛：生效值 = max(绝对参数, 窗内 \|P\| 中位数 × 百分比)。
+- 去重：同一算法同一对象两次事件终点相距 < `min_gap_cycles` 只报第一条；事件要在终点之后再看到"确认周波数"（阈值类 = `settle_cycles`，双滑窗 = `post_cycles`，GLR = `window_cycles`，稳态分段 = `min_steady_cycles`）才出现，因此界面滞后 0.1~0.3 s 属正常。
+- 周波按额定频率定长切分，频率偏离 ±0.5 Hz 以上逐周波 P 会有微小拍频，表现为 σ 偏大——按量出来的填即可。
+- 场景经验：商业楼宇（阶跃干净、σ 小、负荷多）全开 6 算法、`rel_tol_pct` 0.1~0.3；工业电机（软启动、暂态长）优先 `steady_state` + `cusum`，窗长 ≥ 暂态 × 2；变频 / 调光负荷（缓变）优先 `cusum`，其余易漏。
