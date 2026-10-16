@@ -196,6 +196,27 @@ async function main() {
   for (let k = 0; k < 40; k++) pbtn('pl'); await sleep(150);
   const zxE = window.ZOOM['ov-u'].x, cE = cv.__chart, tbE = cE.opt.tbase || 0;
   check('平移夹在全图范围内（左端 = xfull[0]、宽度不变）', Math.abs(zxE[0] - (cE.xfull[0] + tbE)) < 1e-6 && Math.abs(pw(zxE) - pw(zxC)) < 1e-9, `${zxE[0]} vs ${cE.xfull[0] + tbE}`);
+  // v0.31：放大状态下在坐标轴刻度带上拖动 ⇒ 缩放该轴（不是平移）
+  console.log('v0.31 轴带拖选缩放');
+  const cZ = cv.__chart, zxBefore = [...window.ZOOM['ov-u'].x], zyBefore = [...window.ZOOM['ov-u'].y];
+  const ax0 = pad.l + (W - pad.l - pad.r) * 0.3, ax1 = pad.l + (W - pad.l - pad.r) * 0.6, yBand = cZ.h - pad.b + Math.min(8, pad.b - 1);
+  mouse('mousemove', ax0, yBand); await sleep(30);
+  check('悬停 X 轴刻度带 → 光标 ew-resize', cv.style.cursor === 'ew-resize', cv.style.cursor);
+  mouse('mousedown', ax0, yBand); mouse('mousemove', ax1, yBand); await sleep(30);
+  check('X 轴带按下拖动 → 进入轴带拖选（__drag.axis=x）而非平移', !!cv.__drag && cv.__drag.axis === 'x' && !cv.__pan);
+  mouse('mouseup', ax1, yBand); await sleep(120);
+  const zxAfter = window.ZOOM['ov-u'].x, zyAfter = window.ZOOM['ov-u'].y;
+  const expA2 = cZ.xAt(ax0) + (cZ.opt.tbase || 0), expB2 = cZ.xAt(ax1) + (cZ.opt.tbase || 0);
+  check('松开 → X 视窗 = 拖选区间 30%→60%（在已放大基础上再放大）、Y 不变', Math.abs(zxAfter[0] - expA2) < 1e-6 && Math.abs(zxAfter[1] - expB2) < 1e-6 && pw(zxAfter) < pw(zxBefore) && zyAfter[0] === zyBefore[0] && zyAfter[1] === zyBefore[1], `${zxAfter} vs ${expA2}~${expB2}`);
+  const cZ2 = cv.__chart, ya0 = pad.t + (cZ2.h - pad.t - pad.b) * 0.2, ya1 = pad.t + (cZ2.h - pad.t - pad.b) * 0.7, xBand = Math.max(1, pad.l - 8);
+  mouse('mousemove', xBand, ya0); await sleep(30);
+  check('悬停 Y 轴刻度带 → 光标 ns-resize', cv.style.cursor === 'ns-resize', cv.style.cursor);
+  mouse('mousedown', xBand, ya0); mouse('mousemove', xBand + 3, ya1); mouse('mouseup', xBand + 3, ya1); await sleep(120);
+  const zyAfter2 = window.ZOOM['ov-u'].y, zxAfter2 = window.ZOOM['ov-u'].x;
+  check('Y 轴带拖选 → Y 视窗 = 拖选区间、X 不变', Math.abs(zyAfter2[1] - cZ2.yAt(ya0)) < 1e-6 && Math.abs(zyAfter2[0] - cZ2.yAt(ya1)) < 1e-6 && zxAfter2[0] === zxAfter[0] && zxAfter2[1] === zxAfter[1], `${zyAfter2} vs ${cZ2.yAt(ya1)}~${cZ2.yAt(ya0)}`);
+  mouse('mousemove', midX, midY); await sleep(30);
+  check('回到绘图区 → 光标 grab（平移）', cv.style.cursor === 'grab', cv.style.cursor);
+  check('提示文字说明轴带拖选', /轴刻度带上拖选/.test(cv.__zoombar.textContent));
   // 未放大：拖动仍是框选
   pbtn('reset'); await sleep(100);
   check('复位后平移按钮禁用、光标恢复十字', cv.__zoombar.querySelector('button.pan-btn[data-z="pl"]').disabled && cv.style.cursor === 'crosshair');
