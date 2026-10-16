@@ -185,9 +185,16 @@ def test_branch_websocket_and_outputs(client):
 def test_frontend_wiring():
     html = (ROOT / "app" / "static" / "index.html").read_text(encoding="utf-8")
     js = (ROOT / "app" / "static" / "app.js").read_text(encoding="utf-8")
-    assert 'id="side-bus"' not in html and html.count('data-side="branch"') >= 12 and 'id="ov-sides"' in html
+    assert 'id="side-bus"' not in html and html.count('class="navitem" data-view="') >= 17 and 'id="ov-sides"' in html
+    # v0.23：电气量 9 个子界面合并为「左总线/右分路」双列，导航只保留一组（data-side=bus）；分路侧分组只剩事件/负荷辨识/窗口/导出
+    for v in ("voltage", "current", "power", "power_factor", "fundamental", "harmonic", "interharmonic", "dc", "spectrum"):
+        assert f'data-view="{v}" data-side="bus"' in html and f'data-view="{v}" data-side="branch"' not in html, v
+    for v in ("events", "nilm", "windows", "export"):
+        assert f'data-view="{v}" data-side="branch"' in html, v
+    for s in ("const DUAL_VIEWS", "function buildDualViews", "function renderDual", "function branchDualActive", "function refreshBranchDual", "'no-branch-nav'"):
+        assert s in js, s
     assert 'data-view="source" data-side="branch"' not in html      # 分路侧配置集中在总览的数据源页
-    for s in ('data-view="voltage" data-side="bus"', 'data-view="voltage" data-side="branch"', 'id="branch-panel"',
+    for s in ('data-view="voltage" data-side="bus"', 'id="branch-panel"',
               'data-view="compare"', 'id="view-compare"', 'id="br-pt"', 'id="br-fs"', 'id="br-toffset"', 'id="topstats-bus"', 'id="topstats-branch"', 'id="st-br-running"', 'id="st-br-samples"',
               'id="br-mapen"', 'id="br-map-ua"', 'id="br-common"', 'id="br-common-start"', 'id="topstats-common"', 'id="st-cw-dur"', 'id="btn-br-map-save"', 'id="btn-map-save"', 'id="br-enabled"', 'id="br-path"', 
               'id="br-customtime"', 'id="br-utc"', 'id="btn-br-probe"', 'id="br-mode-note"'):

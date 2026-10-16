@@ -59,7 +59,7 @@
     <button class="navitem active" data-view="overview" data-side="bus">📊 总览面板</button>
     <button class="navitem" data-view="source" data-side="bus">🔌 数据源与控制</button>
     <button class="navitem" data-view="compare" data-side="bus">⚖️ 跨侧对比（总线 − 分路）</button>
-    <div class="navgroup navgroup-bus">总线侧 <span class="navhint">总线侧数据源计算的电气量</span></div>
+    <div class="navgroup navgroup-elec">电气量 <span class="navhint">左：总线侧 ｜ 右：分路侧（未启用时隐藏）</span></div>
     <button class="navitem" data-view="voltage" data-side="bus">🔆 三相电压</button>
     <button class="navitem" data-view="current" data-side="bus">🔌 三相电流</button>
     <button class="navitem" data-view="power" data-side="bus">⚙️ 有功 / 无功 / 视在</button>
@@ -69,20 +69,12 @@
     <button class="navitem" data-view="interharmonic" data-side="bus">🎚 间谐波</button>
     <button class="navitem" data-view="dc" data-side="bus">➖ 直流偏置</button>
     <button class="navitem" data-view="spectrum" data-side="bus">🌈 频谱</button>
+    <div class="navgroup navgroup-bus">总线侧 <span class="navhint">事件 / 负荷辨识 / 窗口 / 导出</span></div>
     <button class="navitem" data-view="events" data-side="bus">🚨 事件 <span class="badge" id="nav-ev-badge" style="display:none">0</span></button>
     <button class="navitem" data-view="nilm" data-side="bus">🧩 负荷辨识 <span class="badge" id="nav-nilm-badge" style="display:none">0</span></button>
     <button class="navitem" data-view="windows" data-side="bus">⏱ 窗口配置</button>
     <button class="navitem" data-view="export" data-side="bus">💾 导出与日志</button>
-    <div class="navgroup navgroup-branch">分路侧 <span class="navhint">分路侧设备数据源计算的电气量</span> <span class="badge" id="nav-br-state" style="display:none"></span></div>
-    <button class="navitem" data-view="voltage" data-side="branch">🔆 三相电压</button>
-    <button class="navitem" data-view="current" data-side="branch">🔌 三相电流</button>
-    <button class="navitem" data-view="power" data-side="branch">⚙️ 有功 / 无功 / 视在</button>
-    <button class="navitem" data-view="power_factor" data-side="branch">📐 功率因数</button>
-    <button class="navitem" data-view="fundamental" data-side="branch">〰️ 基波</button>
-    <button class="navitem" data-view="harmonic" data-side="branch">📶 谐波 (2–50 次)</button>
-    <button class="navitem" data-view="interharmonic" data-side="branch">🎚 间谐波</button>
-    <button class="navitem" data-view="dc" data-side="branch">➖ 直流偏置</button>
-    <button class="navitem" data-view="spectrum" data-side="branch">🌈 频谱</button>
+    <div class="navgroup navgroup-branch">分路侧 <span class="navhint">事件 / 负荷辨识 / 窗口 / 导出</span> <span class="badge" id="nav-br-state" style="display:none"></span></div>
     <button class="navitem" data-view="events" data-side="branch">🚨 事件 <span class="badge" id="nav-ev-badge-br" style="display:none">0</span></button>
     <button class="navitem" data-view="nilm" data-side="branch">🧩 负荷辨识 <span class="badge" id="nav-nilm-badge-br" style="display:none">0</span></button>
     <button class="navitem" data-view="windows" data-side="branch">⏱ 窗口配置</button>

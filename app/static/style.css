@@ -157,3 +157,15 @@ label .note{display:block;color:var(--mut);opacity:.8;font-size:11.5px;line-heig
 .row>label{display:inline-flex;align-items:center;gap:6px;color:var(--mut);font-size:12px;white-space:nowrap}
 .row>label>input[type=checkbox]{margin:0}
 .toggle label{display:inline-flex;align-items:center;gap:5px}
+
+/* v0.23：电气量子界面双列（左总线侧 / 右分路侧）；分路侧未启用 → 右列隐藏、左列占满 */
+.dual{display:grid;grid-template-columns:1fr 1fr;gap:16px;align-items:start}
+.dual.no-branch{grid-template-columns:1fr}
+.dual.no-branch .dual-br{display:none}
+.dual-col{min-width:0}
+.dual-hdr{display:flex;align-items:center;gap:10px;margin:0 0 10px;padding-bottom:6px;border-bottom:1px solid var(--line)}
+.dual-br .dual-hdr{border-bottom-color:var(--warn)}
+.dual .cards{grid-template-columns:repeat(auto-fill,minmax(150px,1fr))}
+.dual .grid2{grid-template-columns:1fr}
+@media (max-width:1100px){.dual{grid-template-columns:1fr}}
+body.no-branch-nav .navgroup-branch,body.no-branch-nav .navitem[data-side="branch"]{display:none}

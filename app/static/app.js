@@ -5,8 +5,24 @@
  */
 'use strict';
 
-const $ = (s) => document.querySelector(s);
+/* v0.23：渲染上下文。电气量子界面合并为「左：总线侧 / 右：分路侧」——同一套 render 函数跑两遍，
+   分路侧那遍 RC.side='branch'：$ 选择器自动落到克隆列里带 -br 后缀的元素，q()/curHist() 等取分路侧数据（BRD）。 */
+const RC = { side: 'bus' };
+function $(sel) {
+  if (RC.side === 'branch' && typeof sel === 'string' && sel[0] === '#' && !/[\s>.\[:]/.test(sel)) {
+    const el = document.querySelector(sel + '-br');
+    if (el) return el;
+  }
+  return document.querySelector(sel);
+}
 const $$ = (s) => Array.from(document.querySelectorAll(s));
+function curResult() { return RC.side === 'branch' ? BRD.result : S.result; }
+function curState() { return (RC.side === 'branch' ? BRD.state : S.state) || {}; }
+function curHist(key) { return (RC.side === 'branch' ? BRD.histCache : S.histCache)[key] || []; }
+function radioVal(name, dflt) {
+  const el = document.querySelector(`input[name=${name}${RC.side === 'branch' ? '-br' : ''}]:checked`);
+  return (el && el.value) || dflt;
+}
 const PH = ['A', 'B', 'C'];
 const COLORS = { A: '#4ea1ff', B: '#3ddc97', C: '#ffb648', P: '#ff7ac6', Q: '#9d7bff', S: '#5ee0d0' };
 
@@ -115,7 +131,7 @@ function tsX(v, spanS) {
   const p = (n, w = 2) => String(n).padStart(w, '0');
   return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
 }
-function spanOf(key) { const m = S.histMeta[key]; return m && isNum(m.span_s) ? m.span_s : 0; }
+function spanOf(key) { const m = (RC.side === 'branch' ? BRD.histMeta : S.histMeta)[key]; return m && isNum(m.span_s) ? m.span_s : 0; }
 function fmtDur(sec) {
   if (!isNum(sec) || sec <= 0) return '0s';
   if (sec < 60) return sec.toFixed(1) + 's';
@@ -172,21 +188,21 @@ function sumVals(o, keys) {
 }
 
 function q(key) {
-  const r = S.result;
+  const r = curResult();
   if (!r || !r.quantities) return null;
   const o = r.quantities[key];
   return (o && o.ok) ? o : null;
 }
 
 function qwin(key) {
-  const r = S.result;
+  const r = curResult();
   return (r && r.quantities && r.quantities[key]) ? r.quantities[key].window : null;
 }
 
 function winNotes(key) {
   const w = qwin(key);
   if (!w) return '<div class="notes">该量本窗未计算（缓冲数据不足或已停止）</div>';
-  const mine = S.result.quantities[key];
+  const mine = curResult().quantities[key];
   const err = mine.ok ? null : mine.error;
   const v = q(key);
   return notes(w.notes, [
@@ -677,6 +693,7 @@ function connectWS() {
       S.state = m.data; renderTop(); if (S.view === 'source' || S.view === 'export') render();
       if (S.view === 'compare' && Date.now() - CMP.at > 3000) refreshCompare();
       if (S.view === 'overview') refreshOverviewBranch(false);
+      if (DUAL_VIEWS.includes(S.view)) { const a = branchDualActive(); if (a !== BRD.lastActive) { BRD.lastActive = a; render(); refreshBranchDual(true); } }
     }
     else if (m.type === 'result' || m.type === 'snapshot') { S.result = mergeResult(S.result, m.data); renderTop(); render(); }
     else if (m.type === 'error') { toast('服务端错误：' + m.message, 'err'); }
@@ -867,6 +884,8 @@ function sideStatusText(x) {
 function renderNavBranchState(br) {
   const b = $('#nav-br-state'); if (!b) return;
   if (S.side === 'branch') { br = S.state || null; if (br) br = { error: br.error, paused: br.paused, running: br.running, finished: br.finished, enabled: true }; }
+  // v0.23：分路侧数据源未启用 → 导航里的「分路侧」分组整体隐藏（正在分路侧子界面时不隐藏，避免当前页消失）
+  document.body.classList.toggle('no-branch-nav', S.side === 'bus' && !(br && (br.enabled || br.running)));
   if (!br) { b.style.display = 'none'; return; }
   const t = sideStatusText(br);
   b.textContent = t; b.style.display = '';
@@ -908,6 +927,7 @@ async function switchView(v, side) {
   if (v === 'events') refreshEvents();
   if (v === 'compare') refreshCompare();
   if (v === 'overview') refreshOverviewBranch(true);
+  if (DUAL_VIEWS.includes(v)) refreshBranchDual(true);
 }
 
 /* ------------------------------------------------------------------ 总览：分路侧数据（第 15 轮补充） */
@@ -969,6 +989,91 @@ async function refreshOverviewBranch(force) {
   } finally { OVB.busy = false; }
 }
 
+/* ------------------------------------------------------------------ v0.23：电气量子界面双列（左总线 / 右分路） */
+const DUAL_VIEWS = ['voltage', 'current', 'power', 'power_factor', 'fundamental', 'harmonic', 'interharmonic', 'dc', 'spectrum'];
+const BRD = { result: null, state: null, histCache: {}, histMeta: {}, at: 0, histAt: 0, busy: false, built: false };
+window.BRD = BRD;
+
+function branchDualActive() {
+  // 分路侧数据源未启用 → 右列整体隐藏；启用（或仍在运行/已播完有数据）→ 显示
+  const br = (S.state || {}).branch || {};
+  return !!(br.enabled || br.running);
+}
+
+async function refreshBranchDual(force) {
+  if (S.side !== 'bus' || !DUAL_VIEWS.includes(S.view)) return;
+  if (!branchDualActive()) { if (BRD.result || BRD.state) { BRD.result = null; BRD.state = null; BRD.histCache = {}; BRD.histMeta = {}; } return; }
+  if (BRD.busy || (!force && Date.now() - BRD.at < 900)) return;
+  BRD.busy = true;
+  try {
+    const wantHist = force || Date.now() - BRD.histAt > 3000;
+    const [st, res, ...hs] = await Promise.all([
+      fetch('/api/branch/state').then(r => r.ok ? r.json() : null).catch(() => null),
+      fetch('/api/branch/result?full=false').then(r => r.ok ? r.json() : null).catch(() => null),
+      ...(wantHist ? CURVE_KEYS.map(k => fetch(`/api/branch/history/${k}?max_points=${HIST_MAX_POINTS}`).then(r => r.ok ? r.json() : null).catch(() => null)) : []),
+    ]);
+    if (st) BRD.state = st;
+    if (res && BRD.result && isNum(res.t_ref) && isNum(BRD.result.t_ref) && res.t_ref < BRD.result.t_ref - 0.5) BRD.result = null;   // 分路侧重启
+    if (res && res.quantities) BRD.result = mergeResult(BRD.result, res);
+    if (wantHist) {
+      CURVE_KEYS.forEach((k, i) => {
+        const d = hs[i]; if (!d) return;
+        BRD.histCache[k] = d.points || [];
+        BRD.histMeta[k] = { count: d.count, count_total: d.count_total, span_s: d.span_s, hours: d.hours, t_first: d.t_first, t_last: d.t_last, decimated: !!d.decimated };
+      });
+      BRD.histAt = Date.now();
+    }
+    if (!BR.loaded) loadBranchForm(false);
+    BRD.at = Date.now();
+    if (DUAL_VIEWS.includes(S.view)) render();
+  } finally { BRD.busy = false; }
+}
+
+/* 把 9 个电气量 section 的内容包成两列：左列原 DOM（总线侧），右列克隆（id/name/for 加 -br 后缀，分路侧） */
+function buildDualViews() {
+  if (BRD.built) return; BRD.built = true;
+  DUAL_VIEWS.forEach(v => {
+    const sec = document.querySelector('#view-' + v); if (!sec) return;
+    const kids = Array.from(sec.children).filter(el => el.tagName !== 'H2');
+    const wrap = document.createElement('div'); wrap.className = 'dual'; wrap.dataset.view = v;
+    const left = document.createElement('div'); left.className = 'dual-col dual-bus';
+    const right = document.createElement('div'); right.className = 'dual-col dual-br';
+    left.innerHTML = '<div class="dual-hdr"><span class="sidename bus">总线侧</span><span class="navhint dual-hint" data-side="bus"></span></div>';
+    right.innerHTML = '<div class="dual-hdr"><span class="sidename branch">分路侧</span><span class="navhint dual-hint" data-side="branch"></span></div>';
+    kids.forEach(el => {
+      const c = el.cloneNode(true);
+      [c, ...c.querySelectorAll('[id],[name],[for]')].forEach(n => {
+        if (n.id) n.id += '-br';
+        if (n.getAttribute && n.getAttribute('name')) n.setAttribute('name', n.getAttribute('name') + '-br');
+        if (n.getAttribute && n.getAttribute('for')) n.setAttribute('for', n.getAttribute('for') + '-br');
+      });
+      c.querySelectorAll('.curve-save,.curvespan').forEach(n => { n.dataset.side = 'branch'; });
+      right.appendChild(c); left.appendChild(el);
+    });
+    // 右列的下拉/单选变化 → 重画（克隆不带监听器；用委托）
+    right.addEventListener('change', (ev) => { const t = ev.target; if (t && !t.classList.contains('curve-save') && !t.classList.contains('ser-vis')) render(); });
+    wrap.appendChild(left); wrap.appendChild(right); sec.appendChild(wrap);
+  });
+}
+
+function renderDual(fn) {
+  const wrap = document.querySelector(`#view-${S.view} .dual`);
+  const act = S.side === 'bus' && branchDualActive();
+  if (wrap) wrap.classList.toggle('no-branch', !act);
+  RC.side = 'bus';
+  try { fn(); } finally { RC.side = 'bus'; }
+  const hintBus = wrap && wrap.querySelector('.dual-hint[data-side="bus"]');
+  if (hintBus) hintBus.textContent = sideStatusText(Object.assign({ enabled: true }, (S.state || {}).engine || {}, { error: (S.state || {}).error, paused: (S.state || {}).paused }));
+  if (!act) return;
+  RC.side = 'branch';
+  try { fn(); } catch (e) { console.error('branch render', e); } finally { RC.side = 'bus'; }
+  const hintBr = wrap && wrap.querySelector('.dual-hint[data-side="branch"]');
+  if (hintBr) {
+    const br = (S.state || {}).branch || {};
+    hintBr.textContent = sideStatusText(br) + (BRD.result ? '' : '（尚无结果）');
+  }
+}
+
 function qb(key) { const r = OVB.result; const o = r && r.quantities && r.quantities[key]; return (o && o.ok) ? o : null; }
 
 function ovBranchActive() {
@@ -993,7 +1098,7 @@ async function refreshHistory() {
 }
 
 function curveSpanText(key, side) {
-  const m = side === 'branch' ? OVB.meta[key] : S.histMeta[key];
+  const m = side === 'branch' ? (BRD.histMeta[key] || OVB.meta[key]) : S.histMeta[key];
   if (!m || !m.count_total) return '';
   return `最近 ${fmtDur(m.span_s)} · ${m.count_total} 点` + (m.decimated ? `（显示抽稀至 ${m.count}）` : '') +
     `（保留窗 ${m.hours}h）`;
@@ -1077,7 +1182,7 @@ async function saveCurves() {
 }
 
 function hseries(key, field) {
-  const pts = S.histCache[key] || [];
+  const pts = curHist(key);
   const t0 = pts.length ? pts[0].t : 0;
   return pts.filter(p => isNum(p.t)).map(p => [p.t - t0, p[field]]);
 }
@@ -1366,7 +1471,7 @@ function renderPower() {
     }
   }
   $('#p-cards').innerHTML = cards.join('') || card('状态', '尚无结果', '', '请先启动数据源');
-  const ser = (p && p.series && p.series.p_total) ? [{ name: 'p(t) 总瞬时功率', color: COLORS.P, data: p.series.p_total.map((v2, k) => [k * (p.series.stride || 1) / ((S.state.config.sampling || {}).fs || 6400), v2]) }] : [];
+  const ser = (p && p.series && p.series.p_total) ? [{ name: 'p(t) 总瞬时功率', color: COLORS.P, data: p.series.p_total.map((v2, k) => [k * (p.series.stride || 1) / (((curState().config || {}).sampling || {}).fs || 6400), v2]) }] : [];
   drawLine($('#p-wave'), ser, { ylabel: 'W', unit: 'W', zero: true, fmtX: x => x.toFixed(3) + 's', height: 220 });
   $('#p-phase').innerHTML = p ? table(['相', 'P (W)', 'Q (var)', 'S (VA)', 'PF', 'U (V)', 'I (A)'],
     PH.map(k => [k + ' 相', si(p.values.p_per_phase[k], 'W'), si(p.values.q_per_phase[k], 'var'),
@@ -1395,7 +1500,7 @@ function renderPF() {
     cards.push(card('无功性质', v.q_sign === 'inductive(positive)' ? '感性 (Q>0)' : (v.q_sign === 'capacitive(negative)' ? '容性 (Q<0)' : '—'), '', v.quadrant ? v.quadrant.name : ''));
   }
   $('#pf-cards').innerHTML = cards.join('') || card('状态', '尚无结果', '', '请先启动数据源');
-  const hp = S.histCache.power_factor || [];
+  const hp = curHist('power_factor');
   const t0 = hp.length ? hp[0].t : 0;
   drawLine($('#pf-trend'), [{ name: 'PF', color: COLORS.P, data: hp.map(x => [x.t - t0, x.PF]) },
                             { name: 'DPF', color: COLORS.B, data: hp.map(x => [x.t - t0, x.DPF]) }],
@@ -1423,7 +1528,7 @@ function renderFundamental() {
     PH.map(k => [k, si(f.values.u1_rms[k], 'V'), num(f.values.u1_angle_deg[k], 2),
                  si(f.values.i1_rms[k], 'A'), num(f.values.i1_angle_deg[k], 2), num(f.values.phi_deg[k], 2)])) : '';
   $('#f-seq').innerHTML = f ? `<h3 style="margin-top:6px">电压序分量</h3>${seqTable(f.values.u_sequence, 'V')}<h3 style="margin-top:10px">电流序分量</h3>${seqTable(f.values.i_sequence, 'A')}` : '';
-  const hf = S.histCache.fundamental || [];
+  const hf = curHist('fundamental');
   const t0 = hf.length ? hf[0].t : 0;
   drawLine($('#f-trend'), [{ name: '频率 (Hz)', color: COLORS.A, data: hf.map(x => [x.t - t0, x.f]) }],
            { ylabel: 'Hz', fmtX: x => tsX(x + t0, spanOf('fundamental')), fmtTip: x => ts(x + t0), tbase: t0, height: 200 });
@@ -1444,8 +1549,8 @@ function renderHarmonic() {
   $('#h-cards').innerHTML = cards.join('') || card('状态', '尚无结果', '', '请先启动数据源');
   if (h && h.series) {
     const orders = h.series.orders || [];
-    const modeU = (document.querySelector('input[name=hmode-u]:checked') || {}).value || 'hr';
-    const modeI = (document.querySelector('input[name=hmode-i]:checked') || {}).value || 'hr';
+    const modeU = radioVal('hmode-u', 'hr');
+    const modeI = radioVal('hmode-i', 'hr');
     const srcU = modeU === 'hr' ? h.series.hr_u_pct : h.series.rms_u;
     const srcI = modeI === 'hr' ? h.series.hr_i_pct : h.series.rms_i;
     drawBars($('#h-bar-u'), orders, PH.map(k => ({ name: k + ' 相', color: COLORS[k], data: srcU[k] || [] })),
@@ -1931,8 +2036,8 @@ function renderInterharmonic() {
   $('#ih-cards').innerHTML = cards.join('') || card('状态', '尚无结果', '', '请先启动数据源');
   if (h && h.series) {
     const groups = h.series.groups || [];
-    const modeU = (document.querySelector('input[name=ihmode-u]:checked') || {}).value || 'pct';
-    const modeI = (document.querySelector('input[name=ihmode-i]:checked') || {}).value || 'pct';
+    const modeU = radioVal('ihmode-u', 'pct');
+    const modeI = radioVal('ihmode-i', 'pct');
     const srcU = modeU === 'pct' ? h.series.pct_u : h.series.rms_u;
     const srcI = modeI === 'pct' ? h.series.pct_i : h.series.rms_i;
     drawBars($('#ih-bar-u'), groups, PH.map(k => ({ name: k + ' 相', color: COLORS[k], data: srcU[k] || [] })),
@@ -1949,7 +2054,7 @@ function renderInterharmonic() {
     $('#ih-table-u').innerHTML = table(hdr('V'), rows(h.values.top_u || {}, 'V'));
     $('#ih-table-i').innerHTML = table(hdr('A'), rows(h.values.top_i || {}, 'A'));
   }
-  const hh = S.histCache.interharmonic || [];
+  const hh = curHist('interharmonic');
   const t0 = hh.length ? hh[0].t : 0;
   drawLine($('#ih-trend'), [{ name: 'TIHD_U (%)', color: COLORS.A, data: hh.map(x => [x.t - t0, x.TIHD_U]) },
                             { name: 'TIHD_I (%)', color: COLORS.B, data: hh.map(x => [x.t - t0, x.TIHD_I]) }],
@@ -1983,8 +2088,8 @@ function renderDC() {
     drawLine($('#dc-cyc-i'), PH.map(k => ({ name: k + ' 相', color: COLORS[k], data: cyc.map((c, i) => [c, (d.series.i_per_cycle[k] || [])[i]]) })),
              { ylabel: 'A', fmtX: x => '#' + x.toFixed(0), fmtTip: x => '第 ' + x.toFixed(0) + ' 周期', height: 200, legend: true });
   }
-  const mode = (document.querySelector('input[name=dcmode]:checked') || {}).value || 'u';
-  const hh = S.histCache.dc || [];
+  const mode = radioVal('dcmode', 'u');
+  const hh = curHist('dc');
   const t0 = hh.length ? hh[0].t : 0;
   const pre = mode === 'u' ? 'U' : 'I';
   drawLine($('#dc-trend'), PH.map(k => ({ name: `${pre}${k.toLowerCase()} DC`, color: COLORS[k], data: hh.map(x => [x.t - t0, x[`${pre}${k.toLowerCase()}_dc`]]) })),
@@ -2082,17 +2187,17 @@ function render() {
     switch (S.view) {
       case 'overview': renderOverview(); break;
       case 'compare': renderCompare(); break;
-      case 'voltage': renderVoltage(); break;
-      case 'current': renderCurrent(); break;
-      case 'power': renderPower(); break;
-      case 'power_factor': renderPF(); break;
-      case 'fundamental': renderFundamental(); break;
-      case 'harmonic': renderHarmonic(); break;
-      case 'interharmonic': renderInterharmonic(); break;
-      case 'dc': renderDC(); break;
+      case 'voltage': renderDual(renderVoltage); break;
+      case 'current': renderDual(renderCurrent); break;
+      case 'power': renderDual(renderPower); break;
+      case 'power_factor': renderDual(renderPF); break;
+      case 'fundamental': renderDual(renderFundamental); break;
+      case 'harmonic': renderDual(renderHarmonic); break;
+      case 'interharmonic': renderDual(renderInterharmonic); break;
+      case 'dc': renderDual(renderDC); break;
       case 'events': renderEvents(); break;
       case 'nilm': renderNilm(); break;
-      case 'spectrum': renderSpectrum(); break;
+      case 'spectrum': renderDual(renderSpectrum); break;
       case 'windows': renderWindows(); break;
       case 'source': renderSource(); break;
       case 'export': renderExport(); break;
@@ -2567,7 +2672,7 @@ function bind() {
   $('#btn-preset-slow').addEventListener('click', () => applyPreset(5));
   $('#btn-selftest').addEventListener('click', runSelftest);
   $('#btn-save-cfgfile').addEventListener('click', saveCfgFile);
-  ['sp-chan', 'sp-scale', 'sp-limit'].forEach(id => $('#' + id).addEventListener('change', renderSpectrum));
+  ['sp-chan', 'sp-scale', 'sp-limit'].forEach(id => $('#' + id).addEventListener('change', render));
   // 数据源下拉框联动：选 kind 切换可用字段与填写说明；选 frame=binary 才放开 struct 两项
   $('#src-kind').addEventListener('change', () => { S.srcDirty = true; S.formDirty = true; syncSourceForm(); });
   $('#src-frame').addEventListener('change', () => { S.srcDirty = true; S.formDirty = true; syncSourceForm(); });
@@ -2591,9 +2696,9 @@ function bind() {
     el.addEventListener('input', mark);
     el.addEventListener('change', mark);
   });
-  $$('input[name=hmode-u],input[name=hmode-i]').forEach(el => el.addEventListener('change', renderHarmonic));
-  $$('input[name=ihmode-u],input[name=ihmode-i]').forEach(el => el.addEventListener('change', renderInterharmonic));
-  $$('input[name=dcmode]').forEach(el => el.addEventListener('change', renderDC));
+  $$('input[name=hmode-u],input[name=hmode-i]').forEach(el => el.addEventListener('change', render));
+  $$('input[name=ihmode-u],input[name=ihmode-i]').forEach(el => el.addEventListener('change', render));
+  $$('input[name=dcmode]').forEach(el => el.addEventListener('change', render));
   // 事件子界面
   $('#btn-ev-refresh').addEventListener('click', refreshEvents);
   $('#btn-ev-clear').addEventListener('click', clearEvents);
@@ -2603,6 +2708,7 @@ function bind() {
   $$('#ev-form input').forEach(el => { const mark = () => { S.evDirty = true; }; el.addEventListener('input', mark); el.addEventListener('change', mark); });
   bindNilm();
   window.addEventListener('resize', () => { clearTimeout(window._rz); window._rz = setTimeout(render, 180); });
+  setInterval(() => { refreshBranchDual(false); }, 1000);
   setInterval(() => {
     if (['overview', 'power_factor', 'fundamental', 'interharmonic', 'dc'].includes(S.view)) refreshHistory();
     if (S.view === 'events') refreshEvents();          // 摘要（计数/振荡评估/落盘行数）随数据刷新
@@ -2985,6 +3091,7 @@ window.normalizeConfigForms = normalizeConfigForms;
 
 async function init() {
   normalizeConfigForms();
+  buildDualViews();
   bind();
   try {
     S.state = await api('/api/state');

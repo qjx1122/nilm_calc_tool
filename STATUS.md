@@ -81,6 +81,7 @@
 - 范围边界：~~本 session 不写业务代码~~ ❌**已失效**（该边界属上一任务；本任务即为写代码）；仍然遵守：不新建台账外散文件、不把数据/产物入库
 
 ## 已完成
+- **v0.23**：电气量 9 个子界面合并为「左总线侧 / 右分路侧」双列（`buildDualViews/renderDual`），分路侧未启用时右列与导航分路侧分组隐藏；`tools/ui_r23_check.cjs` 26/26。
 - **v0.22.2**：修复 nilm_tune 在基荷小时给出 >100% 的 min_delta_pct 导致保存参数报错；前端/服务端校验文案带字段值与解释。
 - **v0.22.1**：总线多设备情形——`nilm_check` 幅值带归属（`--mag-w/--signature-from`、真值 `其它`）、`gen_nilm_sample --bus`、手册路线 A/B 与 §5-B。
 - **v0.22**：NILM_TUNING_GUIDE.md 重写为现场实施版 7 步流程；新增 `tools/nilm_replay.py`（离线回放）、`tools/nilm_check.py`（真值对账 + 上线结论）。
