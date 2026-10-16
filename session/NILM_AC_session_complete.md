@@ -280,3 +280,5 @@
 - **[2026-10-16] v0.26.1**（用户：导航三组标题去说明；算法卡片勾选框离色块太远；勾选标题与说明换行）。根因：`h3.curvehdr>span:first-child{flex:1}` 把色块撑开。改为 `h3.algohdr>label.check`（勾选框+色块+名）+ 独立 `.algodesc` 行。ui_r24 36/36、r25 23/23、r12 16/16、pytest 313 passed。
 
 - **[2026-10-16] v0.26.2**（用户：事件落盘卡片长路径溢出 → 换行）。`writerSub()` + `.card .s .path{display:block}` + `overflow-wrap:anywhere`。ui_r24 37/37。
+
+- **[2026-10-16] v0.27**（用户：①功率/功率因数/基波/谐波/间谐波/直流偏置 增加三相分相实时数据保存；②功率与功率因数支持分相曲线、曲线可选）。`_EXTRACTORS` 追加 PFa/b/c、U1a/b/c、I1a/b/c、phiB/phiC、THD_Ua..Ic、TIHD_Ua..Ic、Ua_dc_pct..Ic_dc_pct（历史/实时落盘/保存曲线三处共用，两侧同文件按 source_id 区分）；实时落盘旧表头文件轮转为 `.pre-v027.csv`；功率页新增 `#p-trend`（复用 `pqsSeries`，分相默认隐藏图例勾选）、`#pf-trend` 加 PFa/b/c；新增 `tests/test_r27_phase_curves.py`，ui_r24 44/44，全量 pytest 316 passed。角色：工程实现工程师（混合模式）。

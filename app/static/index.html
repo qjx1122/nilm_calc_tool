@@ -466,6 +466,7 @@
     <section class="view" id="view-power">
       <h2>有功 / 无功 / 视在 · P / Q / S（总量与分相）</h2>
       <div class="cards" id="p-cards"></div>
+      <div class="panel"><h3 class="curvehdr"><span>P / Q / S 趋势（三相总 + 分相 Pa/Pb/Pc、Qa/Qb/Qc、Sa/Sb/Sc；图例勾选选择要显示的曲线）</span><label class="curvesave" title="勾选＝「保存曲线数据」时包含本曲线；不勾选＝保存时跳过本曲线"><input type="checkbox" class="curve-save" data-curve="power"> 保存曲线</label><span class="curvespan" data-curve="power"></span></h3><canvas id="p-trend" height="240"></canvas></div>
       <div class="panel"><h3>瞬时功率波形 p(t)=Σu·i</h3><canvas id="p-wave" height="220"></canvas></div>
       <div class="grid2">
         <div class="panel"><h3>分相功率</h3><div id="p-phase" class="tablewrap"></div></div>
@@ -479,7 +480,7 @@
       <h2>功率因数 · PF / 位移因数 DPF / 象限</h2>
       <div class="cards" id="pf-cards"></div>
       <div class="grid2">
-        <div class="panel"><h3 class="curvehdr"><span>PF / DPF 趋势</span><label class="curvesave" title="勾选＝「保存曲线数据」时包含本曲线；不勾选＝保存时跳过本曲线"><input type="checkbox" class="curve-save" data-curve="power_factor"> 保存曲线</label><span class="curvespan" data-curve="power_factor"></span></h3><canvas id="pf-trend" height="220"></canvas></div>
+        <div class="panel"><h3 class="curvehdr"><span>PF / DPF 趋势（含分相 PFa / PFb / PFc；图例勾选选择要显示的曲线）</span><label class="curvesave" title="勾选＝「保存曲线数据」时包含本曲线；不勾选＝保存时跳过本曲线"><input type="checkbox" class="curve-save" data-curve="power_factor"> 保存曲线</label><span class="curvespan" data-curve="power_factor"></span></h3><canvas id="pf-trend" height="220"></canvas></div>
         <div class="panel"><h3>四象限位置</h3><canvas id="pf-quad" height="220"></canvas><div id="pf-quadtxt" class="notes"></div></div>
       </div>
       <div class="panel"><h3>分相功率因数</h3><div id="pf-phase" class="tablewrap"></div></div>

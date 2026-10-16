@@ -167,6 +167,26 @@ async function main() {
   check('右列「保存曲线数据」→ POST /api/branch/curves/save', calls.slice(b2).some(c => c.method === 'POST' && c.url === '/api/branch/curves/save') && /已保存|✗/.test($('curves-out-br').textContent));
   check('右列实时落盘状态来自 /api/branch/realtime', calls.some(c => c.url === '/api/branch/realtime') && $('rt-out-br').textContent.includes('状态'));
 
+  console.log('v0.27 功率页 P/Q/S 趋势 + 功率因数页分相 PF 曲线（图例可选）');
+  await put('/api/config', { output: { series_hidden: { 'p-trend': [], 'pf-trend': [] } } });   // 清掉上次运行残留的图例勾选状态，验证默认值
+  await nav('power'); await sync(); await sleep(800);
+  const pBoxes = [...document.querySelectorAll('.ser-vis[data-chart="p-trend"]')];
+  const pNames = pBoxes.map(b => b.dataset.name);
+  check('功率页 #p-trend 图例含 P/Q/S 与 Pa..Sc 共 12 条', ['P', 'Q', 'S', 'Pa', 'Pb', 'Pc', 'Qa', 'Qb', 'Qc', 'Sa', 'Sb', 'Sc'].every(n => pNames.includes(n)), pNames.join(','));
+  check('分相 Pa..Sc 默认不勾选（隐藏），P/Q/S 默认勾选', pBoxes.filter(b => /^[PQS]$/.test(b.dataset.name)).every(b => b.checked) && pBoxes.filter(b => /^[PQS][abc]$/.test(b.dataset.name)).every(b => !b.checked));
+  const pa = pBoxes.find(b => b.dataset.name === 'Pa'); pa.checked = true; change(pa); await sleep(600);
+  const paNow = document.querySelector('.ser-vis[data-chart="p-trend"][data-name="Pa"]');   // 重绘后图例重建，需重新取元素
+  check('勾选 Pa → 该曲线可见（图例重建后仍勾选）并写入配置（PUT /api/config output.series_hidden["p-trend"]）',
+        calls.some(c => c.method === 'PUT' && c.url === '/api/config' && /p-trend/.test(c.body || '')) && paNow && paNow.checked && !paNow.closest('label').classList.contains('off'));
+  paNow.checked = false; change(paNow); await sleep(400);
+  check('取消 Pa → 恢复隐藏', !document.querySelector('.ser-vis[data-chart="p-trend"][data-name="Pa"]').checked);
+  await nav('power_factor'); await sync(); await sleep(800);
+  const pfBoxes = [...document.querySelectorAll('.ser-vis[data-chart="pf-trend"]')]; const pfNames = pfBoxes.map(b => b.dataset.name);
+  check('功率因数页 #pf-trend 图例含 PF/DPF/PFa/PFb/PFc', ['PF', 'DPF', 'PFa', 'PFb', 'PFc'].every(n => pfNames.includes(n)), pfNames.join(','));
+  check('PFa/PFb/PFc 默认隐藏、PF/DPF 默认显示', pfBoxes.filter(b => /^PF[abc]$/.test(b.dataset.name)).every(b => !b.checked) && pfBoxes.filter(b => /^D?PF$/.test(b.dataset.name)).every(b => b.checked));
+  const hpf = await api('/api/history/power_factor');
+  check('功率因数历史点含 PFa/PFb/PFc 数值', hpf.count > 0 && ['PFa', 'PFb', 'PFc'].every(k => typeof hpf.points[hpf.points.length - 1][k] === 'number'));
+
   console.log('E4 事件阈值保存');
   await nav('events'); await sync(); await brSync();
   const b3 = calls.length; $('ev-hysteresis-br').value = '0.93'; click($('btn-ev-save-br')); await sleep(1200);

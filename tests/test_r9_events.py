@@ -340,7 +340,7 @@ def test_frontend_has_new_views_and_wiring():
     for i in ("ih-bar-u", "ih-table-i", "ih-trend", "dc-cards", "dc-trend", "ev-active", "ev-table", "ev-form", "btn-ev-save", "btn-ev-clear"):
         assert f'id="{i}"' in html, i
     boxes = re.findall(r'class="curve-save" data-curve="([a-z_]+)"(?! data-side="branch")', html)
-    assert sorted(boxes) == sorted(CURVE_KEYS)                   # 总线侧每条曲线一个；分路侧（data-side=branch）另计
+    assert set(boxes) == set(CURVE_KEYS) and boxes.count("power") == 2   # 总线侧每条曲线至少一个（v0.27 功率页 P/Q/S 趋势再加一个，共用同一保存开关）；分路侧（data-side=branch）另计
     for f in ("renderInterharmonic", "renderDC", "renderEvents", "saveEventConfig", "onEventPush", "/api/events"):
         assert f in js
     assert "'interharmonic', 'dc'" in js                                    # CURVE_KEYS 同步

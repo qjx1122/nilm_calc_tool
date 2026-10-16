@@ -114,6 +114,15 @@ class RealtimeCurveWriter:
                 head = next(csv.reader(fh), None)
             if head and head[:3] == list(self.FIXED):
                 existing_fields = head[3:]
+                # v0.27：字段扩充（如新增分相列）后，旧表头缺列 → 把当天旧文件改名为 <名>.pre-v027.csv 保留，新建完整表头
+                if set(fields) - set(existing_fields):
+                    bak = path[:-4] + ".pre-v027.csv"
+                    try:
+                        if not os.path.exists(bak):
+                            os.replace(path, bak)
+                            existing_fields = None
+                    except OSError:
+                        pass
             elif head and head[:2] == list(self.FIXED_LEGACY):
                 # v0.17.2：旧版（无 source_id 列）文件不再续写——两侧共用一个文件后没有来源号就无法区分，
                 # 把旧文件改名为 <名>.v016.csv 保留，新建带 source_id 的文件

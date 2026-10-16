@@ -959,7 +959,7 @@ async function switchView(v, side) {
   $$('.navitem').forEach(b => b.classList.toggle('active', b.dataset.view === v && (b.dataset.side || 'bus') === S.side));
   $$('.view').forEach(s => s.classList.toggle('active', s.id === 'view-' + v));
   render();
-  if (['overview', 'power_factor', 'fundamental', 'interharmonic', 'dc', 'nilm'].includes(v)) refreshHistory();
+  if (['overview', 'power', 'power_factor', 'fundamental', 'interharmonic', 'dc', 'nilm'].includes(v)) refreshHistory();
   if (v === 'events') refreshEvents('bus');
   if (v === 'nilm') refreshNilm('bus');
   if (['events', 'nilm'].includes(v)) { BRD.evAt = 0; BRD.nlAt = 0; }
@@ -1523,6 +1523,10 @@ function renderPower() {
   $('#p-cards').innerHTML = cards.join('') || card('状态', '尚无结果', '', '请先启动数据源');
   const ser = (p && p.series && p.series.p_total) ? [{ name: 'p(t) 总瞬时功率', color: COLORS.P, data: p.series.p_total.map((v2, k) => [k * (p.series.stride || 1) / (((curState().config || {}).sampling || {}).fs || 6400), v2]) }] : [];
   drawLine($('#p-wave'), ser, { ylabel: 'W', unit: 'W', zero: true, fmtX: x => x.toFixed(3) + 's', height: 220 });
+  // v0.27：P/Q/S 趋势（与总览同一数据与线型：总量默认显示、分相默认隐藏、图例勾选可改并持久化）
+  const hpw = curHist('power'); const t0p = hpw.length ? hpw[0].t : 0;
+  drawLine($('#p-trend'), pqsSeries(hpw, t0p), { ylabel: 'W/var/VA', fmtX: x => tsX(x + t0p, spanOf('power')), fmtTip: x => ts(x + t0p), tbase: t0p, height: 240, empty: '暂无 P/Q/S 趋势（需累计 ≥2 个窗）' });
+  renderCurveSave();
   $('#p-phase').innerHTML = p ? (() => {
     const pv = p.values, col = (o, u) => unitScale(PH.map(k => (o || {})[k]), u);
     const sP = col(pv.p_per_phase, 'W'), sQ = col(pv.q_per_phase, 'var'), sS = col(pv.s_per_phase, 'VA'), sU = col(pv.u_rms, 'V'), sI = col(pv.i_rms, 'A');
@@ -1559,8 +1563,10 @@ function renderPF() {
   $('#pf-cards').innerHTML = cards.join('') || card('状态', '尚无结果', '', '请先启动数据源');
   const hp = curHist('power_factor');
   const t0 = hp.length ? hp[0].t : 0;
+  // v0.27：分相 PFa/PFb/PFc 默认隐藏，图例勾选显示
   drawLine($('#pf-trend'), [{ name: 'PF', color: COLORS.P, data: hp.map(x => [x.t - t0, x.PF]) },
-                            { name: 'DPF', color: COLORS.B, data: hp.map(x => [x.t - t0, x.DPF]) }],
+                            { name: 'DPF', color: COLORS.B, data: hp.map(x => [x.t - t0, x.DPF]) },
+                            ...PH.map(ph => ({ name: 'PF' + ph.toLowerCase(), color: shadeColor(COLORS.P, PQS_PHASE_SHADE[ph]), width: 1.3, defaultHidden: true, data: hp.map(x => [x.t - t0, x['PF' + ph.toLowerCase()]]) }))],
            { ylabel: '', fmtX: x => tsX(x + t0, spanOf('power_factor')), fmtTip: x => ts(x + t0), tbase: t0, height: 220 });
   renderCurveSave();
   drawQuadrant($('#pf-quad'), p ? p.values.p_total : NaN, p ? p.values.q_total : NaN);
@@ -2793,7 +2799,7 @@ function bind() {
   window.addEventListener('resize', () => { clearTimeout(window._rz); window._rz = setTimeout(render, 180); });
   setInterval(() => { refreshBranchDual(false); }, 1000);
   setInterval(() => {
-    if (['overview', 'power_factor', 'fundamental', 'interharmonic', 'dc'].includes(S.view)) refreshHistory();
+    if (['overview', 'power', 'power_factor', 'fundamental', 'interharmonic', 'dc'].includes(S.view)) refreshHistory();
     if (S.view === 'events') refreshEvents('bus');     // 摘要（计数/振荡评估/落盘行数）随数据刷新；分路侧列由 refreshBranchDual 刷新
     if (S.view === 'source' && ($('#br-enabled') || {}).checked) refreshBranchState(true);   // 分路侧数据源状态栏
     if (S.view === 'nilm') { refreshNilm('bus'); refreshHistory(); }   // 周波窗、事件与 P/Q/S 趋势随数据刷新
