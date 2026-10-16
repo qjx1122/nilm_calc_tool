@@ -232,3 +232,30 @@ def test_r20_restart_autoload(tmp_path, monkeypatch):
     with TestClient(srv.app) as c:
         assert c.get("/api/state").json()["loaded_last"] is None
         assert c.get("/api/history/voltage").json()["count_total"] == 0
+
+
+def test_load_last_anchored_on_last_result_t_ref(tmp_path):
+    """v0.30：目录里混有「数据时标更新」的曲线/事件时，load_last 以 last_result.json 的 t_ref（上次播放结束的数据时刻）为锚点，
+    只取 [t_ref-hours, t_ref] —— 否则上次实际播放（时标更旧）的曲线与负荷事件会被 24 h 窗滤掉（实测踩坑：先播今天时标的样例、再播三天前的真实数据，重启后负荷事件 0 条）。"""
+    from elec_tool import replay_load
+    d = tmp_path / "rt"; d.mkdir()
+    nl = tmp_path / "nl"; nl.mkdir()
+    old_t = 1791878400.0           # 2026-10-13
+    new_t = old_t + 3 * 86400      # 2026-10-16（更新的时标，属于别的播放）
+    hdr = "t_epoch_s,time_local,source_id,window_s,P,Q,S\n"
+    (d / "power_20261013.csv").write_text(hdr + "".join(f"{old_t + k},x,0,1,{100 + k},1,1\n" for k in range(5)), encoding="utf-8-sig")
+    (d / "power_20261016.csv").write_text(hdr + "".join(f"{new_t + k},x,0,1,{900 + k},1,1\n" for k in range(5)), encoding="utf-8-sig")
+    nh = "source_id,id,algorithm,algorithm_name,channel,t_start,t_start_local,t_end,t_end_local,duration_s,cycles,direction,magnitude_w,delta_p_w,delta_q_var,delta_i_a,pre_p_w,post_p_w,score\n"
+    (nl / "nilm_events_20261013.csv").write_text(nh + f"0,1,cusum,CUSUM,total,{old_t + 2},x,{old_t + 2},x,0,0,up,100,100,0,0,0,100,1\n", encoding="utf-8-sig")
+    (nl / "nilm_events_20261016.csv").write_text(nh + f"0,1,cusum,CUSUM,total,{new_t + 2},x,{new_t + 2},x,0,0,up,900,900,0,0,0,900,1\n", encoding="utf-8-sig")
+    # 无锚点：旧行为 → 取最新时标（10-16）
+    r0 = replay_load.load_curves(str(d), 0, 24)
+    assert [p["P"] for p in r0["records"]["power"]] == [900, 901, 902, 903, 904]
+    assert [e["magnitude_w"] for e in replay_load.load_nilm_events(str(nl), 0, t_from=r0["t_last"] - 86400)] == [900.0]
+    # 锚点 = 上次播放结束时刻（10-13）→ 只取 10-13 的曲线与事件
+    anchor = old_t + 4
+    r1 = replay_load.load_curves(str(d), 0, 24, t_anchor=anchor)
+    assert [p["P"] for p in r1["records"]["power"]] == [100, 101, 102, 103, 104] and r1["t_last"] == anchor
+    evs = replay_load.load_nilm_events(str(nl), 0, t_from=anchor - 86400, t_to=anchor)
+    assert [e["magnitude_w"] for e in evs] == [100.0]
+    assert replay_load.load_events(str(nl), 0, t_from=anchor - 86400, t_to=anchor) == []      # 目录里没有 events_*.csv → 空，不报错

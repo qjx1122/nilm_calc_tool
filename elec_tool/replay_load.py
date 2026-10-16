@@ -55,17 +55,38 @@ def _row_sid(head: List[str], row: List[str]) -> int:
     return 0                                   # 旧文件无来源号 → 总线侧
 
 
+ANCHOR_EPS_S = 1.0      # 锚点之后允许的余量（最后一个窗的步长抖动）
+
+
+def _anchor_day(t_anchor: Optional[float]) -> Optional[str]:
+    if t_anchor is None:
+        return None
+    try:
+        from .timefmt import local_day
+        return local_day(t_anchor)
+    except Exception:
+        return None
+
+
 def load_curves(dir_: str, source_id: int, hours: float, keys: Iterable[str] = CURVE_KEYS,
-                max_points: int = 200000) -> Dict[str, Any]:
-    """返回 {"records": {key: [{"t":..., field: value, ...}, ...]}, "files": [...], "t_first":..., "t_last":...}。"""
+                max_points: int = 200000, t_anchor: Optional[float] = None) -> Dict[str, Any]:
+    """返回 {"records": {key: [{"t":..., field: value, ...}, ...]}, "files": [...], "t_first":..., "t_last":...}。
+
+    v0.30：``t_anchor``＝「上次播放结束时的数据时刻」（来自 last_result.json 的 t_ref）。给定时只取
+    [t_anchor - hours, t_anchor + 1 s] 内的点——否则目录里若混有**数据时标更新**的别的文件（例如先前播放过一个
+    时标为今天的样例，之后又播放了时标为三天前的真实数据），会按「最新时标」取到前一次的数据，上次实际播放的
+    曲线与负荷辨识事件被 24 h 窗滤光。缺省（None）保持旧行为：以目录中最新时标为准。"""
     records: Dict[str, List[Dict[str, Any]]] = {}
     files: List[Dict[str, Any]] = []
     t_lo: Optional[float] = None
     t_hi: Optional[float] = None
+    a_day = _anchor_day(t_anchor)
     for key in keys:
         recs: List[Dict[str, Any]] = []
         latest: Optional[float] = None
         for day, path in _files_by_day(dir_, key):
+            if a_day is not None and day > a_day:
+                continue                        # 比锚点还新的日期文件与上次播放无关
             head, rows = _read_rows(path)
             if not head or head[0] != "t_epoch_s":
                 continue
@@ -77,6 +98,8 @@ def load_curves(dir_: str, source_id: int, hours: float, keys: Iterable[str] = C
                     continue
                 t = _num(row[0]) if row else None
                 if t is None:
+                    continue
+                if t_anchor is not None and (t > t_anchor + ANCHOR_EPS_S or (hours and t < t_anchor - hours * 3600.0)):
                     continue
                 rec: Dict[str, Any] = {"t": t}
                 for i, h in fields:
@@ -90,7 +113,7 @@ def load_curves(dir_: str, source_id: int, hours: float, keys: Iterable[str] = C
             if recs:
                 latest = max(latest or -math.inf, max(r["t"] for r in recs))
                 oldest = min(r["t"] for r in recs)
-                if hours and latest - oldest >= hours * 3600.0:
+                if hours and (t_anchor if t_anchor is not None else latest) - oldest >= hours * 3600.0:
                     break                       # 已覆盖保留窗
         if not recs:
             continue
@@ -112,7 +135,8 @@ def load_curves(dir_: str, source_id: int, hours: float, keys: Iterable[str] = C
             "points": {k: len(v) for k, v in records.items()}}
 
 
-def load_events(dir_: str, source_id: int, t_from: Optional[float] = None, limit: int = 2000) -> List[Dict[str, Any]]:
+def load_events(dir_: str, source_id: int, t_from: Optional[float] = None, limit: int = 2000,
+                t_to: Optional[float] = None) -> List[Dict[str, Any]]:
     """events_<日期>.csv：同一 id 有 start/end 两行 → 合并为一条（有 end 的为准）。返回按 start_t 升序的字典列表。"""
     by_id: Dict[Tuple[str, str], Dict[str, Any]] = {}
     for day, path in _files_by_day(dir_, "events"):
@@ -125,7 +149,7 @@ def load_events(dir_: str, source_id: int, t_from: Optional[float] = None, limit
             if _row_sid(head, row) != int(source_id):
                 continue
             st = _num(g(row, "start_t"))
-            if st is None or (t_from is not None and st < t_from):
+            if st is None or (t_from is not None and st < t_from) or (t_to is not None and st > t_to + ANCHOR_EPS_S):
                 continue
             key = (day, g(row, "id"))
             d = {
@@ -144,7 +168,8 @@ def load_events(dir_: str, source_id: int, t_from: Optional[float] = None, limit
     return evs[-limit:]
 
 
-def load_nilm_events(dir_: str, source_id: int, t_from: Optional[float] = None, limit: int = 5000) -> List[Dict[str, Any]]:
+def load_nilm_events(dir_: str, source_id: int, t_from: Optional[float] = None, limit: int = 5000,
+                     t_to: Optional[float] = None) -> List[Dict[str, Any]]:
     out: List[Dict[str, Any]] = []
     for day, path in _files_by_day(dir_, "nilm_events"):
         head, rows = _read_rows(path)
@@ -156,7 +181,7 @@ def load_nilm_events(dir_: str, source_id: int, t_from: Optional[float] = None, 
             if _row_sid(head, row) != int(source_id):
                 continue
             ts = _num(g(row, "t_start"))
-            if ts is None or (t_from is not None and ts < t_from):
+            if ts is None or (t_from is not None and ts < t_from) or (t_to is not None and ts > t_to + ANCHOR_EPS_S):
                 continue
             out.append({
                 "algorithm": g(row, "algorithm"), "channel": g(row, "channel") or "total",

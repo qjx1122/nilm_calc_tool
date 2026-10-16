@@ -286,3 +286,5 @@
 - **[2026-10-16] v0.28**（用户修正：谐波/间谐波/直流/基波增加分相趋势线；功率页是分相瞬时功率波形而非趋势线；总览卡片重排为 U/I/P/Q/S/PF/f/THD_U/THD_I 九张、行格式「总线数据 / 分路数据」、U/I 分三相、P/Q/S/PF 分三相+总）。`metrics.py` 放行 `series.p_per_phase`；`#p-trend` 删除 → `#p-wave-ph`；新增 `#h-trend`、`#f-u1-trend`、`#f-i1-trend`；`#ih-trend` 加 6 条分相；总览 `mcard/row` 多行卡片 + `.card.ovc` 样式。ui_r24 53/53、全量 pytest 317 passed；ui_r14 首项为 v0.26 起的历史失败。
 
 - **[2026-10-16] v0.29**（用户：曲线放大后可上下/左右移动坐标轴）。缩放模块加 `zoomPan/zoomPanFrac`：放大后左键拖动＝平移（Ctrl+拖选才框选）、工具条 ◀▶▲▼、方向键、Alt+滚轮；边界夹全图、倍率不变。ui_r17 +11 项 47/47，全量 pytest 317 passed。沙箱重置一次已恢复。
+
+- **[2026-10-16] v0.30**（用户：检查重启后负荷辨识加载的上次数据含曲线事件是否正常）。复现缺陷：先播今天时标样例再播 10-13 的 nilm_steps，重启后负荷事件 0 条——load_last 以目录最新时标为窗终点。修复：以 last_result.json `t_ref` 为锚点取 [t_ref−hours, t_ref]（曲线/事件/负荷事件统一，`t_anchor`/`t_to`）。真实重启核查 13/13 事件、13 条竖线、曲线范围正确；周波窗不恢复改为明确提示。ui_r30 11/11 + RESTART_ONLY 6/6，test_r18 +1，pytest 318 passed。

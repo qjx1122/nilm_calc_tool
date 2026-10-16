@@ -3078,13 +3078,16 @@ function renderNilm() {
     .map((e, i) => ({ x: e.t_start - t0, color: NILM_COLORS[e.algorithm], row: Object.keys(NILM_ALGOS).indexOf(e.algorithm),
                      label: `${e.direction === 'up' ? '↑' : '↓'}${si(e.magnitude_w, 'W', 3)}` }));
   drawLine($('#nilm-chart'), [{ name: `${chn === 'total' ? '三相总' : chn + ' 相'} ${qty.toUpperCase()}（逐周波）`, color: '#4ea1ff', data: tt.map((x, i) => [x - t0, chd[i]]) }],
-           { ylabel: unit, fmtX: x => ts(x + t0), fmtTip: x => ts(x + t0), height: 240, marks, empty: '暂无周波数据（启动数据源后显示）' });
+           { ylabel: unit, fmtX: x => ts(x + t0), fmtTip: x => ts(x + t0), height: 240, marks,
+             empty: (curState().loaded_last && !tt.length) ? '周波窗是内存数据，软件重启后不恢复（上次播放的事件已加载：见事件表与上方 P/Q/S 趋势的事件竖线）；重新播放后显示' : '暂无周波数据（启动数据源后显示）' });
   const nsc = nilmScales(NL.events);
   $('#nilm-total').textContent = String(sm.total || NL.events.length);
   $('#nilm-table').innerHTML = NL.events.length ? table(nilmHeader(nsc), NL.events.map(e => nilmRow(e, nsc))) : '<div class="notes">暂无事件</div>';
   const cfg = curState().config || {};
   fillNilmForm(cfg.nilm);
+  const ll = curState().loaded_last;
   $('#nilm-notes').innerHTML = notes((sm.notes || []).concat(sm.errors || []), [
+    ...(ll && !tt.length ? [`已加载上次播放（${ll.t_anchor_local || ll.t_last_local || ''} 前 ${ll.hours || 24} h）的负荷事件 ${ll.nilm_events || 0} 条与 P/Q/S 趋势；周波窗（逐周波 P/Q/I 序列）是内存数据，重启后不恢复，重新播放后显示。`] : []),
     '口径：每周波 P=mean(u·i)，Q=基波单频 DFT 无功，I=周波有效值；各算法在最近 window_cycles 个周波的窗上评估，同算法同对象按终点序号去重，终点之后需再看到足够周波才确认（所以事件会滞后几个周波出现）。',
     '阈值单位为 W，按计算口径（启用 PT/CT 时为一次侧）填写；rel_tol_pct / min_delta_pct 把门槛按窗内 |P| 中位数折算成相对值，同一套默认值在 W 级与 MW 级都能用。',
     '双滑窗均值差与 CUSUM 对单周波尖峰较敏感（会按均值摊成小事件）；需要抗尖峰请看中值滤波差分 / 稳态分段，或抬高 min_delta_pct。',

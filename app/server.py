@@ -261,18 +261,23 @@ class EngineRunner:
         absd = lambda d: d if os.path.isabs(d) else os.path.join(ROOT, d)   # noqa: E731
         out: Dict[str, Any] = {"ok": True, "side": self.side, "source_id": sid, "hours": use_hours,
                                "curves": {}, "events": 0, "nilm_events": 0, "result": False, "notes": []}
-        if result:
-            ent = self.read_last_result()
-            if ent:
-                with self.lock:
-                    self.latest_merged = ent["result"]
-                    self.latest_full = None
-                out["result"] = True
-                out["result_saved_at_local"] = ent.get("saved_at_local")
-                out["result_source"] = ent.get("source_path") or ent.get("source_kind")
+        # v0.30：以 last_result.json 记录的「上次播放结束时的数据时刻」t_ref 为锚点，曲线 / 事件 / 负荷辨识事件统一取
+        # [t_ref - hours, t_ref]。没有快照（或快照无 t_ref）时退回旧行为（目录中最新时标）。
+        ent = self.read_last_result()
+        t_anchor: Optional[float] = None
+        if ent and isinstance(ent.get("t_ref"), (int, float)):
+            t_anchor = float(ent["t_ref"])
+            out["t_anchor"] = t_anchor; out["t_anchor_local"] = fmt_local(t_anchor)
+        if result and ent:
+            with self.lock:
+                self.latest_merged = ent["result"]
+                self.latest_full = None
+            out["result"] = True
+            out["result_saved_at_local"] = ent.get("saved_at_local")
+            out["result_source"] = ent.get("source_path") or ent.get("source_kind")
         t_first = t_last = None
         if curves:
-            res = replay_load.load_curves(absd(rt_dir), sid, use_hours, max_points=int(cfg.output.history_max_points))
+            res = replay_load.load_curves(absd(rt_dir), sid, use_hours, max_points=int(cfg.output.history_max_points), t_anchor=t_anchor)
             for k, recs in res["records"].items():
                 eng.calc.history.load_records(k, recs, replace=True)
             out["curves"] = res["points"]; out["curve_files"] = [{**f, "path": _display_path(f["path"])} for f in res["files"]]
@@ -280,21 +285,23 @@ class EngineRunner:
             if not res["records"]:
                 out["notes"].append(f"实时落盘目录 {rt_dir} 下没有本侧（source_id={sid}）的曲线数据")
         # 事件 / 负荷辨识事件与曲线取同一时间窗：曲线最新点往前 hours；没有曲线时不按时间过滤（只受 max_log 限制）
-        t_from = (t_last - use_hours * 3600.0) if t_last is not None else None
+        t_ref_win = t_anchor if t_anchor is not None else t_last
+        t_from = (t_ref_win - use_hours * 3600.0) if t_ref_win is not None else None
+        t_to = t_anchor                                           # 有锚点时锚点之后的事件（属于别的播放）不取
         if events:
-            evs = replay_load.load_events(absd(ev_dir), sid, t_from=t_from, limit=int(cfg.events.max_log))
+            evs = replay_load.load_events(absd(ev_dir), sid, t_from=t_from, limit=int(cfg.events.max_log), t_to=t_to)
             out["events"] = eng.detector.load_events(evs, replace=True)
             for d in evs:
                 t_first = d["start_t"] if t_first is None else min(t_first, d["start_t"])
                 t_last = d["start_t"] if t_last is None else max(t_last, d["start_t"])
         if nilm:
-            nevs = replay_load.load_nilm_events(absd(nl_dir), sid, t_from=t_from, limit=int(cfg.nilm.max_log))
+            nevs = replay_load.load_nilm_events(absd(nl_dir), sid, t_from=t_from, limit=int(cfg.nilm.max_log), t_to=t_to)
             out["nilm_events"] = eng.nilm.load_events(nevs, replace=True)
         out["t_first"] = t_first; out["t_last"] = t_last
         out["t_first_local"] = fmt_local(t_first) if t_first is not None else None
         out["t_last_local"] = fmt_local(t_last) if t_last is not None else None
         out["loaded_at"] = time.time(); out["loaded_at_local"] = fmt_local(out["loaded_at"])
-        self.loaded_last = {k: out.get(k) for k in ("source_id", "hours", "curves", "events", "nilm_events", "t_first", "t_last",
+        self.loaded_last = {k: out.get(k) for k in ("source_id", "hours", "curves", "events", "nilm_events", "t_first", "t_last", "t_anchor", "t_anchor_local",
                                                      "t_first_local", "t_last_local", "loaded_at", "loaded_at_local",
                                                      "result", "result_saved_at_local", "result_source", "auto")}
         self.broadcast({"type": "state", "data": self.state()})
