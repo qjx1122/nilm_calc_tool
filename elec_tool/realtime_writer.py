@@ -33,8 +33,9 @@ class RealtimeCurveWriter:
     FIXED = ("t_epoch_s", "time_local", "source_id")      # v0.17：第 3 列数据来源号 0＝总线 / 1＝分路
     FIXED_LEGACY = ("t_epoch_s", "time_local")           # v0.17 之前的文件：追加时保持原列结构
 
-    def __init__(self, cfg: AppConfig, root: Optional[str] = None):
+    def __init__(self, cfg: AppConfig, root: Optional[str] = None, run_id: int = 0):
         self.cfg = cfg
+        self.run_id = int(run_id or 0)          # v0.32：本次运行标识，作为末列 run_id 写入
         self.enabled = bool(cfg.output.realtime_save)
         self.source_id = int(getattr(cfg.output, "source_id", 0) or 0)
         # 环境变量 ELEC_TOOL_REALTIME_DIR 可整体改写目录（测试隔离 / 现场把落盘指到数据盘）
@@ -58,6 +59,8 @@ class RealtimeCurveWriter:
                 if key not in CURVE_KEYS or not self.cfg.output.curve_save.get(key, True):
                     continue
                 rec = curve_record(result, key, q)
+                if rec is not None and self.run_id:
+                    rec = dict(rec); rec["run_id"] = self.run_id
                 if rec is None:
                     continue
                 try:
@@ -114,9 +117,9 @@ class RealtimeCurveWriter:
                 head = next(csv.reader(fh), None)
             if head and head[:3] == list(self.FIXED):
                 existing_fields = head[3:]
-                # v0.27：字段扩充（如新增分相列）后，旧表头缺列 → 把当天旧文件改名为 <名>.pre-v027.csv 保留，新建完整表头
+                # v0.27：字段扩充（如新增分相列）后，旧表头缺列 → 把当天旧文件改名为 <名>.pre-v032.csv 保留，新建完整表头
                 if set(fields) - set(existing_fields):
-                    bak = path[:-4] + ".pre-v027.csv"
+                    bak = path[:-4] + ".pre-v032.csv"
                     try:
                         if not os.path.exists(bak):
                             os.replace(path, bak)

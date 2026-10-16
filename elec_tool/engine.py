@@ -72,6 +72,9 @@ class LiveEngine:
                  on_result: Optional[Callable[[MetricsResult], None]] = None,
                  tz_offset_h: Optional[float] = None, output_root: Optional[str] = None):
         self.cfg = cfg.validate()
+        # v0.32：本次运行标识（墙钟毫秒）。写入实时曲线 / 事件 / 负荷事件 CSV 的 run_id 列与 last_result.json，
+        # 重启加载时只取「上次那一次运行」的行——同一天、数据时标重叠的多次播放（同一样例反复播）不再互相混入。
+        self.run_id = int(time.time() * 1000)
         fs = self.cfg.sampling.fs
         cap = int(np.ceil(self.cfg.max_window_s * fs * 1.5)) + max(int(self.cfg.source.block_samples), 64)
         self.buffer = FrameBuffer(capacity=max(cap, int(fs)))
@@ -84,13 +87,13 @@ class LiveEngine:
         self._last_t: Optional[float] = None
         self._ready: Dict[str, bool] = {k: False for k in QUANTITY_KEYS}
         # 曲线点实时落盘（output.realtime_save）：与趋势历史共用同一提取规则
-        self.writer = RealtimeCurveWriter(self.cfg, root=output_root)
+        self.writer = RealtimeCurveWriter(self.cfg, root=output_root, run_id=self.run_id)
         self._output_root = output_root
         # 事件检测（第 9 轮）：每次 compute 后评估；on_event 供 Web 层推送
-        self.detector = EventDetector(self.cfg, root=output_root)
+        self.detector = EventDetector(self.cfg, root=output_root, run_id=self.run_id)
         self.on_event: Optional[Callable[[List[Dict[str, Any]]], None]] = None
         # 负荷辨识事件检测（第 12 轮）：逐块摄入时按周波评估；on_nilm_event 供 Web 层推送
-        self.nilm = NilmDetector(self.cfg, root=output_root)
+        self.nilm = NilmDetector(self.cfg, root=output_root, run_id=self.run_id)
         self.on_nilm_event: Optional[Callable[[List[Dict[str, Any]]], None]] = None
 
     # ---------------- 生命周期 ----------------
@@ -136,7 +139,7 @@ class LiveEngine:
             self.writer.close()
         except Exception:
             pass
-        self.writer = RealtimeCurveWriter(new_cfg, root=self._output_root)
+        self.writer = RealtimeCurveWriter(new_cfg, root=self._output_root, run_id=self.run_id)
         self.detector.update_config(new_cfg)
         self.nilm.update_config(new_cfg)
         fs = new_cfg.sampling.fs

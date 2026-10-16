@@ -98,7 +98,7 @@ def test_phase_fields_in_history_realtime_and_curves(client, tmp_path, monkeypat
         # ③ 实时落盘文件表头含分相列
         assert _wait(client, lambda: any(n.startswith("power_factor_") for n in os.listdir(rt_dir)) if rt_dir.exists() else False)
         for k, fields in PHASE_FIELDS.items():
-            names = [n for n in os.listdir(rt_dir) if n.startswith(k + "_") and n.endswith(".csv") and ".pre-v027" not in n]
+            names = [n for n in os.listdir(rt_dir) if n.startswith(k + "_") and n.endswith(".csv") and ".pre-v032" not in n]
             assert names, (k, os.listdir(rt_dir))
             with open(rt_dir / names[0], encoding="utf-8-sig", newline="") as fh:
                 head = next(csv.reader(fh))
@@ -108,7 +108,7 @@ def test_phase_fields_in_history_realtime_and_curves(client, tmp_path, monkeypat
 
 
 def test_realtime_writer_rotates_file_with_old_header(tmp_path, monkeypatch):
-    """旧表头（缺分相列）的当天文件 → 改名 .pre-v027.csv，新建完整表头，不把新列硬塞进旧表头。"""
+    """旧表头（缺分相列）的当天文件 → 改名 .pre-v032.csv，新建完整表头，不把新列硬塞进旧表头。"""
     monkeypatch.delenv("ELEC_TOOL_REALTIME_DIR", raising=False)
     from elec_tool.realtime_writer import RealtimeCurveWriter
     from elec_tool.config import AppConfig
@@ -123,7 +123,7 @@ def test_realtime_writer_rotates_file_with_old_header(tmp_path, monkeypatch):
     old.write_text("t_epoch_s,time_local,source_id,window_s,PF,DPF,phi1_deg\n1,2000-01-01 00:00:00.000,0,0.2,0.9,0.95,10\n", encoding="utf-8-sig")
     w._append("power_factor", t, {"window_s": 0.2, "PF": 0.9, "DPF": 0.95, "phi1_deg": 10.0, "PFa": 0.91, "PFb": 0.9, "PFc": 0.89})
     w.close()
-    assert (d / f"power_factor_{day}.pre-v027.csv").exists()
+    assert (d / f"power_factor_{day}.pre-v032.csv").exists()
     with open(old, encoding="utf-8-sig", newline="") as fh:
         rows = list(csv.reader(fh))
     assert "PFa" in rows[0] and len(rows) == 2 and rows[1][rows[0].index("PFc")] == "0.89"

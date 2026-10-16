@@ -259,3 +259,53 @@ def test_load_last_anchored_on_last_result_t_ref(tmp_path):
     evs = replay_load.load_nilm_events(str(nl), 0, t_from=anchor - 86400, t_to=anchor)
     assert [e["magnitude_w"] for e in evs] == [100.0]
     assert replay_load.load_events(str(nl), 0, t_from=anchor - 86400, t_to=anchor) == []      # 目录里没有 events_*.csv → 空，不报错
+
+
+def test_load_last_filters_by_run_id(tmp_path):
+    """v0.32：同一天、数据时标重叠的两次播放（同一样例反复播）→ 只取 last_result.run_id 那一次写的行；
+    旧文件（无 run_id 列）的行不受影响（退回时间窗）。"""
+    from elec_tool import replay_load
+    d = tmp_path / "rt"; d.mkdir(); nl = tmp_path / "nl"; nl.mkdir()
+    t0 = 1791878400.0
+    hdr = "t_epoch_s,time_local,source_id,window_s,P,run_id\n"
+    rows = "".join(f"{t0 + k},x,0,1,{100 + k},111\n" for k in range(6)) + "".join(f"{t0 + k},x,0,1,{200 + k},222\n" for k in range(10))
+    (d / "power_20261013.csv").write_text(hdr + rows, encoding="utf-8-sig")
+    nh = "source_id,id,algorithm,algorithm_name,channel,t_start,t_start_local,t_end,t_end_local,duration_s,cycles,direction,magnitude_w,delta_p_w,delta_q_var,delta_i_a,pre_p_w,post_p_w,score,run_id\n"
+    (nl / "nilm_events_20261013.csv").write_text(nh + f"0,1,cusum,C,total,{t0 + 2},x,{t0 + 2},x,0,0,up,100,100,0,0,0,100,1,111\n"
+                                                 + f"0,1,cusum,C,total,{t0 + 3},x,{t0 + 3},x,0,0,up,300,300,0,0,0,300,1,222\n"
+                                                 + f"0,2,glr,G,total,{t0 + 5},x,{t0 + 5},x,0,0,up,500,500,0,0,0,500,1,222\n", encoding="utf-8-sig")
+    # 上次运行 = 222（10 s 的那次）
+    r = replay_load.load_curves(str(d), 0, 24, t_anchor=t0 + 9, run_id=222)
+    assert [p["P"] for p in r["records"]["power"]] == [200 + k for k in range(10)] and "run_id" not in r["records"]["power"][0]
+    assert [e["magnitude_w"] for e in replay_load.load_nilm_events(str(nl), 0, t_to=t0 + 9, run_id=222)] == [300.0, 500.0]
+    # 上次运行 = 111（6 s 的那次，更早写入）：曲线与事件都只取 111，不混入 222
+    r = replay_load.load_curves(str(d), 0, 24, t_anchor=t0 + 5, run_id=111)
+    assert [p["P"] for p in r["records"]["power"]] == [100 + k for k in range(6)]
+    assert [e["magnitude_w"] for e in replay_load.load_nilm_events(str(nl), 0, t_to=t0 + 5, run_id=111)] == [100.0]
+    # 不给 run_id（旧快照）：旧行为——同一 t 取最后写入的行，事件全取
+    r = replay_load.load_curves(str(d), 0, 24, t_anchor=t0 + 9)
+    assert [p["P"] for p in r["records"]["power"]][:3] == [200, 201, 202]
+    assert len(replay_load.load_nilm_events(str(nl), 0, t_to=t0 + 9)) == 3
+    # 备份文件（.pre-v032.csv）不参与加载
+    (nl / "nilm_events_20261013.pre-v032.csv").write_text(nh + f"0,9,glr,G,total,{t0 + 1},x,{t0 + 1},x,0,0,up,900,900,0,0,0,900,1,222\n", encoding="utf-8-sig")
+    assert [e["magnitude_w"] for e in replay_load.load_nilm_events(str(nl), 0, t_to=t0 + 9, run_id=222)] == [300.0, 500.0]
+
+
+def test_event_writers_rotate_old_header_and_write_run_id(tmp_path, monkeypatch):
+    """v0.32：事件 / 负荷事件 CSV 末列 run_id；旧表头文件改名 .pre-v032.csv 后新建。"""
+    import csv
+    from elec_tool import events as ev, nilm as nm
+    from elec_tool.config import AppConfig
+    from elec_tool.timefmt import local_day
+    monkeypatch.delenv("ELEC_TOOL_NILM_DIR", raising=False); monkeypatch.delenv("ELEC_TOOL_EVENTS_DIR", raising=False)
+    cfg = AppConfig.from_dict({"nilm": {"nilm_dir": str(tmp_path / "nl")}, "events": {"events_dir": str(tmp_path / "ev")}})
+    t = 1791878400.0; day = local_day(t)
+    (tmp_path / "nl").mkdir(); old = tmp_path / "nl" / f"nilm_events_{day}.csv"
+    old.write_text(",".join(nm._CSV_FIELDS[:-1]) + "\n0,1,cusum,C,total,1,x,1,x,0,0,up,1,1,0,0,0,1,1\n", encoding="utf-8-sig")
+    w = nm.NilmWriter(cfg.nilm, source_id=0, run_id=4242)
+    e = nm.NilmEvent(id=1, algorithm="cusum", channel="total", t_start=t, t_end=t, direction="up", magnitude_w=1.0, delta_p_w=1.0, delta_q_var=0.0, delta_i_a=0.0, pre_p_w=0.0, post_p_w=1.0, cycles=0, score=1.0)
+    w.write(e); w.close()
+    assert (tmp_path / "nl" / f"nilm_events_{day}.pre-v032.csv").exists()
+    rows = list(csv.reader(open(old, encoding="utf-8-sig")))
+    assert rows[0][-1] == "run_id" and rows[1][-1] == "4242" and len(rows) == 2
+    assert ev._CSV_FIELDS_V32[-1] == "run_id"

@@ -30,8 +30,8 @@ def _files_by_day(dir_: str, prefix: str) -> List[Tuple[str, str]]:
     """[(day, path)]，新 → 旧；跳过 .v016.csv 备份。"""
     out: List[Tuple[str, str]] = []
     for p in glob.glob(os.path.join(dir_, f"{prefix}_*.csv")):
-        if p.endswith(".v016.csv"):
-            continue
+        if p.endswith(".v016.csv") or ".pre-v0" in os.path.basename(p):
+            continue                        # 跳过各版本表头升级时的备份文件
         m = _DAY_RE.search(os.path.basename(p))
         if m:
             out.append((m.group(1), p))
@@ -58,6 +58,23 @@ def _row_sid(head: List[str], row: List[str]) -> int:
 ANCHOR_EPS_S = 1.0      # 锚点之后允许的余量（最后一个窗的步长抖动）
 
 
+def _row_run_id(head: List[str], row: List[str]) -> Optional[int]:
+    """v0.32：行的 run_id（本次运行标识）；旧文件无该列 → None。"""
+    if "run_id" in head:
+        i = head.index("run_id")
+        v = _num(row[i]) if i < len(row) else None
+        return int(v) if v is not None else None
+    return None
+
+
+def _run_ok(head: List[str], row: List[str], run_id: Optional[int]) -> bool:
+    """给定 run_id 时：有 run_id 列的行必须相等；无该列（旧文件）的行放行（退回时间窗过滤）。"""
+    if run_id is None:
+        return True
+    rid = _row_run_id(head, row)
+    return rid is None or rid == int(run_id)
+
+
 def _anchor_day(t_anchor: Optional[float]) -> Optional[str]:
     if t_anchor is None:
         return None
@@ -69,7 +86,7 @@ def _anchor_day(t_anchor: Optional[float]) -> Optional[str]:
 
 
 def load_curves(dir_: str, source_id: int, hours: float, keys: Iterable[str] = CURVE_KEYS,
-                max_points: int = 200000, t_anchor: Optional[float] = None) -> Dict[str, Any]:
+                max_points: int = 200000, t_anchor: Optional[float] = None, run_id: Optional[int] = None) -> Dict[str, Any]:
     """返回 {"records": {key: [{"t":..., field: value, ...}, ...]}, "files": [...], "t_first":..., "t_last":...}。
 
     v0.30：``t_anchor``＝「上次播放结束时的数据时刻」（来自 last_result.json 的 t_ref）。给定时只取
@@ -90,11 +107,11 @@ def load_curves(dir_: str, source_id: int, hours: float, keys: Iterable[str] = C
             head, rows = _read_rows(path)
             if not head or head[0] != "t_epoch_s":
                 continue
-            skip = {"t_epoch_s", "time_local", "source_id"}
+            skip = {"t_epoch_s", "time_local", "source_id", "run_id"}
             fields = [(i, h) for i, h in enumerate(head) if h not in skip]
             n_side = 0
             for row in rows:
-                if _row_sid(head, row) != int(source_id):
+                if _row_sid(head, row) != int(source_id) or not _run_ok(head, row, run_id):
                     continue
                 t = _num(row[0]) if row else None
                 if t is None:
@@ -136,7 +153,7 @@ def load_curves(dir_: str, source_id: int, hours: float, keys: Iterable[str] = C
 
 
 def load_events(dir_: str, source_id: int, t_from: Optional[float] = None, limit: int = 2000,
-                t_to: Optional[float] = None) -> List[Dict[str, Any]]:
+                t_to: Optional[float] = None, run_id: Optional[int] = None) -> List[Dict[str, Any]]:
     """events_<日期>.csv：同一 id 有 start/end 两行 → 合并为一条（有 end 的为准）。返回按 start_t 升序的字典列表。"""
     by_id: Dict[Tuple[str, str], Dict[str, Any]] = {}
     for day, path in _files_by_day(dir_, "events"):
@@ -146,7 +163,7 @@ def load_events(dir_: str, source_id: int, t_from: Optional[float] = None, limit
         idx = {h: i for i, h in enumerate(head)}
         g = lambda row, k: (row[idx[k]] if k in idx and idx[k] < len(row) else "")   # noqa: E731
         for row in rows:
-            if _row_sid(head, row) != int(source_id):
+            if _row_sid(head, row) != int(source_id) or not _run_ok(head, row, run_id):
                 continue
             st = _num(g(row, "start_t"))
             if st is None or (t_from is not None and st < t_from) or (t_to is not None and st > t_to + ANCHOR_EPS_S):
@@ -169,7 +186,7 @@ def load_events(dir_: str, source_id: int, t_from: Optional[float] = None, limit
 
 
 def load_nilm_events(dir_: str, source_id: int, t_from: Optional[float] = None, limit: int = 5000,
-                     t_to: Optional[float] = None) -> List[Dict[str, Any]]:
+                     t_to: Optional[float] = None, run_id: Optional[int] = None) -> List[Dict[str, Any]]:
     out: List[Dict[str, Any]] = []
     for day, path in _files_by_day(dir_, "nilm_events"):
         head, rows = _read_rows(path)
@@ -178,7 +195,7 @@ def load_nilm_events(dir_: str, source_id: int, t_from: Optional[float] = None, 
         idx = {h: i for i, h in enumerate(head)}
         g = lambda row, k: (row[idx[k]] if k in idx and idx[k] < len(row) else "")   # noqa: E731
         for row in rows:
-            if _row_sid(head, row) != int(source_id):
+            if _row_sid(head, row) != int(source_id) or not _run_ok(head, row, run_id):
                 continue
             ts = _num(g(row, "t_start"))
             if ts is None or (t_from is not None and ts < t_from) or (t_to is not None and ts > t_to + ANCHOR_EPS_S):

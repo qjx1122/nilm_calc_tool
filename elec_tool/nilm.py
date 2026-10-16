@@ -41,7 +41,7 @@ __all__ = ["NilmEvent", "NilmDetector", "CycleFeatures", "detect_steps", "NILM_A
 
 _CSV_FIELDS = ["source_id", "id", "algorithm", "algorithm_name", "channel", "t_start", "t_start_local", "t_end", "t_end_local",
                "duration_s", "cycles", "direction", "magnitude_w", "delta_p_w", "delta_q_var", "delta_i_a",
-               "pre_p_w", "post_p_w", "score"]
+               "pre_p_w", "post_p_w", "score", "run_id"]          # v0.32：末列 run_id（本次运行标识）
 
 
 def _ts(t: Optional[float]) -> str:
@@ -349,9 +349,10 @@ def _confirm_cycles(algo: str, prm: Dict[str, Any]) -> int:
 
 # ---------------------------------------------------------------- 落盘
 class NilmWriter:
-    def __init__(self, cfg: NilmConfig, root: Optional[str] = None, source_id: int = 0):
+    def __init__(self, cfg: NilmConfig, root: Optional[str] = None, source_id: int = 0, run_id: int = 0):
         self.cfg = cfg
         self.source_id = int(source_id)
+        self.run_id = int(run_id or 0)
         d = os.environ.get("ELEC_TOOL_NILM_DIR") or cfg.nilm_dir
         self.dir = d if os.path.isabs(d) else os.path.join(root or os.getcwd(), d)
         self._fh = None
@@ -367,7 +368,8 @@ class NilmWriter:
         self.close()
         with SHARED_FILE_LOCK:                  # v0.17.2：两侧共用同一文件，表头只写一次
             os.makedirs(self.dir, exist_ok=True)
-            new = not os.path.exists(path) or os.path.getsize(path) == 0
+            from .events import _rotate_if_header_differs
+            new = _rotate_if_header_differs(path, _CSV_FIELDS)
             self._fh = open(path, "a", encoding="utf-8-sig" if new else "utf-8", newline="")
             self._path = path
             if new:
@@ -384,7 +386,7 @@ class NilmWriter:
                    f"{d['t_start']:.4f}", d["t_start_local"], f"{d['t_end']:.4f}", d["t_end_local"],
                    f"{d['duration_s']:.4f}", d["cycles"], d["direction"],
                    f"{d['magnitude_w']:.3f}", f"{d['delta_p_w']:.3f}", f"{d['delta_q_var']:.3f}", f"{d['delta_i_a']:.4f}",
-                   f"{d['pre_p_w']:.3f}", f"{d['post_p_w']:.3f}", f"{d['score']:.4g}"]
+                   f"{d['pre_p_w']:.3f}", f"{d['post_p_w']:.3f}", f"{d['score']:.4g}", self.run_id]
             with SHARED_FILE_LOCK:
                 csv.writer(self._fh).writerow(row)
                 self._fh.flush()
@@ -410,12 +412,13 @@ class NilmWriter:
 class NilmDetector:
     """引擎每摄入一块数据调用 ``ingest(scaled_block)``；返回本次新产生的事件（dict 列表）。线程安全。"""
 
-    def __init__(self, cfg: AppConfig, root: Optional[str] = None):
+    def __init__(self, cfg: AppConfig, root: Optional[str] = None, run_id: int = 0):
         self.cfg = cfg
         self.ncfg: NilmConfig = cfg.nilm
         self._root = root
+        self.run_id = int(run_id or 0)
         self.feat = CycleFeatures(cfg.sampling.fs, cfg.sampling.f_nom)
-        self.writer = NilmWriter(self.ncfg, root=root, source_id=int(getattr(cfg.output, "source_id", 0) or 0))
+        self.writer = NilmWriter(self.ncfg, root=root, source_id=int(getattr(cfg.output, "source_id", 0) or 0), run_id=self.run_id)
         self._lock = threading.RLock()
         self._t = np.zeros(0)
         self._p = np.zeros((4, 0))
@@ -439,7 +442,7 @@ class NilmDetector:
                 self._t = np.zeros(0); self._p = np.zeros((4, 0)); self._q = np.zeros((4, 0)); self._i = np.zeros((4, 0))
                 self._g0 += 0
             self.writer.close()
-            self.writer = NilmWriter(self.ncfg, root=self._root, source_id=int(getattr(self.cfg.output, "source_id", 0) or 0))
+            self.writer = NilmWriter(self.ncfg, root=self._root, source_id=int(getattr(self.cfg.output, "source_id", 0) or 0), run_id=self.run_id)
 
     # ---- 主入口
     def ingest(self, block: SampleBlock) -> List[Dict[str, Any]]:
