@@ -160,6 +160,14 @@ function toast(msg, cls = '') {
   setTimeout(() => el.remove(), cls === 'err' ? 9000 : 4200);
 }
 
+/* v0.26.2：落盘状态副文本——行数一行、文件/目录路径单独一行且允许任意位置换行（长路径不再超出卡片） */
+function writerSub(w) {
+  if (!w) return '';
+  const p = w.current_file || w.dir || '';
+  if (!p) return '';
+  const head = w.current_file ? `${w.rows_written} 行 → ` : '目录：';
+  return `${head}<span class="path" title="${esc(p)}">${esc(p)}</span>`;
+}
 function card(k, v, unit, sub) {
   return `<div class="card"><div class="k">${k}</div><div class="v">${v}${unit ? `<span class="u">${unit}</span>` : ''}</div>${sub ? `<div class="s">${sub}</div>` : ''}</div>`;
 }
@@ -2224,7 +2232,7 @@ function renderEvents() {
   const el = sm.effective_limits;
   if (el) cards.push(card('基波有效阈值', `${si(el.u1_low_v, 'V')} ~ ${si(el.u1_high_v, 'V')}`, '', `I1 ≤ ${si(el.i1_high_a, 'A')}（折算 ×${sm.limit_scale.u}/×${sm.limit_scale.i}）`));
   const w = sm.writer || {};
-  cards.push(card('事件落盘', w.enabled ? '开' : '关', '', w.current_file ? `${w.rows_written} 行 → ${w.current_file.split(/[\\/]/).pop()}` : (w.dir || '')));
+  cards.push(card('事件落盘', w.enabled ? '开' : '关', '', writerSub(w)));
   const osc = sm.osc || {};
   cards.push(card('功率振荡评估', isNum(osc.amp_pp_pct) ? num(osc.amp_pp_pct, 2) : '—', isNum(osc.amp_pp_pct) ? '%' : '',
                   isNum(osc.dom_freq_hz) ? `主导 ${num(osc.dom_freq_hz, 3)} Hz · 峰峰 ${si(osc.amp_pp, 'W')} · ${osc.points} 点` : (osc.note || `${osc.points || 0} 点`)));
@@ -2973,7 +2981,7 @@ function renderNilm() {
     (sm.algorithms_enabled || []).includes(a) ? '启用' : '<span class="bad">已停用</span>')));
   cards.push(card('周波窗', `${sm.window_fill || 0} / ${sm.window_cycles || 0}`, '周波', `每周波 ${sm.n_cycle_samples || 0} 点 · 累计 ${sm.cycles_total || 0} 周波 · 对象 ${(sm.channels || []).join('/')}`));
   const w = sm.writer || {};
-  cards.push(card('事件落盘', w.enabled ? '开' : '关', '', w.current_file ? `${w.rows_written} 行 → ${w.current_file.split(/[\\/]/).pop()}` : (w.dir || '')));
+  cards.push(card('事件落盘', w.enabled ? '开' : '关', '', writerSub(w)));
   $('#nilm-cards').innerHTML = cards.join('');
   if (isNum(sm.total)) setNilmBadge(sm.total);
   renderNilmPqs(NL);

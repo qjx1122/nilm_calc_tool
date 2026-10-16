@@ -278,3 +278,5 @@
 - **[2026-10-16] v0.26**（用户：导航按四组重排——总览 / 实时监测 / 事件与分析 / 工具，并给定每组条目名）。纯文案与分组改动，功能代码不动；`ui_r25` 改为按组解析 data-view 顺序比对。全部检查与 pytest 通过。
 
 - **[2026-10-16] v0.26.1**（用户：导航三组标题去说明；算法卡片勾选框离色块太远；勾选标题与说明换行）。根因：`h3.curvehdr>span:first-child{flex:1}` 把色块撑开。改为 `h3.algohdr>label.check`（勾选框+色块+名）+ 独立 `.algodesc` 行。ui_r24 36/36、r25 23/23、r12 16/16、pytest 313 passed。
+
+- **[2026-10-16] v0.26.2**（用户：事件落盘卡片长路径溢出 → 换行）。`writerSub()` + `.card .s .path{display:block}` + `overflow-wrap:anywhere`。ui_r24 37/37。

@@ -112,6 +112,7 @@ async function main() {
   check('事件页：.dual 显示右列', !$('view-events').querySelector('.dual').classList.contains('no-branch'));
   const evBr = await api('/api/branch/events?limit=10');
   check('事件页右列卡片有内容且来自分路侧摘要', $('ev-cards-br').textContent.includes('事件检测') && $('ev-cards-br').textContent.length > 20 && window.SD.branch.evSummary && window.SD.branch.evSummary.total === evBr.summary.total, `branch total=${evBr.summary.total}`);
+  check('v0.26.2：事件落盘卡片路径放在独立 .path 行（长路径可换行）', (() => { const c = Array.from($('ev-cards').querySelectorAll('.card')).find(x => x.querySelector('.k').textContent === '事件落盘'); const pth = c && c.querySelector('.s .path'); return !!pth && pth.textContent.length > 0 && /display:\s*block/.test(require('fs').readFileSync(require('path').join(ROOT, 'app/static/style.css'), 'utf8').match(/\.card \.s \.path\{[^}]*\}/)[0]); })());
   check('事件页左列卡片有内容（总线侧）', $('ev-cards').textContent.includes('事件检测') && window.SD.bus.evSummary !== null);
   check('右列请求走 /api/branch/events', calls.some(c => c.url.startsWith('/api/branch/events')) && calls.some(c => /^\/api\/events/.test(c.url)));
 

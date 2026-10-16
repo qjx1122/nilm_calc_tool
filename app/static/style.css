@@ -182,3 +182,7 @@ body.no-branch-nav .badge-br{display:none !important}
 .nilm-algo h3.algohdr label.check>input{width:15px;height:15px;margin:0;flex:0 0 auto}
 .nilm-algo h3.algohdr .sw{font-size:13px;line-height:1}
 .nilm-algo .algodesc{display:block;font-weight:normal;font-size:12px;line-height:1.5;margin:0 0 6px 21px}
+
+/* v0.26.2：卡片副文本中的路径允许任意位置换行，避免长路径溢出卡片 */
+.card .s{overflow-wrap:anywhere;word-break:break-all;white-space:normal}
+.card .s .path{display:block;font-family:ui-monospace,Consolas,monospace;font-size:10.5px;line-height:1.35;color:#9fb0d3}
