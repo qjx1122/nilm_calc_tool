@@ -48,3 +48,20 @@ def test_cli_runs_on_sample(tmp_path):
     d = json.loads(r.stdout)
     assert d["measure"]["has_events_hint"] and d["suggest"]["algorithms"]["cusum"]["threshold_w"] > 0
     assert set(d["suggest"]["algorithms"]) == {"threshold", "two_window", "cusum", "glr", "steady_state", "median_diff"}
+
+
+def test_suggest_relative_thresholds_stay_valid_when_base_load_small():
+    """v0.22.2：分路侧基荷很小（设备关着时 P≈100 W）而设备很大时，min_delta_pct 曾算出 >100%，
+    导致界面「保存参数」/ PUT /api/config 报「nilm.min_delta_pct 必须在 0~100」。"""
+    import numpy as np
+    from elec_tool.config import AppConfig
+    from tools.nilm_tune import measure, suggest
+    p = 100 + np.random.default_rng(0).normal(0, 2, 3000)
+    sg = suggest(measure(p), 5000)
+    assert sg["min_delta_pct"] == 0.0 and 0 <= sg["rel_tol_pct"] <= 50 and "置 0" in sg["note"]
+    cfg = AppConfig(); cfg.nilm.rel_tol_pct = sg["rel_tol_pct"]; cfg.nilm.min_delta_pct = sg["min_delta_pct"]
+    cfg.nilm.algorithms.update({k: dict(cfg.nilm.algorithms[k], **v) for k, v in sg["algorithms"].items()})
+    cfg.validate()
+    # 基荷大时仍给出有意义的相对值
+    big = suggest(measure(1.5e6 + np.random.default_rng(1).normal(0, 30, 3000)), 300000)
+    assert 0 < big["min_delta_pct"] <= 50

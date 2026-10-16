@@ -84,10 +84,16 @@ def suggest(m: dict, min_load_w: float | None) -> dict:
                 else f"⚠ 最小关心负荷 {min_load_w:g} W 的一半低于噪声底 {noise_floor:g} W：该负荷无法可靠检出，门槛按噪声底给")
     k = _ceil_sig(max(0.25 * min_d, 0.5 * s))                        # CUSUM 漂移：取最小幅值的 1/4（兼顾缓慢爬坡）
     h = _ceil_sig(max(2.0 * (min_d - k), 5 * s))                     # 门限：恰为 min_delta 的阶跃约 2 周波触发；且 ≥5σ
+    # 相对门槛只在「基荷远大于门槛」时有意义；基荷小（分路侧设备关着时 P≈0）会算出 >100% 甚至几千 %，
+    # 配置校验 rel_tol_pct ≤ 50 / min_delta_pct ≤ 100 会拒绝 → 一律夹到合法范围，门槛以绝对值 W 为准
+    mdp = (100.0 * min_d / lvl) if lvl else 0.0
+    if mdp > 50.0:
+        mdp = 0.0
+        note += "；基荷相对门槛过小（基荷 < 2×min_delta_w），nilm.min_delta_pct 置 0，只用各算法绝对值 W"
     return {
         "note": note,
         "rel_tol_pct": round(min(5.0, max(0.05, 100.0 * tol / lvl)), 2) if lvl else 1.0,
-        "min_delta_pct": round(100.0 * min_d / lvl, 2) if lvl else 0.0,
+        "min_delta_pct": round(mdp, 2),
         "algorithms": {
             "threshold":    {"min_delta_w": min_d, "settle_cycles": 5, "settle_tol_w": tol, "max_rise_cycles": 40},
             "median_diff":  {"median_cycles": 5, "min_delta_w": min_d, "settle_cycles": 5, "settle_tol_w": tol, "max_rise_cycles": 40},

@@ -2683,6 +2683,16 @@ function collectNilmPayload() {
 async function saveNilmConfig() {
   const payload = collectNilmPayload();
   if (!payload.channels.length) { toast('至少勾选一个检测对象', 'err'); return; }
+  const lim = { rel_tol_pct: [0, 50], min_delta_pct: [0, 100], window_cycles: [30, 1e9], min_gap_cycles: [0, 1e9] };
+  for (const [k, [lo, hi]] of Object.entries(lim)) {
+    const v = payload[k];
+    if (!isNum(v) || v < lo || v > hi) {
+      const msg = `${k} 必须在 ${lo}~${hi === 1e9 ? '∞' : hi}（当前 ${v}）；` + (k.endsWith('_pct') ? '它是「占窗内 |P| 中位数的百分比」，不是 W；只用绝对值请填 0' : '');
+      $('#nilm-form-note').textContent = '保存失败：' + msg; toast(msg, 'err');
+      const el = document.getElementById(`nilm-${k}`); if (el) el.focus();
+      return;
+    }
+  }
   try {
     const d = await api('/api/config', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ nilm: payload }) });
     NL.dirty = false; $('#nilm-form-note').textContent = '已保存并热生效 ' + new Date().toLocaleTimeString();

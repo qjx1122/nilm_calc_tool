@@ -296,6 +296,7 @@ Invoke-RestMethod -Method Put -Uri http://localhost:8000/api/branch/config -Cont
 | 总线对账"其它设备"列很大、"命中"也全对，但指纹带外还有几条 ΔP 和待检设备差不多 | 总线上有功率相近的其它设备 | 见 §1 Q2：总线侧无法区分 |
 | nilm_check 全是漏报，但界面播放明明能看到台阶 | 真值表时间与文件时间轴差了固定值（时区 / 日期） | 用界面「负荷辨识」页读台阶时刻重填真值表；或回放加 `--custom-time-start "2026-10-15 09:00:00"` 对齐 |
 | 事件幅值是铭牌的 100 倍 / 百分之一 | PT/CT 口径 | 检查 `transform.enabled` 与变比；`--min-load-w` 要同口径 |
+| 保存参数报 `nilm.min_delta_pct 必须在 0~100` | 把 W 值填进了百分比框；或旧版 `nilm_tune` 在基荷很小（设备侧文件）时给出了 >100 的值 | `min_delta_pct` 是「占基荷的百分比」，只用绝对值就填 0；W 级门槛填各算法的 `min_delta_w`。重新跑一次 §3 生成 tune.json 即可 |
 | 中文乱码 | Excel 打开 CSV 未识别 UTF-8 | 本工具输出带 BOM，Excel 可直接双击；若仍乱码用"数据 → 从文本/CSV → UTF-8" |
 | PowerShell 里 `ConvertTo-Json` 后参数丢了一层 | Windows PowerShell 5 默认深度 2 | 命令里必须带 `-Depth 10`（§7-2 已带） |
 

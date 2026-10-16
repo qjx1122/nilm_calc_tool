@@ -750,9 +750,9 @@ class NilmConfig:
         if int(self.max_log) < 10:
             raise ConfigError("nilm.max_log 必须 ≥ 10")
         if not (0 <= float(self.rel_tol_pct) <= 50):
-            raise ConfigError("nilm.rel_tol_pct 必须在 0~50")
+            raise ConfigError(f"nilm.rel_tol_pct 必须在 0~50（当前 {self.rel_tol_pct}；它是占窗内 |P| 中位数的百分比，不是 W）")
         if not (0 <= float(self.min_delta_pct) <= 100):
-            raise ConfigError("nilm.min_delta_pct 必须在 0~100")
+            raise ConfigError(f"nilm.min_delta_pct 必须在 0~100（当前 {self.min_delta_pct}；它是占窗内 |P| 中位数的百分比，不是 W；只用各算法绝对值请填 0）")
         if not str(self.nilm_dir).strip():
             raise ConfigError("nilm.nilm_dir 不能为空")
         unknown = [a for a in self.algorithms if a not in NILM_ALGO_DEFAULTS]
