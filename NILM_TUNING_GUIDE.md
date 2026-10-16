@@ -15,6 +15,7 @@
    - **台阶多高才算事件**（参数名里带 `min_delta`）：填小了把噪声当事件（**误报**），填大了把真设备漏掉（**漏报**）。
    - **多"平"才算平稳**（参数名里带 `tol` / `noise` / `drift`）：这个由数据里的噪声决定，**脚本会替你量出来**，你不用猜。
 3. **怎么知道配对了**：拿一段**明知道设备什么时候开、什么时候关**的数据回放一遍，软件报出来的开关时刻和你知道的一一对上、而且没有多报，就是配对了。本手册的 `nilm_check.py` 会直接打印 ✅ / ⚠ / ✗。
+4. **检测 ≠ 归属**：软件报的是"总线上有一个台阶"，不是"是这台设备"。在**设备自己的支路**上两者一回事；在**总线**上，别的设备开关也会报出来——它们**不是误报**，要靠"台阶多高"（设备指纹）把它们分开。所以本手册分两条路：**路线 A 分路侧**（简单，优先）和**路线 B 总线侧**（多一步"取指纹"）。§1 会告诉你走哪条。
 
 > **单位提醒（最常见的坑）**：所有阈值的单位都是 **W（瓦）**。如果配置里启用了 PT/CT 变比（`transform.enabled=true`），阈值要按**一次侧**填（比如 1 台 500 kW 的电机就是 500000）；没启用就按二次侧 W 填。脚本的输出会告诉你当前是哪种口径，照抄即可。
 
@@ -31,6 +32,15 @@
 | E | 一台装好本软件的 Windows 电脑（PowerShell）或 Linux 机器 | 见 `README.md` §安装 | — |
 
 CSV 格式与数据源一致：`时间戳,A相电压,A相电流,B相电压,B相电流,C相电压,C相电流`，时间戳可以是 `0/00/00 09:12:30.1234` 这种只有时刻的写法。
+
+**先选路线（只问两个问题）：**
+
+| 问题 | 答"是" | 答"否" |
+|---|---|---|
+| Q1 这台设备有**自己的支路**接了采集（分路侧）？ | **路线 A**：全部步骤用分路侧文件、推到分路侧（§7 用 `/api/branch/config`）。总线上别的设备与你无关。 | 看 Q2 |
+| Q2 只能在总线上检：总线上**其它设备的功率**与这台设备相差 ≥ 30 %？（看铭牌即可） | **路线 B**：§3–§5 先用设备侧文件做一遍拿"指纹"，再用总线文件做一遍并带指纹对账（§5-B）。 | **总线侧无法区分这台设备与功率相近的那台**——软件只看台阶高度。要么加装分路采集走路线 A，要么接受"报的是这两台之一"。 |
+
+> 路线 B 还有一个硬限制：待检设备开关的 **±0.2 s 内恰好有别的设备动作**时，两个台阶叠在一起，那一次无法单独识别（对账时会表现为"漏报"或幅值不对）。真值表里这种次数多（> 10 %），换一段数据。
 
 **文件放哪**：把 A、B、C 三个文件拷到软件目录的 `data\` 文件夹里（下文命令都假设软件装在 `D:\nilm_calc_tool`，请按实际路径改）。
 
@@ -106,7 +116,7 @@ New-Item -ItemType Directory -Force output | Out-Null
 规则：
 - 第 1 行是表头，随便写；从第 2 行开始每行一次动作。
 - 「时间」：精确到秒（能到 0.1 s 更好）。只写 `时:分:秒` 时按数据文件里的日期补齐。
-- 「动作」：`开` / `关`（也认 on/off、投入/切除、1/0）。
+- 「动作」：`开` / `关`（也认 on/off、投入/切除、1/0）。路线 B 时，**已知的其它设备动作**写 `其它`（备注写是哪台）——对账时这些时刻的事件归"其它设备"，不算误报；不知道的不用写，靠指纹（§5-B）兜底。
 - 「备注」随意，会原样出现在对账结果里。
 - 时间对不准怎么办？打开软件 → 数据源页播放 `dev_onoff.csv` → 「负荷辨识」页看周波 P 曲线，台阶出现的时刻就是真值；或 Excel 打开 `dev_onoff.csv` 看电流列突然变大 / 变小的那行的时间戳。
 
@@ -143,6 +153,28 @@ New-Item -ItemType Directory -Force output | Out-Null
 - **误报**：报了事件，但真值表里没有这次动作。**先别急着调参**——用 Excel 打开 `output\replay_check.csv`，看"误报"行的事件时间，去现场记录核对：很可能是**别的设备**真的在那一刻动了（真值表漏写了），那就补进真值表重跑 5-2，不用改参数。
 - `output\replay_check.csv` 是逐条明细（算法 / 真值时间 / 结果 / 事件时间 / ΔP / ΔQ / 时刻误差），Excel 打开按"结果"列筛选即可。
 
+### 5-B 路线 B（总线侧，还有其它设备在启停）：带指纹对账
+
+不带指纹直接对账总线文件，其它设备的每次开关都会被算成"误报"，**没有一种算法能 ✅**——这是正常现象，不是参数错了，**不要去调参**。按下面做：
+
+```powershell
+# ① 先在设备侧文件上做 5-1 / 5-2（拿到 ✅ 后，output\dev_events.csv 里命中事件的 ΔP/ΔQ 就是这台设备的"指纹"）
+.\.venv\Scripts\python.exe tools\nilm_replay.py --file data\dev_onoff.csv --config configs\default.json --params output\tune.json --out output\dev_events.csv
+.\.venv\Scripts\python.exe tools\nilm_check.py --events output\dev_events.csv --truth data\truth_dev.csv --tol-s 1
+
+# ② 回放总线文件（真值表 truth_bus.csv 只写这台设备在总线段里的开/关，已知的其它设备写"其它"）
+.\.venv\Scripts\python.exe tools\nilm_replay.py --file data\bus_onoff.csv --config configs\default.json --params output\tune.json --out output\bus_events.csv
+
+# ③ 带指纹对账：指纹自动取自 ① 的命中事件（--signature-truth 是设备侧文件自己的真值表）
+.\.venv\Scripts\python.exe tools\nilm_check.py --events output\bus_events.csv --truth data\truth_bus.csv --tol-s 1 --signature-from output\dev_events.csv --signature-truth data\truth_dev.csv --mag-tol-pct 30 --out output\bus_check.csv
+#    没有设备侧文件、只知道铭牌：手填指纹（W，计算口径；例 500 kW 电机 PF 0.9 → 450000）
+.\.venv\Scripts\python.exe tools\nilm_check.py --events output\bus_events.csv --truth data\truth_bus.csv --tol-s 1 --mag-w 450000 --mag-tol-pct 30
+```
+
+③ 的结论表多一列 **"其它设备"**：ΔP 不在指纹 ±30 % 带内（或匹配到 `其它` 真值行）的事件都计在这里，**不算误报**；"误报"列只剩**带内**的——那才是真要调参的。首行会打印"幅值带 X~Y W"，`output\bus_check.csv` 里"结果"列能看到每条事件被归到了哪一类（命中 / 漏报 / 误报 / 其它设备(带外) / 其它设备(真值)）。
+
+**带宽怎么定**：默认 ±30 %。其它设备里最接近的那台功率与待检设备差 D %，带宽取 **< D/2**（例：差 50 % → 取 20 %）；差 < 30 % 的就是 §1 Q2 说的"无法区分"。
+
 ---
 
 ## 6. 第五步：不达标怎么调（只改一个，改完回到 §5 重跑）
@@ -163,8 +195,10 @@ New-Item -ItemType Directory -Force output | Out-Null
 | 6 种**全部**"全漏"，口径没错 | 设备幅值 < 6σ（§3 ③ 有 ⚠） | 换**分路侧**数据检；或接受"该设备不可检" | — |
 | 某算法**漏报** | 台阶门槛偏高 | 该算法的 `min_delta_w` | 每次 ×0.7，**不低于 6×sigma** |
 | 某算法漏报，且设备是**慢启动**（电机、风机 > 1 s 才稳） | 暂态比窗长 | `two_window.pre_cycles/post_cycles`、`glr.window_cycles` 调到 ≥ 暂态周波数（1 s = 50 周波）；`threshold/median_diff.max_rise_cycles` ≥ 暂态周波数；`steady_state.max_transient_cycles` ≥ 暂态周波数 | 按暂态时长换算 |
-| 某算法**误报**，误报时刻**没有**任何设备动作 | 门槛偏低 / 容差偏小 | 先调 `min_delta_w` ×1.5；仍误报再调容差：`threshold/median_diff.settle_tol_w`、`steady_state.tol_w` ×1.5，`cusum.threshold_w` ×1.5，`glr.threshold` 25→40 | 一次一个 |
-| 误报时刻**确有**其它设备动作 | 不是误报，真值表漏写 | 补真值表 | — |
+| （总线侧）6 种都有好几条"误报"，且误报时刻的 ΔP 与待检设备明显不同 | **其它设备在动，不是误报** | **不要调参**：走 §5-B 带指纹对账（或把已知动作写成 `其它`） | — |
+| 某算法**带内误报**，误报时刻**没有**任何设备动作 | 门槛偏低 / 容差偏小 | 先调 `min_delta_w` ×1.5；仍误报再调容差：`threshold/median_diff.settle_tol_w`、`steady_state.tol_w` ×1.5，`cusum.threshold_w` ×1.5，`glr.threshold` 25→40 | 一次一个 |
+| 带内误报时刻**确有**其它设备动作 | 那台设备功率与待检设备相近 | 真值表写 `其它`；若经常发生 → 总线侧无法区分，见 §1 Q2 | — |
+| 漏报的那一次，±0.2 s 内有其它设备动作 | 两个台阶叠加 | 不调参；该次不计，换一段数据复核 | — |
 | 同一次开关被报成 **2 条**（相隔 < 0.5 s） | 暂态被当成两次 | `nilm.min_gap_cycles` 10→25；或 `settle_cycles` 5→10 | — |
 | 事件报出来**幅值明显偏小**（只有铭牌的一半） | 前后稳态窗没覆盖完暂态 | `settle_cycles` 5→10；`two_window.post_cycles` 10→25 | — |
 | 只在大负荷时段误报 | 基荷大、相对容差 1% 太粗 | `nilm.rel_tol_pct` 1.0→0.2（§3 建议值通常已经给了） | — |
@@ -215,7 +249,8 @@ Invoke-RestMethod -Method Put -Uri http://localhost:8000/api/branch/config -Cont
 - [ ] 真值表 ≥ **2 开 2 关**（越多越可信）
 - [ ] §5 对账：至少 **2 种**算法 ✅（命中 100%、误报 0）
 - [ ] 换**另一段**包含该设备开关的数据（不同日期 / 不同时段）再跑一次 §5，结论仍 ✅ —— 防止参数只对一段数据有效
-- [ ] 用一段**不含**该设备开关的长数据（≥ 10 min）跑 §5-1，达标算法的事件数应为 0（或都能对应到其它设备）—— 验证不会误报
+- [ ] 用一段**不含**该设备开关的长数据（≥ 10 min）跑 §5-1 并对账（真值表只写表头、路线 B 带指纹），达标算法的**带内**事件数应为 0 —— 验证不会误报（总线上其它设备的事件不算）
+- [ ] （路线 B）待检设备指纹与总线上其它设备的功率相差 ≥ 30 %，且 `bus_check.csv` 中"其它设备"行的 ΔP 确实都明显偏离指纹 —— 否则总线侧无法区分，必须到分路侧
 - [ ] "设备特征 |ΔP|" 与铭牌功率 × 功率因数同一量级（相差 < 30 %）—— 否则口径或变比可能错
 - [ ] §7 已推送、界面「检测参数」与 `site.json` 一致，重启软件后仍一致
 - [ ] 把 `output\site.json`、`output\tune.json`、`data\truth.csv`、`output\replay_check.csv` 四个文件归档到项目资料里（下次调参 / 排障的依据）
@@ -245,6 +280,8 @@ Invoke-RestMethod -Method Put -Uri http://localhost:8000/api/branch/config -Cont
 | `rel_tol_pct` | 容差至少是基荷的百分之几（默认 1.0） | 基荷大、设备小时降到 0.1~0.3；`nilm_tune` 会给 |
 | `min_delta_pct` | 最小台阶至少是基荷的百分之几（默认 0） | 一般用 `nilm_tune` 给的值 |
 
+**检测 ≠ 归属（再强调一次）**：6 种算法在线只做"事件检测"，界面「负荷辨识」页的事件表里**不会**写是哪台设备；把事件归到设备是 `nilm_check.py` 用幅值带做的离线辅助。总线上多台设备时，线上看到的事件数 = 所有设备的开关数之和，这是正常的。
+
 ---
 
 ## 附录 B：常见报错与现象
@@ -254,7 +291,9 @@ Invoke-RestMethod -Method Put -Uri http://localhost:8000/api/branch/config -Cont
 | `无法将".\.venv\Scripts\python.exe"识别…` | 不在软件目录，或没装 venv | `cd D:\nilm_calc_tool`；按 README 安装 |
 | `没有读到整周波数据` | 文件太短 / 列映射错 / 采样率配错 | `.\.venv\Scripts\python.exe cli.py sources --file data\xxx.csv` 探查；文件至少 1 s |
 | `真值表「动作」不认识` | 动作列写了别的字 | 只写 开/关 |
-| `真值表只写了时刻但事件文件为空` | 回放一条事件都没有，无法补日期 | 真值表写完整日期；同时说明门槛太高（§6） |
+| `真值表只写了时刻、事件文件又为空` | 回放一条事件都没有，无法补日期 | 真值表至少一行写完整日期；同时说明门槛太高（§6） |
+| `--signature-from … 在真值时刻附近没有事件` | 设备侧回放还没 ✅ 就拿来取指纹，或 `--signature-truth` 的时刻与设备侧文件对不上 | 先把设备侧 §5 做到 ✅；指纹真值表用设备侧文件自己的时刻 |
+| 总线对账"其它设备"列很大、"命中"也全对，但指纹带外还有几条 ΔP 和待检设备差不多 | 总线上有功率相近的其它设备 | 见 §1 Q2：总线侧无法区分 |
 | nilm_check 全是漏报，但界面播放明明能看到台阶 | 真值表时间与文件时间轴差了固定值（时区 / 日期） | 用界面「负荷辨识」页读台阶时刻重填真值表；或回放加 `--custom-time-start "2026-10-15 09:00:00"` 对齐 |
 | 事件幅值是铭牌的 100 倍 / 百分之一 | PT/CT 口径 | 检查 `transform.enabled` 与变比；`--min-load-w` 要同口径 |
 | 中文乱码 | Excel 打开 CSV 未识别 UTF-8 | 本工具输出带 BOM，Excel 可直接双击；若仍乱码用"数据 → 从文本/CSV → UTF-8" |
@@ -292,12 +331,23 @@ Invoke-RestMethod -Method Put -Uri http://localhost:8000/api/branch/config -Cont
 ```
 期望：6 种算法全部 ✅（用出厂默认参数回放时 `two_window` 会把 3.0 s 的尖峰误报 1 条——这正是"先量噪声再定参数"的意义）。
 
+再走一遍**路线 B**（总线上还有别的设备）：
+
+```powershell
+.\.venv\Scripts\python.exe tools\gen_nilm_sample.py --bus                # data\nilm_bus_mixed.csv：待检 2.0 s 开/6.0 s 关(±500 W)；其它 3.5 s +1500、8.0 s −1500、5.0 s +120 W
+"时间,动作,备注`n2026-10-13 08:00:02,开,待检`n08:00:06,关,待检" | Set-Content data\truth_bus.csv -Encoding UTF8
+.\.venv\Scripts\python.exe tools\nilm_replay.py --file data\nilm_bus_mixed.csv --out output\bus_events.csv
+.\.venv\Scripts\python.exe tools\nilm_check.py --events output\bus_events.csv --truth data\truth_bus.csv --tol-s 0.5                      # 不带指纹：每种算法 3 条"误报"，无一 ✅
+.\.venv\Scripts\python.exe tools\nilm_check.py --events output\bus_events.csv --truth data\truth_bus.csv --tol-s 0.5 --mag-w 750000      # 带指纹(500 W × PT·CT 1500)：其它设备 3 条、误报 0，6 种 ✅
+```
+
 ---
 
 ## 附录 D：数据怎么切、用哪一侧
 
 - **切片**：软件 → 数据源页 → 左列「总线侧 导出指定时间段的原始数据」/ 右列「分路侧 …」→ 点「填入文件时间范围」看文件覆盖的时间 → 改成想要的起止（可只写 `09:12:00`）→「导出到新 CSV」，文件在 `output\raw_<起>_<止>_src0.csv`（总线）/ `_src1.csv`（分路）。两侧互不影响。
 - **量噪声用哪侧**：设备最终在哪一侧检，就用哪一侧的背景量 σ。总线侧 σ 通常比分路侧大 5~50 倍。
+- **总线上其它设备也在开关时**：量 σ 不受影响（§3 已说明）；**对账必须带指纹**（§5-B），否则其它设备全算误报；调参只看"带内误报"。
 - **设备侧文件也能量噪声吗**：能——`nilm_tune.py --file data\dev_onoff.csv` 会自动忽略开关点，并在 `max|diff|` 行提示 ⚠。
 - **线上落盘的事件也能对账**：生产运行时事件在 `output\nilm\nilm_events_<日期>.csv`（两侧同文件，`source_id` 0/1 区分），用 `nilm_check.py --events 该文件 --source-id 1 --truth ...` 即可做事后复核。
 

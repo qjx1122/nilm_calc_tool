@@ -3,6 +3,9 @@
 
 三相 57.74 V 二次侧，P 总 1000 W → 2.0 s 投入 +500 W → 4.4 s 切除 −300 W，3.0 s 处一个周波 +400 W 尖峰，
 PF=0.9 感性，电流叠加 2 mA 高斯噪声，fs=6400，时长 6 s。用法：.venv/bin/python tools/gen_nilm_sample.py [输出路径]
+
+v0.22.1 加 ``--bus``：生成「总线上多台设备混合」样例 data/nilm_bus_mixed.csv（10 s）：
+    待检设备 2.0 s 开 +500 W / 6.0 s 关 −500 W；其它设备：3.5 s +1500 W、8.0 s −1500 W（大设备）、5.0 s +120 W（小设备）。
 """
 import csv
 import os
@@ -10,11 +13,22 @@ import sys
 
 import numpy as np
 
-fs, dur = 6400, 6.0
-out = sys.argv[1] if len(sys.argv) > 1 else os.path.join(os.path.dirname(__file__), "..", "data", "nilm_steps.csv")
+args = [a for a in sys.argv[1:] if not a.startswith("--")]
+BUS = "--bus" in sys.argv
+fs, dur = 6400, (10.0 if BUS else 6.0)
+default_name = "nilm_bus_mixed.csv" if BUS else "nilm_steps.csv"
+out = args[0] if args else os.path.join(os.path.dirname(__file__), "..", "data", default_name)
 n = int(fs * dur); t = np.arange(n) / fs; w = 2 * np.pi * 50 * t
-P = np.full(n, 1000.0); P[t >= 2.0] += 500; P[t >= 4.4] -= 300
-P[int(3.0 * fs):int(3.0 * fs) + 128] += 400
+P = np.full(n, 1000.0)
+if BUS:
+    P[t >= 2.0] += 500; P[t >= 6.0] -= 500              # 待检设备 开/关
+    P[t >= 3.5] += 1500; P[t >= 8.0] -= 1500            # 其它大设备
+    P[t >= 5.0] += 120                                  # 其它小设备
+    desc = "待检 2.0 s ↑500 / 6.0 s ↓500；其它 3.5 s ↑1500、8.0 s ↓1500、5.0 s ↑120 W"
+else:
+    P[t >= 2.0] += 500; P[t >= 4.4] -= 300
+    P[int(3.0 * fs):int(3.0 * fs) + 128] += 400
+    desc = "2.0 s ↑500 W，4.4 s ↓300 W；3.0 s 单周波尖峰"
 U, ang = 57.74, np.arccos(0.9)
 cols = []
 for ph, phase in enumerate((0, -2 * np.pi / 3, 2 * np.pi / 3)):
@@ -27,4 +41,4 @@ with open(out, "w", newline="", encoding="utf-8") as fh:
     base = 1791878400.0
     for k in range(n):
         wr.writerow([f"{base + t[k]:.6f}"] + [f"{c[k]:.5f}" for c in cols])
-print(f"已生成 {out}（{n} 行；事件：2.0 s ↑500 W，4.4 s ↓300 W；3.0 s 单周波尖峰）")
+print(f"已生成 {out}（{n} 行；事件：{desc}）")
