@@ -301,3 +301,5 @@
 
 - **[2026-10-16] 分析**（用户：负荷辨识几种算法能否单独用某一相电压/电流检测；再问只有三相电流时）。结论：算法层六种都只看一维序列、均可；电压不适合做负荷事件依据；当前实现硬编码有功 P，无电压时 P≡0 静默 0 事件。
 - **[2026-10-16] v0.36**（用户：按 1–3 项实现仅电流检测最小可用版本）。`nilm.quantity` auto/p/i；检测器 voltage_missing/quantity_effective，i 口径取 I_rms、W 阈值清零只用相对门槛（兜底 3%）；事件/CSV 新增 quantity/magnitude/unit（旧文件 .pre-v036）；p 无电压告警；ColumnMap 识别仅电流表头；前端下拉+幅值列 |ΔI|；`gen_nilm_sample.py --current-only`。test_r12 +4、ui_r12 25/25、pytest 330 passed。
+
+- **[2026-10-16] v0.37**（用户：检查仅电流检测时算法配置/阈值是否应为电流）。发现 v0.36 清零 W 阈值的做法使 CUSUM h=k 退化、无法填电流阈值、界面仍标 W。改为每算法 `*_a`（A）一套阈值 + `NILM_W_TO_A`、`params_for_current()`，去掉 3% 兜底；前端两套输入按口径灰显。test_r12 +3、ui_r12 31/31、pytest 333 passed。

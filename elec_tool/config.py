@@ -723,19 +723,31 @@ NILM_QUANTITIES = ("auto", "p", "i")          # v0.36：检测量 有功 / 电�
 
 # 各事件检测算法的默认参数（单位：W＝有功功率；cycles＝周波数）。键名即界面/配置里的参数名。
 NILM_ALGO_DEFAULTS: Dict[str, Dict[str, Any]] = {
-    # 阈值差分：相邻周波有功之差超过门槛即判为事件起点，之后连续 settle_cycles 个周波波动 < tol 即为终点
-    "threshold":    {"enabled": True, "min_delta_w": 50.0, "settle_cycles": 5, "settle_tol_w": 20.0, "max_rise_cycles": 40},
-    # 双滑窗均值差：|mean(后窗) − mean(前窗)| 的局部极大值 ≥ min_delta_w 且 ≥ k_sigma×前窗标准差
-    "two_window":   {"enabled": True, "pre_cycles": 10, "post_cycles": 10, "min_delta_w": 50.0, "k_sigma": 3.0},
-    # CUSUM 累积和（双侧）：相对参考均值的累积偏差超过 threshold_w 触发；drift_w 为允许漂移（k）
-    "cusum":        {"enabled": True, "drift_w": 10.0, "threshold_w": 200.0, "min_delta_w": 50.0, "settle_cycles": 5},
-    # GLR 广义似然比（高斯均值突变）：窗内各候选点的对数似然比 ≥ threshold 且幅值 ≥ min_delta_w；noise_w 为噪声 σ 下限
-    "glr":          {"enabled": True, "window_cycles": 15, "threshold": 25.0, "min_delta_w": 50.0, "noise_w": 10.0, "settle_cycles": 5},
-    # 稳态分段（Hart 1992）：连续 ≥ min_steady_cycles 个周波极差 ≤ tol_w 为一个稳态；相邻稳态均值差 ≥ min_delta_w 即事件
-    "steady_state": {"enabled": True, "tol_w": 30.0, "min_steady_cycles": 10, "min_delta_w": 50.0, "max_transient_cycles": 100},
+    # 每个算法的绝对阈值分两套：``*_w``（W，P 口径＝有功检测时用）与 ``*_a``（A，I 口径＝电流有效值检测时用，v0.37）。
+    # 检测器按当前检测量只取其中一套（见 nilm.NilmDetector._evaluate），另一套不参与。A 套默认值按二次侧
+    # 单相 ≈6 A（1000 W / 3 相 / 57.74 V / pf 0.9）给出，与 W 套默认值在同一相对量级；一次侧请靠 rel_tol_pct / min_delta_pct。
+    # 阈值差分：相邻周波差分超过门槛即判为事件起点，之后连续 settle_cycles 个周波波动 < tol 即为终点
+    "threshold":    {"enabled": True, "min_delta_w": 50.0, "settle_cycles": 5, "settle_tol_w": 20.0, "max_rise_cycles": 40,
+                     "min_delta_a": 0.3, "settle_tol_a": 0.1},
+    # 双滑窗均值差：|mean(后窗) − mean(前窗)| 的局部极大值 ≥ min_delta 且 ≥ k_sigma×前窗标准差
+    "two_window":   {"enabled": True, "pre_cycles": 10, "post_cycles": 10, "min_delta_w": 50.0, "k_sigma": 3.0,
+                     "min_delta_a": 0.3},
+    # CUSUM 累积和（双侧）：相对参考均值的累积偏差超过 threshold 触发；drift 为允许漂移（k）
+    "cusum":        {"enabled": True, "drift_w": 10.0, "threshold_w": 200.0, "min_delta_w": 50.0, "settle_cycles": 5,
+                     "drift_a": 0.05, "threshold_a": 1.0, "min_delta_a": 0.3},
+    # GLR 广义似然比（高斯均值突变）：窗内各候选点的对数似然比 ≥ threshold 且幅值 ≥ min_delta；noise 为噪声 σ 下限
+    "glr":          {"enabled": True, "window_cycles": 15, "threshold": 25.0, "min_delta_w": 50.0, "noise_w": 10.0, "settle_cycles": 5,
+                     "min_delta_a": 0.3, "noise_a": 0.05},
+    # 稳态分段（Hart 1992）：连续 ≥ min_steady_cycles 个周波极差 ≤ tol 为一个稳态；相邻稳态均值差 ≥ min_delta 即事件
+    "steady_state": {"enabled": True, "tol_w": 30.0, "min_steady_cycles": 10, "min_delta_w": 50.0, "max_transient_cycles": 100,
+                     "tol_a": 0.15, "min_delta_a": 0.3},
     # 中值滤波差分：先 median_cycles 点中值滤波去尖峰，再按阈值差分法检测（对暂态尖峰/缺口不敏感）
-    "median_diff":  {"enabled": True, "median_cycles": 5, "min_delta_w": 50.0, "settle_cycles": 5, "settle_tol_w": 20.0, "max_rise_cycles": 40},
+    "median_diff":  {"enabled": True, "median_cycles": 5, "min_delta_w": 50.0, "settle_cycles": 5, "settle_tol_w": 20.0, "max_rise_cycles": 40,
+                     "min_delta_a": 0.3, "settle_tol_a": 0.1},
 }
+# W 参数 → I 口径下对应的 A 参数（算法函数始终读 *_w 键；I 口径时检测器用 *_a 的值覆盖 *_w 再调用）
+NILM_W_TO_A = {"min_delta_w": "min_delta_a", "settle_tol_w": "settle_tol_a", "tol_w": "tol_a",
+               "drift_w": "drift_a", "noise_w": "noise_a", "threshold_w": "threshold_a"}
 NILM_ALGO_NAMES = {"threshold": "阈值差分", "two_window": "双滑窗均值差", "cusum": "CUSUM 累积和",
                    "glr": "GLR 广义似然比", "steady_state": "稳态分段(Hart)", "median_diff": "中值滤波差分"}
 
@@ -762,8 +774,8 @@ class NilmConfig:
     rel_tol_pct: float = 1.0
     min_delta_pct: float = 0.0
     # v0.36：检测量。p＝逐周波有功（需电压+电流）；i＝逐周波电流有效值（只需电流，数据源无电压时用）；
-    #   auto＝数据源电压全为 0/未映射时自动用 i，否则用 p。i 口径下各算法的绝对 W 阈值不再适用，
-    #   只按 rel_tol_pct / min_delta_pct 相对窗内 |I| 中位数折算（min_delta_pct=0 时按 3% 兜底）。
+    #   auto＝数据源电压全为 0/未映射时自动用 i，否则用 p。i 口径下各算法用 ``*_a``（A）这套绝对阈值，
+    #   W 套不参与；rel_tol_pct / min_delta_pct 同样按窗内 |I| 中位数折算后与 A 套取较大者（v0.37）。
     quantity: str = "auto"
     algorithms: Dict[str, Dict[str, Any]] = field(default_factory=lambda: {k: dict(v) for k, v in NILM_ALGO_DEFAULTS.items()})
 

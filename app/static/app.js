@@ -2924,18 +2924,18 @@ function bind() {
 /* NL：当前侧别的负荷辨识状态（SD[side].nl 的别名，随 sideOf() 变化） */
 function NLs(side) { return SD[side || sideOf()].nl; }
 const NILM_ALGOS = {
-  threshold:    { name: '阈值差分', desc: '相邻周波 ΔP ≥ 门槛为起点；随后 settle 个周波极差 ≤ 容差为终点',
-                  params: { min_delta_w: '最小幅值 (W)', settle_cycles: '稳定周波数', settle_tol_w: '稳定容差 (W)', max_rise_cycles: '最长暂态 (周波)' } },
+  threshold:    { name: '阈值差分', desc: '相邻周波 Δ ≥ 门槛为起点；随后 settle 个周波极差 ≤ 容差为终点',
+                  params: { min_delta_w: '最小幅值 (W · P口径)', min_delta_a: '最小幅值 (A · I口径)', settle_cycles: '稳定周波数', settle_tol_w: '稳定容差 (W · P口径)', settle_tol_a: '稳定容差 (A · I口径)', max_rise_cycles: '最长暂态 (周波)' } },
   two_window:   { name: '双滑窗均值差', desc: '|mean(后窗) − mean(前窗)| 的局部极大值 ≥ 门槛且 ≥ k×前窗σ',
-                  params: { pre_cycles: '前窗 (周波)', post_cycles: '后窗 (周波)', min_delta_w: '最小幅值 (W)', k_sigma: 'k×σ 倍数' } },
+                  params: { pre_cycles: '前窗 (周波)', post_cycles: '后窗 (周波)', min_delta_w: '最小幅值 (W · P口径)', min_delta_a: '最小幅值 (A · I口径)', k_sigma: 'k×σ 倍数' } },
   cusum:        { name: 'CUSUM 累积和', desc: '双侧 Page CUSUM：相对参考均值的累积偏差 > h 触发；起点＝累积量最后归零处',
-                  params: { drift_w: '允许漂移 k (W)', threshold_w: '触发门限 h (W)', min_delta_w: '最小幅值 (W)', settle_cycles: '稳定周波数' } },
+                  params: { drift_w: '允许漂移 k (W · P口径)', drift_a: '允许漂移 k (A · I口径)', threshold_w: '触发门限 h (W · P口径)', threshold_a: '触发门限 h (A · I口径)', min_delta_w: '最小幅值 (W · P口径)', min_delta_a: '最小幅值 (A · I口径)', settle_cycles: '稳定周波数' } },
   glr:          { name: 'GLR 广义似然比', desc: '高斯均值突变的对数似然比 n/4·(m1−m0)²/σ² ≥ 门限',
-                  params: { window_cycles: '单侧窗 (周波)', threshold: '似然比门限', min_delta_w: '最小幅值 (W)', noise_w: '噪声 σ 下限 (W)', settle_cycles: '终点偏移 (周波)' } },
+                  params: { window_cycles: '单侧窗 (周波)', threshold: '似然比门限', min_delta_w: '最小幅值 (W · P口径)', min_delta_a: '最小幅值 (A · I口径)', noise_w: '噪声 σ 下限 (W · P口径)', noise_a: '噪声 σ 下限 (A · I口径)', settle_cycles: '终点偏移 (周波)' } },
   steady_state: { name: '稳态分段 (Hart)', desc: '连续 ≥ N 个周波极差 ≤ 容差为稳态；相邻稳态均值差 ≥ 门槛即事件',
-                  params: { tol_w: '稳态容差 (W)', min_steady_cycles: '最少稳态周波', min_delta_w: '最小幅值 (W)', max_transient_cycles: '最长暂态 (周波)' } },
+                  params: { tol_w: '稳态容差 (W · P口径)', tol_a: '稳态容差 (A · I口径)', min_steady_cycles: '最少稳态周波', min_delta_w: '最小幅值 (W · P口径)', min_delta_a: '最小幅值 (A · I口径)', max_transient_cycles: '最长暂态 (周波)' } },
   median_diff:  { name: '中值滤波差分', desc: '先 N 点中值滤波去尖峰，再做阈值差分（对单周波尖峰/缺口不敏感）',
-                  params: { median_cycles: '中值窗 (周波)', min_delta_w: '最小幅值 (W)', settle_cycles: '稳定周波数', settle_tol_w: '稳定容差 (W)', max_rise_cycles: '最长暂态 (周波)' } },
+                  params: { median_cycles: '中值窗 (周波)', min_delta_w: '最小幅值 (W · P口径)', min_delta_a: '最小幅值 (A · I口径)', settle_cycles: '稳定周波数', settle_tol_w: '稳定容差 (W · P口径)', settle_tol_a: '稳定容差 (A · I口径)', max_rise_cycles: '最长暂态 (周波)' } },
 };
 const NILM_COLORS = { threshold: '#ff6b6b', two_window: '#ffa94d', cusum: '#ffd43b', glr: '#69db7c', steady_state: '#4dabf7', median_diff: '#da77f2' };
 const NILM_FIELDS = ['enabled', 'save', 'quantity', 'window_cycles', 'min_gap_cycles', 'rel_tol_pct', 'min_delta_pct'];
@@ -2949,7 +2949,7 @@ function buildNilmForm(side = sideOf()) {
   host.innerHTML = Object.keys(NILM_ALGOS).map(a => {
     const sp = NILM_ALGOS[a];
     const inputs = Object.keys(sp.params).map(k =>
-      `<label>${sp.params[k]}<input type="number" step="any" min="0" id="nilm-${a}-${k}"></label>`).join('');
+      `<label class="${k.endsWith('_w') ? 'nilm-unit-w' : (k.endsWith('_a') ? 'nilm-unit-a' : '')}">${sp.params[k]}<input type="number" step="any" min="0" id="nilm-${a}-${k}"></label>`).join('');
     // v0.26.1：标题行＝色块 + 勾选框 + 算法名（紧挨），算法说明单独一行
     return `<div class="panel nilm-algo" style="margin-top:8px"><h3 class="algohdr"><label class="check"><input type="checkbox" id="nilm-${a}-enabled"><span class="sw" style="color:${NILM_COLORS[a]}">■</span>${sp.name}</label></h3>
       <div class="algodesc mut">${sp.desc}</div>
@@ -2966,13 +2966,23 @@ function buildNilmForm(side = sideOf()) {
 }
 
 function bindNilmForm(side) {
-  [E(side, 'nilm-form'), E(side, 'nilm-algos')].forEach(h => h && h.querySelectorAll('input').forEach(el => {
+  [E(side, 'nilm-form'), E(side, 'nilm-algos')].forEach(h => h && h.querySelectorAll('input, select').forEach(el => {
     const mark = () => { NLs(side).dirty = true; }; el.addEventListener('input', mark); el.addEventListener('change', mark);
   }));
+  const q = E(side, 'nilm-quantity'); if (q) q.addEventListener('change', () => nilmDimUnits(side));
+}
+
+/* v0.37：按检测量灰显不参与的那套阈值（auto 时按服务端 summary.quantity_effective；未知时两套都亮） */
+function nilmDimUnits(side = sideOf(), effective) {
+  const host = E(side, 'nilm-algos'); const sel = E(side, 'nilm-quantity'); if (!host) return;
+  let q = sel ? sel.value : 'auto';
+  if (q === 'auto') q = effective || (NLs(side).summary && NLs(side).summary.quantity_effective) || '';
+  host.querySelectorAll('.nilm-unit-w').forEach(el => el.classList.toggle('nilm-inactive', q === 'i'));
+  host.querySelectorAll('.nilm-unit-a').forEach(el => el.classList.toggle('nilm-inactive', q === 'p'));
 }
 
 function fillNilmForm(nc, side = sideOf()) {
-  if (!nc || NLs(side).dirty) return;
+  if (!nc || NLs(side).dirty) { nilmDimUnits(side); return; }
   NILM_FIELDS.forEach(f => {
     const el = E(side, `nilm-${f}`); if (!el) return;
     if (el.type === 'checkbox') el.checked = !!nc[f]; else el.value = nc[f];
@@ -2984,6 +2994,7 @@ function fillNilmForm(nc, side = sideOf()) {
     const en = E(side, `nilm-${a}-enabled`); if (en) en.checked = prm.enabled !== false;
     Object.keys(NILM_ALGOS[a].params).forEach(k => { const el = E(side, `nilm-${a}-${k}`); if (el && prm[k] !== undefined) el.value = prm[k]; });
   });
+  nilmDimUnits(side);
 }
 
 function collectNilmPayload(side = sideOf()) {
@@ -3129,6 +3140,7 @@ function renderNilm() {
     '口径：每周波 P=mean(u·i)，Q=基波单频 DFT 无功，I=周波有效值；各算法在最近 window_cycles 个周波的窗上评估，同算法同对象按终点序号去重，终点之后需再看到足够周波才确认（所以事件会滞后几个周波出现）。',
     '阈值单位为 W，按计算口径（启用 PT/CT 时为一次侧）填写；rel_tol_pct / min_delta_pct 把门槛按窗内 |P| 中位数折算成相对值，同一套默认值在 W 级与 MW 级都能用。',
     '检测量 auto/p/i（v0.36）：数据源只有三相电流（无电压）时选 auto 或 i，按逐周波电流有效值检测，六种算法均可用；此时事件幅值为 |ΔI|（A），ΔP/ΔQ 恒为 0。',
+    'v0.37：每个算法的绝对阈值分 W（P 口径）与 A（I 口径）两套，检测器只用当前口径那一套，另一套不参与（表单中灰显）；相对门槛 rel_tol_pct / min_delta_pct 对两种口径都按窗内中位数折算。',
     '双滑窗均值差与 CUSUM 对单周波尖峰较敏感（会按均值摊成小事件）；需要抗尖峰请看中值滤波差分 / 稳态分段，或抬高 min_delta_pct。',
   ]);
 }

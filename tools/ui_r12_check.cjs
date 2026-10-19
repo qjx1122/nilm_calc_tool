@@ -113,6 +113,19 @@ async function main() {
   click($('btn-nilm-refresh')); await sleep(1500);
   check('界面表头幅值列为 |ΔI|（A）', /幅值 \|ΔI\|/.test($('nilm-table').textContent) && !/幅值 \|ΔP\|/.test($('nilm-table').textContent), ($('nilm-table').textContent.match(/幅值[^）]*）?/) || [''])[0]);
   check('提示区说明按电流有效值检测（auto 自动切换）', /电流有效值/.test($('nilm-notes').textContent) && /auto 自动切换/.test($('nilm-notes').textContent));
+  console.log('L6 v0.37 A 口径阈值');
+  const aIds = ['nilm-threshold-min_delta_a', 'nilm-threshold-settle_tol_a', 'nilm-two_window-min_delta_a', 'nilm-cusum-drift_a', 'nilm-cusum-threshold_a', 'nilm-glr-noise_a', 'nilm-steady_state-tol_a', 'nilm-median_diff-settle_tol_a'];
+  check('表单含各算法 A 口径阈值输入', aIds.every((id) => !!$(id)), aIds.filter((id) => !$(id)).join(','));
+  check('A 套回填默认值（cusum threshold_a=1, drift_a=0.05）', +$('nilm-cusum-threshold_a').value === 1 && +$('nilm-cusum-drift_a').value === 0.05, $('nilm-cusum-threshold_a').value);
+  check('auto + 无电压（effective=i）→ W 套灰显、A 套高亮', $('nilm-cusum-threshold_w').parentElement.classList.contains('nilm-inactive') && !$('nilm-cusum-threshold_a').parentElement.classList.contains('nilm-inactive'));
+  $('nilm-quantity').value = 'p'; change($('nilm-quantity')); await sleep(200);
+  check('切到 p → A 套灰显、W 套高亮', $('nilm-cusum-threshold_a').parentElement.classList.contains('nilm-inactive') && !$('nilm-cusum-threshold_w').parentElement.classList.contains('nilm-inactive'));
+  $('nilm-quantity').value = 'auto'; change($('nilm-quantity'));
+  $('nilm-glr-noise_a').value = '0.2'; input($('nilm-glr-noise_a')); click($('btn-nilm-save')); await sleep(1200);
+  const putsA = bodies('/api/config', 'PUT'); const lastA = putsA[putsA.length - 1] || {};
+  check('保存 → PUT 含 glr.noise_a=0.2 且 noise_w 仍为 10', lastA.nilm && lastA.nilm.algorithms.glr.noise_a === 0.2 && lastA.nilm.algorithms.glr.noise_w === 10, JSON.stringify(lastA.nilm && lastA.nilm.algorithms.glr));
+  check('服务端 glr.noise_a=0.2', (await api('/api/state')).config.nilm.algorithms.glr.noise_a === 0.2);
+  await api('/api/config', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ nilm: { algorithms: { glr: { noise_a: 0.05 } } } }) });
   await api('/api/engine/stop', { method: 'POST' });
 
   console.log('L4 清空');

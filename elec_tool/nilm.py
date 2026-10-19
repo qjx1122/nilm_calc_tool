@@ -35,7 +35,7 @@ import numpy as np
 
 from .blocks import SampleBlock
 from .timefmt import fmt_local, local_day
-from .config import AppConfig, NILM_ALGO_DEFAULTS, NILM_ALGO_NAMES, NILM_CHANNELS, NilmConfig
+from .config import AppConfig, NILM_ALGO_DEFAULTS, NILM_ALGO_NAMES, NILM_CHANNELS, NILM_W_TO_A, NilmConfig
 
 __all__ = ["NilmEvent", "NilmDetector", "CycleFeatures", "detect_steps", "NILM_ALGO_NAMES"]
 
@@ -43,7 +43,7 @@ _CSV_FIELDS = ["source_id", "id", "algorithm", "algorithm_name", "channel", "t_s
                "duration_s", "cycles", "direction", "magnitude_w", "delta_p_w", "delta_q_var", "delta_i_a",
                "pre_p_w", "post_p_w", "score", "quantity", "magnitude", "unit", "run_id"]
 # v0.32：run_id（本次运行标识）；v0.36：quantity（p/i 检测量）、magnitude（检测量口径的 |Δ|）、unit（W/A）
-_I_FALLBACK_MIN_DELTA_PCT = 3.0      # 电流口径且 min_delta_pct=0 时的兜底相对门槛
+
 
 
 def _ts(t: Optional[float]) -> str:
@@ -324,7 +324,14 @@ _ALGOS = {"threshold": _steps_threshold, "two_window": _steps_two_window, "cusum
 _TOL_KEYS = ("settle_tol_w", "tol_w", "drift_w", "noise_w", "threshold_w")
 
 
-_W_PARAMS = ("min_delta_w", "settle_tol_w", "tol_w", "drift_w", "noise_w", "threshold_w")   # 以 W 为单位的绝对阈值
+def params_for_current(prm: Dict[str, Any]) -> Dict[str, Any]:
+    """I 口径：把 ``*_a``（A）的值写到算法函数读取的 ``*_w`` 键上（W 套不参与）。缺 ``*_a`` 的键保持原值。"""
+    out = dict(prm)
+    for kw, ka in NILM_W_TO_A.items():
+        if kw in out and ka in out:
+            out[kw] = float(out[ka])
+    return out
+
 
 
 def effective_params(prm: Dict[str, Any], level: float, rel_tol_pct: float, min_delta_pct: float) -> Dict[str, Any]:
@@ -515,10 +522,6 @@ class NilmDetector:
             return out
         rel_tol = float(self.ncfg.rel_tol_pct)
         min_pct = float(self.ncfg.min_delta_pct)
-        if qty == "i":
-            # 电流口径：绝对 W 阈值无意义，全部清零只留相对门槛；min_delta_pct=0 时兜底 3%
-            rel_tol = rel_tol if rel_tol > 0 else 1.0
-            min_pct = min_pct if min_pct > 0 else _I_FALLBACK_MIN_DELTA_PCT
         for ch in self.ncfg.channels:
             ci = NILM_CHANNELS.index(ch)
             p = self._p[ci] if qty == "p" else self._i[ci]
@@ -528,7 +531,7 @@ class NilmDetector:
                 if not prm.get("enabled", True):
                     continue
                 if qty == "i":
-                    prm = {k: (0.0 if k in _W_PARAMS else v) for k, v in prm.items()}
+                    prm = params_for_current(prm)              # v0.37：I 口径用 *_a（A）这套绝对阈值
                 prm = effective_params(prm, level, rel_tol, min_pct)
                 try:
                     steps = detect_steps(algo, p, prm)
@@ -615,9 +618,9 @@ class NilmDetector:
             qty = self.quantity_effective
             if qty == "i":
                 notes.append("检测量：电流有效值 I（" + ("数据源无电压，auto 自动切换" if self.ncfg.quantity == "auto" else "nilm.quantity=i")
-                             + "）；各算法绝对 W 阈值不生效，门槛按 rel_tol_pct / min_delta_pct 相对窗内 |I| 中位数折算"
-                             + ("（min_delta_pct=0 → 兜底 3%）" if float(self.ncfg.min_delta_pct) <= 0 else "")
-                             + "；事件幅值 magnitude 为 |ΔI|（A），ΔP/ΔQ 在无电压时恒为 0")
+                             + "）；各算法使用 A 口径阈值（min_delta_a / settle_tol_a / tol_a / drift_a / noise_a / threshold_a），"
+                             "W 口径阈值不参与；rel_tol_pct / min_delta_pct 按窗内 |I| 中位数折算后与 A 阈值取较大者；"
+                             "事件幅值 magnitude 为 |ΔI|（A），ΔP/ΔQ 在无电压时恒为 0")
             enabled_algos = [a for a in NILM_ALGO_DEFAULTS if self.ncfg.params(a).get("enabled", True)]
             return {"enabled": bool(self.ncfg.enabled), "total": total, "counts": counts, "by_channel": by_ch,
                     "by_direction": by_dir, "cycles_total": self.cycles_total, "window_fill": int(self._t.shape[0]),

@@ -358,3 +358,68 @@ def test_frontend_quantity_wiring():
     js = (ROOT / "app/static/app.js").read_text(encoding="utf-8")
     assert 'id="nilm-quantity"' in html and 'value="auto"' in html
     assert "'quantity'" in js.split("const NILM_FIELDS")[1].split(";")[0] and "function nilmMag(" in js
+
+
+# ------------------------------------------------------------------ v0.37：I 口径使用 A 这套绝对阈值
+
+def test_current_params_set_and_relative_floor():
+    from elec_tool.config import NILM_W_TO_A
+    from elec_tool.nilm import params_for_current
+    for a, d in NILM_ALGO_DEFAULTS.items():
+        for kw, ka in NILM_W_TO_A.items():
+            assert (kw in d) == (ka in d), (a, kw)            # 每个 W 阈值都有对应 A 阈值
+            if kw in d:
+                assert 0 < d[ka] < d[kw]
+    prm = params_for_current(NILM_ALGO_DEFAULTS["cusum"])
+    assert prm["drift_w"] == 0.05 and prm["threshold_w"] == 1.0 and prm["min_delta_w"] == 0.3     # 算法函数读 *_w 键，值已换成 A 套
+    assert prm["drift_a"] == 0.05 and prm["settle_cycles"] == 5
+    # CUSUM 的 h/k 比例在 A 套中保持（20 倍），不会像「全部清零只留相对门槛」那样退化成 h=k
+    assert prm["threshold_w"] / prm["drift_w"] == pytest.approx(20.0)
+    # 相对门槛仍按中位数取较大者：level=100 A、min_delta_pct=5 → 5 A > 0.3 A
+    eff = effective_params(prm, 100.0, 1.0, 5.0)
+    assert eff["min_delta_w"] == 5.0 and eff["drift_w"] == 1.0 and eff["threshold_w"] == 1.0
+    # 配置：A 套可单独改、往返、校验 > 0
+    cfg = AppConfig.from_dict({"nilm": {"algorithms": {"glr": {"noise_a": 0.2, "min_delta_a": 1.5}}}}).validate()
+    g = cfg.nilm.params("glr")
+    assert g["noise_a"] == 0.2 and g["min_delta_a"] == 1.5 and g["noise_w"] == 10.0 and g["min_delta_w"] == 50.0
+    assert AppConfig.from_dict(cfg.to_dict()).nilm.params("glr")["noise_a"] == 0.2
+    with pytest.raises(ConfigError):
+        AppConfig.from_dict({"nilm": {"algorithms": {"threshold": {"settle_tol_a": 0}}}}).validate()
+
+
+def test_current_mode_uses_a_thresholds_not_w(tmp_path, monkeypatch):
+    """I 口径：把 A 套门槛抬到 ΔI 之上 → 不报；W 套改成天文数字 → 不影响 I 口径。"""
+    monkeypatch.setenv("ELEC_TOOL_NILM_DIR", str(tmp_path / "nilm"))
+    t, u, i = _wave(6.0)
+    u0 = np.zeros_like(u)
+    # ΔI_A ≈ 3.2 A（投入）、≈1.9 A（切除）：min_delta_a=2.5 → 只剩投入事件
+    cfg = AppConfig(); cfg.nilm.channels = ["A"]
+    for a in NILM_ALGO_DEFAULTS:
+        cfg.nilm.algorithms[a]["min_delta_a"] = 2.5
+        cfg.nilm.algorithms[a]["min_delta_w"] = 1e9                     # W 套应被忽略
+    cfg.validate()
+    evs = _feed(NilmDetector(cfg), t, u0, i)
+    assert evs and all(e["direction"] == "up" for e in evs) and {e["algorithm"] for e in evs} == set(NILM_ALGO_DEFAULTS)
+    assert all(e["unit"] == "A" and e["magnitude"] > 2.5 for e in evs)
+    # 全部 A 套抬到 10 A → 0 事件
+    for a in NILM_ALGO_DEFAULTS:
+        cfg.nilm.algorithms[a]["min_delta_a"] = 10.0
+    cfg.validate()
+    assert _feed(NilmDetector(cfg), t, u0, i) == []
+    # P 口径不受 A 套影响：A 套 10 A、W 套恢复默认 → 事件照常
+    cfg2 = AppConfig(); cfg2.nilm.quantity = "p"; cfg2.nilm.channels = ["A"]
+    for a in NILM_ALGO_DEFAULTS:
+        cfg2.nilm.algorithms[a]["min_delta_a"] = 10.0
+    cfg2.validate()
+    evs2 = _feed(NilmDetector(cfg2), t, u, i)
+    assert {e["algorithm"] for e in evs2} == set(NILM_ALGO_DEFAULTS) and all(e["unit"] == "W" for e in evs2)
+
+
+def test_frontend_a_params_wiring():
+    js = (ROOT / "app/static/app.js").read_text(encoding="utf-8")
+    block = js.split("const NILM_ALGOS")[1].split("};")[0]
+    for a in NILM_ALGO_DEFAULTS:
+        for k in NILM_ALGO_DEFAULTS[a]:
+            if k.endswith("_a"):
+                assert f"{k}:" in block and "A · I口径" in block, (a, k)
+    assert "function nilmDimUnits(" in js and "nilm-inactive" in js
