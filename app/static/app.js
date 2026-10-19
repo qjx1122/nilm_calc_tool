@@ -3094,17 +3094,15 @@ function nilmPqsKind(nl) {
   if (v !== 'auto') return v;
   return (nl.summary && nl.summary.quantity_effective === 'i') ? 'i' : 'pqs';
 }
+/* v0.40：三相的显示/隐藏统一用曲线下方的图例勾选（与其它趋势图一致），不再在标题栏重复放一组勾选框 */
 function nilmCurrentSeries(hi, t0) {
-  const box = $('#nilm-pqs-phases');
-  const on = box ? Array.from(box.querySelectorAll('.nilm-pqs-ph')).filter(c => c.checked).map(c => c.dataset.ph) : ['A', 'B', 'C'];
-  return ['A', 'B', 'C'].filter(ph => on.includes(ph)).map(ph => ({ name: 'I' + ph.toLowerCase(), color: COLORS[ph], data: hi.map(p => [p.t - t0, p['I' + ph.toLowerCase()]]) }));
+  return ['A', 'B', 'C'].map(ph => ({ name: 'I' + ph.toLowerCase(), color: COLORS[ph], data: hi.map(p => [p.t - t0, p['I' + ph.toLowerCase()]]) }));
 }
 function renderNilmPqs(nl) {
   const cv = $('#nilm-pqs'); if (!cv) return;
   const kind = nilmPqsKind(nl); const isI = kind === 'i';
   const hp = isI ? curHist('current') : curHist('power'); const t0 = hp.length ? hp[0].t : 0;
   const ttl = $('#nilm-pqs-title'); if (ttl) ttl.textContent = isI ? '三相电流 I 趋势' : 'P / Q / S 趋势';
-  const phs = $('#nilm-pqs-phases'); if (phs) phs.style.display = isI ? '' : 'none';
   const sp = cv.parentElement && cv.parentElement.querySelector('.curvespan'); if (sp) { sp.dataset.curve = isI ? 'current' : 'power'; sp.textContent = curveSpanText(sp.dataset.curve, sp.dataset.side); }
   const box = $('#nilm-pqs-algos');
   const chosen = box ? Array.from(box.querySelectorAll('.nilm-pqs-algo')).filter(c => c.checked).map(c => c.dataset.algo) : Object.keys(NILM_ALGOS);
@@ -3158,7 +3156,7 @@ function renderNilm() {
     '口径：每周波 P=mean(u·i)，Q=基波单频 DFT 无功，I=周波有效值；各算法在最近 window_cycles 个周波的窗上评估，同算法同对象按终点序号去重，终点之后需再看到足够周波才确认（所以事件会滞后几个周波出现）。',
     '阈值单位为 W，按计算口径（启用 PT/CT 时为一次侧）填写；rel_tol_pct / min_delta_pct 把门槛按窗内 |P| 中位数折算成相对值，同一套默认值在 W 级与 MW 级都能用。',
     '检测量 auto/p/i（v0.36）：数据源只有三相电流（无电压）时选 auto 或 i，按逐周波电流有效值检测，六种算法均可用；此时事件幅值为 |ΔI|（A），ΔP/ΔQ 恒为 0。',
-    'v0.39：I 口径不存在跨相合并（三相电流有效值不能像有功那样相加），只能单相检测——检测对象「三相总」被忽略，只配了三相总时按 A/B/C 各自检测；上方趋势图「曲线」可选三相电流（Ia/Ib/Ic 勾选），auto 时 I 口径自动画电流。',
+    'v0.39：I 口径不存在跨相合并（三相电流有效值不能像有功那样相加），只能单相检测——检测对象「三相总」被忽略，只配了三相总时按 A/B/C 各自检测；上方趋势图「曲线」可选三相电流（显示哪几相用曲线下方图例勾选），auto 时 I 口径自动画电流。',
     'v0.37：每个算法的绝对阈值分 W（P 口径）与 A（I 口径）两套，检测器只用当前口径那一套，另一套不参与（表单中灰显）；相对门槛 rel_tol_pct / min_delta_pct 对两种口径都按窗内中位数折算。',
     '双滑窗均值差与 CUSUM 对单周波尖峰较敏感（会按均值摊成小事件）；需要抗尖峰请看中值滤波差分 / 稳态分段，或抬高 min_delta_pct。',
   ]);
@@ -3173,7 +3171,6 @@ function bindNilm(side) {
   on('nilm-chfilter', 'change', () => refreshNilm(side));
   ['nilm-ch', 'nilm-qty', 'nilm-mark', 'nilm-pqs-ch', 'nilm-pqs-kind'].forEach(id => on(id, 'change', render));
   const pa = E(side, 'nilm-pqs-algos'); if (pa) pa.addEventListener('change', render);
-  const pp = E(side, 'nilm-pqs-phases'); if (pp) pp.addEventListener('change', render);
   if (side === 'branch') bindNilmForm('branch');   // 克隆列的表单输入 → 分路侧脏标记
 }
 

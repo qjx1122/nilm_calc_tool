@@ -132,15 +132,12 @@ async function main() {
   check('提示区说明「只能单相检测」', /只能单相检测/.test($('nilm-notes').textContent));
   check('检测对象「三相总」灰显（effective=i）', $('nilm-ch-total-lbl').classList.contains('nilm-inactive'));
   check('周波窗卡片对象显示 A/B/C', /对象 A\/B\/C/.test($('nilm-cards').textContent));
-  check('趋势图曲线选择器与三相勾选存在', !!$('nilm-pqs-kind') && $('nilm-pqs-phases').querySelectorAll('.nilm-pqs-ph').length === 3, String(document.querySelectorAll('.nilm-pqs-ph').length));
-  check('auto + I 口径 → 趋势标题为三相电流、勾选可见', /三相电流 I 趋势/.test($('nilm-pqs-title').textContent) && $('nilm-pqs-phases').style.display !== 'none');
+  check('趋势图曲线选择器存在、标题栏无重复的三相勾选框（v0.40）', !!$('nilm-pqs-kind') && !document.querySelector('#nilm-pqs-phases') && document.querySelectorAll('.nilm-pqs-ph').length === 0);
+  check('auto + I 口径 → 趋势标题为三相电流', /三相电流 I 趋势/.test($('nilm-pqs-title').textContent));
   const cs = document.querySelector('#view-nilm .curvespan'); check('曲线跨度标签切到 current', cs && cs.dataset.curve === 'current', cs && cs.dataset.curve);
   $('nilm-pqs-kind').value = 'pqs'; change($('nilm-pqs-kind')); await sleep(300);
-  check('切到 P/Q/S → 标题复原、三相勾选隐藏', /P \/ Q \/ S 趋势/.test($('nilm-pqs-title').textContent) && $('nilm-pqs-phases').style.display === 'none');
-  $('nilm-pqs-kind').value = 'i'; change($('nilm-pqs-kind')); await sleep(300);
-  const phB = document.querySelector('.nilm-pqs-ph[data-ph="B"]'); phB.checked = false; change(phB); await sleep(300);
-  check('去掉 Ib 勾选后仍正常渲染（电流趋势标题保持）', /三相电流 I 趋势/.test($('nilm-pqs-title').textContent));
-  phB.checked = true; change(phB); $('nilm-pqs-kind').value = 'auto'; change($('nilm-pqs-kind')); await sleep(200);
+  check('切到 P/Q/S → 标题复原', /P \/ Q \/ S 趋势/.test($('nilm-pqs-title').textContent));
+  $('nilm-pqs-kind').value = 'auto'; change($('nilm-pqs-kind')); await sleep(200);
   await api('/api/engine/stop', { method: 'POST' });
 
   console.log('L4 清空');

@@ -457,7 +457,8 @@ def test_current_mode_only_single_phase_total_falls_back_to_abc(tmp_path, monkey
 def test_frontend_current_trend_and_total_dim_wiring():
     html = (ROOT / "app/static/index.html").read_text(encoding="utf-8")
     js = (ROOT / "app/static/app.js").read_text(encoding="utf-8")
-    assert 'id="nilm-pqs-kind"' in html and html.count('class="nilm-pqs-ph"') == 3 and 'id="nilm-ch-total-lbl"' in html
+    assert 'id="nilm-pqs-kind"' in html and 'id="nilm-ch-total-lbl"' in html
+    assert 'nilm-pqs-ph' not in html and 'nilm-pqs-phases' not in js      # v0.40：标题栏不再放三相勾选，三相显隐用曲线下方图例
     assert "function nilmCurrentSeries(" in js and "curHist('current')" in js.split("function renderNilmPqs")[1].split("\n}")[0]
     assert "nilm-ch-total-lbl" in js.split("function nilmDimUnits")[1].split("\n}")[0]
     assert "channels_effective" in js
