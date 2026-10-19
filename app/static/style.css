@@ -88,6 +88,9 @@ input:disabled, select:disabled { cursor: not-allowed; }
 .curvesave{font-weight:400;font-size:12px;color:var(--mut);display:inline-flex;align-items:center;gap:4px;cursor:pointer}
 .curvesave input{margin:0}
 .curvespan{font-weight:400;font-size:11px;color:var(--mut)}
+/* v0.41：负荷辨识页三块面板标题后的括号提示独占一行，不与标题混排 */
+.hdrhint{display:block;font-weight:400;font-size:12px;color:var(--mut);margin-top:4px;line-height:1.5}
+.hdrhint .curvespan{margin-left:6px}
 #curve-save-list label{display:inline-flex;align-items:center;gap:4px;padding:4px 8px;border:1px solid var(--line);border-radius:6px;cursor:pointer}
 
 /* 数据处理：重采样进度条 */

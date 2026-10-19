@@ -133,6 +133,8 @@ async function main() {
   check('检测对象「三相总」灰显（effective=i）', $('nilm-ch-total-lbl').classList.contains('nilm-inactive'));
   check('周波窗卡片对象显示 A/B/C', /对象 A\/B\/C/.test($('nilm-cards').textContent));
   check('趋势图曲线选择器存在、标题栏无重复的三相勾选框（v0.40）', !!$('nilm-pqs-kind') && !document.querySelector('#nilm-pqs-phases') && document.querySelectorAll('.nilm-pqs-ph').length === 0);
+  check('v0.41 三块面板标题的括号提示为独立块级行（.hdrhint display:block）', ['nilm-pqs-n', 'nilm-win-n', 'nilm-total'].every((id) => { const h = $(id).closest('.hdrhint'); return h && h.tagName === 'SMALL' && h.parentElement === h.closest('h3').firstElementChild; }) && /\.hdrhint\{display:block/.test(await (await fetch(BASE + '/static/style.css')).text()));
+  check('v0.41 标题文本本身不再含括号提示', !/（/.test($('nilm-pqs-title').textContent) && $('nilm-win-n').closest('h3').firstElementChild.firstChild.textContent.trim() === '周波窗');
   check('auto + I 口径 → 趋势标题为三相电流', /三相电流 I 趋势/.test($('nilm-pqs-title').textContent));
   const cs = document.querySelector('#view-nilm .curvespan'); check('曲线跨度标签切到 current', cs && cs.dataset.curve === 'current', cs && cs.dataset.curve);
   $('nilm-pqs-kind').value = 'pqs'; change($('nilm-pqs-kind')); await sleep(300);

@@ -309,3 +309,5 @@
 - **[2026-10-19] v0.39**（用户：① 仅电流检测不存在跨相合并、只能单相；② 趋势图增加电流显示、三相可选）。`NilmDetector.channels_effective`（I 口径去 total，仅 total → A/B/C），summary 带 `channels_effective` + note；nilm_tune I 口径默认 `--channel A`、total 报错；nilm_check `--channel` 过滤 + 多对象提示。前端：三相总灰显、趋势面板「曲线」自动/P/Q/S/电流 I + Ia/Ib/Ic 勾选（取 history/current）。验证：test_r12 +2 改 2、tune 端到端改三相（36 事件、`--channel A` ✅），ui_r12 41/41、ui_r24 64/64、ui_r30 11/11，全量 pytest 337 passed / 1 skipped。
 
 - **[2026-10-19] v0.40**（用户：趋势曲线选电流时上方三相勾选框与曲线下方图例重复，统一去掉上方的）。删除 `nilm-pqs-phases`，`nilmCurrentSeries` 恒给 Ia/Ib/Ic 三条、由图例勾选显隐；ui_r12 40/40、ui_r24 64/64、test_r12 17 passed。
+
+- **[2026-10-19] v0.41**（用户：负荷辨识页趋势/周波窗/事件列表标题后的括号提示换行显示）。`<small class="hdrhint">` 块级独占一行；ui_r12 42/42、ui_r24 64/64。
