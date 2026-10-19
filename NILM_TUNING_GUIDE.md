@@ -363,8 +363,8 @@ Invoke-RestMethod -Method Put -Uri http://localhost:8000/api/branch/config -Cont
 .\.venv\Scripts\python.exe tools\nilm_replay.py --file data\dev_onoff_i.csv --params output\tune_i.json --out output\dev_events_i.csv
 #   也可对有电压的文件强制按电流检测：加 --quantity i（或 --set threshold.min_delta_a=0.5 单项覆盖）
 # 3 对账：真值表不变；总线侧带指纹归属改用 --mag-a（A），--mag-w / --dq-var 对电流口径事件不适用（ΔQ 恒 0，脚本会提示并忽略）
-.\.venv\Scripts\python.exe tools\nilm_check.py --events output\dev_events_i.csv --truth data\truth.csv --tol-s 1
-.\.venv\Scripts\python.exe tools\nilm_check.py --events output\bus_events_i.csv --truth data\truth_bus.csv --mag-a 25 --mag-tol-pct 30
+.\.venv\Scripts\python.exe tools\nilm_check.py --events output\dev_events_i.csv --truth data\truth.csv --tol-s 1 --channel A
+.\.venv\Scripts\python.exe tools\nilm_check.py --events output\bus_events_i.csv --truth data\truth_bus.csv --channel A --mag-a 25 --mag-tol-pct 30
 #   --signature-from 同样可用：从设备侧命中事件取 |ΔI| 均值作指纹
 # 4 定稿：同 §7；界面「检测参数」里 A 口径一列会点亮、W 一列灰显（quantity_effective = i）
 ```
