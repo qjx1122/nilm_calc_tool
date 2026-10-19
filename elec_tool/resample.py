@@ -56,12 +56,36 @@ def output_name(src_path: str, fs_new: float) -> str:
 @dataclass
 class ResampleJob:
     """进度/取消句柄（Web 后台线程用；CLI 可忽略）。"""
-    progress: float = 0.0            # 0~1，按已读字节
+    progress: float = 0.0            # 当前步 0~1，按已读字节
     rows_in: int = 0
     rows_out: int = 0
     stage: str = "idle"
+    # v0.35：两步进度——step 1 重采样 / step 2 相对误差；steps 为本次任务总步数（不算误差时为 1）
+    step: int = 1
+    steps: int = 1
+    step_status: Dict[str, str] = field(default_factory=dict)   # {"resample": pending|running|done|skipped, "error": …}
+    step_elapsed: Dict[str, float] = field(default_factory=dict)
     cancel: threading.Event = field(default_factory=threading.Event)
     on_progress: Optional[Callable[["ResampleJob"], None]] = None
+
+    def begin_step(self, step: int, name: str) -> None:
+        self.step = step
+        self.progress = 0.0
+        self.step_status[name] = "running"
+        self.step_elapsed[name] = time.time()
+
+    def end_step(self, name: str, status: str = "done") -> None:
+        self.step_status[name] = status
+        t0 = self.step_elapsed.get(name)
+        self.step_elapsed[name] = round(time.time() - t0, 3) if (t0 and status != "skipped") else 0.0
+        self.progress = 1.0
+        if self.on_progress:
+            self.on_progress(self)
+
+    @property
+    def overall(self) -> float:
+        """跨步总进度 0~1。"""
+        return max(0.0, min(1.0, ((self.step - 1) + self.progress) / max(1, self.steps)))
 
     def tick(self, progress: float, stage: Optional[str] = None) -> None:
         self.progress = max(0.0, min(1.0, progress))
@@ -186,11 +210,14 @@ def resample_csv(src_path: str, fs_new: float, out_dir: str = "data", *,
                  cfg: Optional[AppConfig] = None, fs_src: Optional[float] = None,
                  method: str = "linear", overwrite: bool = False, decimals: int = 6,
                  job: Optional[ResampleJob] = None, root: Optional[str] = None,
-                 error_window_s: Optional[float] = None) -> Dict[str, Any]:
+                 error_window_s: Optional[float] = None, error_only_if_exists: bool = True) -> Dict[str, Any]:
     """重采样一个 CSV 文件，返回结果字典（out_path / rows_in / rows_out / fs_src / notes …）。
 
     ``error_window_s``：>0 时在重采样完成后按该时间窗（秒）逐窗计算重采样前后的相对误差并写入
     ``<输出名>_err.csv``（见 :func:`error_report`）；None/0 → 不计算。
+    ``error_only_if_exists``（v0.35）：输出文件已存在、未勾选覆盖且要算误差时，**跳过重采样只算相对误差**
+    （结果 ``resample_skipped=True``）；为 False 则沿用旧行为（已存在即报错）。
+    任务分两步：step 1 重采样、step 2 相对误差（``job.step/steps/step_status``）。
     """
     t_start = time.time()
     job = job or ResampleJob()
@@ -213,8 +240,15 @@ def resample_csv(src_path: str, fs_new: float, out_dir: str = "data", *,
     out_path = os.path.join(out_dir_abs, output_name(src, fs_new))
     if os.path.abspath(out_path) == os.path.abspath(src):
         raise ResampleError("输出文件与输入文件同名，拒绝覆盖输入")
+    want_err = error_window_s is not None and float(error_window_s) > 0
+    skip_resample = False
     if os.path.exists(out_path) and not overwrite:
-        raise ResampleError(f"输出文件已存在：{os.path.relpath(out_path, root)}（勾选「覆盖」或改目标采样率）")
+        if want_err and error_only_if_exists:
+            skip_resample = True
+        else:
+            raise ResampleError(f"输出文件已存在：{os.path.relpath(out_path, root)}（勾选「覆盖」或改目标采样率）")
+    job.steps = 2 if want_err else 1
+    job.step_status = {"resample": "pending", **({"error": "pending"} if want_err else {})}
 
     enc = colmap.encoding if colmap.encoding != "auto" else detect_encoding(src)
     # 输出编码与输入一致；utf-8-sig 只在源文件真的带 BOM 时才写 BOM（探测器对纯 UTF-8 也会报 utf-8-sig）
@@ -224,6 +258,7 @@ def resample_csv(src_path: str, fs_new: float, out_dir: str = "data", *,
         else ("utf-8" if enc.lower().replace("_", "-") == "utf-8-sig" else enc)
     delim = colmap.delimiter
     notes: List[str] = []
+    job.begin_step(1, "resample")
     job.tick(0.0, "prescan")
     tz_h = float(getattr(colmap, "tz_offset_h", 0.0) or 0.0)
     pre = _prescan(src, enc, delim, colmap, colmap.has_header, tz_h)
@@ -265,29 +300,41 @@ def resample_csv(src_path: str, fs_new: float, out_dir: str = "data", *,
     rows_in = 0
     rows_out = 0
     tmp_path = out_path + ".part"
-    try:
-        rows_in, rows_out = _run_resample(src, tmp_path, enc, enc_out, delim, header, idx, ncols, size, method,
-                                          ratio, fs_new, fs_src_used, ts_writer, decimals, job, notes)
-    except BaseException:
+    if skip_resample:
+        notes.append(f"输出文件已存在：{os.path.relpath(out_path, root)}，跳过重采样，只计算相对误差（勾选「覆盖」可强制重做）")
+        job.tick(1.0, "skipped")
+        job.end_step("resample", "skipped")
+    else:
         try:
-            os.remove(tmp_path)                      # 失败/取消不留半成品
-        except OSError:
-            pass
-        raise
-    os.replace(tmp_path, out_path)
-    job.rows_in, job.rows_out = rows_in, rows_out
+            rows_in, rows_out = _run_resample(src, tmp_path, enc, enc_out, delim, header, idx, ncols, size, method,
+                                              ratio, fs_new, fs_src_used, ts_writer, decimals, job, notes)
+        except BaseException:
+            try:
+                os.remove(tmp_path)                      # 失败/取消不留半成品
+            except OSError:
+                pass
+            raise
+        os.replace(tmp_path, out_path)
+        job.rows_in, job.rows_out = rows_in, rows_out
+        job.end_step("resample", "done")
     err: Dict[str, Any] = {}
-    if error_window_s is not None and float(error_window_s) > 0:
-        job.tick(1.0, "error")
+    if want_err:
+        job.begin_step(2, "error")
+        job.tick(0.0, "error")
         err = error_report(src, out_path, fs_src=fs_src_used, fs_new=fs_new, window_s=float(error_window_s),
                            enc=enc, enc_out=enc_out, delim=delim, header=header, idx=idx, ncols=ncols,
                            colmap=colmap, root=root, job=job)
         notes.append(f"相对误差：时间窗 {float(error_window_s):g} s，共 {err['err_windows']} 窗 → {err['err_path']}")
+        if skip_resample:                                # 行数取自误差统计实际读到的两份文件
+            rows_in, rows_out = err["err_rows_in"], err["err_rows_out"]
+            job.rows_in, job.rows_out = rows_in, rows_out
+        job.end_step("error", "done")
     job.tick(1.0, "done")
     dur_in = (rows_in - 1) / fs_src_used if rows_in > 1 else 0.0
     return {
         **err,
-        "ok": True, "src_path": os.path.relpath(src, root) if src.startswith(root) else src,
+        "ok": True, "resample_skipped": skip_resample,
+        "steps": {k: {"status": v, "elapsed_s": job.step_elapsed.get(k, 0.0)} for k, v in job.step_status.items()}, "src_path": os.path.relpath(src, root) if src.startswith(root) else src,
         "out_path": os.path.relpath(out_path, root), "out_name": os.path.basename(out_path),
         "out_size_mb": round(os.path.getsize(out_path) / 1024 / 1024, 3),
         "rows_in": rows_in, "rows_out": rows_out, "fs_src": fs_src_used, "fs_src_source": fs_src_source,
@@ -546,8 +593,8 @@ def error_report(src: str, out_path: str, *, fs_src: float, fs_new: float, windo
                 maxs["rms_rel"] = np.maximum(maxs["rms_rel"], np.where(np.isfinite(rms_rel), rms_rel, 0.0))
                 maxs["nrmse"] = np.maximum(maxs["nrmse"], np.where(np.isfinite(nrmse), nrmse, 0.0))
                 i0 = i1
-                if windows % 16 == 0:
-                    job.tick(1.0, "error")
+                if windows % 8 == 0:
+                    job.tick(fi.buffer.tell() / size if hasattr(fi, "buffer") else 0.5, "error")
             if windows == 0:
                 raise ResampleError("误差统计：原始文件没有数据行")
             srow: List[Any] = ["汇总", "", "0.000000", f"{i0 / fs_src:.6f}", i0, k]
@@ -565,7 +612,8 @@ def error_report(src: str, out_path: str, *, fs_src: float, fs_new: float, windo
             pass
         raise
     os.replace(tmp, err_path)
-    return {"err_path": os.path.relpath(err_path, root) if err_path.startswith(root) else err_path,
+    job.tick(1.0, "error")
+    return {"err_rows_in": i0, "err_rows_out": k, "err_path": os.path.relpath(err_path, root) if err_path.startswith(root) else err_path,
             "err_name": os.path.basename(err_path), "err_window_s": float(window_s), "err_windows": windows,
             "err_channels": names, "err_summary": summary,
             "err_rms_rel_max": float(maxs["rms_rel"].max()) if nch else 0.0,

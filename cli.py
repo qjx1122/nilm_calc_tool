@@ -471,12 +471,15 @@ def cmd_resample(args: argparse.Namespace) -> int:
     if args.format == "json":
         print(json.dumps(r, ensure_ascii=False, indent=2))
         return 0
-    print(f"✓ 已写出 {r['out_path']}（{r['out_size_mb']} MB）")
+    if r.get("resample_skipped"):
+        print(f"⤼ 第 1 步重采样已跳过：输出 {r['out_path']} 已存在（--overwrite 可强制重做），只计算相对误差")
+    else:
+        print(f"✓ 第 1 步重采样已写出 {r['out_path']}（{r['out_size_mb']} MB）")
     print(f"  行数 {r['rows_in']} → {r['rows_out']}；原采样率 {r['fs_src']:g} Hz（{r['fs_src_source']}）→ 目标 {r['fs_new']:g} Hz；"
           f"方法 {r['method']}；耗时 {r['elapsed_s']}s")
     print(f"  时间戳 {r['ts_first_in']!r} → 输出首/末 {r['ts_first_out']!r} / {r['ts_last_out']!r}（模式 {r['ts_mode']}）")
     if r.get("err_path"):
-        print(f"  相对误差：窗 {r['err_window_s']:g}s × {r['err_windows']} 窗 → {r['err_path']}；"
+        print(f"✓ 第 2 步相对误差：窗 {r['err_window_s']:g}s × {r['err_windows']} 窗 → {r['err_path']}；"
               f"RMS 相对误差最大 {r['err_rms_rel_max']:.3e}，波形 NRMSE 最大 {r['err_nrmse_max']:.3e}")
     for n in r["notes"]:
         print("  · " + n)

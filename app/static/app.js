@@ -3234,7 +3234,7 @@ async function rsRun() {
     const r = await api('/api/process/resample', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(p) });
     if (!r.ok) { toast(r.error, 'err'); $('#rs-status').innerHTML = notes(['✗ ' + esc(r.error)]); return; }
     toast('重采样任务已启动');
-    $('#rs-result').innerHTML = ''; $('#rs-json').textContent = ''; $('#btn-rs-use').disabled = true;
+    $('#rs-result').innerHTML = ''; $('#rs-result2').innerHTML = ''; $('#rs-json').textContent = ''; $('#btn-rs-use').disabled = true;
     const es = $('#rs-err-summary'); if (es) es.innerHTML = '';
     rsPoll(true);
   } catch (e) { toast(e.message, 'err'); }
@@ -3255,33 +3255,59 @@ async function rsPoll(loop) {
 
 function rsRenderStatus(st) {
   const bar = $('#rs-bar'); if (!bar) return;
-  const pct = Math.round((st.progress || 0) * 100);
-  bar.style.width = pct + '%';
-  bar.className = 'progress-bar' + (st.error ? ' err' : (st.result ? ' done' : ''));
+  const bar2 = $('#rs-bar2'), l1 = $('#rs-step1-label'), l2 = $('#rs-step2-label');
+  const p = st.params || {};
+  const ss = st.step_status || {};
+  const steps = st.steps || 1;
+  const sp = Math.round((st.step_progress || 0) * 100);
+  const r = st.result;
+  // v0.35：两步各自的进度条与状态标签
+  const stepPct = (name, idx) => {
+    const stt = ss[name] || 'pending';
+    if (stt === 'done' || stt === 'skipped') return 100;
+    if (stt === 'running') return sp;
+    return 0;
+  };
+  const stepCls = (name) => {
+    const stt = ss[name] || 'pending';
+    if (st.error && (stt === 'running' || (stt === 'pending' && st.step === (name === 'error' ? 2 : 1)))) return 'progress-bar err';
+    return 'progress-bar' + (stt === 'done' ? ' done' : '');
+  };
+  const label = (name) => {
+    const stt = ss[name] || 'pending';
+    if (st.error && stt === 'running') return '✗ 失败';
+    return { pending: '等待', running: `进行中 ${sp}%`, done: '✓ 完成' + (r && r.steps && r.steps[name] ? ` · ${r.steps[name].elapsed_s}s` : ''), skipped: '⤼ 已跳过（输出已存在）' }[stt] || stt;
+  };
+  bar.style.width = stepPct('resample') + '%'; bar.className = stepCls('resample');
+  if (l1) l1.textContent = label('resample');
+  $('#rs-step1').className = 'rs-step ' + (ss.resample || 'pending');
+  const hasErrStep = steps >= 2 || 'error' in ss || (r && r.err_path);
+  if (bar2) { bar2.style.width = (hasErrStep ? stepPct('error') : 0) + '%'; bar2.className = hasErrStep ? stepCls('error') : 'progress-bar'; }
+  if (l2) l2.textContent = hasErrStep ? label('error') : '未启用（未勾选计算相对误差）';
+  $('#rs-step2').className = 'rs-step ' + (hasErrStep ? (ss.error || 'pending') : 'pending');
   $('#btn-rs-run').disabled = !!st.running;
   $('#btn-rs-cancel').disabled = !st.running;
-  const p = st.params || {};
   if (st.running) {
-    $('#rs-status').innerHTML = notes([`运行中 · 阶段 ${esc(st.stage)} · ${pct}% · 已读 ${num(st.rows_in, 0)} 行 → 已写 ${num(st.rows_out, 0)} 行 · ${num(st.elapsed_s, 1)}s`,
+    $('#rs-status').innerHTML = notes([`运行中 · 第 ${st.step || 1}/${steps} 步 · 阶段 ${esc(st.stage)} · 本步 ${sp}% · 总 ${Math.round((st.progress || 0) * 100)}% · 已读 ${num(st.rows_in, 0)} 行 → 已写 ${num(st.rows_out, 0)} 行 · ${num(st.elapsed_s, 1)}s`,
       `源 ${esc(p.path || '')} → ${p.fs_new} Hz（${esc(p.method || 'linear')}）`]);
     return;
   }
   if (st.error) {
-    $('#rs-status').innerHTML = notes([`✗ 失败：${esc(st.error)}`]);
+    $('#rs-status').innerHTML = notes([`✗ 失败（第 ${st.step || 1} 步）：${esc(st.error)}`]);
     return;
   }
-  const r = st.result;
   if (!r) { if (!st.params || !st.params.path) $('#rs-status').innerHTML = notes(['尚未运行任务']); return; }
-  $('#rs-status').innerHTML = notes([`✓ 完成 · 耗时 ${r.elapsed_s}s`]);
+  $('#rs-status').innerHTML = notes([`✓ 完成 · 总耗时 ${r.elapsed_s}s` + (r.resample_skipped ? ' · 第 1 步已跳过（输出已存在，只计算了相对误差）' : '')]);
   $('#rs-result').innerHTML = notes([
-    `输出文件：<b><code>${esc(r.out_path)}</code></b>（${r.out_size_mb} MB）`,
+    (r.resample_skipped ? `已存在的输出文件：<b><code>${esc(r.out_path)}</code></b>（${r.out_size_mb} MB）——未重新重采样` : `输出文件：<b><code>${esc(r.out_path)}</code></b>（${r.out_size_mb} MB）`),
     `行数 ${num(r.rows_in, 0)} → <b>${num(r.rows_out, 0)}</b>；原采样率 <b>${num(r.fs_src, 4)} Hz</b>（${r.fs_src_source === 'user' ? '用户指定' : '时间戳推算'}）→ 目标 <b>${num(r.fs_new, 4)} Hz</b>；方法 ${esc(r.method)}；数据时长 ${num(r.duration_s, 3)}s`,
     `时间戳：输入首 <code>${esc(r.ts_first_in)}</code> → 输出首 <code>${esc(r.ts_first_out)}</code> / 末 <code>${esc(r.ts_last_out)}</code>（模式 ${esc(r.ts_mode)}，${r.header_kept ? '表头保留' : '无表头'}，编码 ${esc(r.encoding)}）`,
-    ...(r.err_path ? [`相对误差文件：<b><code>${esc(r.err_path)}</code></b>（时间窗 ${num(r.err_window_s, 3)} s × ${num(r.err_windows, 0)} 窗）· ` +
-      `各通道最大 RMS 相对误差 <b>${(r.err_rms_rel_max * 100).toExponential(2)}%</b>，最大波形相对误差 NRMSE <b>${(r.err_nrmse_max * 100).toExponential(2)}%</b>`]
-      : ['未计算相对误差（已关闭）']),
-    ...(r.notes || []),
+    ...((r.notes || []).filter(n => !/^相对误差：/.test(n))),
   ]);
+  $('#rs-result2').innerHTML = notes(r.err_path
+    ? [`相对误差文件：<b><code>${esc(r.err_path)}</code></b>（时间窗 ${num(r.err_window_s, 3)} s × ${num(r.err_windows, 0)} 窗）`,
+       `各通道最大 RMS 相对误差 <b>${(r.err_rms_rel_max * 100).toExponential(2)}%</b>，最大波形相对误差 NRMSE <b>${(r.err_nrmse_max * 100).toExponential(2)}%</b>`]
+    : ['未计算相对误差（已关闭）']);
   const es = $('#rs-err-summary'); if (es) es.innerHTML = r.err_path ? rsErrTable(r) : '';
   $('#rs-json').textContent = JSON.stringify(r, null, 2);
   const useBtn = $('#btn-rs-use'); useBtn.disabled = false; useBtn.dataset.path = r.out_path; useBtn.dataset.fs = r.fs_new;

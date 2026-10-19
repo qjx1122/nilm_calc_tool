@@ -813,7 +813,7 @@
                   <option value="fft">fft 频域（抗混叠，整文件载入）</option>
                 </select>
               </label>
-              <label class="check"><input id="rs-overwrite" type="checkbox"> 输出已存在时覆盖</label>
+              <label class="check"><input id="rs-overwrite" type="checkbox"> 输出已存在时覆盖（不勾选且要算误差：已存在则跳过重采样只算误差）</label>
             </div>
             <div class="row2">
               <label class="check"><input id="rs-err" type="checkbox" checked> 计算重采样前后相对误差（写 <code>_err.csv</code>）</label>
@@ -838,11 +838,19 @@
           </div>
         </div>
         <div class="panel">
-          <h3>任务进度与结果</h3>
-          <div class="progress"><div id="rs-bar" class="progress-bar" style="width:0%"></div></div>
+          <h3>任务进度与结果（两步）</h3>
           <div id="rs-status" class="notes"></div>
-          <div id="rs-result" class="notes"></div>
-          <div id="rs-err-summary" class="tablewrap"></div>
+          <div class="rs-step" id="rs-step1">
+            <div class="rs-step-head"><b>第 1 步 · 重采样</b> <span id="rs-step1-label" class="muted">未开始</span></div>
+            <div class="progress"><div id="rs-bar" class="progress-bar" style="width:0%"></div></div>
+            <div id="rs-result" class="notes"></div>
+          </div>
+          <div class="rs-step" id="rs-step2">
+            <div class="rs-step-head"><b>第 2 步 · 重采样前后相对误差</b> <span id="rs-step2-label" class="muted">未开始</span></div>
+            <div class="progress"><div id="rs-bar2" class="progress-bar" style="width:0%"></div></div>
+            <div id="rs-result2" class="notes"></div>
+            <div id="rs-err-summary" class="tablewrap"></div>
+          </div>
           <div class="btnrow"><button id="btn-rs-use" disabled>用重采样文件作为离线播放源 →</button></div>
           <details><summary>原始结果 JSON</summary><pre id="rs-json" class="pre"></pre></details>
         </div>

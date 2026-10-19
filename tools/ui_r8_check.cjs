@@ -137,13 +137,24 @@ async function main() {
   check('文件下拉自动刷新含新文件', [...$('rs-files').options].some((o) => o.value === 'data/' + OUT_NAME));
   check('预览提示输出已存在', /已存在/.test($('rs-preview').textContent));
 
-  console.log('\n=== E4. 覆盖保护 ===');
+  console.log('\n=== E4. 覆盖保护 / v0.35 已存在则跳过重采样只算误差 ===');
+  const mtime0 = fs.statSync(outPath).mtimeMs;
   click($('btn-rs-run')); st = await waitDone();
-  check('未勾选覆盖 → 失败且界面显示「已存在」', st.error && /已存在/.test(st.error) && /已存在/.test($('rs-status').textContent), st.error);
+  check('v0.35 未勾选覆盖 + 算误差 → 不失败，resample_skipped=true，steps.resample=skipped', st.result && !st.error && st.result.resample_skipped === true && st.result.steps.resample.status === 'skipped' && st.result.steps.error.status === 'done', st.error || JSON.stringify(st.result && st.result.steps));
+  check('v0.35 输出文件未被改写（mtime 不变）', fs.statSync(outPath).mtimeMs === mtime0);
+  check('v0.35 界面：第 1 步标签「已跳过」、第 2 步「完成」、状态行提示跳过', /已跳过/.test($('rs-step1-label').textContent) && /完成/.test($('rs-step2-label').textContent) && /已跳过/.test($('rs-status').textContent), $('rs-step1-label').textContent + ' | ' + $('rs-step2-label').textContent);
+  check('v0.35 两步进度条都 100%', $('rs-bar').style.width === '100%' && $('rs-bar2').style.width === '100%');
+  check('v0.35 状态接口含 step/steps/step_status', st.steps === 2 && st.step === 2 && st.step_status && st.step_status.resample === 'skipped', JSON.stringify([st.step, st.steps, st.step_status]));
+  $('rs-err').checked = false; change($('rs-err')); await sleep(400);
+  click($('btn-rs-run')); st = await waitDone();
+  check('未勾选覆盖且不算误差 → 失败且界面显示「已存在」', st.error && /已存在/.test(st.error) && /已存在/.test($('rs-status').textContent), st.error);
   check('失败时进度条标红', $('rs-bar').classList.contains('err'));
+  check('v0.35 不算误差时第 2 步标注未启用', /未启用/.test($('rs-step2-label').textContent), $('rs-step2-label').textContent);
+  $('rs-err').checked = true; change($('rs-err')); await sleep(400);
   $('rs-overwrite').checked = true; $('rs-method').value = 'fft';
   click($('btn-rs-run')); st = await waitDone();
   check('勾选覆盖 + fft → 成功，行数 2N（周期语义）', st.result && !st.error && st.result.rows_out === 2 * N && st.result.method === 'fft', st.error || (st.result && st.result.rows_out));
+  check('v0.35 两步都完成：标签「✓ 完成 · Ns」、resample_skipped=false', /✓ 完成 · [\d.]+s/.test($('rs-step1-label').textContent) && /✓ 完成 · [\d.]+s/.test($('rs-step2-label').textContent) && st.result.resample_skipped === false, $('rs-step1-label').textContent);
 
   console.log('\n=== E7. v0.34 相对误差（时间窗可配） ===');
   const ERR_NAME = OUT_NAME.replace(/\.csv$/, '_err.csv');
@@ -155,7 +166,7 @@ async function main() {
   const elast = fs.readFileSync(errPath, 'utf8').trim().split(/\r?\n/).pop();
   check('E7 末行为汇总', /^汇总,/.test(elast), elast.slice(0, 40));
   check('E7 fft 升采样纯正弦：最大 NRMSE < 1%', st.result.err_nrmse_max < 0.01, String(st.result.err_nrmse_max));
-  check('E7 界面显示误差文件名与误差表', $('rs-result').textContent.includes(ERR_NAME) && !!document.getElementById('rs-err-table') && document.getElementById('rs-err-table').querySelectorAll('tbody tr').length === 6);
+  check('E7 界面显示误差文件名与误差表', $('rs-result2').textContent.includes(ERR_NAME) && !!document.getElementById('rs-err-table') && document.getElementById('rs-err-table').querySelectorAll('tbody tr').length === 6);
   $('rs-errwin').value = '0.5'; change($('rs-errwin')); await sleep(500);
   const cfgNow = await (await fetch(BASE + '/api/config')).json();
   check('E7 改时间窗 → PUT 配置 processing.error_window_s=0.5', (cfgNow.config || cfgNow).processing && (cfgNow.config || cfgNow).processing.error_window_s === 0.5, JSON.stringify((cfgNow.config || cfgNow).processing));
@@ -168,7 +179,7 @@ async function main() {
   click($('btn-rs-run')); await sleep(300);
   const b8 = bodies('/api/process/resample', 'POST').pop();
   st = await waitDone();
-  check('E7 关闭勾选 → 载荷 err_report=false、结果无 err_path、界面提示已关闭', b8 && b8.err_report === false && !('err_window_s' in b8) && st.result && !st.result.err_path && /已关闭/.test($('rs-result').textContent), JSON.stringify(b8));
+  check('E7 关闭勾选 → 载荷 err_report=false、结果无 err_path、界面提示已关闭', b8 && b8.err_report === false && !('err_window_s' in b8) && st.result && !st.result.err_path && /已关闭/.test($('rs-result2').textContent), JSON.stringify(b8));
   const badw = await (await fetch(BASE + '/api/process/resample', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ path: 'data/' + SRC_NAME, fs_new: 6400, overwrite: true, err_report: true, err_window_s: 0 }) })).json();
   check('E7 err_window_s=0 → ok:false', badw.ok === false && /时间窗/.test(badw.error), badw.error);
   // 还原配置默认值

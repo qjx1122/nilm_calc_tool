@@ -203,3 +203,9 @@ body.no-branch-nav .badge-br{display:none !important}
 .zoombar .pan-btn{padding:0 5px}
 .zoombar .pan-btn:disabled{opacity:.35;cursor:not-allowed}
 canvas:focus{outline:none}
+
+/* v0.35：数据处理两步进度 */
+.rs-step { border: 1px solid #1f2b47; border-radius: 8px; padding: 8px 10px; margin: 8px 0; }
+.rs-step-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: 13px; }
+.rs-step.skipped .progress-bar { background: #64748b; }
+.rs-step.pending { opacity: .6; }

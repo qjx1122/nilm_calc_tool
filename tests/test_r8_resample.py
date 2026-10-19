@@ -251,10 +251,18 @@ def test_api_resample_roundtrip(client):
         st = _wait(client)
         assert st["error"] is None and st["result"]["rows_out"] == 2 * n - 1 and st["progress"] == 1.0
         assert out.exists() and st["result"]["out_path"] == "data/" + out.name
-        # 覆盖保护
+        # v0.35：已存在 + 要算误差 → 跳过重采样只算误差
+        mtime = out.stat().st_mtime_ns
         client.post("/api/process/resample", json={"path": "data/" + src.name, "fs_new": 6400})
         st = _wait(client)
-        assert st["error"] and "已存在" in st["error"]
+        assert st["error"] is None and st["result"]["resample_skipped"] is True
+        assert st["result"]["steps"] == {"resample": {"status": "skipped", "elapsed_s": 0.0}, "error": {"status": "done", "elapsed_s": st["result"]["steps"]["error"]["elapsed_s"]}}
+        assert st["result"]["err_windows"] == 1 and st["result"]["rows_out"] == 2 * n - 1 and out.stat().st_mtime_ns == mtime
+        assert st["step"] == 2 and st["steps"] == 2 and st["step_status"]["resample"] == "skipped" and st["progress"] == 1.0
+        # 覆盖保护（不算误差时仍报错）
+        client.post("/api/process/resample", json={"path": "data/" + src.name, "fs_new": 6400, "err_report": False})
+        st = _wait(client)
+        assert st["error"] and "已存在" in st["error"] and st["steps"] == 1
         r = client.post("/api/process/resample", json={"path": "data/" + src.name, "fs_new": 6400, "overwrite": True, "method": "fft"}).json()
         assert r["ok"]
         st = _wait(client)
@@ -303,9 +311,13 @@ def test_cli_resample(tmp_path):
     r = json.loads(p.stdout)
     assert r["out_name"] == "波形_农业排灌_大水泵_80_1_re_6400.csv" and r["rows_out"] == 2 * n - 1
     assert (out_dir / r["out_name"]).exists()
-    p2 = subprocess.run([sys.executable, str(ROOT / "cli.py"), "resample", str(src), "--fs", "6400", "--out-dir", str(out_dir)],
+    p2 = subprocess.run([sys.executable, str(ROOT / "cli.py"), "resample", str(src), "--fs", "6400", "--out-dir", str(out_dir), "--no-err"],
                         capture_output=True, text=True, cwd=str(ROOT))
     assert p2.returncode == 2 and "已存在" in p2.stderr
+    # v0.35：默认算误差 → 已存在时跳过重采样只算误差
+    p3 = subprocess.run([sys.executable, str(ROOT / "cli.py"), "resample", str(src), "--fs", "6400", "--out-dir", str(out_dir)],
+                        capture_output=True, text=True, cwd=str(ROOT))
+    assert p3.returncode == 0 and "跳过重采样" in p3.stdout and (out_dir / (r["out_name"][:-4] + "_err.csv")).exists()
 
 
 # ------------------------------------------------------------------ 前端静态断言
@@ -404,6 +416,28 @@ def test_error_window_config_and_api(client):
                 p.unlink()
 
 
+def test_skip_resample_when_output_exists(tmp_path):
+    src = tmp_path / "波形_农业排灌_大水泵_80_1.csv"
+    _write(src, 3200, 1.0)
+    out_dir = tmp_path / "data"
+    r1 = resample_csv(str(src), 6400, out_dir=str(out_dir), error_window_s=0.5)
+    assert r1["resample_skipped"] is False and r1["steps"]["resample"]["status"] == "done"
+    out = out_dir / r1["out_name"]
+    mt = out.stat().st_mtime_ns
+    job = ResampleJob()
+    r2 = resample_csv(str(src), 6400, out_dir=str(out_dir), error_window_s=0.25, job=job)
+    assert r2["resample_skipped"] is True and r2["steps"]["resample"]["status"] == "skipped"
+    assert r2["err_windows"] == 4 and r2["rows_in"] == r1["rows_in"] and r2["rows_out"] == r1["rows_out"]
+    assert out.stat().st_mtime_ns == mt and job.steps == 2 and job.overall == 1.0
+    assert any("跳过重采样" in n for n in r2["notes"])
+    with pytest.raises(ResampleError, match="已存在"):
+        resample_csv(str(src), 6400, out_dir=str(out_dir))                                # 不算误差 → 仍拒绝
+    with pytest.raises(ResampleError, match="已存在"):
+        resample_csv(str(src), 6400, out_dir=str(out_dir), error_window_s=0.5, error_only_if_exists=False)
+    r3 = resample_csv(str(src), 6400, out_dir=str(out_dir), error_window_s=0.5, overwrite=True)
+    assert r3["resample_skipped"] is False and out.stat().st_mtime_ns != mt
+
+
 def test_cli_resample_err_window(tmp_path):
     src = tmp_path / "波形_农业排灌_大水泵_80_1.csv"
     _write(src, 3200, 1.0)
@@ -421,6 +455,6 @@ def test_cli_resample_err_window(tmp_path):
 def test_frontend_has_error_window_controls():
     html = (ROOT / "app" / "static" / "index.html").read_text(encoding="utf-8")
     js = (ROOT / "app" / "static" / "app.js").read_text(encoding="utf-8")
-    for i in ("rs-err", "rs-errwin", "rs-err-summary"):
+    for i in ("rs-err", "rs-errwin", "rs-err-summary", "rs-bar2", "rs-result2", "rs-step1-label", "rs-step2-label"):
         assert f'id="{i}"' in html, i
     assert "processing: { error_window_s" in js and "err_window_s" in js

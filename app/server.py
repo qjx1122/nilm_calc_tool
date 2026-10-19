@@ -1907,7 +1907,10 @@ class _ResampleJobs:
             j = self.job
             return {
                 "running": self.running(), "params": self.params,
-                "progress": (j.progress if j else 0.0), "stage": (j.stage if j else "idle"),
+                "progress": (j.overall if j else 0.0), "stage": (j.stage if j else "idle"),
+                # v0.35：两步进度
+                "step": (j.step if j else 1), "steps": (j.steps if j else 1), "step_progress": (j.progress if j else 0.0),
+                "step_status": (dict(j.step_status) if j else {}),
                 "rows_in": (j.rows_in if j else 0), "rows_out": (j.rows_out if j else 0),
                 "result": self.result, "error": self.error,
                 "started_at": self.started_at, "finished_at": self.finished_at,
