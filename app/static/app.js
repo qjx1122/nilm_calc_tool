@@ -2979,6 +2979,8 @@ function nilmDimUnits(side = sideOf(), effective) {
   if (q === 'auto') q = effective || (NLs(side).summary && NLs(side).summary.quantity_effective) || '';
   host.querySelectorAll('.nilm-unit-w').forEach(el => el.classList.toggle('nilm-inactive', q === 'i'));
   host.querySelectorAll('.nilm-unit-a').forEach(el => el.classList.toggle('nilm-inactive', q === 'p'));
+  // v0.39：I 口径没有跨相合并，只能单相检测——「三相总」灰显（仍可勾选保存，检测器忽略）
+  const tl = E(side, 'nilm-ch-total-lbl'); if (tl) tl.classList.toggle('nilm-inactive', q === 'i');
 }
 
 function fillNilmForm(nc, side = sideOf()) {
@@ -3086,9 +3088,24 @@ function nilmRow(e, sc) {
 }
 
 /* v0.24：P/Q/S 趋势（与总览同一数据 /api/history/power、同一 pqsSeries）+ 各算法事件竖线 */
+/* v0.39：趋势图可切换为三相电流（Ia/Ib/Ic 可选）；auto = 按检测量（I 口径画电流） */
+function nilmPqsKind(nl) {
+  const sel = $('#nilm-pqs-kind'); const v = sel ? sel.value : 'auto';
+  if (v !== 'auto') return v;
+  return (nl.summary && nl.summary.quantity_effective === 'i') ? 'i' : 'pqs';
+}
+function nilmCurrentSeries(hi, t0) {
+  const box = $('#nilm-pqs-phases');
+  const on = box ? Array.from(box.querySelectorAll('.nilm-pqs-ph')).filter(c => c.checked).map(c => c.dataset.ph) : ['A', 'B', 'C'];
+  return ['A', 'B', 'C'].filter(ph => on.includes(ph)).map(ph => ({ name: 'I' + ph.toLowerCase(), color: COLORS[ph], data: hi.map(p => [p.t - t0, p['I' + ph.toLowerCase()]]) }));
+}
 function renderNilmPqs(nl) {
   const cv = $('#nilm-pqs'); if (!cv) return;
-  const hp = curHist('power'); const t0 = hp.length ? hp[0].t : 0;
+  const kind = nilmPqsKind(nl); const isI = kind === 'i';
+  const hp = isI ? curHist('current') : curHist('power'); const t0 = hp.length ? hp[0].t : 0;
+  const ttl = $('#nilm-pqs-title'); if (ttl) ttl.textContent = isI ? '三相电流 I 趋势' : 'P / Q / S 趋势';
+  const phs = $('#nilm-pqs-phases'); if (phs) phs.style.display = isI ? '' : 'none';
+  const sp = cv.parentElement && cv.parentElement.querySelector('.curvespan'); if (sp) { sp.dataset.curve = isI ? 'current' : 'power'; sp.textContent = curveSpanText(sp.dataset.curve, sp.dataset.side); }
   const box = $('#nilm-pqs-algos');
   const chosen = box ? Array.from(box.querySelectorAll('.nilm-pqs-algo')).filter(c => c.checked).map(c => c.dataset.algo) : Object.keys(NILM_ALGOS);
   const chSel = $('#nilm-pqs-ch'); const ch = chSel ? chSel.value : '';
@@ -3097,8 +3114,9 @@ function renderNilmPqs(nl) {
   const marks = evs.map(e => ({ x: e.t_start - t0, color: NILM_COLORS[e.algorithm], row: Object.keys(NILM_ALGOS).indexOf(e.algorithm),
                                 label: `${e.direction === 'up' ? '↑' : '↓'}${si(nilmMag(e), e.unit || 'W', 3)}${ch ? '' : ' ' + e.channel}` }));
   const nEl = $('#nilm-pqs-n'); if (nEl) nEl.textContent = String(marks.length);
-  drawLine(cv, pqsSeries(hp, t0), { ylabel: 'W/var/VA', fmtX: x => tsX(x + t0, spanOf('power')), fmtTip: x => ts(x + t0), tbase: t0, height: 260, marks,
-                                   empty: '暂无 P/Q/S 趋势（需累计 ≥2 个 power 窗）' });
+  drawLine(cv, isI ? nilmCurrentSeries(hp, t0) : pqsSeries(hp, t0),
+           { ylabel: isI ? 'A' : 'W/var/VA', fmtX: x => tsX(x + t0, spanOf(isI ? 'current' : 'power')), fmtTip: x => ts(x + t0), tbase: t0, height: 260, marks,
+             empty: isI ? '暂无电流趋势（需累计 ≥2 个 current 窗）' : '暂无 P/Q/S 趋势（需累计 ≥2 个 power 窗）' });
 }
 
 function renderNilm() {
@@ -3111,7 +3129,7 @@ function renderNilm() {
   const cards = [card('负荷辨识', sm.enabled === false ? '已禁用' : '启用', '', `累计 ${sm.total || 0} 条 · ↑${(sm.by_direction || {}).up || 0} / ↓${(sm.by_direction || {}).down || 0}`)];
   Object.keys(NILM_ALGOS).forEach(a => cards.push(card(names[a] || NILM_ALGOS[a].name, String(counts[a] || 0), '次',
     (sm.algorithms_enabled || []).includes(a) ? '启用' : '<span class="bad">已停用</span>')));
-  cards.push(card('周波窗', `${sm.window_fill || 0} / ${sm.window_cycles || 0}`, '周波', `每周波 ${sm.n_cycle_samples || 0} 点 · 累计 ${sm.cycles_total || 0} 周波 · 对象 ${(sm.channels || []).join('/')}`));
+  cards.push(card('周波窗', `${sm.window_fill || 0} / ${sm.window_cycles || 0}`, '周波', `每周波 ${sm.n_cycle_samples || 0} 点 · 累计 ${sm.cycles_total || 0} 周波 · 对象 ${(sm.channels_effective || sm.channels || []).join('/')}`));
   const w = sm.writer || {};
   cards.push(card('事件落盘', w.enabled ? '开' : '关', '', writerSub(w)));
   $('#nilm-cards').innerHTML = cards.join('');
@@ -3140,6 +3158,7 @@ function renderNilm() {
     '口径：每周波 P=mean(u·i)，Q=基波单频 DFT 无功，I=周波有效值；各算法在最近 window_cycles 个周波的窗上评估，同算法同对象按终点序号去重，终点之后需再看到足够周波才确认（所以事件会滞后几个周波出现）。',
     '阈值单位为 W，按计算口径（启用 PT/CT 时为一次侧）填写；rel_tol_pct / min_delta_pct 把门槛按窗内 |P| 中位数折算成相对值，同一套默认值在 W 级与 MW 级都能用。',
     '检测量 auto/p/i（v0.36）：数据源只有三相电流（无电压）时选 auto 或 i，按逐周波电流有效值检测，六种算法均可用；此时事件幅值为 |ΔI|（A），ΔP/ΔQ 恒为 0。',
+    'v0.39：I 口径不存在跨相合并（三相电流有效值不能像有功那样相加），只能单相检测——检测对象「三相总」被忽略，只配了三相总时按 A/B/C 各自检测；上方趋势图「曲线」可选三相电流（Ia/Ib/Ic 勾选），auto 时 I 口径自动画电流。',
     'v0.37：每个算法的绝对阈值分 W（P 口径）与 A（I 口径）两套，检测器只用当前口径那一套，另一套不参与（表单中灰显）；相对门槛 rel_tol_pct / min_delta_pct 对两种口径都按窗内中位数折算。',
     '双滑窗均值差与 CUSUM 对单周波尖峰较敏感（会按均值摊成小事件）；需要抗尖峰请看中值滤波差分 / 稳态分段，或抬高 min_delta_pct。',
   ]);
@@ -3152,8 +3171,9 @@ function bindNilm(side) {
   on('btn-nilm-save', 'click', () => saveNilmConfig(side));
   on('nilm-filter', 'change', () => refreshNilm(side));
   on('nilm-chfilter', 'change', () => refreshNilm(side));
-  ['nilm-ch', 'nilm-qty', 'nilm-mark', 'nilm-pqs-ch'].forEach(id => on(id, 'change', render));
+  ['nilm-ch', 'nilm-qty', 'nilm-mark', 'nilm-pqs-ch', 'nilm-pqs-kind'].forEach(id => on(id, 'change', render));
   const pa = E(side, 'nilm-pqs-algos'); if (pa) pa.addEventListener('change', render);
+  const pp = E(side, 'nilm-pqs-phases'); if (pp) pp.addEventListener('change', render);
   if (side === 'branch') bindNilmForm('branch');   // 克隆列的表单输入 → 分路侧脏标记
 }
 

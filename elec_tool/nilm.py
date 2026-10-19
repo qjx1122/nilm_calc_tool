@@ -506,6 +506,15 @@ class NilmDetector:
                 self._log = self._log[-int(self.ncfg.max_log):]
             return [e.to_dict() for e in new]
 
+    @property
+    def channels_effective(self) -> List[str]:
+        """实际参与检测的对象。v0.39：I 口径（仅电流）不存在「三相总」——三相电流有效值无法像有功那样相加，
+        跨相合并没有物理意义，只能单相检测：去掉 total；若配置里只有 total 则改为 A/B/C 三相各自单独检测。"""
+        chans = list(self.ncfg.channels)
+        if self.quantity_effective == "i":
+            chans = [c for c in chans if c != "total"] or ["A", "B", "C"]
+        return chans
+
     def _evaluate(self) -> List[NilmEvent]:
         out: List[NilmEvent] = []
         L = self._t.shape[0]
@@ -522,7 +531,7 @@ class NilmDetector:
             return out
         rel_tol = float(self.ncfg.rel_tol_pct)
         min_pct = float(self.ncfg.min_delta_pct)
-        for ch in self.ncfg.channels:
+        for ch in self.channels_effective:
             ci = NILM_CHANNELS.index(ch)
             p = self._p[ci] if qty == "p" else self._i[ci]
             level = float(np.median(np.abs(p))) if p.size else 0.0
@@ -621,11 +630,15 @@ class NilmDetector:
                              + "）；各算法使用 A 口径阈值（min_delta_a / settle_tol_a / tol_a / drift_a / noise_a / threshold_a），"
                              "W 口径阈值不参与；rel_tol_pct / min_delta_pct 按窗内 |I| 中位数折算后与 A 阈值取较大者；"
                              "事件幅值 magnitude 为 |ΔI|（A），ΔP/ΔQ 在无电压时恒为 0")
+                if "total" in self.ncfg.channels:
+                    notes.append("I 口径不存在跨相合并（三相电流有效值不能像有功那样相加），只能单相检测：检测对象「三相总」已忽略，"
+                                 + ("实际对象 " + "/".join(self.channels_effective)
+                                    + ("（配置只有三相总 → 按 A/B/C 三相各自单独检测）" if self.channels_effective == ["A", "B", "C"] and self.ncfg.channels == ["total"] else "")))
             enabled_algos = [a for a in NILM_ALGO_DEFAULTS if self.ncfg.params(a).get("enabled", True)]
             return {"enabled": bool(self.ncfg.enabled), "total": total, "counts": counts, "by_channel": by_ch,
                     "by_direction": by_dir, "cycles_total": self.cycles_total, "window_fill": int(self._t.shape[0]),
                     "window_cycles": int(self.ncfg.window_cycles), "n_cycle_samples": self.feat.n_cycle,
-                    "channels": list(self.ncfg.channels), "algorithms_enabled": enabled_algos,
+                    "channels": list(self.ncfg.channels), "channels_effective": self.channels_effective, "algorithms_enabled": enabled_algos,
                     "quantity": str(self.ncfg.quantity), "quantity_effective": qty, "voltage_missing": self.voltage_missing,
                     "algorithm_names": NILM_ALGO_NAMES, "writer": self.writer.info(), "errors": list(self.errors),
                     "notes": notes}

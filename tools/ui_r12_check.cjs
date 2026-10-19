@@ -126,6 +126,21 @@ async function main() {
   check('保存 → PUT 含 glr.noise_a=0.2 且 noise_w 仍为 10', lastA.nilm && lastA.nilm.algorithms.glr.noise_a === 0.2 && lastA.nilm.algorithms.glr.noise_w === 10, JSON.stringify(lastA.nilm && lastA.nilm.algorithms.glr));
   check('服务端 glr.noise_a=0.2', (await api('/api/state')).config.nilm.algorithms.glr.noise_a === 0.2);
   await api('/api/config', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ nilm: { algorithms: { glr: { noise_a: 0.05 } } } }) });
+  console.log('L7 v0.39 I 口径只能单相 + 电流趋势');
+  check('仅电流播放：事件无 total、只有 A/B/C（配置 total → 三相各自检测）', !evQ.events.some((e) => e.channel === 'total') && new Set(evQ.events.map((e) => e.channel)).size === 3, JSON.stringify([...new Set(evQ.events.map((e) => e.channel))]));
+  check('summary.channels_effective=[A,B,C]', JSON.stringify(evQ.summary.channels_effective) === '["A","B","C"]', JSON.stringify(evQ.summary.channels_effective));
+  check('提示区说明「只能单相检测」', /只能单相检测/.test($('nilm-notes').textContent));
+  check('检测对象「三相总」灰显（effective=i）', $('nilm-ch-total-lbl').classList.contains('nilm-inactive'));
+  check('周波窗卡片对象显示 A/B/C', /对象 A\/B\/C/.test($('nilm-cards').textContent));
+  check('趋势图曲线选择器与三相勾选存在', !!$('nilm-pqs-kind') && $('nilm-pqs-phases').querySelectorAll('.nilm-pqs-ph').length === 3, String(document.querySelectorAll('.nilm-pqs-ph').length));
+  check('auto + I 口径 → 趋势标题为三相电流、勾选可见', /三相电流 I 趋势/.test($('nilm-pqs-title').textContent) && $('nilm-pqs-phases').style.display !== 'none');
+  const cs = document.querySelector('#view-nilm .curvespan'); check('曲线跨度标签切到 current', cs && cs.dataset.curve === 'current', cs && cs.dataset.curve);
+  $('nilm-pqs-kind').value = 'pqs'; change($('nilm-pqs-kind')); await sleep(300);
+  check('切到 P/Q/S → 标题复原、三相勾选隐藏', /P \/ Q \/ S 趋势/.test($('nilm-pqs-title').textContent) && $('nilm-pqs-phases').style.display === 'none');
+  $('nilm-pqs-kind').value = 'i'; change($('nilm-pqs-kind')); await sleep(300);
+  const phB = document.querySelector('.nilm-pqs-ph[data-ph="B"]'); phB.checked = false; change(phB); await sleep(300);
+  check('去掉 Ib 勾选后仍正常渲染（电流趋势标题保持）', /三相电流 I 趋势/.test($('nilm-pqs-title').textContent));
+  phB.checked = true; change(phB); $('nilm-pqs-kind').value = 'auto'; change($('nilm-pqs-kind')); await sleep(200);
   await api('/api/engine/stop', { method: 'POST' });
 
   console.log('L4 清空');

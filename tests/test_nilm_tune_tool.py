@@ -119,16 +119,20 @@ def test_cli_current_only_auto_picks_i_and_replay_check_roundtrip(tmp_path):
     assert "nilm.quantity = i" in rp.stdout and "幅值范围(A)" in rp.stdout
     import csv
     rows = list(csv.DictReader(open(out, encoding="utf-8-sig", newline="")))
-    assert len(rows) == 12 and all(r_["unit"] == "A" and r_["quantity"] == "i" for r_ in rows)
+    # v0.39：I 口径只能单相——默认配置 channels=[total] → A/B/C 各自检测，6 算法 × 3 相 × 2 事件；A 相 ΔI ≈ 48.1 A（一次侧）
+    assert len(rows) == 36 and all(r_["unit"] == "A" and r_["quantity"] == "i" and r_["channel"] in ("A", "B", "C") for r_ in rows)
     ups = sorted(float(r_["magnitude"]) for r_ in rows if r_["direction"] == "up")
-    assert all(abs(x - 83.3) < 0.5 for x in ups)
+    assert all(abs(x - 48.1) < 0.5 for x in ups)
     # 真值表用事件文件里的本地时间文本（与 nilm_check 同一本机时区解释）
     up_local = next(r_["t_start_local"] for r_ in rows if r_["direction"] == "up")
     dn_local = next(r_["t_start_local"] for r_ in rows if r_["direction"] == "down")
     truth = tmp_path / "truth.csv"; truth.write_text(f"时间,动作,备注\n{up_local},开,x\n{dn_local},关,x\n", encoding="utf-8")
-    ck = subprocess.run([sys.executable, os.path.join(ROOT, "tools", "nilm_check.py"), "--events", str(out), "--truth", str(truth), "--tol-s", "0.5"],
+    ck0 = subprocess.run([sys.executable, os.path.join(ROOT, "tools", "nilm_check.py"), "--events", str(out), "--truth", str(truth), "--tol-s", "0.5"],
+                         capture_output=True, text=True, cwd=ROOT)
+    assert "请加 --channel" in ck0.stdout and "带内误报" in ck0.stdout                    # 三相事件混在一起 → 提示指定对象
+    ck = subprocess.run([sys.executable, os.path.join(ROOT, "tools", "nilm_check.py"), "--events", str(out), "--truth", str(truth), "--tol-s", "0.5", "--channel", "A"],
                         capture_output=True, text=True, cwd=ROOT, check=True)
     assert "✅ 6 种算法全部命中且 0 误报" in ck.stdout and "|ΔI| 均值，A" in ck.stdout
-    ck2 = subprocess.run([sys.executable, os.path.join(ROOT, "tools", "nilm_check.py"), "--events", str(out), "--truth", str(truth), "--tol-s", "0.5",
-                          "--mag-a", "83", "--mag-tol-pct", "30"], capture_output=True, text=True, cwd=ROOT)
-    assert ck2.returncode == 1 and "幅值带 58.1~107.9 A" in ck2.stdout and "min_delta_a" in ck2.stdout      # 50 A 的切除事件带外 → 记「其它设备」、漏 1
+    ck2 = subprocess.run([sys.executable, os.path.join(ROOT, "tools", "nilm_check.py"), "--events", str(out), "--truth", str(truth), "--tol-s", "0.5", "--channel", "A",
+                          "--mag-a", "48", "--mag-tol-pct", "30"], capture_output=True, text=True, cwd=ROOT)
+    assert ck2.returncode == 1 and "幅值带 33.6~62.4 A" in ck2.stdout and "min_delta_a" in ck2.stdout      # 28.9 A 的切除事件带外 → 记「其它设备」、漏 1

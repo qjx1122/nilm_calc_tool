@@ -263,7 +263,8 @@ def _feed(det, t, u, i, step=640):
 
 
 def test_current_only_detection_all_algorithms(tmp_path, monkeypatch):
-    """电压全 0（数据源只有电流）：quantity=auto 自动切到 I，六种算法在 total/A 上都报出 2.0 s ↑ / 4.4 s ↓。"""
+    """电压全 0（数据源只有电流）：quantity=auto 自动切到 I，六种算法在 A 上都报出 2.0 s ↑ / 4.4 s ↓。
+    v0.39：I 口径没有跨相合并——配置里的 total 被忽略（channels_effective=[A]），不产生 total 事件。"""
     monkeypatch.setenv("ELEC_TOOL_NILM_DIR", str(tmp_path / "nilm"))
     t, u, i = _wave(6.0)
     u0 = np.zeros_like(u)
@@ -273,22 +274,23 @@ def test_current_only_detection_all_algorithms(tmp_path, monkeypatch):
     evs = _feed(det, t, u0, i)
     sm = det.summary()
     assert sm["voltage_missing"] is True and sm["quantity_effective"] == "i" and sm["errors"] == []
-    assert any("电流有效值" in n for n in sm["notes"])
+    assert any("电流有效值" in n for n in sm["notes"]) and any("跨相合并" in n for n in sm["notes"])
+    assert sm["channels"] == ["total", "A"] and sm["channels_effective"] == ["A"] and det.channels_effective == ["A"]
+    assert not any(e["channel"] == "total" for e in evs)
     key = {}
     for e in evs:
         key.setdefault((e["algorithm"], e["channel"], e["direction"]), []).append(e)
     for a in NILM_ALGO_DEFAULTS:
-        for ch in ("total", "A"):
+        for ch in ("A",):
             ups, downs = key.get((a, ch, "up"), []), key.get((a, ch, "down"), [])
             assert ups and downs, (a, ch)
             big_up = max(ups, key=lambda e: e["magnitude"]); big_dn = max(downs, key=lambda e: e["magnitude"])
             assert abs(big_up["t_start"] - (t[0] + T_UP)) < 0.06 and abs(big_dn["t_start"] - (t[0] + T_DOWN)) < 0.06, (a, ch)
             assert big_up["unit"] == "A" and big_up["quantity"] == "i" and big_up["magnitude"] == big_up["delta_i_a"]
             assert big_up["delta_p_w"] == 0.0 and big_up["pre_p_w"] == 0.0 and big_up["magnitude_w"] == 0.0
-    # A 相：I = P/(3·U·pf)；1000 W → 1500 W：ΔI_A = 500/3/(57.74·0.9) ≈ 3.207 A；total = √3 倍
+    # A 相：I = P/(3·U·pf)；1000 W → 1500 W：ΔI_A = 500/3/(57.74·0.9) ≈ 3.207 A
     a_up = max(key[("glr", "A", "up")], key=lambda e: e["magnitude"])
     assert a_up["magnitude"] == pytest.approx(500 / 3 / (57.74 * 0.9), rel=0.03)
-    assert max(key[("glr", "total", "up")], key=lambda e: e["magnitude"])["magnitude"] == pytest.approx(a_up["magnitude"] * np.sqrt(3), rel=0.03)
     # 落盘：新增 quantity / magnitude / unit 列
     f = [p for p in (tmp_path / "nilm").iterdir() if p.suffix == ".csv"][0]
     rows = list(csv.reader(open(f, encoding="utf-8-sig")))
@@ -303,14 +305,14 @@ def test_quantity_p_without_voltage_reports_error_and_i_with_voltage_works(tmp_p
     assert _feed(det, t, np.zeros_like(u), i) == []
     sm = det.summary()
     assert sm["voltage_missing"] and sm["quantity_effective"] == "p" and any("数据源无电压" in e for e in sm["errors"])
-    # 有电压也可强制按电流检测：ΔI 与 ΔP 同时给出
+    # 有电压也可强制按电流检测：ΔI 与 ΔP 同时给出（v0.39：I 口径只能单相，默认 total → A/B/C，单相 ΔP = 500/3）
     cfg2 = AppConfig(); cfg2.nilm.quantity = "i"; cfg2.validate()
     det2 = NilmDetector(cfg2)
     evs = _feed(det2, t, u, i)
     sm2 = det2.summary()
-    assert sm2["voltage_missing"] is False and sm2["quantity_effective"] == "i"
-    up = max((e for e in evs if e["algorithm"] == "glr" and e["direction"] == "up"), key=lambda e: e["magnitude"])
-    assert up["unit"] == "A" and up["delta_p_w"] == pytest.approx(500, rel=0.03) and up["magnitude_w"] == pytest.approx(500, rel=0.03)
+    assert sm2["voltage_missing"] is False and sm2["quantity_effective"] == "i" and sm2["channels_effective"] == ["A", "B", "C"]
+    up = max((e for e in evs if e["algorithm"] == "glr" and e["direction"] == "up" and e["channel"] == "A"), key=lambda e: e["magnitude"])
+    assert up["unit"] == "A" and up["delta_p_w"] == pytest.approx(500 / 3, rel=0.03) and up["magnitude_w"] == pytest.approx(500 / 3, rel=0.03)
     # auto + 有电压 → p
     det3 = NilmDetector(AppConfig().validate())
     _feed(det3, t, u, i)
@@ -423,3 +425,39 @@ def test_frontend_a_params_wiring():
             if k.endswith("_a"):
                 assert f"{k}:" in block and "A · I口径" in block, (a, k)
     assert "function nilmDimUnits(" in js and "nilm-inactive" in js
+
+
+# ------------------------------------------------------------------ v0.39：I 口径只能单相；趋势图可画三相电流
+
+def test_current_mode_only_single_phase_total_falls_back_to_abc(tmp_path, monkeypatch):
+    """配置只有 total 时，I 口径按 A/B/C 三相各自单独检测；P 口径不受影响仍用 total。"""
+    monkeypatch.setenv("ELEC_TOOL_NILM_DIR", str(tmp_path / "nilm"))
+    t, u, i = _wave(6.0)
+    cfg = AppConfig(); cfg.nilm.channels = ["total"]; cfg.validate()
+    det = NilmDetector(cfg)
+    evs = _feed(det, t, np.zeros_like(u), i)
+    sm = det.summary()
+    assert det.channels_effective == ["A", "B", "C"] and sm["channels_effective"] == ["A", "B", "C"] and sm["channels"] == ["total"]
+    assert any("按 A/B/C 三相各自单独检测" in n for n in sm["notes"])
+    chans = {e["channel"] for e in evs}
+    assert chans == {"A", "B", "C"}
+    for ch in ("A", "B", "C"):
+        ups = [e for e in evs if e["algorithm"] == "glr" and e["channel"] == ch and e["direction"] == "up"]
+        assert ups and abs(max(ups, key=lambda e: e["magnitude"])["t_start"] - (t[0] + T_UP)) < 0.06
+    # P 口径：total 照常
+    det2 = NilmDetector(AppConfig().validate())
+    evs2 = _feed(det2, t, u, i)
+    assert det2.channels_effective == ["total"] and {e["channel"] for e in evs2} == {"total"} and "channels_effective" in det2.summary()
+    # 有电压但强制 i：同样去掉 total
+    cfg3 = AppConfig(); cfg3.nilm.quantity = "i"; cfg3.nilm.channels = ["total", "B"]; cfg3.validate()
+    det3 = NilmDetector(cfg3); evs3 = _feed(det3, t, u, i)
+    assert det3.channels_effective == ["B"] and {e["channel"] for e in evs3} == {"B"}
+
+
+def test_frontend_current_trend_and_total_dim_wiring():
+    html = (ROOT / "app/static/index.html").read_text(encoding="utf-8")
+    js = (ROOT / "app/static/app.js").read_text(encoding="utf-8")
+    assert 'id="nilm-pqs-kind"' in html and html.count('class="nilm-pqs-ph"') == 3 and 'id="nilm-ch-total-lbl"' in html
+    assert "function nilmCurrentSeries(" in js and "curHist('current')" in js.split("function renderNilmPqs")[1].split("\n}")[0]
+    assert "nilm-ch-total-lbl" in js.split("function nilmDimUnits")[1].split("\n}")[0]
+    assert "channels_effective" in js

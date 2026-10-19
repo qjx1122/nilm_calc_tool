@@ -373,6 +373,10 @@ Invoke-RestMethod -Method Put -Uri http://localhost:8000/api/branch/config -Cont
 `min_delta_a = max(额定电流/2, 6σ)`、CUSUM `drift_a = min_delta_a/4`、`threshold_a = 2×(min_delta_a − drift_a)`、GLR `noise_a = σ`、
 `steady_state.tol_a = 10 周波极差 95 分位 × 1.2`。`rel_tol_pct / min_delta_pct` 对 |I| 中位数折算，与绝对值取较大者生效。
 
+**只能单相（v0.39）**：I 口径没有「三相总」——三相电流有效值不能像有功那样相加，跨相合并没有物理意义。软件在 I 口径忽略检测对象 `total`
+（只配了 `total` 时按 A/B/C 三相各自单独检测，事件 `channel` 列为 A/B/C）；`nilm_tune.py` I 口径默认 `--channel A`（填 total 会报错）；
+`nilm_check.py` 对账时**必须加 `--channel A`（或 B/C）**，否则三相各一条的同一次投切会互相算成误报（脚本会提示）。界面趋势图「曲线」选 电流 I 可看三相电流（Ia/Ib/Ic 勾选）。
+
 **电流口径的两个注意点**：
 
 | 现象 | 原因 | 怎么办 |

@@ -15,6 +15,7 @@
 总线上还有其它设备启停时（v0.22.1）——按**幅值带**归属：
     --mag-w 500 --mag-tol-pct 30            ΔP 不在 500×(1±30%) 内的事件记为「其它设备」，不算误报
     --mag-a 2.5 --mag-tol-pct 30            v0.38：仅电流检测（事件 unit=A）时按 |ΔI| 指纹归属
+    --channel A                             v0.39：只对账某一个检测对象（仅电流检测只能单相，三相事件混在一起会互相算成误报）
     --dq-var 240                            可选：ΔQ 也要同号且在 ±(tol+20)% 内
     --signature-from output/dev_events.csv  直接用设备侧回放结果（命中事件）的 ΔP/ΔQ 均值作指纹（配合 --truth 同一张真值表时取真值附近的事件）
 判定规则（每种算法单独算）：
@@ -51,17 +52,19 @@ def _norm_dir(s: str) -> str:
     raise SystemExit(f"真值表「动作」不认识：{s!r}（可写 开/关、on/off、up/down、投入/切除、1/0、其它）")
 
 
-def read_events(path: str, source_id: Optional[int]) -> List[Dict[str, Any]]:
+def read_events(path: str, source_id: Optional[int], channel: Optional[str] = None) -> List[Dict[str, Any]]:
     with open(path, encoding="utf-8-sig", newline="") as fh:
         rows = list(csv.DictReader(fh))
     out = []
     for r in rows:
         if source_id is not None and str(r.get("source_id", "0")).strip() not in ("", str(source_id)):
             continue
+        if channel and (r.get("channel") or "").strip() != channel:
+            continue
         try:
             unit = (r.get("unit") or "W").strip() or "W"
             mag = r.get("magnitude") if unit == "A" else None
-            out.append({"algorithm": r["algorithm"], "t": float(r["t_start"]), "dir": r["direction"], "unit": unit,
+            out.append({"algorithm": r["algorithm"], "t": float(r["t_start"]), "dir": r["direction"], "unit": unit, "channel": (r.get("channel") or "").strip(),
                         "mag": float(mag if mag not in (None, "") else (r.get("magnitude_w") or 0)), "dp": float(r.get("delta_p_w") or 0),
                         "dq": float(r.get("delta_q_var") or 0), "di": float(r.get("delta_i_a") or 0), "local": r.get("t_start_local", "")})
         except (KeyError, ValueError):
@@ -111,6 +114,8 @@ def main() -> int:
     ap.add_argument("--truth", required=True, help="真值表 CSV：时间,动作[,备注]")
     ap.add_argument("--tol-s", type=float, default=1.0, help="时刻允许误差（秒，默认 1.0）")
     ap.add_argument("--source-id", type=int, default=None, help="只看某一侧（0 总线 / 1 分路；默认全部）")
+    ap.add_argument("--channel", default=None, choices=("total", "A", "B", "C"),
+                    help="只看某一个检测对象（v0.39：仅电流检测只能单相，事件文件里 A/B/C 三相事件混在一起会互相算成误报，请指定一相）")
     ap.add_argument("--out", default=None, help="把逐条对账结果另存为 CSV（给 Excel 看）")
     ap.add_argument("--mag-w", type=float, default=None, help="待检设备的 |ΔP| 指纹（W，计算口径）；给出后带外事件记为「其它设备」")
     ap.add_argument("--mag-a", type=float, default=None, help="待检设备的 |ΔI| 指纹（A，计算口径）；事件为电流口径（unit=A）时用")
@@ -120,7 +125,11 @@ def main() -> int:
     ap.add_argument("--signature-truth", default=None, help="设备侧文件自己的真值表（时刻与 --signature-from 对应；默认用 --truth）")
     a = ap.parse_args()
 
-    evs = read_events(a.events, a.source_id)
+    evs = read_events(a.events, a.source_id, a.channel)
+    chans = sorted({e["channel"] for e in evs if e["channel"]})
+    if len(chans) > 1:
+        print(f"提示：事件文件含 {len(chans)} 个检测对象（{'/'.join(chans)}）的事件，同一次投切会在每个对象上各报一条、互相算成误报；"
+              f"请加 --channel 指定一个对象（仅电流检测只能单相：A/B/C）")
     truth = read_truth(a.truth, evs[0]["t"] if evs else None)
     if not truth:
         raise SystemExit("真值表为空")
@@ -137,7 +146,7 @@ def main() -> int:
         if dq_var is not None:
             print("提示：电流口径事件 ΔQ 恒为 0，--dq-var 已忽略"); dq_var = None
     if a.signature_from:
-        sev = read_events(a.signature_from, None)
+        sev = read_events(a.signature_from, None, a.channel)
         st = targets
         if a.signature_truth:
             st = [t for t in read_truth(a.signature_truth, sev[0]["t"] if sev else None) if t["dir"] != "other"]

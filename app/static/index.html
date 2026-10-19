@@ -664,8 +664,10 @@
       <h2>负荷辨识事件 · 设备启停检测（逐周波 P/Q/I 突变：阈值差分 / 双滑窗 / CUSUM / GLR / 稳态分段 / 中值滤波差分）</h2>
       <div class="cards" id="nilm-cards"></div>
       <div class="panel">
-        <h3 class="curvehdr"><span>P / Q / S 趋势（与总览面板同一曲线；竖线＝各算法检测到的负荷事件起点，颜色＝算法，图内 <span id="nilm-pqs-n">0</span> 条）<span class="curvespan" data-curve="power"></span></span>
+        <h3 class="curvehdr"><span><span id="nilm-pqs-title">P / Q / S 趋势</span>（与总览面板同一曲线；竖线＝各算法检测到的负荷事件起点，颜色＝算法，图内 <span id="nilm-pqs-n">0</span> 条）<span class="curvespan" data-curve="power"></span></span>
           <span class="toggle">
+            <label title="v0.39：趋势曲线——auto：按当前检测量（P 口径画 P/Q/S，I 口径画三相电流）">曲线 <select id="nilm-pqs-kind"><option value="auto">自动</option><option value="pqs">P / Q / S</option><option value="i">电流 I</option></select></label>
+            <span class="toggle" id="nilm-pqs-phases" title="电流趋势显示哪几相"><label><input type="checkbox" class="nilm-pqs-ph" data-ph="A" checked> Ia</label><label><input type="checkbox" class="nilm-pqs-ph" data-ph="B" checked> Ib</label><label><input type="checkbox" class="nilm-pqs-ph" data-ph="C" checked> Ic</label></span>
             <label>对象 <select id="nilm-pqs-ch"><option value="">全部</option><option value="total">三相总</option><option value="A">A 相</option><option value="B">B 相</option><option value="C">C 相</option></select></label>
             <span class="toggle" id="nilm-pqs-algos" title="只标注勾选算法检测到的事件（默认全部）"></span>
           </span></h3>
@@ -696,7 +698,7 @@
           <label class="check"><input type="checkbox" id="nilm-enabled"> 启用负荷辨识事件检测</label>
           <label class="check"><input type="checkbox" id="nilm-save"> 事件落盘 CSV（output/nilm/nilm_events_&lt;日期&gt;.csv）</label>
           <label>检测对象 <span class="toggle">
-            <label><input type="checkbox" id="nilm-ch-total"> 三相总</label>
+            <label id="nilm-ch-total-lbl" title="I 口径（仅电流）没有跨相合并，只能单相检测：此项不参与"><input type="checkbox" id="nilm-ch-total"> 三相总</label>
             <label><input type="checkbox" id="nilm-ch-A"> A 相</label>
             <label><input type="checkbox" id="nilm-ch-B"> B 相</label>
             <label><input type="checkbox" id="nilm-ch-C"> C 相</label></span></label>
