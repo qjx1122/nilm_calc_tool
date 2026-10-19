@@ -3149,6 +3149,26 @@ function renderProcess() {
   rsPreview();
 }
 
+// v0.34：误差统计参数默认值来自配置 processing（状态接口 defaults），只在用户未改动时回填
+function rsApplyDefaults(d) {
+  if (!d || RS.errTouched) return;
+  const w = $('#rs-errwin'), e = $('#rs-err');
+  if (w && isNum(d.err_window_s)) w.value = d.err_window_s;
+  if (e && typeof d.err_report === 'boolean') e.checked = d.err_report;
+}
+
+async function rsSaveErrCfg() {
+  RS.errTouched = true;
+  const w = +$('#rs-errwin').value, on = $('#rs-err').checked;
+  if (!(w > 0)) { toast('误差统计时间窗必须 > 0 秒', 'err'); return; }
+  try {
+    const r = await api('/api/config', { method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ processing: { error_window_s: w, error_report: on } }) });
+    if (r && r.ok === false) { toast(r.error, 'err'); return; }
+    toast(`误差统计：${on ? '开启' : '关闭'} · 时间窗 ${w} s 已保存到配置`);
+  } catch (e) { toast(e.message, 'err'); }
+}
+
 async function rsListFiles() {
   const sel = $('#rs-files');
   if (!sel) return;
@@ -3200,6 +3220,9 @@ function rsPayload() {
               overwrite: $('#rs-overwrite').checked };
   const fsrc = $('#rs-fssrc').value.trim();
   if (fsrc) p.fs_src = +fsrc;                       // 留空不送 → 服务端自动推算（载荷无空值纪律）
+  p.err_report = $('#rs-err').checked;              // v0.34：相对误差统计
+  const ew = $('#rs-errwin').value.trim();
+  if (p.err_report && ew) p.err_window_s = +ew;
   return p;
 }
 
@@ -3212,6 +3235,7 @@ async function rsRun() {
     if (!r.ok) { toast(r.error, 'err'); $('#rs-status').innerHTML = notes(['✗ ' + esc(r.error)]); return; }
     toast('重采样任务已启动');
     $('#rs-result').innerHTML = ''; $('#rs-json').textContent = ''; $('#btn-rs-use').disabled = true;
+    const es = $('#rs-err-summary'); if (es) es.innerHTML = '';
     rsPoll(true);
   } catch (e) { toast(e.message, 'err'); }
 }
@@ -3224,7 +3248,7 @@ async function rsPoll(loop) {
   clearTimeout(RS.timer);
   try {
     const st = await api('/api/process/resample');
-    RS.status = st; rsRenderStatus(st);
+    RS.status = st; rsApplyDefaults(st.defaults); rsRenderStatus(st);
     if (st.running || loop) RS.timer = setTimeout(() => rsPoll(st.running), 500);
   } catch (e) { $('#rs-status').innerHTML = notes(['✗ ' + e.message]); }
 }
@@ -3253,11 +3277,23 @@ function rsRenderStatus(st) {
     `输出文件：<b><code>${esc(r.out_path)}</code></b>（${r.out_size_mb} MB）`,
     `行数 ${num(r.rows_in, 0)} → <b>${num(r.rows_out, 0)}</b>；原采样率 <b>${num(r.fs_src, 4)} Hz</b>（${r.fs_src_source === 'user' ? '用户指定' : '时间戳推算'}）→ 目标 <b>${num(r.fs_new, 4)} Hz</b>；方法 ${esc(r.method)}；数据时长 ${num(r.duration_s, 3)}s`,
     `时间戳：输入首 <code>${esc(r.ts_first_in)}</code> → 输出首 <code>${esc(r.ts_first_out)}</code> / 末 <code>${esc(r.ts_last_out)}</code>（模式 ${esc(r.ts_mode)}，${r.header_kept ? '表头保留' : '无表头'}，编码 ${esc(r.encoding)}）`,
+    ...(r.err_path ? [`相对误差文件：<b><code>${esc(r.err_path)}</code></b>（时间窗 ${num(r.err_window_s, 3)} s × ${num(r.err_windows, 0)} 窗）· ` +
+      `各通道最大 RMS 相对误差 <b>${(r.err_rms_rel_max * 100).toExponential(2)}%</b>，最大波形相对误差 NRMSE <b>${(r.err_nrmse_max * 100).toExponential(2)}%</b>`]
+      : ['未计算相对误差（已关闭）']),
     ...(r.notes || []),
   ]);
+  const es = $('#rs-err-summary'); if (es) es.innerHTML = r.err_path ? rsErrTable(r) : '';
   $('#rs-json').textContent = JSON.stringify(r, null, 2);
   const useBtn = $('#btn-rs-use'); useBtn.disabled = false; useBtn.dataset.path = r.out_path; useBtn.dataset.fs = r.fs_new;
   rsListFiles(); rsPreview();
+}
+
+function rsErrTable(r) {
+  const sm = r.err_summary || {};
+  const pct = (v) => isNum(v) ? (v * 100).toExponential(2) + '%' : '—';
+  const rows = Object.keys(sm).map(k => `<tr><td>${esc(k)}</td><td>${pct(sm[k].rms_rel_mean)}</td><td>${pct(sm[k].rms_rel_max)}</td>` +
+    `<td>${pct(sm[k].nrmse_mean)}</td><td>${pct(sm[k].nrmse_max)}</td></tr>`).join('');
+  return `<table id="rs-err-table"><thead><tr><th>通道</th><th>RMS 相对误差·均值</th><th>RMS 相对误差·最大</th><th>NRMSE·均值</th><th>NRMSE·最大</th></tr></thead><tbody>${rows}</tbody></table>`;
 }
 
 function rsUseAsSource() {
@@ -3277,6 +3313,8 @@ function bindProcess() {
   $('#btn-rs-cancel').addEventListener('click', rsCancel);
   $('#btn-rs-refresh').addEventListener('click', rsListFiles);
   $('#btn-rs-use').addEventListener('click', rsUseAsSource);
+  $('#rs-errwin').addEventListener('change', rsSaveErrCfg);
+  $('#rs-err').addEventListener('change', rsSaveErrCfg);
 }
 
 

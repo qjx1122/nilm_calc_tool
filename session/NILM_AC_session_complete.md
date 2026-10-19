@@ -294,3 +294,5 @@
 - **[2026-10-16] v0.32**（用户：再查重启后 P/Q/S 趋势是否标注上次运行所有事件）。复现：同时段两次播放 → 重启后 37 条（混入 7 条）。修复 run_id（引擎启动墙钟 ms）写三类 CSV 末列 + last_result，加载按 run_id 过滤、旧文件退回时间窗；旧表头轮转 .pre-v032。真实重启 13/13、竖线 13。pytest 320 passed。
 
 - **[2026-10-16] v0.33**（用户：增加「是否隐藏分路侧数据」配置，为真隐藏实时监测 / 事件与分析右侧分路内容）。`BranchConfig.hide_ui` + state 下发；`branchDualActive()` 判 hide_ui → 四双列页 `.no-branch`、导航徽标隐藏；数据源页 `#br-hide-ui` 勾选即时 PUT 生效。仍计算落盘；总览/跨侧对比不受影响。ui_r24 +11 项 64/64，test_config +1，pytest 321 passed。
+
+- **[2026-10-16] v0.34**（用户：数据处理重采样增加计算重采样前后相对误差并保存 CSV，时间窗可配）。配置段 `processing.error_window_s`（默认 1 s）/`error_report`；`resample.error_report()` 流式切窗、逐窗逐通道 RMS 相对误差 + NRMSE → `<输出名>_err.csv`（末行汇总）；界面勾选 + 窗长输入即时保存配置、结果显示误差表；CLI `--err-window/--no-err`。ui_r8 +11 项 40/40，test_r8 +4，pytest 325 passed。

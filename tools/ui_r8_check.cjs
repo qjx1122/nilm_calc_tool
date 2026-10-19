@@ -10,6 +10,9 @@
  *   E4 已存在且未勾选覆盖 → 任务失败并显示错误；勾选覆盖 → 成功
  *   E5 「用重采样文件作为离线播放源」→ 切到数据源页、kind=csv_file、path=输出文件
  *   E6 非法参数（fs<=0 / 路径不存在）→ 服务端 ok:false 且界面显示错误
+ *   E7 v0.34 相对误差：时间窗输入改动即保存到配置 processing.error_window_s；重采样 POST 载荷带 err_window_s；
+ *      结果含 _err.csv（真实存在、行数=窗数+表头+汇总、列名含 RMS相对误差/NRMSE）；界面显示误差表；
+ *      关闭勾选 → 载荷 err_report=false、结果无 err_path；非法窗 → ok:false
  *
  * 用法：JSDOM_DIR=/tmp/uitest node tools/ui_r8_check.cjs [baseUrl]
  */
@@ -141,6 +144,36 @@ async function main() {
   $('rs-overwrite').checked = true; $('rs-method').value = 'fft';
   click($('btn-rs-run')); st = await waitDone();
   check('勾选覆盖 + fft → 成功，行数 2N（周期语义）', st.result && !st.error && st.result.rows_out === 2 * N && st.result.method === 'fft', st.error || (st.result && st.result.rows_out));
+
+  console.log('\n=== E7. v0.34 相对误差（时间窗可配） ===');
+  const ERR_NAME = OUT_NAME.replace(/\.csv$/, '_err.csv');
+  const errPath = path.join(ROOT, 'data', ERR_NAME);
+  check('E7 结果含 err_path 且默认时间窗来自配置(1s)', st.result.err_path === 'data/' + ERR_NAME && st.result.err_window_s === 1, JSON.stringify([st.result.err_path, st.result.err_window_s]));
+  check('E7 _err.csv 真实存在，行数 = 表头 + 3 窗 + 汇总', fs.existsSync(errPath) && fs.readFileSync(errPath, 'utf8').split(/\r?\n/).filter((l) => l.trim()).length === 5, String(fs.existsSync(errPath)));
+  const eh = fs.readFileSync(errPath, 'utf8').replace(/^\uFEFF/, '').split(/\r?\n/)[0];
+  check('E7 误差 CSV 列名含通道_RMS相对误差 / _波形相对误差NRMSE', /A相电压_RMS相对误差/.test(eh) && /C相电流_波形相对误差NRMSE/.test(eh), eh.slice(0, 120));
+  const elast = fs.readFileSync(errPath, 'utf8').trim().split(/\r?\n/).pop();
+  check('E7 末行为汇总', /^汇总,/.test(elast), elast.slice(0, 40));
+  check('E7 fft 升采样纯正弦：最大 NRMSE < 1%', st.result.err_nrmse_max < 0.01, String(st.result.err_nrmse_max));
+  check('E7 界面显示误差文件名与误差表', $('rs-result').textContent.includes(ERR_NAME) && !!document.getElementById('rs-err-table') && document.getElementById('rs-err-table').querySelectorAll('tbody tr').length === 6);
+  $('rs-errwin').value = '0.5'; change($('rs-errwin')); await sleep(500);
+  const cfgNow = await (await fetch(BASE + '/api/config')).json();
+  check('E7 改时间窗 → PUT 配置 processing.error_window_s=0.5', (cfgNow.config || cfgNow).processing && (cfgNow.config || cfgNow).processing.error_window_s === 0.5, JSON.stringify((cfgNow.config || cfgNow).processing));
+  click($('btn-rs-run')); await sleep(300);
+  const b7 = bodies('/api/process/resample', 'POST').pop();
+  check('E7 POST 载荷带 err_report=true、err_window_s=0.5', b7 && b7.err_report === true && b7.err_window_s === 0.5, JSON.stringify(b7));
+  st = await waitDone();
+  check('E7 窗 0.5s → 6 窗', st.result && st.result.err_windows === 6, st.error || String(st.result && st.result.err_windows));
+  $('rs-err').checked = false; change($('rs-err')); await sleep(400);
+  click($('btn-rs-run')); await sleep(300);
+  const b8 = bodies('/api/process/resample', 'POST').pop();
+  st = await waitDone();
+  check('E7 关闭勾选 → 载荷 err_report=false、结果无 err_path、界面提示已关闭', b8 && b8.err_report === false && !('err_window_s' in b8) && st.result && !st.result.err_path && /已关闭/.test($('rs-result').textContent), JSON.stringify(b8));
+  const badw = await (await fetch(BASE + '/api/process/resample', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ path: 'data/' + SRC_NAME, fs_new: 6400, overwrite: true, err_report: true, err_window_s: 0 }) })).json();
+  check('E7 err_window_s=0 → ok:false', badw.ok === false && /时间窗/.test(badw.error), badw.error);
+  // 还原配置默认值
+  $('rs-err').checked = true; $('rs-errwin').value = '1'; change($('rs-errwin')); await sleep(400);
+  try { fs.unlinkSync(errPath); } catch (e) { /* ignore */ }
 
   console.log('\n=== E5. 用作离线播放源 ===');
   check('按钮可用', !$('btn-rs-use').disabled);

@@ -460,7 +460,9 @@ def cmd_resample(args: argparse.Namespace) -> int:
     job = ResampleJob(on_progress=on_progress)
     try:
         r = resample_csv(args.file, args.fs, args.out_dir, cfg=cfg, fs_src=args.fs_src, method=args.method,
-                         overwrite=args.overwrite, decimals=args.decimals, job=job, root=os.getcwd())
+                         overwrite=args.overwrite, decimals=args.decimals, job=job, root=os.getcwd(),
+                         error_window_s=(None if args.no_err else (args.err_window if args.err_window
+                                                                   else cfg.processing.error_window_s)))
     except ResampleError as exc:
         print(f"\n✗ 重采样失败：{exc}", file=sys.stderr)
         return 2
@@ -473,6 +475,9 @@ def cmd_resample(args: argparse.Namespace) -> int:
     print(f"  行数 {r['rows_in']} → {r['rows_out']}；原采样率 {r['fs_src']:g} Hz（{r['fs_src_source']}）→ 目标 {r['fs_new']:g} Hz；"
           f"方法 {r['method']}；耗时 {r['elapsed_s']}s")
     print(f"  时间戳 {r['ts_first_in']!r} → 输出首/末 {r['ts_first_out']!r} / {r['ts_last_out']!r}（模式 {r['ts_mode']}）")
+    if r.get("err_path"):
+        print(f"  相对误差：窗 {r['err_window_s']:g}s × {r['err_windows']} 窗 → {r['err_path']}；"
+              f"RMS 相对误差最大 {r['err_rms_rel_max']:.3e}，波形 NRMSE 最大 {r['err_nrmse_max']:.3e}")
     for n in r["notes"]:
         print("  · " + n)
     return 0
@@ -666,6 +671,9 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--out-dir", dest="out_dir", default="data", help="输出目录（默认 data）")
     sp.add_argument("--overwrite", action="store_true", help="输出已存在时覆盖")
     sp.add_argument("--decimals", type=int, default=6, help="数值列小数位（默认 6）")
+    sp.add_argument("--err-window", type=float, dest="err_window",
+                    help="重采样前后相对误差统计时间窗（秒；默认取配置 processing.error_window_s）→ <输出名>_err.csv")
+    sp.add_argument("--no-err", action="store_true", dest="no_err", help="不计算相对误差")
     sp.add_argument("--format", choices=["table", "json"], default="table")
     sp.set_defaults(func=cmd_resample)
 

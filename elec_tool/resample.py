@@ -185,8 +185,13 @@ def _prescan(path: str, enc: str, delimiter: str, colmap: ColumnMap, has_header:
 def resample_csv(src_path: str, fs_new: float, out_dir: str = "data", *,
                  cfg: Optional[AppConfig] = None, fs_src: Optional[float] = None,
                  method: str = "linear", overwrite: bool = False, decimals: int = 6,
-                 job: Optional[ResampleJob] = None, root: Optional[str] = None) -> Dict[str, Any]:
-    """重采样一个 CSV 文件，返回结果字典（out_path / rows_in / rows_out / fs_src / notes …）。"""
+                 job: Optional[ResampleJob] = None, root: Optional[str] = None,
+                 error_window_s: Optional[float] = None) -> Dict[str, Any]:
+    """重采样一个 CSV 文件，返回结果字典（out_path / rows_in / rows_out / fs_src / notes …）。
+
+    ``error_window_s``：>0 时在重采样完成后按该时间窗（秒）逐窗计算重采样前后的相对误差并写入
+    ``<输出名>_err.csv``（见 :func:`error_report`）；None/0 → 不计算。
+    """
     t_start = time.time()
     job = job or ResampleJob()
     cfg = cfg or AppConfig()
@@ -270,10 +275,18 @@ def resample_csv(src_path: str, fs_new: float, out_dir: str = "data", *,
             pass
         raise
     os.replace(tmp_path, out_path)
-    job.tick(1.0, "done")
     job.rows_in, job.rows_out = rows_in, rows_out
+    err: Dict[str, Any] = {}
+    if error_window_s is not None and float(error_window_s) > 0:
+        job.tick(1.0, "error")
+        err = error_report(src, out_path, fs_src=fs_src_used, fs_new=fs_new, window_s=float(error_window_s),
+                           enc=enc, enc_out=enc_out, delim=delim, header=header, idx=idx, ncols=ncols,
+                           colmap=colmap, root=root, job=job)
+        notes.append(f"相对误差：时间窗 {float(error_window_s):g} s，共 {err['err_windows']} 窗 → {err['err_path']}")
+    job.tick(1.0, "done")
     dur_in = (rows_in - 1) / fs_src_used if rows_in > 1 else 0.0
     return {
+        **err,
         "ok": True, "src_path": os.path.relpath(src, root) if src.startswith(root) else src,
         "out_path": os.path.relpath(out_path, root), "out_name": os.path.basename(out_path),
         "out_size_mb": round(os.path.getsize(out_path) / 1024 / 1024, 3),
@@ -405,3 +418,155 @@ def _run_resample(src: str, tmp_path: str, enc: str, enc_out: str, delim: str, h
             if rows_in < 2:
                 raise ResampleError("数据行不足 2 行，无法重采样")
     return rows_in, rows_out
+
+
+# ------------------------------------------------------------------ v0.34：重采样前后相对误差（按时间窗）
+
+def error_output_name(out_path: str) -> str:
+    """``X_re_6400.csv`` → ``X_re_6400_err.csv``。"""
+    stem, ext = os.path.splitext(out_path)
+    return f"{stem}_err{ext or '.csv'}"
+
+
+def _rel(num: float, den: float) -> float:
+    return float(num / den) if den > 0 else (0.0 if num == 0 else float("inf"))
+
+
+def error_report(src: str, out_path: str, *, fs_src: float, fs_new: float, window_s: float,
+                 enc: str, enc_out: str, delim: str, header: Optional[List[str]], idx: Dict[str, int],
+                 ncols: int, colmap: ColumnMap, root: Optional[str] = None,
+                 job: Optional[ResampleJob] = None, err_path: Optional[str] = None) -> Dict[str, Any]:
+    """按时间窗流式对比原始文件与重采样文件，逐窗逐通道计算相对误差并写 CSV。
+
+    时间轴沿用重采样约定：原始第 i 行位于 ``i/fs_src``，输出第 k 行位于 ``k/fs_new``（同一起点）。
+    第 w 窗覆盖原始行 ``[w·n_src, (w+1)·n_src)``（``n_src = round(window_s·fs_src)``，末窗不足整窗也统计），
+    对应输出行 k 满足 ``k·fs_src/fs_new`` 落在同一区间。每通道两项指标：
+
+    * **RMS 相对误差** ``|RMS_out − RMS_in| / RMS_in``——窗内有效值变化（降采样折叠 / 升采样失真的总量）。
+    * **波形相对误差 NRMSE** ``‖x_in − x̂‖₂ / ‖x_in‖₂``，x̂ 为把窗内输出样本线性插回原始采样时刻得到的重建波形
+      （只取输出覆盖到的原始时刻，窗边界最多舍弃 1 个样本）——逐点波形偏差。
+
+    CSV 列：窗序号, 起始时间戳, 起始秒, 结束秒, 原始行数, 重采样行数, 然后每通道 4 列
+    ``<通道>_原始RMS / _重采样RMS / _RMS相对误差 / _波形相对误差NRMSE``；末行 ``汇总`` 为各窗平均（RMS 列）/ 最大（误差列）。
+    返回 ``err_path / err_window_s / err_windows / err_summary``（summary: 通道 → {rms_rel_mean, rms_rel_max, nrmse_mean, nrmse_max}）。
+    """
+    root = root or os.getcwd()
+    job = job or ResampleJob()
+    if not (window_s > 0):
+        raise ResampleError("误差统计时间窗必须 > 0 秒")
+    ti = idx["timestamp"]
+    num_cols = [c for c in range(ncols) if c != ti]
+    # 通道名：表头优先；无表头按列映射的标准字段名；都没有则「列N」
+    col2field = {v: k for k, v in idx.items() if v is not None}
+    names: List[str] = []
+    for c in num_cols:
+        if header is not None and c < len(header) and str(header[c]).strip():
+            names.append(str(header[c]).strip())
+        elif c in col2field:
+            names.append(ColumnMap.FIELD_NAMES.get(col2field[c], col2field[c]))
+        else:
+            names.append(f"列{c + 1}")
+    n_src = max(2, int(round(window_s * fs_src)))
+    ratio = fs_src / fs_new
+    err_path = err_path or error_output_name(out_path)
+    tmp = err_path + ".part"
+    size = max(1, os.path.getsize(src))
+    head = ["窗序号", "起始时间戳", "起始秒", "结束秒", "原始行数", "重采样行数"]
+    for nm in names:
+        head += [f"{nm}_原始RMS", f"{nm}_重采样RMS", f"{nm}_RMS相对误差", f"{nm}_波形相对误差NRMSE"]
+    nch = len(num_cols)
+    sums = {"rms_rel": np.zeros(nch), "nrmse": np.zeros(nch), "rms_in": np.zeros(nch), "rms_out": np.zeros(nch)}
+    maxs = {"rms_rel": np.zeros(nch), "nrmse": np.zeros(nch)}
+    windows = 0
+
+    def _rows(fh):
+        rdr = csv.reader(fh, delimiter=delim)
+        if header is not None:
+            next(rdr, None)
+        for row in rdr:
+            if row and any(str(c).strip() for c in row):
+                yield row
+
+    def _vals(rows: List[List[str]]) -> np.ndarray:
+        try:
+            return np.array([[r[c] for c in num_cols] for r in rows], dtype=np.float64) if rows else np.zeros((0, nch))
+        except (ValueError, IndexError) as exc:
+            raise ResampleError(f"误差统计：数据列含非数值或列数不一致：{exc}") from None
+
+    try:
+        with open(src, "r", encoding=enc, newline="") as fi, open(out_path, "r", encoding=enc_out, newline="") as fo, \
+                open(tmp, "w", encoding="utf-8-sig", newline="") as fe:
+            wr = csv.writer(fe)
+            wr.writerow(head)
+            gi, go = _rows(fi), _rows(fo)
+            pend_out: Optional[List[str]] = next(go, None)
+            k = 0                                   # pend_out 的输出行号
+            i0 = 0
+            while True:
+                src_rows: List[List[str]] = []
+                for row in gi:
+                    src_rows.append(row)
+                    if len(src_rows) >= n_src:
+                        break
+                if not src_rows:
+                    break
+                i1 = i0 + len(src_rows)             # 本窗原始行 [i0, i1)
+                out_rows: List[List[str]] = []
+                k0 = k
+                while pend_out is not None and k * ratio < i1 - 1e-9:
+                    out_rows.append(pend_out)
+                    pend_out = next(go, None)
+                    k += 1
+                xin = _vals(src_rows)
+                xout = _vals(out_rows)
+                rms_in = np.sqrt(np.mean(xin ** 2, axis=0))
+                rms_out = np.sqrt(np.mean(xout ** 2, axis=0)) if xout.shape[0] else np.zeros(nch)
+                rms_rel = np.array([_rel(abs(rms_out[j] - rms_in[j]), rms_in[j]) for j in range(nch)])
+                if xout.shape[0] >= 2:
+                    pos_out = np.arange(k0, k0 + xout.shape[0]) * ratio      # 输出样本在原始索引轴上的位置
+                    pos_in = np.arange(i0, i1, dtype=np.float64)
+                    m = (pos_in >= pos_out[0] - 1e-9) & (pos_in <= pos_out[-1] + 1e-9)
+                    xi, pi = xin[m], pos_in[m]
+                    nrmse = np.zeros(nch)
+                    for j in range(nch):
+                        xh = np.interp(pi, pos_out, xout[:, j])
+                        nrmse[j] = _rel(float(np.sqrt(np.sum((xi[:, j] - xh) ** 2))), float(np.sqrt(np.sum(xi[:, j] ** 2))))
+                else:
+                    nrmse = np.full(nch, float("nan"))
+                row_out: List[Any] = [windows, src_rows[0][ti], f"{i0 / fs_src:.6f}", f"{i1 / fs_src:.6f}",
+                                      len(src_rows), len(out_rows)]
+                for j in range(nch):
+                    row_out += [f"{rms_in[j]:.6f}", f"{rms_out[j]:.6f}", f"{rms_rel[j]:.6e}",
+                                ("" if math.isnan(nrmse[j]) else f"{nrmse[j]:.6e}")]
+                wr.writerow(row_out)
+                windows += 1
+                sums["rms_in"] += rms_in; sums["rms_out"] += rms_out
+                sums["rms_rel"] += np.where(np.isfinite(rms_rel), rms_rel, 0.0)
+                sums["nrmse"] += np.where(np.isfinite(nrmse), nrmse, 0.0)
+                maxs["rms_rel"] = np.maximum(maxs["rms_rel"], np.where(np.isfinite(rms_rel), rms_rel, 0.0))
+                maxs["nrmse"] = np.maximum(maxs["nrmse"], np.where(np.isfinite(nrmse), nrmse, 0.0))
+                i0 = i1
+                if windows % 16 == 0:
+                    job.tick(1.0, "error")
+            if windows == 0:
+                raise ResampleError("误差统计：原始文件没有数据行")
+            srow: List[Any] = ["汇总", "", "0.000000", f"{i0 / fs_src:.6f}", i0, k]
+            summary: Dict[str, Dict[str, float]] = {}
+            for j, nm in enumerate(names):
+                srow += [f"{sums['rms_in'][j] / windows:.6f}", f"{sums['rms_out'][j] / windows:.6f}",
+                         f"{maxs['rms_rel'][j]:.6e}", f"{maxs['nrmse'][j]:.6e}"]
+                summary[nm] = {"rms_rel_mean": float(sums["rms_rel"][j] / windows), "rms_rel_max": float(maxs["rms_rel"][j]),
+                               "nrmse_mean": float(sums["nrmse"][j] / windows), "nrmse_max": float(maxs["nrmse"][j])}
+            wr.writerow(srow)
+    except BaseException:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        raise
+    os.replace(tmp, err_path)
+    return {"err_path": os.path.relpath(err_path, root) if err_path.startswith(root) else err_path,
+            "err_name": os.path.basename(err_path), "err_window_s": float(window_s), "err_windows": windows,
+            "err_channels": names, "err_summary": summary,
+            "err_rms_rel_max": float(maxs["rms_rel"].max()) if nch else 0.0,
+            "err_nrmse_max": float(maxs["nrmse"].max()) if nch else 0.0}

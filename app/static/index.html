@@ -815,6 +815,11 @@
               </label>
               <label class="check"><input id="rs-overwrite" type="checkbox"> 输出已存在时覆盖</label>
             </div>
+            <div class="row2">
+              <label class="check"><input id="rs-err" type="checkbox" checked> 计算重采样前后相对误差（写 <code>_err.csv</code>）</label>
+              <label>误差统计时间窗 (s，可配，保存到配置 processing.error_window_s)
+                <input id="rs-errwin" type="number" min="0.001" step="0.1" value="1"></label>
+            </div>
             <div id="rs-preview" class="notes"></div>
             <div class="btnrow">
               <button id="btn-rs-probe">探查源文件</button>
@@ -827,6 +832,8 @@
                 <code>波形_农业排灌_大水泵_80_1.csv</code> → <code>波形_农业排灌_大水泵_80_1_re_6400.csv</code>；表头、列顺序、编码、时间戳写法原样保留。</div>
               <div>时间轴按等间隔原采样率重建（第 i 行 = 起点 + i/fs_src），不逐行使用原时标，避免 0.1 ms 量化抖动被放大。</div>
               <div>降采样请优先选 <b>fft</b>（自带理想低通抗混叠）；linear 降采样会把高次谐波折叠到低频。</div>
+              <div>相对误差：按「误差统计时间窗」把原始与重采样文件对齐切窗，逐窗逐通道算 <b>RMS 相对误差</b> |RMS<sub>重</sub>−RMS<sub>原</sub>|/RMS<sub>原</sub>
+                与 <b>波形相对误差 NRMSE</b>（重采样样本插回原始时刻后 ‖x−x̂‖/‖x‖），写入 <code>&lt;输出名&gt;_err.csv</code>，末行为汇总。</div>
             </div>
           </div>
         </div>
@@ -835,6 +842,7 @@
           <div class="progress"><div id="rs-bar" class="progress-bar" style="width:0%"></div></div>
           <div id="rs-status" class="notes"></div>
           <div id="rs-result" class="notes"></div>
+          <div id="rs-err-summary" class="tablewrap"></div>
           <div class="btnrow"><button id="btn-rs-use" disabled>用重采样文件作为离线播放源 →</button></div>
           <details><summary>原始结果 JSON</summary><pre id="rs-json" class="pre"></pre></details>
         </div>

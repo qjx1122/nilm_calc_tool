@@ -267,7 +267,7 @@ def test_api_resample_roundtrip(client):
         assert client.post("/api/process/resample", json={"path": "data/nope.csv", "fs_new": 6400}).json()["ok"] is False
         assert client.post("/api/process/resample", json={"fs_new": 6400}).json()["ok"] is False
     finally:
-        for p in (src, out):
+        for p in (src, out, out.with_name(out.stem + "_err.csv")):
             if p.exists():
                 p.unlink()
 
@@ -319,3 +319,108 @@ def test_frontend_has_process_view():
         assert f'id="{i}"' in html, i
     assert "case 'process': renderProcess(); break;" in js
     assert "/api/process/resample" in js and "bindProcess();" in js
+
+
+# ------------------------------------------------------------------ v0.34：重采样前后相对误差（时间窗可配）
+
+def _read_err(path: Path):
+    with open(path, encoding="utf-8-sig", newline="") as fh:
+        return list(csv.reader(fh))
+
+
+def test_error_report_windows_and_metrics(tmp_path):
+    src = tmp_path / "波形_农业排灌_大水泵_80_1.csv"
+    n = _write(src, 3200, 3.0)                         # 9600 行
+    # 窗 1 s → 3 窗；fft 升采样纯正弦：误差应极小
+    r = resample_csv(str(src), 6400, out_dir=str(tmp_path / "data"), method="fft", error_window_s=1.0)
+    assert r["err_windows"] == 3 and r["err_window_s"] == 1.0
+    err = tmp_path / "data" / "波形_农业排灌_大水泵_80_1_re_6400_err.csv"
+    assert err.exists() and r["err_path"].endswith("_re_6400_err.csv") and r["err_name"] == err.name
+    rows = _read_err(err)
+    head = rows[0]
+    assert head[:6] == ["窗序号", "起始时间戳", "起始秒", "结束秒", "原始行数", "重采样行数"]
+    assert "A相电压_RMS相对误差" in head and "C相电流_波形相对误差NRMSE" in head and len(head) == 6 + 6 * 4
+    assert len(rows) == 1 + 3 + 1 and rows[-1][0] == "汇总"
+    assert [int(x[4]) for x in rows[1:4]] == [3200, 3200, 3200] and sum(int(x[5]) for x in rows[1:4]) == r["rows_out"]
+    assert rows[1][1].startswith("0/00/00 12:40:00") and rows[2][2] == "1.000000"
+    assert r["err_rms_rel_max"] < 1e-3 and r["err_nrmse_max"] < 0.01
+    assert set(r["err_summary"]) == set(HEADER[1:]) and all(v["nrmse_max"] >= v["nrmse_mean"] for v in r["err_summary"].values())
+    # 窗 0.25 s → 12 窗；末窗不足整窗也统计（2.9 s → 12 窗，最后一窗 0.15 s）
+    n2 = _write(src, 3200, 2.9)
+    r2 = resample_csv(str(src), 6400, out_dir=str(tmp_path / "data"), overwrite=True, error_window_s=0.25)
+    assert r2["err_windows"] == 12 and int(_read_err(err)[12][4]) == n2 - 11 * 800
+    # 关闭：不生成文件、结果无 err_path
+    err.unlink()
+    r3 = resample_csv(str(src), 6400, out_dir=str(tmp_path / "data"), overwrite=True)
+    assert "err_path" not in r3 and not err.exists()
+    # 降采样 linear 对含 1250 Hz 谐波的电流：折叠 → 误差明显大于 fft
+    _write(src, 3200, 1.0, harmonic=True)
+    rl = resample_csv(str(src), 1600, out_dir=str(tmp_path / "data"), method="linear", error_window_s=0.5)
+    rf = resample_csv(str(src), 1600, out_dir=str(tmp_path / "data"), method="fft", overwrite=True, error_window_s=0.5)
+    assert rl["err_summary"]["A相电流"]["nrmse_max"] > rf["err_summary"]["A相电流"]["nrmse_max"]
+
+
+def test_error_window_config_and_api(client):
+    from elec_tool.config import AppConfig, ConfigError
+    cfg = AppConfig.from_dict({"processing": {"error_window_s": "0.5", "error_report": 1}}).validate()
+    assert cfg.processing.error_window_s == 0.5 and cfg.processing.error_report is True
+    assert AppConfig.from_dict(AppConfig().to_dict()).processing.error_window_s == 1.0
+    with pytest.raises(ConfigError):
+        AppConfig.from_dict({"processing": {"error_window_s": 0}}).validate()
+    data_dir = ROOT / "data"
+    data_dir.mkdir(exist_ok=True)
+    src = data_dir / "_r34_api_波形_80_1.csv"
+    out = data_dir / "_r34_api_波形_80_1_re_6400.csv"
+    err = data_dir / "_r34_api_波形_80_1_re_6400_err.csv"
+    try:
+        _write(src, 3200, 1.0)
+        # 默认来自配置
+        st0 = client.get("/api/process/resample").json()
+        assert st0["defaults"]["err_window_s"] == 1.0 and st0["defaults"]["err_report"] is True
+        assert client.put("/api/config", json={"processing": {"error_window_s": 0.2}}).json()["ok"]
+        assert client.get("/api/process/resample").json()["defaults"]["err_window_s"] == 0.2
+        r = client.post("/api/process/resample", json={"path": "data/" + src.name, "fs_new": 6400}).json()
+        assert r["ok"], r
+        st = _wait(client)
+        assert st["error"] is None and st["result"]["err_windows"] == 5 and err.exists()
+        # 载荷显式覆盖窗长
+        r = client.post("/api/process/resample", json={"path": "data/" + src.name, "fs_new": 6400, "overwrite": True, "err_window_s": 0.5}).json()
+        assert r["ok"], r
+        st = _wait(client)
+        assert st["result"]["err_windows"] == 2 and st["params"]["err_window_s"] == 0.5
+        # 关闭
+        err.unlink()
+        r = client.post("/api/process/resample", json={"path": "data/" + src.name, "fs_new": 6400, "overwrite": True, "err_report": False}).json()
+        assert r["ok"], r
+        st = _wait(client)
+        assert "err_path" not in st["result"] and not err.exists()
+        # 非法窗
+        assert client.post("/api/process/resample", json={"path": "data/" + src.name, "fs_new": 6400, "err_window_s": 0}).json()["ok"] is False
+        assert client.post("/api/process/resample", json={"path": "data/" + src.name, "fs_new": 6400, "err_window_s": "x"}).json()["ok"] is False
+    finally:
+        client.put("/api/config", json={"processing": {"error_window_s": 1.0, "error_report": True}})
+        for p in (src, out, err):
+            if p.exists():
+                p.unlink()
+
+
+def test_cli_resample_err_window(tmp_path):
+    src = tmp_path / "波形_农业排灌_大水泵_80_1.csv"
+    _write(src, 3200, 1.0)
+    out_dir = tmp_path / "data"
+    p = subprocess.run([sys.executable, str(ROOT / "cli.py"), "resample", str(src), "--fs", "6400", "--out-dir", str(out_dir),
+                        "--err-window", "0.5", "--format", "json"], capture_output=True, text=True, cwd=str(ROOT))
+    assert p.returncode == 0, p.stderr
+    r = json.loads(p.stdout)
+    assert r["err_windows"] == 2 and (out_dir / r["err_name"]).exists()
+    p2 = subprocess.run([sys.executable, str(ROOT / "cli.py"), "resample", str(src), "--fs", "6400", "--out-dir", str(out_dir),
+                         "--overwrite", "--no-err", "--format", "json"], capture_output=True, text=True, cwd=str(ROOT))
+    assert p2.returncode == 0 and "err_path" not in json.loads(p2.stdout)
+
+
+def test_frontend_has_error_window_controls():
+    html = (ROOT / "app" / "static" / "index.html").read_text(encoding="utf-8")
+    js = (ROOT / "app" / "static" / "app.js").read_text(encoding="utf-8")
+    for i in ("rs-err", "rs-errwin", "rs-err-summary"):
+        assert f'id="{i}"' in html, i
+    assert "processing: { error_window_s" in js and "err_window_s" in js

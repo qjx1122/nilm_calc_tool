@@ -833,6 +833,33 @@ class BranchConfig:
 
 
 @dataclass
+class ProcessingConfig:
+    """v0.34：数据处理子界面（离线 CSV 重采样）的参数。
+
+    ``error_window_s``：重采样前后相对误差的统计时间窗（秒）。重采样完成后按该窗长把原始文件与输出文件
+    对齐切窗，逐窗逐通道计算 RMS 相对误差与波形相对误差（NRMSE），写入 ``<输出名>_err.csv``。
+    ``error_report=False`` 时不计算、不生成误差文件。
+    """
+
+    error_report: bool = True
+    error_window_s: float = 1.0
+
+    def validate(self) -> None:
+        self.error_report = bool(self.error_report)
+        try:
+            self.error_window_s = float(self.error_window_s)
+        except (TypeError, ValueError):
+            raise ConfigError("processing.error_window_s 必须是数字（秒）")
+        if not (self.error_window_s > 0) or self.error_window_s > 3600:
+            raise ConfigError("processing.error_window_s 必须在 (0, 3600] 秒之间")
+
+    @classmethod
+    def from_dict(cls, d: Dict[str, Any]) -> "ProcessingConfig":
+        keep = {k: v for k, v in d.items() if k in cls.__dataclass_fields__}
+        return cls(**keep)
+
+
+@dataclass
 class AppConfig:
     """顶层配置。持久化为 JSON（configs/default.json）。"""
 
@@ -847,6 +874,7 @@ class AppConfig:
     events: EventConfig = field(default_factory=EventConfig)
     nilm: NilmConfig = field(default_factory=NilmConfig)
     branch: BranchConfig = field(default_factory=BranchConfig)
+    processing: ProcessingConfig = field(default_factory=ProcessingConfig)
     windows: Dict[str, WindowSpec] = field(default_factory=default_windows)
 
     # ---------- 派生量 ----------
@@ -875,6 +903,7 @@ class AppConfig:
         self.events.validate()
         self.nilm.validate()
         self.branch.validate()
+        self.processing.validate()
         for name, spec in self.windows.items():
             spec.validate(name, self.sampling.fs)
         missing = [k for k in QUANTITY_KEYS if k not in self.windows]
@@ -902,6 +931,7 @@ class AppConfig:
             ("sampling", SamplingConfig), ("transform", TransformConfig), ("harmonic", HarmonicConfig),
             ("power", PowerConfig), ("columns", ColumnMap), ("source", SourceConfig),
             ("events", EventConfig), ("nilm", NilmConfig), ("branch", BranchConfig),
+            ("processing", ProcessingConfig),
         ):
             if isinstance(d.get(key), dict):
                 setattr(cfg, key, klass.from_dict(d[key]))

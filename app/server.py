@@ -1880,7 +1880,8 @@ class _ResampleJobs:
                     res = resample_csv(params["path"], params["fs_new"], params.get("out_dir") or "data",
                                        cfg=RUNNER.cfg, fs_src=params.get("fs_src") or None,
                                        method=params.get("method") or "linear",
-                                       overwrite=bool(params.get("overwrite")), job=job, root=ROOT)
+                                       overwrite=bool(params.get("overwrite")), job=job, root=ROOT,
+                                       error_window_s=params.get("err_window_s"))
                     with self.lock:
                         self.result = res
                 except Exception as exc:                    # 线程内异常必须回收给界面
@@ -1921,7 +1922,9 @@ RESAMPLE = _ResampleJobs()
 async def process_resample(payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     payload = payload or {}
     """启动离线 CSV 重采样后台任务。payload：path, fs_new, [fs_src], [method=linear|nearest|fft],
-    [overwrite], [out_dir=data]。输出文件名 = 原名_re_<fs_new>.csv。"""
+    [overwrite], [out_dir=data], [err_report], [err_window_s]。输出文件名 = 原名_re_<fs_new>.csv。
+    v0.34：err_report（默认取配置 processing.error_report）为真时按 err_window_s 秒（默认取配置
+    processing.error_window_s）逐窗计算重采样前后相对误差，写 原名_re_<fs_new>_err.csv。"""
     path = str(payload.get("path") or "").strip()
     if not path:
         return {"ok": False, "error": "请填写源文件路径"}
@@ -1946,13 +1949,27 @@ async def process_resample(payload: Optional[Dict[str, Any]] = None) -> Dict[str
     src_abs = path if os.path.isabs(path) else os.path.join(ROOT, path)
     if not os.path.isfile(src_abs):
         return {"ok": False, "error": f"文件不存在：{path}"}
+    pc = RUNNER.cfg.processing
+    err_report = bool(payload.get("err_report")) if "err_report" in payload else bool(pc.error_report)
+    err_window_s: Optional[float] = None
+    if err_report:
+        try:
+            err_window_s = float(payload.get("err_window_s")) if payload.get("err_window_s") not in (None, "") \
+                else float(pc.error_window_s)
+        except (TypeError, ValueError):
+            return {"ok": False, "error": "误差统计时间窗必须是数字（秒）"}
+        if not (err_window_s > 0) or err_window_s > 3600:
+            return {"ok": False, "error": "误差统计时间窗必须在 (0, 3600] 秒之间"}
     return RESAMPLE.start({"path": path, "fs_new": fs_new, "fs_src": fs_src, "method": method,
-                           "overwrite": bool(payload.get("overwrite")), "out_dir": out_dir})
+                           "overwrite": bool(payload.get("overwrite")), "out_dir": out_dir,
+                           "err_report": err_report, "err_window_s": err_window_s})
 
 
 @app.get("/api/process/resample")
 async def process_resample_status() -> Dict[str, Any]:
-    return {"ok": True, **RESAMPLE.status()}
+    pc = RUNNER.cfg.processing
+    return {"ok": True, **RESAMPLE.status(),
+            "defaults": {"err_report": bool(pc.error_report), "err_window_s": float(pc.error_window_s)}}
 
 
 @app.post("/api/process/resample/cancel")
