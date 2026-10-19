@@ -14,6 +14,7 @@
 
 总线上还有其它设备启停时（v0.22.1）——按**幅值带**归属：
     --mag-w 500 --mag-tol-pct 30            ΔP 不在 500×(1±30%) 内的事件记为「其它设备」，不算误报
+    --mag-a 2.5 --mag-tol-pct 30            v0.38：仅电流检测（事件 unit=A）时按 |ΔI| 指纹归属
     --dq-var 240                            可选：ΔQ 也要同号且在 ±(tol+20)% 内
     --signature-from output/dev_events.csv  直接用设备侧回放结果（命中事件）的 ΔP/ΔQ 均值作指纹（配合 --truth 同一张真值表时取真值附近的事件）
 判定规则（每种算法单独算）：
@@ -58,9 +59,11 @@ def read_events(path: str, source_id: Optional[int]) -> List[Dict[str, Any]]:
         if source_id is not None and str(r.get("source_id", "0")).strip() not in ("", str(source_id)):
             continue
         try:
-            out.append({"algorithm": r["algorithm"], "t": float(r["t_start"]), "dir": r["direction"],
-                        "mag": float(r.get("magnitude_w") or 0), "dp": float(r.get("delta_p_w") or 0),
-                        "dq": float(r.get("delta_q_var") or 0), "local": r.get("t_start_local", "")})
+            unit = (r.get("unit") or "W").strip() or "W"
+            mag = r.get("magnitude") if unit == "A" else None
+            out.append({"algorithm": r["algorithm"], "t": float(r["t_start"]), "dir": r["direction"], "unit": unit,
+                        "mag": float(mag if mag not in (None, "") else (r.get("magnitude_w") or 0)), "dp": float(r.get("delta_p_w") or 0),
+                        "dq": float(r.get("delta_q_var") or 0), "di": float(r.get("delta_i_a") or 0), "local": r.get("t_start_local", "")})
         except (KeyError, ValueError):
             continue
     return out
@@ -110,6 +113,7 @@ def main() -> int:
     ap.add_argument("--source-id", type=int, default=None, help="只看某一侧（0 总线 / 1 分路；默认全部）")
     ap.add_argument("--out", default=None, help="把逐条对账结果另存为 CSV（给 Excel 看）")
     ap.add_argument("--mag-w", type=float, default=None, help="待检设备的 |ΔP| 指纹（W，计算口径）；给出后带外事件记为「其它设备」")
+    ap.add_argument("--mag-a", type=float, default=None, help="待检设备的 |ΔI| 指纹（A，计算口径）；事件为电流口径（unit=A）时用")
     ap.add_argument("--mag-tol-pct", type=float, default=30.0, help="幅值带宽度 ±%%（默认 30）")
     ap.add_argument("--dq-var", type=float, default=None, help="待检设备的 ΔQ 指纹（var，带符号的开机值；关机取反）；给出后 ΔQ 也参与归属")
     ap.add_argument("--signature-from", default=None, help="从设备侧回放的事件 CSV 取指纹（真值附近的命中事件 ΔP/ΔQ 均值），代替手填 --mag-w/--dq-var")
@@ -124,7 +128,14 @@ def main() -> int:
     others = [t for t in truth if t["dir"] == "other"]
     if not targets:
         raise SystemExit("真值表里没有待检设备的 开/关 行")
-    mag_w, dq_var = a.mag_w, a.dq_var
+    # v0.38：事件口径——全部 unit=A（仅电流检测）时幅值带按 |ΔI|（--mag-a），否则按 |ΔP|（--mag-w）
+    ev_unit = "A" if evs and all(e.get("unit") == "A" for e in evs) else "W"
+    mag_w, dq_var = (a.mag_a if ev_unit == "A" else a.mag_w), a.dq_var
+    if ev_unit == "A":
+        if a.mag_w is not None and a.mag_a is None:
+            print("提示：事件为电流口径（unit=A），--mag-w 不适用，请用 --mag-a（A）；本次不按幅值带归属")
+        if dq_var is not None:
+            print("提示：电流口径事件 ΔQ 恒为 0，--dq-var 已忽略"); dq_var = None
     if a.signature_from:
         sev = read_events(a.signature_from, None)
         st = targets
@@ -137,8 +148,11 @@ def main() -> int:
                 m_ += [e["mag"] for e in near]; q_ += [e["dq"] if tr["dir"] == "up" else -e["dq"] for e in near]
         if not m_:
             raise SystemExit(f"--signature-from {a.signature_from} 里在真值时刻附近没有事件，无法取指纹（请先用设备侧文件回放并确认 ✅）")
-        mag_w = sum(m_) / len(m_); dq_var = sum(q_) / len(q_)
-        print(f"设备指纹（来自 {a.signature_from}，{len(m_)} 次）：|ΔP| = {mag_w:.4g} W，ΔQ(开机) = {dq_var:.4g} var")
+        mag_w = sum(m_) / len(m_); dq_var = (sum(q_) / len(q_)) if ev_unit == "W" else None
+        if ev_unit == "A":
+            print(f"设备指纹（来自 {a.signature_from}，{len(m_)} 次，电流口径）：|ΔI| = {mag_w:.4g} A")
+        else:
+            print(f"设备指纹（来自 {a.signature_from}，{len(m_)} 次）：|ΔP| = {mag_w:.4g} W，ΔQ(开机) = {dq_var:.4g} var")
 
     def in_band(e: Dict[str, Any]) -> bool:
         """事件是否落在待检设备的幅值带内（未给指纹 → 全部视为带内）。"""
@@ -155,7 +169,8 @@ def main() -> int:
 
     algos = [x for x in NILM_ALGO_DEFAULTS if any(e["algorithm"] == x for e in evs)] or list(NILM_ALGO_DEFAULTS)
 
-    band = f"  幅值带 {mag_w * (1 - a.mag_tol_pct / 100):.4g}~{mag_w * (1 + a.mag_tol_pct / 100):.4g} W" if mag_w is not None else ""
+    sx = "_a" if ev_unit == "A" else "_w"
+    band = f"  幅值带 {mag_w * (1 - a.mag_tol_pct / 100):.4g}~{mag_w * (1 + a.mag_tol_pct / 100):.4g} {ev_unit}" if mag_w is not None else ""
     print(f"事件文件 {a.events}（{len(evs)} 条）  真值 {len(targets)} 条待检 + {len(others)} 条其它  容差 ±{a.tol_s:g} s{band}")
     print(f"  {'算法':14s} {'真值':>4s} {'命中':>4s} {'漏报':>4s} {'误报':>4s} {'其它设备':>6s}  {'命中率':>6s}  结论")
     detail: List[List[Any]] = []
@@ -200,20 +215,20 @@ def main() -> int:
         if miss == 0 and not fa:
             v = "✅ 可上线"
         elif miss == 0:
-            v = f"⚠ 有 {len(fa)} 条带内误报：调高 min_delta_w / 容差，或核对误报时刻是否为功率相近的其它设备（相近则总线侧无法区分）"
+            v = f"⚠ 有 {len(fa)} 条带内误报：调高 min_delta{sx} / 容差，或核对误报时刻是否为功率相近的其它设备（相近则总线侧无法区分）"
         elif hit == 0:
             v = "✗ 全漏：门槛/量级可能填错，或该设备幅值低于噪声底（看 nilm_tune 的 ⚠）"
         else:
-            v = f"✗ 漏 {miss} 条：调低 min_delta_w（不低于 6σ），或加长 window/pre/post；若漏的那次 ±0.2 s 内有其它设备动作则属叠加、换一段数据"
+            v = f"✗ 漏 {miss} 条：调低 min_delta{sx}（不低于 6σ），或加长 window/pre/post；若漏的那次 ±0.2 s 内有其它设备动作则属叠加、换一段数据"
         verdicts[algo] = v
         print(f"  {algo:14s} {len(targets):4d} {hit:4d} {miss:4d} {len(fa):4d} {n_oth:6d}  {rate:5.0f}%  {v}   ({NILM_ALGO_NAMES.get(algo, '')})")
     ok = [x for x, v in verdicts.items() if v.startswith("✅")]
-    print("—— 设备特征（命中事件的 |ΔP| 均值，W，计算口径）——")
+    print(f"—— 设备特征（命中事件的 {'|ΔI| 均值，A' if ev_unit == 'A' else '|ΔP| 均值，W'}，计算口径）——")
     for algo, m in mags.items():
         print(f"  {algo:14s} {sum(m) / len(m):.4g}  （{len(m)} 次）")
     print("—— 总结论 ——")
     if n_other_total and mag_w is None:
-        print(f"  ℹ 有事件匹配到「其它」真值行；若总线上还有未登记的其它设备，请加 --mag-w/--signature-from 按幅值带归属，否则它们会被算成误报。")
+        print(f"  ℹ 有事件匹配到「其它」真值行；若总线上还有未登记的其它设备，请加 {'--mag-a' if ev_unit == 'A' else '--mag-w'}/--signature-from 按幅值带归属，否则它们会被算成误报。")
     elif n_other_total:
         print(f"  ℹ 带外 / 已知其它设备事件最多 {n_other_total} 条（不计误报）；这些是总线上别的负荷，不需要为它们调参。")
     if len(ok) >= 2:
@@ -221,7 +236,7 @@ def main() -> int:
     elif ok:
         print(f"  ⚠ 只有 1 种算法（{ok[0]}）达标：可试运行，但请再采一段数据复核后再上线。")
     else:
-        print("  ✗ 没有算法达标：按上表的结论改参数后重新回放；若 6 种都「全漏」，先检查 PT/CT 口径与 --min-load-w 单位。")
+        print("  ✗ 没有算法达标：按上表的结论改参数后重新回放；若 6 种都「全漏」，先检查 PT/CT 口径与 --min-load-w / --min-load-a 单位。")
     if a.out:
         os.makedirs(os.path.dirname(os.path.abspath(a.out)), exist_ok=True)
         with open(a.out, "w", encoding="utf-8-sig", newline="") as fh:

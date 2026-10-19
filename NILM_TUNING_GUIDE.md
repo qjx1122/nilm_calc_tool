@@ -4,6 +4,7 @@
 > **需要会什么**：① 复制粘贴 PowerShell 命令；② 用 Excel 打开 / 另存 CSV；③ 看懂"开 / 关"。
 > **能做到什么**：把一个从未见过的新设备，从"只有两份 CSV"开始，一步步配好 6 种事件检测算法的参数，并**用数字判断它能不能上线**。
 > **配套脚本**（都在仓库 `tools/` 下，本手册会告诉你每一步敲什么）：`nilm_tune.py`（量噪声给参数）、`nilm_replay.py`（离线回放跑检测）、`nilm_check.py`（和真实开关表对账、出结论）。
+> 正文按**有功 P（W）**口径写；数据源**只有电流**时三个脚本自动按电流 I（A）口径工作，差异见**附录 F**。
 > 想看算法推导的同学直接跳到 [附录 E](#附录-e进阶参数是怎么算出来的)。
 
 ---
@@ -343,6 +344,41 @@ Invoke-RestMethod -Method Put -Uri http://localhost:8000/api/branch/config -Cont
 ```
 
 ---
+
+## 附录 F（v0.38）：数据源只有电流、没有电压——按电流 I 调参
+
+> 适用：CSV 只有三相电流列（电压列未映射或全为 0）、或 Web 界面 `nilm.quantity` 选了 `i`。此时有功 P 恒为 0，**所有 `*_w`（W）参数都不生效**，
+> 软件改用逐周波**电流有效值 I（A）**做检测，参数换成每种算法各自的 `*_a`（A）一套：`min_delta_a / settle_tol_a / tol_a / drift_a / threshold_a / noise_a`。
+> 其它参数（窗长、周波数、`k_sigma`、GLR 门限 `threshold`、`rel_tol_pct`、`min_delta_pct`）两种口径共用。
+
+**步骤与 §3～§7 完全一样，只是单位从 W 换成 A**（三个脚本都已支持，自动按文件/事件的口径切换）：
+
+```powershell
+# 1 量噪声：没有电压时 --quantity 默认 auto 会自动按 I 统计；--min-load-a = 设备额定电流（A，一次侧口径；铭牌 kW 换算：I ≈ P / (√3 × U线 × PF)）
+.\.venv\Scripts\python.exe tools\nilm_tune.py --file data\bus_bg_i.csv --config configs\default.json --min-load-a 30
+.\.venv\Scripts\python.exe tools\nilm_tune.py --file data\bus_bg_i.csv --config configs\default.json --min-load-a 30 --json > output\tune_i.json
+#   第 1 行会写「检测量 电流有效值 I（数据源无电压，auto 自动选 I）」；建议行是 min_delta_a= / settle_tol_a= …，并带 nilm.quantity = i
+#   若写成 --quantity p 会直接报错退出（有功恒为 0，无法按 P 调参），不会给出一套没意义的 W 参数
+# 2 回放：--params 会一并把 nilm.quantity=i 和 *_a 参数套上；表头为「幅值范围(A)」，事件 CSV 的 unit 列 = A、magnitude 列 = |ΔI|
+.\.venv\Scripts\python.exe tools\nilm_replay.py --file data\dev_onoff_i.csv --params output\tune_i.json --out output\dev_events_i.csv
+#   也可对有电压的文件强制按电流检测：加 --quantity i（或 --set threshold.min_delta_a=0.5 单项覆盖）
+# 3 对账：真值表不变；总线侧带指纹归属改用 --mag-a（A），--mag-w / --dq-var 对电流口径事件不适用（ΔQ 恒 0，脚本会提示并忽略）
+.\.venv\Scripts\python.exe tools\nilm_check.py --events output\dev_events_i.csv --truth data\truth.csv --tol-s 1
+.\.venv\Scripts\python.exe tools\nilm_check.py --events output\bus_events_i.csv --truth data\truth_bus.csv --mag-a 25 --mag-tol-pct 30
+#   --signature-from 同样可用：从设备侧命中事件取 |ΔI| 均值作指纹
+# 4 定稿：同 §7；界面「检测参数」里 A 口径一列会点亮、W 一列灰显（quantity_effective = i）
+```
+
+**建议值是怎么算的**：与附录 E 完全相同的规则，只是把 P 序列换成 I 序列——`settle_tol_a = 5 周波极差 95 分位 × 1.2`、
+`min_delta_a = max(额定电流/2, 6σ)`、CUSUM `drift_a = min_delta_a/4`、`threshold_a = 2×(min_delta_a − drift_a)`、GLR `noise_a = σ`、
+`steady_state.tol_a = 10 周波极差 95 分位 × 1.2`。`rel_tol_pct / min_delta_pct` 对 |I| 中位数折算，与绝对值取较大者生效。
+
+**电流口径的两个注意点**：
+
+| 现象 | 原因 | 怎么办 |
+|---|---|---|
+| 感性设备（电机）投入时 ΔI 比按 kW 换算的大 20%～50% | 电流含无功分量，I 口径看到的是视在电流 | `--min-load-a` 按**铭牌额定电流**填，不要按 kW/U 粗算；指纹 `--mag-a` 取设备侧命中事件的 |ΔI| 均值 |
+| 功率因数补偿电容投切被报成事件 | 电容只改无功，P 不变但 I 变 | 这是电流口径的固有特性：用 `--mag-a` 幅值带归属，或在真值表把电容投切写成「其它」 |
 
 ## 附录 D：数据怎么切、用哪一侧
 

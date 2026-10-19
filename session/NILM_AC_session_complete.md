@@ -303,3 +303,5 @@
 - **[2026-10-16] v0.36**（用户：按 1–3 项实现仅电流检测最小可用版本）。`nilm.quantity` auto/p/i；检测器 voltage_missing/quantity_effective，i 口径取 I_rms、W 阈值清零只用相对门槛（兜底 3%）；事件/CSV 新增 quantity/magnitude/unit（旧文件 .pre-v036）；p 无电压告警；ColumnMap 识别仅电流表头；前端下拉+幅值列 |ΔI|；`gen_nilm_sample.py --current-only`。test_r12 +4、ui_r12 25/25、pytest 330 passed。
 
 - **[2026-10-16] v0.37**（用户：检查仅电流检测时算法配置/阈值是否应为电流）。发现 v0.36 清零 W 阈值的做法使 CUSUM h=k 退化、无法填电流阈值、界面仍标 W。改为每算法 `*_a`（A）一套阈值 + `NILM_W_TO_A`、`params_for_current()`，去掉 3% 兜底；前端两套输入按口径灰显。test_r12 +3、ui_r12 31/31、pytest 333 passed。
+
+- **[2026-10-19] v0.38**（用户：同步修改离线调参工具增加仅电流检测支持、修复 v0.37 交付说明中的两个缺口）。`nilm_tune.py` `--quantity auto/p/i` + `--min-load-a`，measure 键去单位、suggest 按 unit 给 `*_w`/`*_a`，JSON 带 quantity；`nilm_replay.py` 套用 quantity、口径标签；`nilm_check.py` 识别 unit=A 事件、`--mag-a` 指纹；`NILM_TUNING_GUIDE.md` 附录 F。实测仅电流样例：tune auto→I（σ≈0.0027 A、min_delta_a=15 @ --min-load-a 30）→ replay 六算法各 2 事件（83.3 A↑/50 A↓）→ check 6 算法 ✅。测试 `test_nilm_tune_tool` 5 passed；全量 pytest 335 passed / 1 skipped。
