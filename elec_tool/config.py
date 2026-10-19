@@ -281,6 +281,26 @@ class ColumnMap:
         }
     )
 
+    def _resolve_partial(self, header: List[str]) -> Dict[str, int]:
+        """与 resolve 同规则，但不要求字段齐全：返回能识别的 {字段: 列索引}。"""
+        norm = {self._norm(h): idx for idx, h in enumerate(header)}
+        out: Dict[str, int] = {}
+        configured = {"timestamp": self.timestamp, "ua": self.ua, "ia": self.ia,
+                      "ub": self.ub, "ib": self.ib, "uc": self.uc, "ic": self.ic}
+        for key, name in configured.items():
+            if name in header:
+                out[key] = header.index(name)
+            elif self._norm(name) in norm:
+                out[key] = norm[self._norm(name)]
+        for key in configured:
+            if key in out:
+                continue
+            for alias in self.ALIASES.get(key, []):
+                if self._norm(alias) in norm:
+                    out[key] = norm[self._norm(alias)]
+                    break
+        return out
+
     def resolve(self, header: List[str]) -> Dict[str, int]:
         """把表头解析为 {字段: 列索引}。先精确匹配配置名，再走别名（大小写/空格不敏感）。"""
         norm = {self._norm(h): idx for idx, h in enumerate(header)}
@@ -340,6 +360,13 @@ class ColumnMap:
                     return dict(self.resolve(header))
                 except ConfigError:
                     pass
+                # v0.36：部分表头（如只有三相电流 ``时间戳,A相电流,B相电流,C相电流``）——**每一列**都能识别、含时间戳
+                # 和至少一个通道、且字段不齐全 → 按识别结果取列，缺的字段 None（通道按 0 播放）。
+                # 含任何不可识别列名的表头仍按默认列序（兼容老文件 / 老测试的既有行为）。
+                part = self._resolve_partial(header)
+                if part and "timestamp" in part and len(part) == len(header) and len(set(part.values())) == len(header) \
+                        and any(k != "timestamp" for k in part):
+                    return {k: part.get(k) for k in self.FIELDS}
             return positional
         norm = {self._norm(h): i for i, h in enumerate(header)} if header else {}
         out: Dict[str, Optional[int]] = {}
@@ -692,6 +719,7 @@ class EventConfig:
 
 # ---------------------------------------------------------------- 负荷辨识（第 12 轮）
 NILM_CHANNELS = ("total", "A", "B", "C")
+NILM_QUANTITIES = ("auto", "p", "i")          # v0.36：检测量 有功 / 电流有效值 / 自动
 
 # 各事件检测算法的默认参数（单位：W＝有功功率；cycles＝周波数）。键名即界面/配置里的参数名。
 NILM_ALGO_DEFAULTS: Dict[str, Dict[str, Any]] = {
@@ -733,6 +761,10 @@ class NilmConfig:
     #   min_delta_pct 作用于各算法的 min_delta_w。这样同一套默认值在二次侧（W 级）和一次侧（MW 级）都能用。
     rel_tol_pct: float = 1.0
     min_delta_pct: float = 0.0
+    # v0.36：检测量。p＝逐周波有功（需电压+电流）；i＝逐周波电流有效值（只需电流，数据源无电压时用）；
+    #   auto＝数据源电压全为 0/未映射时自动用 i，否则用 p。i 口径下各算法的绝对 W 阈值不再适用，
+    #   只按 rel_tol_pct / min_delta_pct 相对窗内 |I| 中位数折算（min_delta_pct=0 时按 3% 兜底）。
+    quantity: str = "auto"
     algorithms: Dict[str, Dict[str, Any]] = field(default_factory=lambda: {k: dict(v) for k, v in NILM_ALGO_DEFAULTS.items()})
 
     def params(self, algo: str) -> Dict[str, Any]:
@@ -741,6 +773,9 @@ class NilmConfig:
         return base
 
     def validate(self) -> None:
+        self.quantity = str(self.quantity or "auto").strip().lower()
+        if self.quantity not in NILM_QUANTITIES:
+            raise ConfigError(f"nilm.quantity 必须是 {NILM_QUANTITIES} 之一（当前 {self.quantity!r}）")
         if not self.channels or any(c not in NILM_CHANNELS for c in self.channels):
             raise ConfigError(f"nilm.channels 必须是 {NILM_CHANNELS} 的非空子集（当前 {self.channels}）")
         if int(self.window_cycles) < 30:

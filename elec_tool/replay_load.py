@@ -207,6 +207,7 @@ def load_nilm_events(dir_: str, source_id: int, t_from: Optional[float] = None, 
                 "delta_q_var": _num(g(row, "delta_q_var")) or 0.0, "delta_i_a": _num(g(row, "delta_i_a")) or 0.0,
                 "pre_p_w": _num(g(row, "pre_p_w")) or 0.0, "post_p_w": _num(g(row, "post_p_w")) or 0.0,
                 "cycles": int(_num(g(row, "cycles")) or 0), "score": _num(g(row, "score")) or 0.0,
+                "quantity": g(row, "quantity") or "p", "magnitude": _num(g(row, "magnitude")), "unit": g(row, "unit") or "W",
             })
         if len(out) >= limit:
             break

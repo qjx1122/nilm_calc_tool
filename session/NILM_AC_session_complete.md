@@ -298,3 +298,6 @@
 - **[2026-10-16] v0.34**（用户：数据处理重采样增加计算重采样前后相对误差并保存 CSV，时间窗可配）。配置段 `processing.error_window_s`（默认 1 s）/`error_report`；`resample.error_report()` 流式切窗、逐窗逐通道 RMS 相对误差 + NRMSE → `<输出名>_err.csv`（末行汇总）；界面勾选 + 窗长输入即时保存配置、结果显示误差表；CLI `--err-window/--no-err`。ui_r8 +11 项 40/40，test_r8 +4，pytest 325 passed。
 
 - **[2026-10-16] v0.35**（用户：输出已存在且要算误差则跳过重采样只算误差；进度与结果分两步显示）。`error_only_if_exists`（未勾选覆盖时生效，覆盖仍重做，不算误差仍报错）；ResampleJob step/steps/step_status/overall，状态接口与结果 `steps`/`resample_skipped`；界面两步骤卡（#rs-bar/#rs-bar2、#rs-result/#rs-result2、标签）；CLI 分两步输出。ui_r8 47/47，pytest 326 passed。
+
+- **[2026-10-16] 分析**（用户：负荷辨识几种算法能否单独用某一相电压/电流检测；再问只有三相电流时）。结论：算法层六种都只看一维序列、均可；电压不适合做负荷事件依据；当前实现硬编码有功 P，无电压时 P≡0 静默 0 事件。
+- **[2026-10-16] v0.36**（用户：按 1–3 项实现仅电流检测最小可用版本）。`nilm.quantity` auto/p/i；检测器 voltage_missing/quantity_effective，i 口径取 I_rms、W 阈值清零只用相对门槛（兜底 3%）；事件/CSV 新增 quantity/magnitude/unit（旧文件 .pre-v036）；p 无电压告警；ColumnMap 识别仅电流表头；前端下拉+幅值列 |ΔI|；`gen_nilm_sample.py --current-only`。test_r12 +4、ui_r12 25/25、pytest 330 passed。

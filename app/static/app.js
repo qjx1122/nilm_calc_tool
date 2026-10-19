@@ -2938,7 +2938,7 @@ const NILM_ALGOS = {
                   params: { median_cycles: '中值窗 (周波)', min_delta_w: '最小幅值 (W)', settle_cycles: '稳定周波数', settle_tol_w: '稳定容差 (W)', max_rise_cycles: '最长暂态 (周波)' } },
 };
 const NILM_COLORS = { threshold: '#ff6b6b', two_window: '#ffa94d', cusum: '#ffd43b', glr: '#69db7c', steady_state: '#4dabf7', median_diff: '#da77f2' };
-const NILM_FIELDS = ['enabled', 'save', 'window_cycles', 'min_gap_cycles', 'rel_tol_pct', 'min_delta_pct'];
+const NILM_FIELDS = ['enabled', 'save', 'quantity', 'window_cycles', 'min_gap_cycles', 'rel_tol_pct', 'min_delta_pct'];
 const NILM_CH = ['total', 'A', 'B', 'C'];
 
 function buildNilmForm(side = sideOf()) {
@@ -2988,7 +2988,7 @@ function fillNilmForm(nc, side = sideOf()) {
 
 function collectNilmPayload(side = sideOf()) {
   const p = { algorithms: {} };
-  NILM_FIELDS.forEach(f => { const el = E(side, `nilm-${f}`); if (!el) return; p[f] = el.type === 'checkbox' ? el.checked : +el.value; });
+  NILM_FIELDS.forEach(f => { const el = E(side, `nilm-${f}`); if (!el) return; p[f] = el.type === 'checkbox' ? el.checked : (el.tagName === 'SELECT' ? el.value : +el.value); });
   p.channels = NILM_CH.filter(c => { const el = E(side, `nilm-ch-${c}`); return el && el.checked; });
   Object.keys(NILM_ALGOS).forEach(a => {
     const prm = { enabled: !!E(side, `nilm-${a}-enabled`).checked };
@@ -3056,18 +3056,22 @@ async function clearNilm(side = sideOf()) {
 }
 
 /* v0.25：整表共用一组单位（按全部事件的最大值选前缀），表头带单位、单元格只放数字 */
+/* v0.36：事件幅值按检测量口径——全部为电流口径（unit=A）时幅值列为 |ΔI|（A），否则 |ΔP|（W） */
+function nilmMag(e) { return isNum(e.magnitude) && e.unit ? e.magnitude : e.magnitude_w; }
+function nilmAllCurrent(events) { return events.length > 0 && events.every(e => e.unit === 'A'); }
 function nilmScales(events) {
-  return { D: unitScale(events.map(e => e.magnitude_w), 'W', 3), P: unitScale(events.flatMap(e => [e.pre_p_w, e.post_p_w]), 'W', 3),
+  const cur = nilmAllCurrent(events);
+  return { cur, D: unitScale(events.map(nilmMag), cur ? 'A' : 'W', 3), P: unitScale(events.flatMap(e => [e.pre_p_w, e.post_p_w]), 'W', 3),
            Q: unitScale(events.map(e => e.delta_q_var), 'var', 3), I: unitScale(events.map(e => e.delta_i_a), 'A', 3) };
 }
 function nilmHeader(sc) {
-  return ['#', '算法', '对象', '开始（数据时间）', '结束', '持续 (s)', '周波数', '方向', sc.D.hdr('幅值 |ΔP|'), sc.Q.hdr('ΔQ'), sc.I.hdr('ΔI'), sc.P.hdr('事件前 P'), sc.P.hdr('事件后 P'), '检验量'];
+  return ['#', '算法', '对象', '开始（数据时间）', '结束', '持续 (s)', '周波数', '方向', sc.D.hdr(sc.cur ? '幅值 |ΔI|' : '幅值 |ΔP|'), sc.Q.hdr('ΔQ'), sc.I.hdr('ΔI'), sc.P.hdr('事件前 P'), sc.P.hdr('事件后 P'), '检验量'];
 }
 function nilmRow(e, sc) {
   const dir = e.direction === 'up' ? '<span class="badge bad">↑ 投入</span>' : '<span class="badge">↓ 切除</span>';
   return [e.id, `<span style="color:${NILM_COLORS[e.algorithm] || '#fff'}">■</span> ${esc(e.algorithm_name || e.algorithm)}`, esc(e.channel),
           ts(e.t_start), ts(e.t_end), num(e.duration_s || 0, 2), e.cycles, dir,
-          sc.D.f(e.magnitude_w), sc.Q.f(e.delta_q_var), sc.I.f(e.delta_i_a), sc.P.f(e.pre_p_w), sc.P.f(e.post_p_w), isNum(e.score) ? num(e.score, 3) : ''];
+          sc.D.f(nilmMag(e)), sc.Q.f(e.delta_q_var), sc.I.f(e.delta_i_a), sc.P.f(e.pre_p_w), sc.P.f(e.post_p_w), isNum(e.score) ? num(e.score, 3) : ''];
 }
 
 /* v0.24：P/Q/S 趋势（与总览同一数据 /api/history/power、同一 pqsSeries）+ 各算法事件竖线 */
@@ -3080,7 +3084,7 @@ function renderNilmPqs(nl) {
   const tEnd = hp.length ? hp[hp.length - 1].t : 0;
   const evs = nl.events.filter(e => chosen.includes(e.algorithm) && (!ch || e.channel === ch) && isNum(e.t_start) && e.t_start >= t0 && e.t_start <= tEnd);
   const marks = evs.map(e => ({ x: e.t_start - t0, color: NILM_COLORS[e.algorithm], row: Object.keys(NILM_ALGOS).indexOf(e.algorithm),
-                                label: `${e.direction === 'up' ? '↑' : '↓'}${si(e.magnitude_w, 'W', 3)}${ch ? '' : ' ' + e.channel}` }));
+                                label: `${e.direction === 'up' ? '↑' : '↓'}${si(nilmMag(e), e.unit || 'W', 3)}${ch ? '' : ' ' + e.channel}` }));
   const nEl = $('#nilm-pqs-n'); if (nEl) nEl.textContent = String(marks.length);
   drawLine(cv, pqsSeries(hp, t0), { ylabel: 'W/var/VA', fmtX: x => tsX(x + t0, spanOf('power')), fmtTip: x => ts(x + t0), tbase: t0, height: 260, marks,
                                    empty: '暂无 P/Q/S 趋势（需累计 ≥2 个 power 窗）' });
@@ -3110,7 +3114,7 @@ function renderNilm() {
   const unit = qty === 'p' ? 'W' : qty === 'q' ? 'var' : 'A';
   const marks = NL.events.filter(e => e.channel === chn && (!mk || e.algorithm === mk) && e.t_start >= t0 && tt.length && e.t_start <= tt[tt.length - 1])
     .map((e, i) => ({ x: e.t_start - t0, color: NILM_COLORS[e.algorithm], row: Object.keys(NILM_ALGOS).indexOf(e.algorithm),
-                     label: `${e.direction === 'up' ? '↑' : '↓'}${si(e.magnitude_w, 'W', 3)}` }));
+                     label: `${e.direction === 'up' ? '↑' : '↓'}${si(nilmMag(e), e.unit || 'W', 3)}` }));
   drawLine($('#nilm-chart'), [{ name: `${chn === 'total' ? '三相总' : chn + ' 相'} ${qty.toUpperCase()}（逐周波）`, color: '#4ea1ff', data: tt.map((x, i) => [x - t0, chd[i]]) }],
            { ylabel: unit, fmtX: x => ts(x + t0), fmtTip: x => ts(x + t0), height: 240, marks,
              empty: (curState().loaded_last && !tt.length) ? '周波窗是内存数据，软件重启后不恢复（上次播放的事件已加载：见事件表与上方 P/Q/S 趋势的事件竖线）；重新播放后显示' : '暂无周波数据（启动数据源后显示）' });
@@ -3124,6 +3128,7 @@ function renderNilm() {
     ...(ll && !tt.length ? [`已加载上次播放（${ll.t_anchor_local || ll.t_last_local || ''} 前 ${ll.hours || 24} h）的负荷事件 ${ll.nilm_events || 0} 条与 P/Q/S 趋势；周波窗（逐周波 P/Q/I 序列）是内存数据，重启后不恢复，重新播放后显示。`] : []),
     '口径：每周波 P=mean(u·i)，Q=基波单频 DFT 无功，I=周波有效值；各算法在最近 window_cycles 个周波的窗上评估，同算法同对象按终点序号去重，终点之后需再看到足够周波才确认（所以事件会滞后几个周波出现）。',
     '阈值单位为 W，按计算口径（启用 PT/CT 时为一次侧）填写；rel_tol_pct / min_delta_pct 把门槛按窗内 |P| 中位数折算成相对值，同一套默认值在 W 级与 MW 级都能用。',
+    '检测量 auto/p/i（v0.36）：数据源只有三相电流（无电压）时选 auto 或 i，按逐周波电流有效值检测，六种算法均可用；此时事件幅值为 |ΔI|（A），ΔP/ΔQ 恒为 0。',
     '双滑窗均值差与 CUSUM 对单周波尖峰较敏感（会按均值摊成小事件）；需要抗尖峰请看中值滤波差分 / 稳态分段，或抬高 min_delta_pct。',
   ]);
 }

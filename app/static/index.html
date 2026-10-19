@@ -700,6 +700,12 @@
             <label><input type="checkbox" id="nilm-ch-A"> A 相</label>
             <label><input type="checkbox" id="nilm-ch-B"> B 相</label>
             <label><input type="checkbox" id="nilm-ch-C"> C 相</label></span></label>
+          <label>检测量（v0.36）
+            <select id="nilm-quantity">
+              <option value="auto">auto 自动：有电压用有功 P，数据源无电压时用电流有效值 I</option>
+              <option value="p">p 有功功率（需电压 + 电流）</option>
+              <option value="i">i 电流有效值（只需电流；绝对 W 阈值不生效，只用相对门槛）</option>
+            </select></label>
           <label>周波窗长（周波数，≥30）<input type="number" step="1" min="30" id="nilm-window_cycles"></label>
           <label>同算法同对象最小事件间隔（周波）<input type="number" step="1" min="0" id="nilm-min_gap_cycles"></label>
           <label>相对容差 rel_tol_pct（% 窗内 |P| 中位数；作用于容差/漂移/噪声类参数）<input type="number" step="0.1" min="0" max="50" id="nilm-rel_tol_pct"></label>

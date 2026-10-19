@@ -41,7 +41,9 @@ __all__ = ["NilmEvent", "NilmDetector", "CycleFeatures", "detect_steps", "NILM_A
 
 _CSV_FIELDS = ["source_id", "id", "algorithm", "algorithm_name", "channel", "t_start", "t_start_local", "t_end", "t_end_local",
                "duration_s", "cycles", "direction", "magnitude_w", "delta_p_w", "delta_q_var", "delta_i_a",
-               "pre_p_w", "post_p_w", "score", "run_id"]          # v0.32：末列 run_id（本次运行标识）
+               "pre_p_w", "post_p_w", "score", "quantity", "magnitude", "unit", "run_id"]
+# v0.32：run_id（本次运行标识）；v0.36：quantity（p/i 检测量）、magnitude（检测量口径的 |Δ|）、unit（W/A）
+_I_FALLBACK_MIN_DELTA_PCT = 3.0      # 电流口径且 min_delta_pct=0 时的兜底相对门槛
 
 
 def _ts(t: Optional[float]) -> str:
@@ -68,6 +70,9 @@ class NilmEvent:
     score: float = 0.0        # 算法自身的检验量（CUSUM 累积量 / GLR 似然比 / 差分值…）
     g_start: int = 0          # 全局周波序号（内部去重用）
     g_end: int = 0
+    quantity: str = "p"       # v0.36：检测量 p（有功）/ i（电流有效值）
+    magnitude: float = 0.0    # 检测量口径的 |Δ|（p 时 = magnitude_w，i 时 = |ΔI|）
+    unit: str = "W"
 
     def to_dict(self) -> Dict[str, Any]:
         d = asdict(self)
@@ -319,6 +324,9 @@ _ALGOS = {"threshold": _steps_threshold, "two_window": _steps_two_window, "cusum
 _TOL_KEYS = ("settle_tol_w", "tol_w", "drift_w", "noise_w", "threshold_w")
 
 
+_W_PARAMS = ("min_delta_w", "settle_tol_w", "tol_w", "drift_w", "noise_w", "threshold_w")   # 以 W 为单位的绝对阈值
+
+
 def effective_params(prm: Dict[str, Any], level: float, rel_tol_pct: float, min_delta_pct: float) -> Dict[str, Any]:
     """把相对门槛折算进绝对参数：容差类取 max(绝对值, level×rel_tol_pct%)，min_delta_w 取 max(绝对值, level×min_delta_pct%)。"""
     out = dict(prm)
@@ -386,7 +394,8 @@ class NilmWriter:
                    f"{d['t_start']:.4f}", d["t_start_local"], f"{d['t_end']:.4f}", d["t_end_local"],
                    f"{d['duration_s']:.4f}", d["cycles"], d["direction"],
                    f"{d['magnitude_w']:.3f}", f"{d['delta_p_w']:.3f}", f"{d['delta_q_var']:.3f}", f"{d['delta_i_a']:.4f}",
-                   f"{d['pre_p_w']:.3f}", f"{d['post_p_w']:.3f}", f"{d['score']:.4g}", self.run_id]
+                   f"{d['pre_p_w']:.3f}", f"{d['post_p_w']:.3f}", f"{d['score']:.4g}",
+                   d.get("quantity", "p"), f"{d.get('magnitude', d['magnitude_w']):.4f}", d.get("unit", "W"), self.run_id]
             with SHARED_FILE_LOCK:
                 csv.writer(self._fh).writerow(row)
                 self._fh.flush()
@@ -431,6 +440,21 @@ class NilmDetector:
         self._last_end: Dict[Tuple[str, str], int] = {}    # (algo, channel) → 已确认事件的终点全局序号
         self.counts: Dict[str, int] = {a: 0 for a in NILM_ALGO_DEFAULTS}
         self.errors: List[str] = []
+        # v0.36：电压存在性（数据源只有电流时 u 全 0）；quantity=auto 据此选检测量
+        self._u_blocks = 0
+        self._u_nonzero_blocks = 0
+
+    @property
+    def voltage_missing(self) -> bool:
+        """已摄入的块里电压从未出现过非零值（数据源无电压 / 电压列未映射）。"""
+        return self._u_blocks > 0 and self._u_nonzero_blocks == 0
+
+    @property
+    def quantity_effective(self) -> str:
+        q = str(getattr(self.ncfg, "quantity", "auto") or "auto")
+        if q == "auto":
+            return "i" if self.voltage_missing else "p"
+        return q
 
     # ---- 配置热更新：换阈值不清历史；fs/f_nom 变化重建周波切分
     def update_config(self, cfg: AppConfig) -> None:
@@ -449,6 +473,9 @@ class NilmDetector:
         if not self.ncfg.enabled or block.n == 0:
             return []
         with self._lock:
+            self._u_blocks += 1
+            if np.any(np.abs(block.u) > 0):
+                self._u_nonzero_blocks += 1
             f = self.feat.push(block)
             m = int(f["t"].shape[0])
             if m == 0:
@@ -479,15 +506,30 @@ class NilmDetector:
             return out
         g_last = self._g0 + L - 1
         gap = int(self.ncfg.min_gap_cycles)
+        qty = self.quantity_effective
+        if qty == "p" and self.voltage_missing:
+            msg = ("数据源无电压（电压列未映射或全为 0）：逐周波有功恒为 0，按 P 检测不会产生任何事件；"
+                   "请把 nilm.quantity 设为 i（电流有效值）或 auto")
+            if msg not in self.errors:
+                self.errors.append(msg)
+            return out
+        rel_tol = float(self.ncfg.rel_tol_pct)
+        min_pct = float(self.ncfg.min_delta_pct)
+        if qty == "i":
+            # 电流口径：绝对 W 阈值无意义，全部清零只留相对门槛；min_delta_pct=0 时兜底 3%
+            rel_tol = rel_tol if rel_tol > 0 else 1.0
+            min_pct = min_pct if min_pct > 0 else _I_FALLBACK_MIN_DELTA_PCT
         for ch in self.ncfg.channels:
             ci = NILM_CHANNELS.index(ch)
-            p = self._p[ci]
+            p = self._p[ci] if qty == "p" else self._i[ci]
             level = float(np.median(np.abs(p))) if p.size else 0.0
             for algo in NILM_ALGO_DEFAULTS:
                 prm = self.ncfg.params(algo)
                 if not prm.get("enabled", True):
                     continue
-                prm = effective_params(prm, level, float(self.ncfg.rel_tol_pct), float(self.ncfg.min_delta_pct))
+                if qty == "i":
+                    prm = {k: (0.0 if k in _W_PARAMS else v) for k, v in prm.items()}
+                prm = effective_params(prm, level, rel_tol, min_pct)
                 try:
                     steps = detect_steps(algo, p, prm)
                 except Exception as exc:
@@ -507,13 +549,20 @@ class NilmDetector:
                     settle = max(2, min(confirm, 10))
                     pre_q, post_q = self._level(self._q[ci], onset, end, settle)
                     pre_i, post_i = self._level(self._i[ci], onset, end, settle)
-                    dp = post - pre
+                    d_main = post - pre                        # 检测量口径的带符号变化（P 或 I）
+                    if qty == "p":
+                        dp, pre_p, post_p = d_main, pre, post
+                    else:
+                        pre_p, post_p = self._level(self._p[ci], onset, end, settle)
+                        dp = post_p - pre_p
+                        pre_i, post_i = pre, post
                     ev = NilmEvent(id=self._next_id, algorithm=algo, channel=ch,
                                    t_start=float(self._t[onset]), t_end=float(self._t[end]),
-                                   direction="up" if dp >= 0 else "down", magnitude_w=abs(float(dp)), delta_p_w=float(dp),
+                                   direction="up" if d_main >= 0 else "down", magnitude_w=abs(float(dp)), delta_p_w=float(dp),
                                    delta_q_var=float(post_q - pre_q), delta_i_a=float(post_i - pre_i),
-                                   pre_p_w=float(pre), post_p_w=float(post), cycles=int(end - onset), score=float(score),
-                                   g_start=g_on, g_end=g_end)
+                                   pre_p_w=float(pre_p), post_p_w=float(post_p), cycles=int(end - onset), score=float(score),
+                                   g_start=g_on, g_end=g_end, quantity=qty, magnitude=abs(float(d_main)),
+                                   unit="W" if qty == "p" else "A")
                     self._next_id += 1
                     out.append(ev)
                     last_end = g_end
@@ -563,11 +612,18 @@ class NilmDetector:
                              "逐周波 P/Q 会有小幅泄漏抖动，建议抬高 settle_tol_w / noise_w")
             if not self.ncfg.enabled:
                 notes.append("负荷辨识事件检测已禁用（nilm.enabled=false）")
+            qty = self.quantity_effective
+            if qty == "i":
+                notes.append("检测量：电流有效值 I（" + ("数据源无电压，auto 自动切换" if self.ncfg.quantity == "auto" else "nilm.quantity=i")
+                             + "）；各算法绝对 W 阈值不生效，门槛按 rel_tol_pct / min_delta_pct 相对窗内 |I| 中位数折算"
+                             + ("（min_delta_pct=0 → 兜底 3%）" if float(self.ncfg.min_delta_pct) <= 0 else "")
+                             + "；事件幅值 magnitude 为 |ΔI|（A），ΔP/ΔQ 在无电压时恒为 0")
             enabled_algos = [a for a in NILM_ALGO_DEFAULTS if self.ncfg.params(a).get("enabled", True)]
             return {"enabled": bool(self.ncfg.enabled), "total": total, "counts": counts, "by_channel": by_ch,
                     "by_direction": by_dir, "cycles_total": self.cycles_total, "window_fill": int(self._t.shape[0]),
                     "window_cycles": int(self.ncfg.window_cycles), "n_cycle_samples": self.feat.n_cycle,
                     "channels": list(self.ncfg.channels), "algorithms_enabled": enabled_algos,
+                    "quantity": str(self.ncfg.quantity), "quantity_effective": qty, "voltage_missing": self.voltage_missing,
                     "algorithm_names": NILM_ALGO_NAMES, "writer": self.writer.info(), "errors": list(self.errors),
                     "notes": notes}
 
@@ -588,7 +644,9 @@ class NilmDetector:
                                delta_p_w=float(d.get("delta_p_w") or 0.0), delta_q_var=float(d.get("delta_q_var") or 0.0),
                                delta_i_a=float(d.get("delta_i_a") or 0.0), pre_p_w=float(d.get("pre_p_w") or 0.0),
                                post_p_w=float(d.get("post_p_w") or 0.0), cycles=int(d.get("cycles") or 0),
-                               score=float(d.get("score") or 0.0))
+                               score=float(d.get("score") or 0.0), quantity=str(d.get("quantity") or "p"),
+                               magnitude=float(d.get("magnitude") if d.get("magnitude") not in (None, "") else (d.get("magnitude_w") or 0.0)),
+                               unit=str(d.get("unit") or "W"))
                 self._next_id += 1
                 self._log.append(ev)
                 self.counts[algo] = self.counts.get(algo, 0) + 1

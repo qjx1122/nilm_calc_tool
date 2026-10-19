@@ -97,7 +97,9 @@ def _rotate_if_header_differs(path: str, fields) -> bool:
         return False
     if head == list(fields):
         return False
-    bak = path[:-4] + ".pre-v032.csv"
+    # v0.36：v0.32~v0.35 的文件（已有 run_id 列、尚无 quantity 列）改名 .pre-v036；更早的改名 .pre-v032
+    tag = "v036" if (head and "run_id" in head) else "v032"
+    bak = path[:-4] + f".pre-{tag}.csv"
     try:
         if not os.path.exists(bak):
             os.replace(path, bak)

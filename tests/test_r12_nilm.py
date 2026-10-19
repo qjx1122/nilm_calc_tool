@@ -241,3 +241,120 @@ def test_frontend_wiring():
                 assert f"{k}:" in js, (a, k)
     assert "case 'nilm': renderDual(renderNilm); break;" in js and "m.type === 'nilm_event'" in js
     assert "JSON.stringify({ nilm: payload })" in js and "/api/nilm/cycles" in js and "opt.marks" in js
+
+
+# ------------------------------------------------------------------ v0.36：仅电流事件检测（数据源无电压）
+
+def _write_csv_current_only(path, dur=6.0):
+    t, _u, i = _wave(dur)
+    with open(path, "w", newline="", encoding="utf-8") as fh:
+        wr = csv.writer(fh)
+        wr.writerow(["时间戳", "A相电流", "B相电流", "C相电流"])
+        for k in range(t.size):
+            wr.writerow([f"{t[k]:.6f}", f"{i[0,k]:.5f}", f"{i[1,k]:.5f}", f"{i[2,k]:.5f}"])
+    return str(path)
+
+
+def _feed(det, t, u, i, step=640):
+    out = []
+    for a in range(0, t.size, step):
+        out += det.ingest(SampleBlock(t=t[a:a + step], u=u[:, a:a + step], i=i[:, a:a + step]))
+    return out
+
+
+def test_current_only_detection_all_algorithms(tmp_path, monkeypatch):
+    """电压全 0（数据源只有电流）：quantity=auto 自动切到 I，六种算法在 total/A 上都报出 2.0 s ↑ / 4.4 s ↓。"""
+    monkeypatch.setenv("ELEC_TOOL_NILM_DIR", str(tmp_path / "nilm"))
+    t, u, i = _wave(6.0)
+    u0 = np.zeros_like(u)
+    cfg = AppConfig(); cfg.nilm.channels = ["total", "A"]; cfg.validate()
+    assert cfg.nilm.quantity == "auto"
+    det = NilmDetector(cfg)
+    evs = _feed(det, t, u0, i)
+    sm = det.summary()
+    assert sm["voltage_missing"] is True and sm["quantity_effective"] == "i" and sm["errors"] == []
+    assert any("电流有效值" in n for n in sm["notes"])
+    key = {}
+    for e in evs:
+        key.setdefault((e["algorithm"], e["channel"], e["direction"]), []).append(e)
+    for a in NILM_ALGO_DEFAULTS:
+        for ch in ("total", "A"):
+            ups, downs = key.get((a, ch, "up"), []), key.get((a, ch, "down"), [])
+            assert ups and downs, (a, ch)
+            big_up = max(ups, key=lambda e: e["magnitude"]); big_dn = max(downs, key=lambda e: e["magnitude"])
+            assert abs(big_up["t_start"] - (t[0] + T_UP)) < 0.06 and abs(big_dn["t_start"] - (t[0] + T_DOWN)) < 0.06, (a, ch)
+            assert big_up["unit"] == "A" and big_up["quantity"] == "i" and big_up["magnitude"] == big_up["delta_i_a"]
+            assert big_up["delta_p_w"] == 0.0 and big_up["pre_p_w"] == 0.0 and big_up["magnitude_w"] == 0.0
+    # A 相：I = P/(3·U·pf)；1000 W → 1500 W：ΔI_A = 500/3/(57.74·0.9) ≈ 3.207 A；total = √3 倍
+    a_up = max(key[("glr", "A", "up")], key=lambda e: e["magnitude"])
+    assert a_up["magnitude"] == pytest.approx(500 / 3 / (57.74 * 0.9), rel=0.03)
+    assert max(key[("glr", "total", "up")], key=lambda e: e["magnitude"])["magnitude"] == pytest.approx(a_up["magnitude"] * np.sqrt(3), rel=0.03)
+    # 落盘：新增 quantity / magnitude / unit 列
+    f = [p for p in (tmp_path / "nilm").iterdir() if p.suffix == ".csv"][0]
+    rows = list(csv.reader(open(f, encoding="utf-8-sig")))
+    assert rows[0][-4:] == ["quantity", "magnitude", "unit", "run_id"] and rows[1][-4] == "i" and rows[1][-2] == "A"
+
+
+def test_quantity_p_without_voltage_reports_error_and_i_with_voltage_works(tmp_path, monkeypatch):
+    monkeypatch.setenv("ELEC_TOOL_NILM_DIR", str(tmp_path / "nilm"))
+    t, u, i = _wave(6.0)
+    cfg = AppConfig(); cfg.nilm.quantity = "p"; cfg.validate()
+    det = NilmDetector(cfg)
+    assert _feed(det, t, np.zeros_like(u), i) == []
+    sm = det.summary()
+    assert sm["voltage_missing"] and sm["quantity_effective"] == "p" and any("数据源无电压" in e for e in sm["errors"])
+    # 有电压也可强制按电流检测：ΔI 与 ΔP 同时给出
+    cfg2 = AppConfig(); cfg2.nilm.quantity = "i"; cfg2.validate()
+    det2 = NilmDetector(cfg2)
+    evs = _feed(det2, t, u, i)
+    sm2 = det2.summary()
+    assert sm2["voltage_missing"] is False and sm2["quantity_effective"] == "i"
+    up = max((e for e in evs if e["algorithm"] == "glr" and e["direction"] == "up"), key=lambda e: e["magnitude"])
+    assert up["unit"] == "A" and up["delta_p_w"] == pytest.approx(500, rel=0.03) and up["magnitude_w"] == pytest.approx(500, rel=0.03)
+    # auto + 有电压 → p
+    det3 = NilmDetector(AppConfig().validate())
+    _feed(det3, t, u, i)
+    assert det3.quantity_effective == "p" and det3.summary()["voltage_missing"] is False
+    # 配置校验
+    with pytest.raises(ConfigError):
+        AppConfig.from_dict({"nilm": {"quantity": "u"}}).validate()
+    assert AppConfig.from_dict({"nilm": {"quantity": " I "}}).validate().nilm.quantity == "i"
+    assert AppConfig.from_dict(AppConfig().to_dict()).nilm.quantity == "auto"
+
+
+def test_current_only_csv_header_and_web_playback(client):
+    """只有三相电流列的 CSV：列映射自动识别（电压 None → 0），Web 播放后按 I 检测出事件。"""
+    from elec_tool.config import ColumnMap
+    lay = ColumnMap().layout(["时间戳", "A相电流", "B相电流", "C相电流"])
+    assert lay == {"timestamp": 0, "ua": None, "ia": 1, "ub": None, "ib": 2, "uc": None, "ic": 3}
+    assert ColumnMap().layout(["时间戳", "x1", "x2", "x3", "x4", "x5", "x6"])["ua"] == 1      # 7 列不可识别 → 仍默认列序
+    p = _write_csv_current_only(client.dir / "i_only.csv", dur=6.0)
+    client.post("/api/engine/stop")
+    client.post("/api/nilm/clear")
+    assert client.put("/api/config", json={"nilm": {"quantity": "auto", "channels": ["total", "A"]}}).status_code == 200
+    r = client.post("/api/engine/start", json={"kind": "csv_file", "path": p, "realtime": False})
+    assert r.status_code == 200, r.text
+    deadline = time.time() + 20
+    while time.time() < deadline:
+        st = client.get("/api/state").json()
+        if st.get("finished") or st.get("error"):
+            break
+        time.sleep(0.2)
+    d = client.get("/api/nilm/events?limit=200").json()
+    sm = d["summary"]
+    assert sm["voltage_missing"] is True and sm["quantity_effective"] == "i" and sm["total"] >= 12, sm
+    assert {e["algorithm"] for e in d["events"]} == set(NILM_ALGO_DEFAULTS)
+    assert all(e["unit"] == "A" and e["quantity"] == "i" and e["delta_p_w"] == 0 for e in d["events"])
+    # 一次侧（CT=15）：A 相 ΔI ≈ 3.207×15 ≈ 48.1 A
+    a_up = max((e for e in d["events"] if e["channel"] == "A" and e["direction"] == "up"), key=lambda e: e["magnitude"])
+    assert a_up["magnitude"] == pytest.approx(500 / 3 / (57.74 * 0.9) * 15, rel=0.03)
+    client.post("/api/engine/stop")
+    client.post("/api/nilm/clear")
+    client.put("/api/config", json={"nilm": {"quantity": "auto", "channels": ["total"]}})
+
+
+def test_frontend_quantity_wiring():
+    html = (ROOT / "app/static/index.html").read_text(encoding="utf-8")
+    js = (ROOT / "app/static/app.js").read_text(encoding="utf-8")
+    assert 'id="nilm-quantity"' in html and 'value="auto"' in html
+    assert "'quantity'" in js.split("const NILM_FIELDS")[1].split(";")[0] and "function nilmMag(" in js

@@ -95,6 +95,26 @@ async function main() {
   const st = await api('/api/state');
   check('服务端配置生效', st.config.nilm.algorithms.glr.threshold === 40 && st.config.nilm.algorithms.cusum.threshold_w === 200);
 
+  console.log('L5 v0.36 仅电流检测（quantity）');
+  check('表单含检测量下拉 auto/p/i', !!$('nilm-quantity') && [...$('nilm-quantity').options].map((o) => o.value).join(',') === 'auto,p,i');
+  check('回填默认 auto', $('nilm-quantity').value === 'auto');
+  $('nilm-quantity').value = 'i'; change($('nilm-quantity')); click($('btn-nilm-save')); await sleep(1200);
+  const putsQ = bodies('/api/config', 'PUT'); const lastQ = putsQ[putsQ.length - 1] || {};
+  check('PUT 载荷 nilm.quantity="i"（字符串）', lastQ.nilm && lastQ.nilm.quantity === 'i', JSON.stringify(lastQ.nilm && lastQ.nilm.quantity));
+  check('服务端配置 quantity=i', (await api('/api/state')).config.nilm.quantity === 'i');
+  $('nilm-quantity').value = 'auto'; change($('nilm-quantity')); click($('btn-nilm-save')); await sleep(1200);
+  await api('/api/nilm/clear', { method: 'POST' });
+  const stQ = await api('/api/engine/start', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ kind: 'csv_file', path: 'data/nilm_steps_i.csv', realtime: false }) });
+  check('仅电流样例 data/nilm_steps_i.csv 可启动播放', stQ.ok !== false, JSON.stringify(stQ).slice(0, 120));
+  for (let k = 0; k < 60; k++) { const s2 = await api('/api/state'); if (s2.finished || s2.error) break; await sleep(500); }
+  const evQ = await api('/api/nilm/events?limit=200');
+  check('summary.voltage_missing=true、quantity_effective=i、事件 ≥ 12', evQ.summary.voltage_missing === true && evQ.summary.quantity_effective === 'i' && evQ.summary.total >= 12, JSON.stringify([evQ.summary.voltage_missing, evQ.summary.quantity_effective, evQ.summary.total]));
+  check('六种算法都有事件、全部 unit=A', new Set(evQ.events.map((e) => e.algorithm)).size === 6 && evQ.events.every((e) => e.unit === 'A' && e.quantity === 'i'));
+  click($('btn-nilm-refresh')); await sleep(1500);
+  check('界面表头幅值列为 |ΔI|（A）', /幅值 \|ΔI\|/.test($('nilm-table').textContent) && !/幅值 \|ΔP\|/.test($('nilm-table').textContent), ($('nilm-table').textContent.match(/幅值[^）]*）?/) || [''])[0]);
+  check('提示区说明按电流有效值检测（auto 自动切换）', /电流有效值/.test($('nilm-notes').textContent) && /auto 自动切换/.test($('nilm-notes').textContent));
+  await api('/api/engine/stop', { method: 'POST' });
+
   console.log('L4 清空');
   click($('btn-nilm-clear')); await sleep(1500);
   check('清空后表格为空', ($('nilm-table').textContent || '').includes('暂无事件'));
