@@ -682,9 +682,11 @@ def _side_summary(side: str) -> Dict[str, Any]:
     """某一侧的状态摘要（挂在对侧 /api/state 里：界面顶栏、导航徽标、数据源页用）。"""
     br = RUNNERS[side]
     bus = RUNNERS["bus"]
+    hide_ui = False
     if side == "branch":
         try:
             enabled = bool(bus.cfg.branch.enabled)
+            hide_ui = bool(getattr(bus.cfg.branch, "hide_ui", False))      # v0.33：隐藏分路侧界面
         except Exception:
             enabled = False
     else:
@@ -708,7 +710,7 @@ def _side_summary(side: str) -> Dict[str, Any]:
         "f_used": (getattr(latest, "f_used", None) if latest else None),
         "t_ref": (getattr(latest, "t_ref", None) if latest else None),
         "data_duration_s": (float(getattr(st, "data_duration_s", 0) or 0) if st else 0.0),
-        "side": side, "enabled": enabled, "label": SIDE_LABELS[side], "config_path": br.cfg_path,
+        "side": side, "enabled": enabled, "hide_ui": hide_ui, "label": SIDE_LABELS[side], "config_path": br.cfg_path,
         "running": running, "paused": bool(running and br.pause_event.is_set()),
         "finished": bool(st and st.finished), "error": br.error,
         "source_kind": (src.kind if src else None), "source_path": (src.path if src else None),

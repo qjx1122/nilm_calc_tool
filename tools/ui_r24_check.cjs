@@ -207,6 +207,21 @@ async function main() {
   const numOf = (txt) => { const m = txt.match(/([\d.]+)\s*(k?)V/); return m ? +m[1] * (m[2] ? 1e3 : 1) : NaN; };
   check('电压 A 相行：左值 = /api/result、右值 = /api/branch/result', Math.abs(numOf(vA.querySelector('.bus').textContent) - busApiU) / busApiU < 0.01 && Math.abs(numOf(vA.querySelector('.br').textContent) - brApiU) / brApiU < 0.01, `${vA.textContent} vs ${busApiU}/${brApiU}`);
 
+  console.log('v0.33 隐藏分路侧数据（branch.hide_ui）');
+  check('/api/state.branch 带 hide_ui（默认 false）、分路侧已启用', (await api('/api/state')).branch.hide_ui === false && (await api('/api/state')).branch.enabled === true);
+  await put('/api/config', { branch: { hide_ui: true } });
+  check('PUT branch.hide_ui=true 持久化到 /api/config 并反映到 state.branch.hide_ui', (await api('/api/config')).branch.hide_ui === true && (await api('/api/state')).branch.hide_ui === true);
+  for (const v of ['voltage', 'power', 'events', 'nilm']) { await nav(v); await sync(); check(`hide_ui=true：${v} 页 .dual 带 no-branch（右列隐藏，尽管分路侧已启用）`, $(`view-${v}`).querySelector('.dual').classList.contains('no-branch')); }
+  check('hide_ui=true：导航「实时监测」组分路侧徽标也隐藏（body.no-branch-nav）', document.body.classList.contains('no-branch-nav'));
+  await nav('overview'); await sync(); await sleep(600);
+  check('hide_ui 不影响总览（总览卡片仍含分路数据）', !!document.querySelector('#ov-cards .ovrows td.v .br'));
+  await nav('source'); await sync(); await sleep(600);
+  check('数据源页「隐藏分路侧数据」勾选框回填为勾选', $('br-hide-ui') && $('br-hide-ui').checked === true);
+  $('br-hide-ui').checked = false; change($('br-hide-ui')); await sleep(800);
+  check('取消勾选 → PUT /api/config {branch:{hide_ui:false}} 即时生效', calls.some(c => c.method === 'PUT' && c.url === '/api/config' && /"hide_ui":false/.test(c.body || '')) && (await api('/api/config')).branch.hide_ui === false);
+  await nav('voltage'); await sync();
+  check('hide_ui=false：voltage 页右列恢复显示', !$('view-voltage').querySelector('.dual').classList.contains('no-branch') && !document.body.classList.contains('no-branch-nav'));
+
   console.log('E4 事件阈值保存');
   await nav('events'); await sync(); await brSync();
   const b3 = calls.length; $('ev-hysteresis-br').value = '0.93'; click($('btn-ev-save-br')); await sleep(1200);

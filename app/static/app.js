@@ -1000,7 +1000,7 @@ function renderNavBranchState(br) {
   const b = $('#nav-br-state'); if (!b) return;
   if (S.side === 'branch') { br = S.state || null; if (br) br = { error: br.error, paused: br.paused, running: br.running, finished: br.finished, enabled: true }; }
   // v0.23：分路侧数据源未启用 → 导航里的「分路侧」分组整体隐藏（正在分路侧子界面时不隐藏，避免当前页消失）
-  document.body.classList.toggle('no-branch-nav', S.side === 'bus' && !(br && (br.enabled || br.running)));
+  document.body.classList.toggle('no-branch-nav', S.side === 'bus' && (!(br && (br.enabled || br.running)) || !!(br && br.hide_ui)));   // v0.33：hide_ui 时「实时监测」组的分路侧徽标也隐藏
   if (!br) { b.style.display = 'none'; return; }
   const t = sideStatusText(br);
   b.textContent = t; b.style.display = '';
@@ -1114,8 +1114,10 @@ const BRD = { result: null, state: null, histCache: {}, histMeta: {}, at: 0, his
 window.BRD = BRD;
 
 function branchDualActive() {
-  // 分路侧数据源未启用 → 右列整体隐藏；启用（或仍在运行/已播完有数据）→ 显示
+  // 分路侧数据源未启用 → 右列整体隐藏；启用（或仍在运行/已播完有数据）→ 显示；
+  // v0.33：配置 branch.hide_ui（「隐藏分路侧数据」）为真时无论是否启用都隐藏右列（只影响实时监测 / 事件与分析页）
   const br = (S.state || {}).branch || {};
+  if (br.hide_ui) return false;
   return !!(br.enabled || br.running);
 }
 
@@ -1924,6 +1926,7 @@ async function loadBranchForm(force) {
       const bb = (S.state && S.state.config && S.state.config.branch) || {};
       $('#br-toffset').value = bb.time_offset_s ?? 0; $('#br-tol').value = bb.align_tol_s ?? 0;
       $('#br-common').checked = !!bb.common_window; $('#br-common-start').value = bb.common_start || '';
+      const hu = $('#br-hide-ui'); if (hu && !BR.dirty) hu.checked = !!bb.hide_ui;
       $('#br-common-end').value = bb.common_end || '';
       syncSourceFields('br-');
     }
@@ -1939,6 +1942,7 @@ async function refreshBranchState(force) {
 function renderBranchPanel(st) {
   const cfg = st.config || {};
   if (!BR.dirty && cfg.branch) $('#br-enabled').checked = !!cfg.branch.enabled;
+  if (cfg.branch && $('#br-hide-ui')) $('#br-hide-ui').checked = !!cfg.branch.hide_ui;     // v0.33：独立开关，总随配置回填
   loadBranchForm(false);
   syncBranchColumns();
   renderBranchStatus();
@@ -2022,7 +2026,7 @@ async function saveBranchSource() {
     const enabled = $('#br-enabled').checked;
     const brTop = { enabled, time_offset_s: parseFloat($('#br-toffset').value) || 0, align_tol_s: Math.max(0, parseFloat($('#br-tol').value) || 0),
                     common_window: $('#br-common').checked, common_start: $('#br-common-start').value.trim(),
-                    common_end: $('#br-common-end').value.trim() };
+                    common_end: $('#br-common-end').value.trim(), hide_ui: !!($('#br-hide-ui') || {}).checked };
     const r1 = await fetch('/api/config', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ branch: brTop }) });
     if (!r1.ok) throw new Error((await r1.json()).error || 'HTTP ' + r1.status);
     const body = collectBranchConfigPayload();
@@ -2856,6 +2860,15 @@ function bind() {
   $('#br-kind').addEventListener('change', syncBranchColumns);
   $('#br-file-speed').addEventListener('change', () => { BR.fileSpeedChosen = parseFloat($('#br-file-speed').value) || 0; });
   $('#br-enabled').addEventListener('change', () => { syncBranchColumns(); if ($('#br-enabled').checked) { loadBranchForm(false); refreshBranchState(true); } });
+  // v0.33：「隐藏分路侧数据」即时生效并持久化（只存总线侧 config.branch.hide_ui）
+  const hu = $('#br-hide-ui'); if (hu) hu.addEventListener('change', async () => {
+    try {
+      const r = await fetch('/api/config', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ branch: { hide_ui: hu.checked } }) });
+      if (!r.ok) throw new Error((await r.json()).error || 'HTTP ' + r.status);
+      S.state = await (await fetch('/api/state')).json(); renderTop();
+      toast(hu.checked ? '已隐藏分路侧数据：实时监测 / 事件与分析 各子界面右侧的分路侧内容不再显示' : '已显示分路侧数据：分路侧启用时各子界面右侧显示分路侧内容', 'ok');
+    } catch (e) { toast('保存失败：' + e.message, 'err'); }
+  });
   $('#btn-probe').addEventListener('click', probe);
   $('#btn-listfiles').addEventListener('click', listFiles);
   $('#btn-savecfg').addEventListener('click', saveConfig);

@@ -808,12 +808,16 @@ class BranchConfig:
     align_tol_s: float = 0.0       # 配对容差（秒）；0＝自动＝max(两侧输出步长)×0.6
     # v0.15：只播放两侧文件的公共时间段（联动启动时两侧都从公共起点播到公共终点）
     common_window: bool = False
+    # v0.33：隐藏分路侧界面——True 时「实时监测」「事件与分析」各子界面右侧的分路侧列整体隐藏（分路侧仍照常计算 / 落盘，
+    # 只是不在这些页面显示）；False 时按 enabled 显示。总览 / 跨侧对比 / 数据源与控制 不受影响。
+    hide_ui: bool = False
     common_start: str = ""         # 公共时间段内的自定义播放起始时间（本地时间文本 / epoch 秒）；空＝公共起点
     common_end: str = ""           # v0.17：公共时间段内的自定义播放结束时间；空＝公共终点
 
     def validate(self) -> None:
         if not str(self.config_path).strip():
             raise ConfigError("branch.config_path 不能为空")
+        self.hide_ui = bool(self.hide_ui)
         try:
             self.time_offset_s = float(self.time_offset_s)
             self.align_tol_s = float(self.align_tol_s)

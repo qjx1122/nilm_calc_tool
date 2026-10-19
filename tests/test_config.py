@@ -135,3 +135,13 @@ def test_max_and_min_window_derivation():
     assert cfg.max_window_s == 5.0
     assert cfg.min_step_s == 0.1
     assert cfg.windows["harmonic"].effective_step_s() == 0.1
+
+
+def test_branch_hide_ui_config_roundtrip():
+    """v0.33：branch.hide_ui（隐藏分路侧界面）默认 False、可写入、validate 归一为 bool、to_dict 往返保留。"""
+    from elec_tool.config import AppConfig
+    c = AppConfig.from_dict({})
+    assert c.branch.hide_ui is False
+    c2 = AppConfig.from_dict({"branch": {"enabled": True, "hide_ui": 1}}).validate()
+    assert c2.branch.hide_ui is True and c2.branch.enabled is True
+    assert AppConfig.from_dict(c2.to_dict()).branch.hide_ui is True

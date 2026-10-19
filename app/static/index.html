@@ -137,6 +137,8 @@
         <div class="form" id="branch-form">
           <label class="chk"><input id="br-enabled" type="checkbox">
             启用分路侧设备数据源：总线侧「启动」时同时启动分路侧；「停止 / 暂停 / 恢复」联动（右列显示分路侧配置，输入方式与总线侧一样有 4 种）</label>
+          <label class="chk"><input id="br-hide-ui" type="checkbox">
+            隐藏分路侧数据：勾选后「实时监测」「事件与分析」各子界面右侧的分路侧内容整体隐藏（分路侧仍照常计算与落盘）；不勾选则在分路侧启用时显示</label>
           <div id="br-link-fields">
             <div class="notes" id="br-mode-note" style="display:none">ℹ 两侧都是<b>离线文件（csv_file）</b>时共用节拍钟（倍速一致、严格同步）并可按公共时间段播放；其它组合各自按自身配置同时启动，「公共时间段」不生效。</div>
             <div class="row2">
