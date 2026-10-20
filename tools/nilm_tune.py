@@ -11,7 +11,8 @@
 理想输入是**没有投切事件的稳态段**（几十秒即可）；若文件含事件，脚本用稳健统计量（中位数 / MAD）削弱其影响，
 并提示「窗内极差」供判断。输出的单位与界面一致：启用 PT/CT 时为一次侧 W / A。
 
-检测量 ``--quantity auto|p|i``（与 nilm.quantity 同义，默认 auto）：有电压按逐周波有功 P 统计、建议 ``*_w``（W）阈值；
+检测量 ``--quantity auto|p|i``（与 nilm.quantity 同义；**不填时取 --config 的 nilm.quantity**，配置也没有才是 auto）：
+有电压按逐周波有功 P 统计、建议 ``*_w``（W）阈值；
 数据源无电压（电压列未映射 / 全 0）或显式 ``i`` 时按逐周波电流有效值 I 统计、建议 ``*_a``（A）阈值，并在 JSON 里带
 ``quantity``，nilm_replay.py ``--params`` 会一并套用。
 """
@@ -125,8 +126,8 @@ def main() -> int:
                     help="检测对象（默认：P 口径 total，I 口径 A）。I 口径没有跨相合并，只能单相（A/B/C），不接受 total")
     ap.add_argument("--min-load-w", type=float, default=None, help="现场最小关心负荷（W，计算口径；P 口径用）")
     ap.add_argument("--min-load-a", type=float, default=None, help="现场最小关心负荷电流（A，计算口径；I 口径用）")
-    ap.add_argument("--quantity", default="auto", choices=("auto", "p", "i"),
-                    help="检测量：p 有功 / i 电流有效值 / auto（默认，数据源无电压时自动 i）")
+    ap.add_argument("--quantity", default=None, choices=("auto", "p", "i"),
+                    help="检测量：p 有功 / i 电流有效值 / auto（数据源无电压时自动 i）。不填时取 --config 里的 nilm.quantity（v0.45）")
     ap.add_argument("--max-cycles", type=int, default=30000, help="最多分析的周波数（默认 30000 ≈ 10 min@50Hz）")
     ap.add_argument("--json", action="store_true", help="只输出 JSON")
     a = ap.parse_args()
@@ -154,7 +155,9 @@ def main() -> int:
     if not ps:
         print("没有读到整周波数据", file=sys.stderr)
         return 2
-    qty = a.quantity if a.quantity != "auto" else ("i" if not u_nonzero else "p")
+    q_req = a.quantity or str(getattr(cfg.nilm, "quantity", "auto") or "auto")      # v0.45：默认跟随配置文件的 nilm.quantity
+    q_src = "--quantity" if a.quantity else f"配置 nilm.quantity={q_req}"
+    qty = q_req if q_req != "auto" else ("i" if not u_nonzero else "p")
     if qty == "p" and not u_nonzero:
         print("⚠ 数据源没有电压（电压列未映射或全为 0）：有功恒为 0，无法按 P 调参；请用 --quantity i（或 auto）", file=sys.stderr)
         return 2
@@ -171,7 +174,7 @@ def main() -> int:
         print("提示：I 口径请用 --min-load-a（A）；--min-load-w 已忽略", file=sys.stderr)
     sg = suggest(m, min_load)
     out = {"file": a.file, "channel": channel, "fs": cfg.sampling.fs, "f_nom": cfg.sampling.f_nom,
-           "quantity": qty, "unit": unit, "voltage_present": u_nonzero,
+           "quantity": qty, "quantity_requested": q_req, "unit": unit, "voltage_present": u_nonzero,
            "scaled": bool(cfg.transform.enabled), "t_span_s": float(t[-1] - t[0]) if len(t) > 1 else 0.0,
            "measure": m, "suggest": sg}
     if a.json:
@@ -179,7 +182,7 @@ def main() -> int:
         return 0
     sx = _SUFFIX[unit]
     print(f"文件 {a.file}  对象 {channel}  周波 {m['cycles']}  时长 {out['t_span_s']:.1f} s  口径 {'一次侧(PT/CT)' if out['scaled'] else '二次侧'}"
-          f"  检测量 {'有功 P' if qty == 'p' else '电流有效值 I'}" + ("（数据源无电压，auto 自动选 I）" if (qty == "i" and not u_nonzero and a.quantity == "auto") else ""))
+          f"  检测量 {'有功 P' if qty == 'p' else '电流有效值 I'}（{q_src}" + ("，数据源无电压 → auto 选 I" if (qty == "i" and not u_nonzero and q_req == "auto") else "") + "）")
     print(f"—— 噪声统计（{unit}）——")
     print(f"  基荷 |{'P' if qty == 'p' else 'I'}| 中位数        level      = {m['level']:.4g}")
     print(f"  单周波噪声 σ(稳健)     sigma      = {m['sigma_cycle']:.4g}  ({m['sigma_cycle_pct']:.3f} % 基荷)")

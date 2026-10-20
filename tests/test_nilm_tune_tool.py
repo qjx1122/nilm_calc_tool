@@ -136,3 +136,21 @@ def test_cli_current_only_auto_picks_i_and_replay_check_roundtrip(tmp_path):
     ck2 = subprocess.run([sys.executable, os.path.join(ROOT, "tools", "nilm_check.py"), "--events", str(out), "--truth", str(truth), "--tol-s", "0.5", "--channel", "A",
                           "--mag-a", "48", "--mag-tol-pct", "30"], capture_output=True, text=True, cwd=ROOT)
     assert ck2.returncode == 1 and "幅值带 33.6~62.4 A" in ck2.stdout and "min_delta_a" in ck2.stdout      # 28.9 A 的切除事件带外 → 记「其它设备」、漏 1
+
+
+def test_cli_quantity_defaults_to_config_nilm_quantity(tmp_path):
+    """v0.45：配置里 nilm.quantity=i、文件有电压时，不传 --quantity 也应按 I 调参（此前默认 auto 只看电压 → 给出 W 参数）。"""
+    import json
+    from elec_tool.config import AppConfig
+    sample = os.path.join(ROOT, "data", "nilm_steps.csv")
+    cfg = AppConfig(); cfg.nilm.quantity = "i"; cfg.nilm.channels = ["A"]
+    cfgp = tmp_path / "site.json"; cfg.save(str(cfgp))
+    r = subprocess.run([sys.executable, os.path.join(ROOT, "tools", "nilm_tune.py"), "--file", sample, "--config", str(cfgp), "--json"],
+                       capture_output=True, text=True, cwd=ROOT, check=True)
+    d = json.loads(r.stdout)
+    assert d["quantity"] == "i" and d["quantity_requested"] == "i" and d["voltage_present"] is True and d["unit"] == "A"
+    assert "min_delta_a" in d["suggest"]["algorithms"]["threshold"] and "min_delta_w" not in d["suggest"]["algorithms"]["threshold"]
+    # 命令行显式 --quantity p 仍可覆盖配置
+    r2 = subprocess.run([sys.executable, os.path.join(ROOT, "tools", "nilm_tune.py"), "--file", sample, "--config", str(cfgp), "--quantity", "p", "--json"],
+                        capture_output=True, text=True, cwd=ROOT, check=True)
+    assert json.loads(r2.stdout)["quantity"] == "p"

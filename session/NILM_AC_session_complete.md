@@ -317,3 +317,5 @@
 - **[2026-10-19] v0.43**（用户：三块面板括号提示放一行、去掉「与总览面板同一曲线」）。`.hdrhint` nowrap+ellipsis+title；ui_r12 44/44、ui_r24 64/64。
 
 - **[2026-10-19] v0.44**（用户：三块面板括号提示与标题改成一行）。`.hdrhint` inline、标题行 flex nowrap、提示省略号；ui_r12 44/44、ui_r24 64/64。
+
+- **[2026-10-19] v0.45**（用户：配置仅电流检测、nilm_tune 仍输出功率参数——分析）。根因：`--quantity` 默认 auto 且只看电压，不读 `cfg.nilm.quantity`。修复为默认跟随配置；test_nilm_tune_tool 6 passed。
