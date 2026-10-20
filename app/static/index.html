@@ -679,6 +679,13 @@
             <label>量 <select id="nilm-qty"><option value="p">有功 P</option><option value="q">无功 Q</option><option value="i">电流 I</option></select></label>
             <label>标注算法 <select id="nilm-mark"><option value="">全部</option></select></label>
           </span></h3>
+        <div class="row nilm-winload" title="v0.46：非运行状态下从当前侧配置的离线文件手动装载一段周波数据：时刻留空＝数据起始时刻起 N 个周波；填时刻＝以该时刻为中心的 N 个周波（也可在上方趋势曲线上右键「显示周波窗」）">
+          <label>装载时刻 <input type="text" id="nilm-win-t" placeholder="留空＝数据起点；或 2026-10-13 08:00:02.000" style="width:220px"></label>
+          <label>周波数 <input type="number" id="nilm-win-count" min="1" max="20000" step="1" value="300" style="width:80px"></label>
+          <button id="btn-nilm-win-load">装载周波窗</button>
+          <button id="btn-nilm-win-live" title="清除手动装载的数据，恢复显示引擎的实时周波窗">清除</button>
+          <span id="nilm-win-src" class="mut"></span>
+        </div>
         <canvas id="nilm-chart" height="240"></canvas>
       </div>
       <div class="panel">

@@ -1401,6 +1401,31 @@ async def get_nilm_cycles(n: int = 300) -> Dict[str, Any]:
     return RUNNER.nilm_cycles(max(1, min(int(n), 20000)))
 
 
+@app.get("/api/nilm/cycles_file")
+async def get_nilm_cycles_file(t: Optional[str] = None, n: int = 300):
+    """v0.46：**非运行状态下**从当前侧配置的离线文件装载一段周波窗：t 为空＝数据起点起 n 个周波；
+    t＝epoch 秒或 'YYYY-MM-DD HH:MM:SS[.fff]'（本机时区）＝以该时刻为中心的 n 个周波。引擎运行中返回 409。"""
+    from elec_tool.config import ConfigError, parse_time_text
+    from elec_tool.nilm import load_cycles_from_file
+    if RUNNER.state().get("running"):
+        return JSONResponse(status_code=409, content={"ok": False, "error": "引擎运行中：请先停止数据源，再手动装载周波窗（运行中周波窗显示实时数据）"})
+    cfg = AppConfig.from_dict(RUNNER.cfg.to_dict())
+    tc: Optional[float] = None
+    if t is not None and str(t).strip():
+        try:
+            tc = float(parse_time_text(str(t).strip()))
+        except ConfigError as exc:
+            return JSONResponse(status_code=400, content={"ok": False, "error": str(exc)})
+    try:
+        if cfg.source.path:
+            cfg.source.path = _abs_path(cfg.source.path)
+        return await asyncio.to_thread(load_cycles_from_file, cfg, tc, max(1, min(int(n), 20000)))
+    except (ValueError, ConfigError) as exc:
+        return JSONResponse(status_code=400, content={"ok": False, "error": str(exc)})
+    except Exception as exc:
+        return JSONResponse(status_code=400, content={"ok": False, "error": f"{type(exc).__name__}: {exc}"})
+
+
 # ------------------------------------------------------------------ v0.21：离线文件指定时间段原始数据重新导出
 def _raw_export_sides(payload: Dict[str, Any]) -> Tuple[List[Tuple[AppConfig, int]], List[str], Dict[str, Any]]:
     """**只取当前侧**的离线文件配置（总线侧与分路侧的导出相互独立、互不关联）；非 csv_file 时给出说明。"""

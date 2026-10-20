@@ -144,6 +144,44 @@ async function main() {
   $('nilm-pqs-kind').value = 'auto'; change($('nilm-pqs-kind')); await sleep(200);
   await api('/api/engine/stop', { method: 'POST' });
 
+  console.log('L8 v0.46 右键「显示周波窗」+ 手动装载（仅非运行）');
+  // 运行中：接口 409、按钮禁用、右键菜单项禁用
+  await api('/api/engine/start', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ kind: 'csv_file', path: 'data/nilm_bus_mixed.csv', file_speed: 1.0 }) });
+  await sleep(1200); click($('btn-nilm-refresh')); await sleep(600);
+  check('（前提）引擎运行中', (await api('/api/state')).running === true);
+  const rRun = await fetch(BASE + '/api/nilm/cycles_file?n=50');
+  check('运行中 GET /api/nilm/cycles_file → 409', rRun.status === 409, String(rRun.status));
+  check('运行中「装载周波窗」按钮与输入禁用', $('btn-nilm-win-load').disabled && $('nilm-win-t').disabled && $('nilm-win-count').disabled);
+  const cvP = $('nilm-pqs');
+  const rc = (cv, x) => { const r = cv.getBoundingClientRect(); cv.dispatchEvent(new window.MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: r.left + x, clientY: r.top + 60 })); };
+  rc(cvP, 300); await sleep(200);
+  let menu = document.getElementById('ctxmenu');
+  check('运行中右键：菜单出现、「显示周波窗」项禁用', !!menu && !!menu.querySelector('.mi[data-key="show-window"].disabled'), menu ? menu.textContent.slice(0, 60) : 'no menu');
+  window.closeCtxMenu();
+  await api('/api/engine/stop', { method: 'POST' }); await sleep(1500); click($('btn-nilm-refresh')); await sleep(800);
+  await api('/api/config', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ source: { kind: 'csv_file', path: 'data/nilm_steps.csv' } }) });
+  // 非运行：手动装载（留空 → 起点 300）
+  check('停止后按钮可用', !$('btn-nilm-win-load').disabled && !$('nilm-win-t').disabled);
+  $('nilm-win-t').value = ''; $('nilm-win-count').value = '300'; click($('btn-nilm-win-load')); await sleep(2500);
+  const nlBus = window.SD ? window.SD.bus.nl : null;
+  check('留空装载 → 数据起点起 300 个周波', nlBus && nlBus.winFile && nlBus.winFile.source.mode === 'begin' && nlBus.winFile.t.length === 300, nlBus && nlBus.winFile ? JSON.stringify(nlBus.winFile.source) : 'none');
+  check('周波窗标题计数=300、来源说明含「数据起点起」', $('nilm-win-n').textContent === '300' && /数据起点起/.test($('nilm-win-src').textContent), $('nilm-win-src').textContent);
+  // 指定时刻（事件时刻 2.0 s）+ 100 周波 → 中心
+  const tUp = nlBus.winFile.t[0] + 2.0;
+  $('nilm-win-t').value = String(tUp); $('nilm-win-count').value = '100'; click($('btn-nilm-win-load')); await sleep(2500);
+  const wf = nlBus.winFile;
+  check('指定时刻装载 → 以该时刻为中心 100 周波（第 50 个周波 ≈ 中心）', wf && wf.source.mode === 'center' && wf.t.length === 100 && Math.abs(wf.t[50] - tUp) < 0.011, wf ? JSON.stringify([wf.t.length, wf.t[50] - tUp]) : 'none');
+  check('中心左右有功阶跃（1.5 MW → 2.25 MW）', wf && wf.channels.total.p[45] < 1.6e6 && wf.channels.total.p[55] > 2.1e6, wf ? JSON.stringify([wf.channels.total.p[45], wf.channels.total.p[55]]) : '');
+  // 右键菜单 → 显示周波窗（非运行）
+  rc(cvP, 200); await sleep(200);
+  menu = document.getElementById('ctxmenu');
+  const mi = menu && menu.querySelector('.mi[data-key="show-window"]');
+  check('非运行右键：「显示周波窗（时刻）」可点', !!mi && !mi.classList.contains('disabled') && /显示周波窗（\d{4}-/.test(mi.textContent), mi ? mi.textContent.slice(0, 50) : 'none');
+  if (mi) { mi.dispatchEvent(new window.Event('click', { bubbles: true })); await sleep(2500); }
+  check('右键装载后周波窗为 center 模式、时刻输入框回填', nlBus.winFile && nlBus.winFile.source.mode === 'center' && /^\d{4}-\d{2}-\d{2} /.test($('nilm-win-t').value), $('nilm-win-t').value);
+  click($('btn-nilm-win-live')); await sleep(300);
+  check('「清除」后回到引擎周波窗', !nlBus.winFile && $('btn-nilm-win-live').disabled);
+
   console.log('L4 清空');
   click($('btn-nilm-clear')); await sleep(1500);
   check('清空后表格为空', ($('nilm-table').textContent || '').includes('暂无事件'));

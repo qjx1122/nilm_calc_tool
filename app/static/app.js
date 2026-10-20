@@ -18,7 +18,7 @@ function E(side, id) {
 /* v0.24：事件 / 负荷辨识 / 实时落盘 等按侧别各自一份状态（左列总线侧、右列分路侧） */
 function _sideStore() {
   return { events: [], evSummary: null, evLoaded: false, evDirty: false, realtime: null, rtDirty: false,
-           nl: { events: [], summary: null, cycles: null, loaded: false, dirty: false, formBuilt: false } };
+           nl: { events: [], summary: null, cycles: null, loaded: false, dirty: false, formBuilt: false, winFile: null } };
 }
 const SD = { bus: _sideStore(), branch: _sideStore() };
 window.SD = SD;
@@ -796,7 +796,7 @@ function connectWS() {
   S.ws.onmessage = (ev) => {
     let m; try { m = JSON.parse(ev.data); } catch (e) { return; }
     if (m.type === 'hello' || m.type === 'state') {
-      S.state = m.data; renderTop(); if (S.view === 'source' || S.view === 'export' || S.view === 'windows') render();
+      S.state = m.data; renderTop(); if (S.view === 'source' || S.view === 'export' || S.view === 'windows' || S.view === 'nilm') render();   // v0.46：nilm 页按运行状态启停「装载周波窗」
       if (S.view === 'compare' && Date.now() - CMP.at > 3000) refreshCompare();
       if (S.view === 'overview') refreshOverviewBranch(false);
       if (DUAL_VIEWS.includes(S.view)) { const a = branchDualActive(); if (a !== BRD.lastActive) { BRD.lastActive = a; render(); refreshBranchDual(true); } }
@@ -3088,6 +3088,82 @@ function nilmRow(e, sc) {
 }
 
 /* v0.24：P/Q/S 趋势（与总览同一数据 /api/history/power、同一 pqsSeries）+ 各算法事件竖线 */
+/* ------------------------------------------------------------------ v0.46：通用右键菜单（画布） */
+const CTX_MENU_ID = 'ctxmenu';   // 动态创建、挂在 body 下的右键菜单（不在 index.html 里）
+function closeCtxMenu() { const m = document.getElementById(CTX_MENU_ID); if (m) m.remove(); }
+function showCtxMenu(x, y, items) {
+  closeCtxMenu();
+  const m = document.createElement('div'); m.id = CTX_MENU_ID; m.className = 'ctxmenu';
+  items.forEach(it => {
+    const d = document.createElement('div'); d.className = 'mi' + (it.disabled ? ' disabled' : '');
+    d.innerHTML = esc(it.label) + (it.hint ? `<small>${esc(it.hint)}</small>` : '');
+    d.title = it.title || '';
+    d.dataset.key = it.key || '';
+    if (!it.disabled) d.addEventListener('click', (e) => { e.stopPropagation(); closeCtxMenu(); try { it.onClick(); } catch (err) { console.error(err); } });
+    m.appendChild(d);
+  });
+  document.body.appendChild(m);
+  const vw = window.innerWidth || 1200, vh = window.innerHeight || 800;
+  const r = m.getBoundingClientRect();
+  m.style.left = Math.max(0, Math.min(x, vw - (r.width || 220) - 4)) + 'px';
+  m.style.top = Math.max(0, Math.min(y, vh - (r.height || 80) - 4)) + 'px';
+  setTimeout(() => {
+    const off = (e) => { if (!m.contains(e.target)) { closeCtxMenu(); document.removeEventListener('mousedown', off); } };
+    document.addEventListener('mousedown', off);
+  }, 0);
+  document.addEventListener('keydown', function esc_(e) { if (e.key === 'Escape') { closeCtxMenu(); document.removeEventListener('keydown', esc_); } });
+  return m;
+}
+/* 画布右键：itemsFn(epochX, info) → 菜单项；只绑定一次 */
+function bindCtxMenu(cv, itemsFn) {
+  if (!cv || cv.__ctxBound) return;
+  cv.__ctxBound = true;
+  cv.addEventListener('contextmenu', (e) => {
+    e.preventDefault();
+    const c = cv.__chart;
+    let xEpoch = null, info = null;
+    if (c) {
+      const r = cv.getBoundingClientRect(); const mx = e.clientX - r.left;
+      const tb = isNum(c.opt.tbase) ? c.opt.tbase : 0;
+      info = hoverInfo(cv, mx);
+      xEpoch = (info ? info.x : c.xAt(mx)) + tb;
+    }
+    const items = itemsFn(xEpoch, info, e) || [];
+    if (items.length) showCtxMenu(e.clientX, e.clientY, items);
+  });
+}
+window.showCtxMenu = showCtxMenu; window.closeCtxMenu = closeCtxMenu;
+
+/* v0.46：周波窗手动装载（非运行状态；从当前侧配置的离线文件读） */
+function curRunning(side = sideOf()) { const st = (side === 'branch' ? BRD.state : S.state) || {}; return !!st.running; }
+function fmtLocalInput(t) {
+  const d = new Date(t * 1000); const p = (n, w = 2) => String(n).padStart(w, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}.${p(d.getMilliseconds(), 3)}`;
+}
+async function loadNilmWindow(side = sideOf(), tEpoch, nCycles) {
+  const nl = NLs(side);
+  if (curRunning(side)) { toast('引擎运行中：请先停止数据源，再装载周波窗（运行中周波窗显示实时数据）', 'err'); return false; }
+  const tEl = E(side, 'nilm-win-t'), nEl = E(side, 'nilm-win-count');
+  let tTxt = tEpoch !== undefined && tEpoch !== null ? String(tEpoch) : ((tEl && tEl.value) || '').trim();
+  const n = Math.max(1, Math.min(20000, parseInt((nCycles !== undefined ? nCycles : (nEl && nEl.value)) || '300', 10) || 300));
+  if (tEpoch !== undefined && tEpoch !== null && tEl) tEl.value = fmtLocalInput(tEpoch);
+  try {
+    const d = await api(`/api/nilm/cycles_file?n=${n}${tTxt ? '&t=' + encodeURIComponent(tTxt) : ''}`, undefined, side);
+    nl.winFile = d; nl.winFileAt = Date.now();
+    const sname = (d.source && d.source.path) ? d.source.path.split(/[\\/]/).pop() : '';
+    toast(`${side === 'branch' ? '分路侧' : '总线侧'}已装载 ${d.source.n_loaded} 个周波（${sname}${d.source.mode === 'center' ? '，中心 ' + ts(d.source.t_center) : '，数据起点起'}）` + (d.source.note ? '；' + d.source.note : ''), 'ok');
+    if (S.view === 'nilm') render();
+    return true;
+  } catch (e) { toast('装载周波窗失败：' + e.message, 'err'); return false; }
+}
+function clearNilmWindow(side = sideOf()) { const nl = NLs(side); nl.winFile = null; if (S.view === 'nilm') render(); }
+function nilmWinSourceText(nl, running) {
+  if (running) return nl.winFile ? '引擎运行中：显示实时周波窗（手动装载的数据已暂存，停止后恢复显示）' : '';
+  if (!nl.winFile) return '当前显示引擎最近一次运行的周波窗；可装载离线文件任意时刻的周波数据（或在趋势曲线上右键「显示周波窗」）';
+  const sr = nl.winFile.source || {};
+  return `已装载：${(sr.path || '').split(/[\\/]/).pop()} · ${sr.mode === 'center' ? '中心 ' + fmtLocalInput(sr.t_center) : '数据起点起'} · ${sr.n_loaded} 个周波（${ts(sr.t_start)} ~ ${ts(sr.t_end)}）` + (sr.note ? ' · ' + sr.note : '');
+}
+
 /* v0.39：趋势图可切换为三相电流（Ia/Ib/Ic 可选）；auto = 按检测量（I 口径画电流） */
 function nilmPqsKind(nl) {
   const sel = $('#nilm-pqs-kind'); const v = sel ? sel.value : 'auto';
@@ -3115,6 +3191,18 @@ function renderNilmPqs(nl) {
   drawLine(cv, isI ? nilmCurrentSeries(hp, t0) : pqsSeries(hp, t0),
            { ylabel: isI ? 'A' : 'W/var/VA', fmtX: x => tsX(x + t0, spanOf(isI ? 'current' : 'power')), fmtTip: x => ts(x + t0), tbase: t0, height: 260, marks,
              empty: isI ? '暂无电流趋势（需累计 ≥2 个 current 窗）' : '暂无 P/Q/S 趋势（需累计 ≥2 个 power 窗）' });
+  const side = sideOf();
+  bindCtxMenu(cv, (xEpoch) => {
+    const running = curRunning(side);
+    const nEl = E(side, 'nilm-win-count'); const n = parseInt((nEl && nEl.value) || '300', 10) || 300;
+    const noX = !isNum(xEpoch);
+    return [
+      { key: 'show-window', label: `显示周波窗（${noX ? '暂无曲线' : fmtLocalInput(xEpoch)}）`, disabled: running || noX,
+        hint: running ? '引擎运行中不可用：请先停止数据源' : noX ? '趋势曲线有数据后，在曲线上右键' : `以该时刻为中心装载 ${n} 个周波（离线文件）`,
+        onClick: () => loadNilmWindow(side, xEpoch, n) },
+      { key: 'zoom-reset', label: '复位缩放', onClick: () => zoomReset(cv) },
+    ];
+  });
 }
 
 function renderNilm() {
@@ -3134,7 +3222,12 @@ function renderNilm() {
   if (isNum(sm.total)) setNilmBadge(sm.total);
   renderNilmPqs(NL);
   // 周波窗曲线 + 事件竖线
-  const c = NL.cycles || {}; const chn = $('#nilm-ch').value, qty = $('#nilm-qty').value, mk = $('#nilm-mark').value;
+  const running = curRunning();
+  const useFile = !running && !!NL.winFile;
+  const c = (useFile ? NL.winFile : NL.cycles) || {}; const chn = $('#nilm-ch').value, qty = $('#nilm-qty').value, mk = $('#nilm-mark').value;
+  ['btn-nilm-win-load', 'btn-nilm-win-live', 'nilm-win-t', 'nilm-win-count'].forEach(id => { const el = $('#' + id); if (el) el.disabled = running; });
+  { const el = $('#btn-nilm-win-live'); if (el) el.disabled = running || !NL.winFile; }
+  { const el = $('#nilm-win-src'); if (el) el.textContent = nilmWinSourceText(NL, running); }
   const chd = ((c.channels || {})[chn] || {})[qty] || [];
   const tt = c.t || []; const t0 = tt.length ? tt[0] : 0;
   $('#nilm-win-n').textContent = String(tt.length);
@@ -3142,9 +3235,9 @@ function renderNilm() {
   const marks = NL.events.filter(e => e.channel === chn && (!mk || e.algorithm === mk) && e.t_start >= t0 && tt.length && e.t_start <= tt[tt.length - 1])
     .map((e, i) => ({ x: e.t_start - t0, color: NILM_COLORS[e.algorithm], row: Object.keys(NILM_ALGOS).indexOf(e.algorithm),
                      label: `${e.direction === 'up' ? '↑' : '↓'}${si(nilmMag(e), e.unit || 'W', 3)}` }));
-  drawLine($('#nilm-chart'), [{ name: `${chn === 'total' ? '三相总' : chn + ' 相'} ${qty.toUpperCase()}（逐周波）`, color: '#4ea1ff', data: tt.map((x, i) => [x - t0, chd[i]]) }],
+  drawLine($('#nilm-chart'), [{ name: `${chn === 'total' ? '三相总' : chn + ' 相'} ${qty.toUpperCase()}（逐周波${useFile ? '，离线装载' : ''}）`, color: useFile ? '#f2b84b' : '#4ea1ff', data: tt.map((x, i) => [x - t0, chd[i]]) }],
            { ylabel: unit, fmtX: x => ts(x + t0), fmtTip: x => ts(x + t0), height: 240, marks,
-             empty: (curState().loaded_last && !tt.length) ? '周波窗是内存数据，软件重启后不恢复（上次播放的事件已加载：见事件表与上方 P/Q/S 趋势的事件竖线）；重新播放后显示' : '暂无周波数据（启动数据源后显示）' });
+             empty: (curState().loaded_last && !tt.length) ? '周波窗是内存数据，软件重启后不恢复（上次播放的事件已加载：见事件表与上方 P/Q/S 趋势的事件竖线）；可用上方「装载周波窗」从离线文件读取任意时刻的周波数据' : '暂无周波数据（启动数据源后显示，或非运行状态下用「装载周波窗」从离线文件读取）' });
   const nsc = nilmScales(NL.events);
   $('#nilm-total').textContent = String(sm.total || NL.events.length);
   $('#nilm-table').innerHTML = NL.events.length ? table(nilmHeader(nsc), NL.events.map(e => nilmRow(e, nsc))) : '<div class="notes">暂无事件</div>';
@@ -3158,6 +3251,7 @@ function renderNilm() {
     '检测量 auto/p/i（v0.36）：数据源只有三相电流（无电压）时选 auto 或 i，按逐周波电流有效值检测，六种算法均可用；此时事件幅值为 |ΔI|（A），ΔP/ΔQ 恒为 0。',
     'v0.39：I 口径不存在跨相合并（三相电流有效值不能像有功那样相加），只能单相检测——检测对象「三相总」被忽略，只配了三相总时按 A/B/C 各自检测；上方趋势图「曲线」可选三相电流（显示哪几相用曲线下方图例勾选），auto 时 I 口径自动画电流。',
     'v0.37：每个算法的绝对阈值分 W（P 口径）与 A（I 口径）两套，检测器只用当前口径那一套，另一套不参与（表单中灰显）；相对门槛 rel_tol_pct / min_delta_pct 对两种口径都按窗内中位数折算。',
+    'v0.46：非运行状态下可在趋势曲线上右键「显示周波窗」查看鼠标所指时刻为中心的周波数据，或在周波窗面板填时刻/周波数手动装载（留空＝数据起点起 300 个周波）；数据来自当前侧配置的离线文件，运行中不可用。',
     '双滑窗均值差与 CUSUM 对单周波尖峰较敏感（会按均值摊成小事件）；需要抗尖峰请看中值滤波差分 / 稳态分段，或抬高 min_delta_pct。',
   ]);
 }
@@ -3167,6 +3261,9 @@ function bindNilm(side) {
   on('btn-nilm-refresh', 'click', () => refreshNilm(side));
   on('btn-nilm-clear', 'click', () => clearNilm(side));
   on('btn-nilm-save', 'click', () => saveNilmConfig(side));
+  on('btn-nilm-win-load', 'click', () => loadNilmWindow(side));
+  on('btn-nilm-win-live', 'click', () => clearNilmWindow(side));
+  on('nilm-win-t', 'keydown', (e) => { if (e.key === 'Enter') loadNilmWindow(side); });
   on('nilm-filter', 'change', () => refreshNilm(side));
   on('nilm-chfilter', 'change', () => refreshNilm(side));
   ['nilm-ch', 'nilm-qty', 'nilm-mark', 'nilm-pqs-ch', 'nilm-pqs-kind'].forEach(id => on(id, 'change', render));

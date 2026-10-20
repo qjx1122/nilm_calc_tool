@@ -678,3 +678,86 @@ class NilmDetector:
 
     def close(self) -> None:
         self.writer.close()
+
+
+# ------------------------------------------------------------------ v0.46：离线文件按时刻装载周波窗（非运行状态下手动查看）
+
+def load_cycles_from_file(cfg: "AppConfig", t_center: Optional[float] = None, n: int = 300,
+                          path: Optional[str] = None, max_scan_cycles: int = 200000) -> Dict[str, Any]:
+    """从离线 CSV（``cfg.source``，须为 csv_file）读出一段逐周波 P/Q/I 序列，供界面「周波窗」手动装载。
+
+    - ``t_center`` 为 None：从数据起始时刻开始取前 ``n`` 个周波（默认 300）。
+    - ``t_center`` 给定（epoch 秒）：以该时刻为中心取 ``n`` 个周波（前 n//2、后 n-n//2）；
+      为避免定位带来的半周波偏移，从中心前 n//2+2 个周波处开始读，再按时间裁剪。
+    返回与 ``NilmDetector.cycles()`` 同结构（t / channels{p,q,i} / n_cycle_samples）并附 ``source`` 说明；
+    不触发检测、不落盘、不改动运行配置（在配置副本上操作）。
+    """
+    from .config import AppConfig
+    from .scaling import scale_block
+    from .sources import create_source
+    c = AppConfig.from_dict(cfg.to_dict())
+    if path:
+        c.source.path = path
+    if c.source.kind != "csv_file":
+        raise ValueError(f"只能从离线文件（csv_file）装载周波窗，当前数据源为 {c.source.kind}")
+    if not str(c.source.path or "").strip():
+        raise ValueError("未配置离线文件路径（source.path）")
+    n = max(1, min(int(n), 20000))
+    cyc_s = 1.0 / float(c.sampling.f_nom)
+    c.source.file_speed = 0.0
+    c.source.play_window = False
+    c.source.play_end_time = ""
+    if t_center is None:
+        c.source.play_start_mode = "begin"; c.source.play_start_value = ""
+        t_from = None
+    else:
+        t_from = float(t_center) - (n // 2 + 2) * cyc_s
+        c.source.play_start_mode = "time"; c.source.play_start_value = f"{t_from:.6f}"
+    c.validate()
+
+    def _read(want: int):
+        feat = CycleFeatures(c.sampling.fs, c.sampling.f_nom)
+        ts: List[np.ndarray] = []; ps: List[np.ndarray] = []; qs: List[np.ndarray] = []; is_: List[np.ndarray] = []
+        got = 0; eof = False
+        with create_source(c) as src:
+            while got < want and got < max_scan_cycles:
+                blk = src.read()
+                if blk is None:
+                    if src.exhausted:
+                        eof = True; break
+                    continue
+                f = feat.push(scale_block(blk, c.transform))
+                if f["t"].size:
+                    ts.append(f["t"]); ps.append(f["p"]); qs.append(f["q"]); is_.append(f["i"]); got += int(f["t"].size)
+        if not ts:
+            return None
+        return (np.concatenate(ts), np.concatenate(ps, axis=1), np.concatenate(qs, axis=1), np.concatenate(is_, axis=1), eof, feat.n_cycle)
+
+    want = n if t_center is None else n + 6
+    r = _read(want)
+    if r is not None and t_center is not None and r[4] and r[0].size < n and t_from is not None:
+        # 中心靠近文件末尾：往前多读「不足的周波数」，保证仍能给满 n 个
+        t_from -= (n - int(r[0].size) + 2) * cyc_s
+        c.source.play_start_value = f"{t_from:.6f}"
+        r2 = _read(want + (n - int(r[0].size) + 2))
+        r = r2 or r
+    if r is None:
+        raise ValueError("该时刻附近没有读到整周波数据（时刻超出文件范围或文件为空）")
+    t, p, q, i, _eof, n_cycle = r
+    if t_center is None:
+        sl = slice(0, n)
+    else:
+        k = int(np.searchsorted(t, float(t_center)))            # 第一个 ≥ 中心时刻的周波
+        a = max(0, k - n // 2); b = min(t.size, a + n); a = max(0, b - n)
+        sl = slice(a, b)
+    t = t[sl]; p = p[:, sl]; q = q[:, sl]; i = i[:, sl]
+    from .config import NILM_CHANNELS
+    d: Dict[str, Any] = {"ok": True, "t": [float(x) for x in t], "n_cycle_samples": n_cycle, "channels": {},
+                         "source": {"path": c.source.path, "mode": ("center" if t_center is not None else "begin"),
+                                    "t_center": (float(t_center) if t_center is not None else None), "n_requested": n,
+                                    "n_loaded": int(t.size), "t_start": float(t[0]) if t.size else None, "t_end": float(t[-1]) if t.size else None}}
+    for ci, ch in enumerate(NILM_CHANNELS):
+        d["channels"][ch] = {"p": [float(x) for x in p[ci]], "q": [float(x) for x in q[ci]], "i": [float(x) for x in i[ci]]}
+    if t_center is not None and t.size and not (t[0] - cyc_s <= float(t_center) <= t[-1] + cyc_s):
+        d["source"]["note"] = "指定时刻不在文件数据范围内，已取最接近的一段"
+    return d

@@ -462,3 +462,50 @@ def test_frontend_current_trend_and_total_dim_wiring():
     assert "function nilmCurrentSeries(" in js and "curHist('current')" in js.split("function renderNilmPqs")[1].split("\n}")[0]
     assert "nilm-ch-total-lbl" in js.split("function nilmDimUnits")[1].split("\n}")[0]
     assert "channels_effective" in js
+
+
+# ------------------------------------------------------------------ v0.46：非运行状态下从离线文件装载周波窗
+
+def test_load_cycles_from_file_begin_and_center():
+    from elec_tool.nilm import load_cycles_from_file
+    cfg = AppConfig(); cfg.source.kind = "csv_file"; cfg.source.path = str(ROOT / "data" / "nilm_steps.csv")
+    d = load_cycles_from_file(cfg)                                   # 默认：数据起点起 300 个周波
+    assert d["source"]["mode"] == "begin" and len(d["t"]) == 300 and d["n_cycle_samples"] == 128
+    t0 = d["t"][0]
+    assert d["channels"]["total"]["p"][0] == pytest.approx(1.5e6, rel=0.02)
+    c = load_cycles_from_file(cfg, t_center=t0 + 2.0, n=100)          # 以 2.0 s 阶跃为中心
+    assert c["source"]["mode"] == "center" and len(c["t"]) == 100 and abs(c["t"][50] - (t0 + 2.0)) < 0.011
+    assert c["channels"]["total"]["p"][45] == pytest.approx(1.5e6, rel=0.02) and c["channels"]["total"]["p"][55] == pytest.approx(2.25e6, rel=0.02)
+    e = load_cycles_from_file(cfg, t_center=t0 + 0.1, n=100)          # 靠近起点：取最接近的一段
+    assert len(e["t"]) == 100 and e["t"][0] == pytest.approx(t0)
+    far = load_cycles_from_file(cfg, t_center=t0 + 5.9, n=100)
+    assert len(far["t"]) == 100 and far["t"][-1] == pytest.approx(d["t"][-1])
+    with pytest.raises(ValueError, match="csv_file"):
+        bad = AppConfig(); bad.source.kind = "simulator"; load_cycles_from_file(bad)
+
+
+def test_api_cycles_file_requires_stopped_engine(client):
+    client.post("/api/engine/stop")
+    assert client.put("/api/config", json={"source": {"kind": "csv_file", "path": "data/nilm_steps.csv"}}).status_code == 200
+    r = client.get("/api/nilm/cycles_file?n=40").json()
+    assert r["ok"] and len(r["t"]) == 40 and r["source"]["mode"] == "begin"
+    tc = r["t"][0] + 2.0
+    c = client.get(f"/api/nilm/cycles_file?n=60&t={tc}").json()
+    assert c["ok"] and len(c["t"]) == 60 and abs(c["t"][30] - tc) < 0.011 and c["source"]["t_center"] == pytest.approx(tc)
+    assert client.get("/api/nilm/cycles_file?t=abc").status_code == 400
+    # 运行中 → 409
+    st = client.post("/api/engine/start", json={"kind": "csv_file", "path": "data/nilm_bus_mixed.csv", "file_speed": 1.0}).json()
+    assert st.get("ok", True)
+    try:
+        resp = client.get("/api/nilm/cycles_file?n=40")
+        assert resp.status_code == 409 and "运行中" in resp.json()["error"]
+    finally:
+        client.post("/api/engine/stop")
+
+
+def test_frontend_window_load_wiring():
+    html = (ROOT / "app/static/index.html").read_text(encoding="utf-8")
+    js = (ROOT / "app/static/app.js").read_text(encoding="utf-8")
+    assert all(x in html for x in ('id="nilm-win-t"', 'id="nilm-win-count"', 'id="btn-nilm-win-load"', 'id="btn-nilm-win-live"', 'value="300"'))
+    assert "function bindCtxMenu(" in js and "key: 'show-window'" in js and "/api/nilm/cycles_file" in js
+    assert "disabled: running || noX" in js and "el.disabled = running" in js      # 仅非运行可操作

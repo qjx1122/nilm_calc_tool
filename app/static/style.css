@@ -229,3 +229,14 @@ canvas:focus{outline:none}
 /* v0.37：负荷辨识——不参与当前检测口径的那套阈值灰显 */
 .nilm-algo label.nilm-inactive { opacity: .45; }
 .nilm-algo label.nilm-inactive input { background: #141b2d; }
+
+/* v0.46：负荷辨识趋势曲线右键菜单 + 周波窗手动装载行 */
+.ctxmenu{position:fixed;z-index:120;background:#121a2c;border:1px solid #2b3a5c;border-radius:8px;padding:4px;min-width:200px;box-shadow:0 8px 24px #000a;font-size:12.5px}
+.ctxmenu .mi{padding:7px 12px;border-radius:5px;cursor:pointer;color:#dbe7ff;white-space:nowrap}
+.ctxmenu .mi:hover{background:#1f2d4d}
+.ctxmenu .mi.disabled{color:#6b7a99;cursor:not-allowed}
+.ctxmenu .mi.disabled:hover{background:transparent}
+.ctxmenu .mi small{display:block;color:var(--mut);font-size:11px;margin-top:2px;white-space:normal;max-width:300px}
+.nilm-winload{margin:0 0 8px;flex-wrap:wrap}
+.nilm-winload input{font-size:12px}
+.nilm-winload .mut{font-size:11.5px}
