@@ -431,3 +431,181 @@ Invoke-RestMethod -Method Put -Uri http://localhost:8000/api/branch/config -Cont
 - 去重：同一算法同一对象两次事件终点相距 < `min_gap_cycles` 只报第一条；事件要在终点之后再看到"确认周波数"（阈值类 = `settle_cycles`，双滑窗 = `post_cycles`，GLR = `window_cycles`，稳态分段 = `min_steady_cycles`）才出现，因此界面滞后 0.1~0.3 s 属正常。
 - 周波按额定频率定长切分，频率偏离 ±0.5 Hz 以上逐周波 P 会有微小拍频，表现为 σ 偏大——按量出来的填即可。
 - 场景经验：商业楼宇（阶跃干净、σ 小、负荷多）全开 6 算法、`rel_tol_pct` 0.1~0.3；工业电机（软启动、暂态长）优先 `steady_state` + `cusum`，窗长 ≥ 暂态 × 2；变频 / 调光负荷（缓变）优先 `cusum`，其余易漏。
+
+## 附录 G（v0.49）：6 种事件检测算法的实现流程（输入 / 输出 / 过程参数）
+
+> 依据 `elec_tool/nilm.py` 当前实现逐行整理；参数默认值见 `elec_tool/config.py` `NILM_ALGO_DEFAULTS`。
+> 下文"W 口径"指按有功 P 检测、"A 口径"指按电流有效值 I 检测（附录 F）；两种口径算法完全相同，只是输入序列与绝对阈值那一套不同。
+
+### G.0 公共部分：所有算法共用的输入、输出与前后处理
+
+**1. 输入序列是怎么来的（`CycleFeatures.push`）**
+
+| 步骤 | 说明 |
+|---|---|
+| 切周波 | 按额定频率定长切分：每周波 `n_cycle = round(fs / f_nom)` 个采样点（6400 Hz / 50 Hz = 128 点），不足一个周波的零头结转到下一块；时间不连续（缺口 > 1.5/fs）时丢弃零头，避免拼出假周波 |
+| 逐周波有功 P | 每相 `P = mean(u·i)`（一个周波内逐点乘积的均值），`total = Pa+Pb+Pc` |
+| 逐周波无功 Q | 基波单频 DFT 得 U、I 复相量，`Q = Im(½·U·conj(I))`，`total` 为三相之和（只用于事件的 ΔQ 字段，不参与检测） |
+| 逐周波电流 I | 每相 `I = sqrt(mean(i²))`（周波有效值）；`total = sqrt(Ia²+Ib²+Ic²)` 只作幅值参考，**I 口径不检测 total** |
+| 口径 | 启用 PT/CT 时序列已换算到一次侧，所有阈值按同一口径填 |
+
+**2. 检测器怎么调用算法（`NilmDetector._evaluate`）**
+
+| 过程参数 | 含义 / 用途 |
+|---|---|
+| `nilm.window_cycles`（默认 300） | 内存里保留的最近周波数 = 每次算法评估的序列长度 `L`；窗按滑动方式更新，每来一块新数据就对整窗重新跑一遍算法 |
+| `nilm.channels` → `channels_effective` | 检测对象 total / A / B / C；I 口径自动去掉 total（只配 total 时按 A/B/C 各自检测） |
+| `level` | 窗内 `median(|序列|)`，作为相对门槛的基准 |
+| `params_for_current()` | I 口径把 `*_a` 的值写到算法读取的 `*_w` 键上（算法函数只认 `*_w` 键名，键名里的 "w" 此时只是名字） |
+| `effective_params()` | 把相对门槛折算进绝对参数：容差类 `settle_tol_w / tol_w / drift_w / noise_w / threshold_w` 取 `max(绝对值, level × rel_tol_pct%)`；`min_delta_w` 取 `max(绝对值, level × min_delta_pct%)`。算法实际使用的就是折算后的"生效值" |
+| 算法输出 `Step` | 每条候选事件是一个五元组 `(onset, end, pre, post, score)`：起点 / 终点周波在窗内的索引、事件前稳态值、事件后稳态值、检验量 |
+| 确认周波数 `_confirm_cycles` | 终点之后至少还要再看到这么多周波事件才"确认"（否则等下一块数据）：阈值类 / CUSUM / 中值 = `settle_cycles`，双滑窗 = `post_cycles`，GLR = `window_cycles`，稳态分段 = `min_steady_cycles`。这就是界面上事件滞后 0.1~0.3 s 出现的原因 |
+| 去重 `nilm.min_gap_cycles`（默认 10） | 同一算法同一对象：新事件起点 ≤ 上一事件终点 + gap 的不再报（窗滑动时同一事件会被反复检出，靠全局周波序号 `g_start/g_end` 去重） |
+| 事件字段 | `t_start/t_end`（起点 / 终点周波的时间）、`direction`（post − pre 的符号：↑up / ↓down）、`magnitude`（检测量口径的 \|post − pre\|，W 或 A）、`delta_p_w / delta_q_var / delta_i_a`（事件前后各取 `settle` 个周波均值之差；P 口径 ΔP 直接用算法的 pre/post，I 口径 ΔI 用算法的 pre/post、ΔP 另算）、`cycles = end − onset`（暂态周波数）、`score`（检验量，含义随算法） |
+
+**3. 共用的辅助函数 `_settle_end(p, start, settle, tol, max_rise)`**
+从 `start` 起逐位置 `j` 看 `p[j : j+settle]` 的极差（max − min）是否 ≤ `tol`，第一个满足的 `j` 就是"暂态结束 / 新稳态开始"的终点；向后最多看 `max_rise` 个位置，超过返回 None（暂态还没结束或数据还不够）。
+
+---
+
+### G.1 阈值差分 `threshold`（`_steps_threshold`）
+
+**思想**：相邻周波的一阶差分超过门槛 → 事件起点；随后找到稳定段 → 终点；前后稳态均值之差 ≥ 最小幅值才算事件。
+
+| 参数 | 默认（W / A） | 用途 |
+|---|---|---|
+| `min_delta_w` / `min_delta_a` | 50 / 0.3 | 最小事件幅值：\|post − pre\| 低于它丢弃；同时决定触发门槛 |
+| `settle_cycles` | 5 | 稳态判定与均值统计的周波数 |
+| `settle_tol_w` / `settle_tol_a` | 20 / 0.1 | 稳态容差：`settle` 个周波极差 ≤ 它即稳定 |
+| `max_rise_cycles` | 40 | 起点之后最多等多少周波暂态结束；超过则放弃本次（等更多数据） |
+
+**流程**
+1. `d = diff(p)`；触发门槛 `trig = max(0.5 × min_delta, settle_tol)`——取一半是因为阶跃落在周波边界内时会被分摊到相邻两个周波，各占一半；不低于容差是防噪声误触发。
+2. 从 `i = settle` 起扫描：若 `|d[i−1]| ≥ trig`，记 `onset = i`。
+3. `end = _settle_end(p, onset+1, settle, settle_tol, max_rise)`；为 None 则停止本轮（暂态未结束）。
+4. `pre = mean(p[onset−settle : onset])`，`post = mean(p[end : end+settle])`；`|post − pre| < min_delta` → 不是事件。
+5. **起点精修**：在 `[onset, end]` 内找第一个越过中线 `pre + Δ/2` 的周波作为最终 `onset`（让起点落在阶跃真正发生的周波上，而不是差分刚冒头的周波）。
+6. 输出 `(onset, end, pre, post, score = post − pre)`；扫描指针跳到 `end + settle` 继续。
+
+**特点**：最直接、对干净阶跃最准；对单周波尖峰敏感（尖峰也会使差分越过门槛，但随后 \|post − pre\| 小会被第 4 步丢掉）；缓慢爬坡（每周波增量 < trig）检不出。
+
+---
+
+### G.2 中值滤波差分 `median_diff`（`_steps_median`）
+
+**思想**：先用中值滤波去掉孤立尖峰 / 单周波缺口，再套用阈值差分法。
+
+| 参数 | 默认 | 用途 |
+|---|---|---|
+| `median_cycles` | 5 | 中值滤波窗长（偶数自动 +1 变奇数） |
+| 其余 | 同阈值差分 | 滤波后的序列直接交给 `_steps_threshold` |
+
+**流程**
+1. 两端 edge 填充 `k//2` 个点，滑窗取 `k` 点中值得 `pm`（长度与 `p` 相同，无相位偏移）。
+2. `_steps_threshold(pm, prm)`，起点 / 终点索引对应回原序列。
+
+**特点**：宽度 ≤ `k//2` 个周波的尖峰 / 缺口被完全抹掉，不会触发；代价是阶跃边沿被"推迟" ≈ `k//2` 个周波才充分反映（起点精修能部分补偿），`k` 过大会把短暂态（如几周波的启动冲击 + 回落）整体抹掉。
+
+---
+
+### G.3 双滑窗均值差 `two_window`（`_steps_two_window`）
+
+**思想**：在每个候选点左右各开一个窗，比较"后窗均值 − 前窗均值"，超过门槛且显著高于前窗噪声的局部极大值即事件。
+
+| 参数 | 默认（W / A） | 用途 |
+|---|---|---|
+| `pre_cycles` | 10 | 前窗长度（事件前基准） |
+| `post_cycles` | 10 | 后窗长度（事件后水平），也是该算法的"确认周波数" |
+| `min_delta_w` / `min_delta_a` | 50 / 0.3 | 均值差绝对门槛 |
+| `k_sigma` | 3.0 | 均值差还须 ≥ `k_sigma × σ_pre`（前窗标准差），噪声大的段门槛自动抬高 |
+
+**流程**
+1. 用前缀和 `cs = cumsum(p)`、`cs2 = cumsum(p²)` 一次性算出所有候选点 `idx ∈ [pre, L−post]` 的 `m_pre / m_post / v_pre`（O(L)）。
+2. `delta = m_post − m_pre`；门槛 `thr = max(min_delta, k_sigma × sqrt(v_pre))`；`exceed = |delta| ≥ thr`。
+3. 把连续为真的 `exceed` 归成一段，段内取 `|delta|` 最大处 `pk` 为事件：`onset = idx[pk]`、`end = min(onset + post, L−1)`。
+4. 输出 `(onset, end, m_pre[pk], m_post[pk], score = delta[pk])`。
+
+**特点**：对阶跃位置的估计是 `|均值差|` 峰值，天然抗单点噪声；但单周波尖峰会被摊进后窗均值（幅值 ≈ 尖峰 / post），尖峰足够大时仍会报出一条"小事件"——这就是 README 提到的"对尖峰较敏感"。`pre/post` 必须 ≥ 暂态长度，否则暂态会同时进入两个窗，使 `delta` 偏小。
+
+---
+
+### G.4 CUSUM 累积和 `cusum`（`_steps_cusum`）
+
+**思想**：Page 的双侧 CUSUM。相对参考均值 `mu` 累积正 / 负偏差（每步扣掉允许漂移 `k`），累积量越过门限 `h` 判定均值发生了变化；能把很多个小增量累加起来，适合缓慢爬坡 / 软启动。
+
+| 参数 | 默认（W / A） | 用途 |
+|---|---|---|
+| `drift_w` / `drift_a`（k） | 10 / 0.05 | 允许漂移：小于 k 的偏差不累积（吸收噪声与缓慢波动）；也用作终点稳态容差（`2k`） |
+| `threshold_w` / `threshold_a`（h） | 200 / 1.0 | 触发门限：累积量 > h 判定事件。h/k 默认 20 倍——恰为 min_delta 的阶跃约 2 个周波触发，纯噪声累积不到 |
+| `min_delta_w` / `min_delta_a` | 50 / 0.3 | 触发后仍要求 \|post − pre\| ≥ 它，否则只更新参考均值不报事件 |
+| `settle_cycles` | 5 | 初始参考均值 `mu = mean(p[:settle])` 的长度、终点稳态判定长度、事件后均值长度 |
+
+**流程**
+1. `mu = mean(p[:settle])`；`sp = sn = 0`；`zp = zn = 0`（累积量最后一次归零的位置 = 起点估计）。
+2. 对 `i ≥ settle`：`x = p[i] − mu`；`sp = max(0, sp + x − k)`；`sn = max(0, sn − x − k)`；`sp == 0` 时记 `zp = i`，`sn == 0` 时记 `zn = i`。
+3. 若 `sp > h` 或 `sn > h`：`onset = (zp 或 zn) + 1`（累积开始的那个周波），`score = 越限的累积量`。
+4. 终点：`end = _settle_end(p, i, settle, tol = 2k, max_rise = 4×settle)`；找不到且数据不够则停止等待，否则 `end = i`。
+5. `pre = mu`，`post = mean(p[end : end+settle])`；`|post − pre| ≥ min_delta` 才输出 `(onset, end, pre, post, score)`。
+6. 无论是否报出，都把 `mu = post`、累积量清零、`i = end + settle` 继续（参考均值随负荷水平自适应）。
+
+**特点**：唯一能可靠检出缓变（每周波增量小于任何差分门槛）的算法；起点估计 = 累积开始点，对软启动给的是"开始爬坡"的时刻。单周波尖峰：一个高于 `h + k` 的尖峰当周波就能触发，随后 `post ≈ pre` 被 `min_delta` 挡掉（但 `mu` 已重置为 post，无影响）。**A 口径下 k、h 必须填 A 单位的 `drift_a / threshold_a`**（v0.37 之前清零 W 阈值会让 h = k 退化）。
+
+---
+
+### G.5 GLR 广义似然比 `glr`（`_steps_glr`）
+
+**思想**：高斯均值突变的广义似然比检验：在候选点左右各取 `w` 个周波，比较"两段均值不同"与"均值相同"两个假设的对数似然比。
+
+| 参数 | 默认（W / A） | 用途 |
+|---|---|---|
+| `window_cycles`（w） | 15 | 左右窗长；也是"确认周波数" |
+| `threshold` | 25.0 | 对数似然比门限（无量纲，两种口径共用） |
+| `noise_w` / `noise_a` | 10 / 0.05 | 噪声 σ 下限：窗内方差小于 `noise²` 时按 `noise²` 算，防止极平稳段把微小变化放大成巨大的似然比 |
+| `min_delta_w` / `min_delta_a` | 50 / 0.3 | 幅值门槛：`|m1 − m0| ≥ min_delta` 与似然比门限同时满足才触发 |
+| `settle_cycles` | 5 | `end = onset + settle`（事件时长按固定周波数给出） |
+
+**流程**
+1. 前缀和一次算出所有候选点 `idx ∈ [w, L−w]` 的左窗均值 / 方差 `m0, v0` 与右窗 `m1, v1`。
+2. `σ² = max(½(v0+v1), noise²)`；`llr = (w/2) · (m1 − m0)² / (2σ²)`（代码中写作 `w·w/(2w) · Δ²/(2σ²)`）。
+3. `exceed = (llr ≥ threshold) & (|m1 − m0| ≥ min_delta)`。
+4. 连续越限段内取 `llr` 最大处 `pk`：`onset = idx[pk]`，`end = min(onset + settle, L−1)`。
+5. 输出 `(onset, end, m0[pk], m1[pk], score = llr[pk])`。
+
+**特点**：`score` 有统计意义（≈ 信噪比的平方 × 窗长 / 4），同一门限在 W 级与 MW 级都适用，噪声大的段自动变"迟钝"；但 `threshold` 固定意味着窗长变化会改变灵敏度（`llr ∝ w`）。暂态长于 `w` 时两窗都被污染，峰值位置可能偏移。
+
+---
+
+### G.6 稳态分段 `steady_state`（`_steps_steady`，Hart 1992 的边沿检测思路）
+
+**思想**：不找"突变"，而是找"稳态"：把序列切成若干段"极差 ≤ tol 且长度 ≥ 最少周波"的稳态段，相邻两个稳态段之间就是一次暂态，两段均值之差即事件幅值。
+
+| 参数 | 默认（W / A） | 用途 |
+|---|---|---|
+| `tol_w` / `tol_a` | 30 / 0.15 | 稳态容差：一个稳态段内 max − min 不得超过它（随数据增长在线维护 lo/hi） |
+| `min_steady_cycles` | 10 | 稳态段最少周波数（短于它的平台不算稳态，会并入暂态）；也是"确认周波数" |
+| `min_delta_w` / `min_delta_a` | 50 / 0.3 | 相邻稳态均值差门槛 |
+| `max_transient_cycles` | 100 | 两个稳态段之间的暂态最长允许周波数；超过视为"数据缺口 / 长时间不稳"，不配对成事件 |
+
+**流程**
+1. 单遍扫描：维护当前段 `[a, i)` 的 `lo/hi`；新点加入后若 `hi − lo ≤ tol` 则继续，否则当前段结束——长度 ≥ `min_n` 的记为稳态段 `(a, i)`，然后从 `i` 新开一段。
+2. 对相邻稳态段 `(a0,b0)`、`(a1,b1)`：若暂态长度 `a1 − b0 > max_tr` 跳过；否则 `pre = mean(p[a0:b0])`，`post = mean(p[a1:b1])`。
+3. `|post − pre| ≥ min_delta` → 输出 `(onset = b0, end = a1, pre, post, score = post − pre)`：起点 = 前一稳态的最后一个周波之后，终点 = 新稳态的第一个周波。
+
+**特点**：对暂态形状完全不敏感（启动冲击、振荡、爬坡都只是"两个稳态之间的东西"），最适合电机 / 软启动类设备；代价是事件要等到新稳态积满 `min_steady_cycles` 才出现，且 `tol` 填小了会把带纹波的正常运行切成很多短段、没有一段够长 → 整体漏报；`tol` 填大了会把小阶跃吞进同一稳态段。单周波尖峰 = 一个长度为 1 的"段"，不够 `min_n`，自然被忽略。
+
+---
+
+### G.7 一张表对比
+
+| 算法 | 起点怎么定 | 终点怎么定 | 检验量 score | 擅长 | 弱点 |
+|---|---|---|---|---|---|
+| threshold | 差分越门槛 → 精修到越过中线的周波 | 之后首个 `settle` 周波极差 ≤ 容差处 | post − pre | 干净阶跃，定位最准 | 缓变漏报；尖峰可能误触发 |
+| median_diff | 同上（在中值滤波后的序列上） | 同上 | post − pre | 带尖峰 / 缺口的数据 | 边沿略延迟；短暂态被抹掉 |
+| two_window | \|后窗均值 − 前窗均值\| 的峰 | onset + post_cycles | m_post − m_pre | 噪声大的总线 | 尖峰被摊成小事件；窗短于暂态时幅值偏小 |
+| cusum | 累积量最后一次归零处 + 1 | 触发后首个极差 ≤ 2k 处（找不到即触发点） | 越限的累积量 | 缓慢爬坡 / 软启动 | 参数两个且有比例关系；尖峰当周波触发 |
+| glr | 对数似然比的峰 | onset + settle_cycles | llr | 统一门限跨量级可用 | 灵敏度随窗长变；长暂态位置偏移 |
+| steady_state | 前一稳态结束处 | 新稳态开始处 | post − pre | 电机 / 任意暂态形状 | 出事件最慢；tol 过小整体漏报 |
+
+### G.8 参数与 `nilm_tune.py` 建议值的对应关系（见附录 E）
+
+`settle_tol = 5 周波极差 P95 × 1.2`（threshold / median 的稳态容差）；`steady_state.tol = 10 周波极差 P95 × 1.2`；`min_delta = max(最小关心负荷/2, 6σ)`；`cusum.drift = max(min_delta/4, 0.5σ)`、`cusum.threshold = max(2(min_delta − drift), 5σ)`；`glr.noise = σ`；其余窗长 / 周波数用默认值。A 口径同一套公式作用在 I 序列上，输出 `*_a`。
