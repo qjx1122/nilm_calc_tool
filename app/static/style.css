@@ -185,7 +185,8 @@ body.no-branch-nav .badge-br{display:none !important}
 .panel h3.nilm-hdr>.toggle>.toggle{flex-wrap:wrap;row-gap:6px;column-gap:4px}
 .panel h3.nilm-hdr .toggle label{white-space:nowrap}
 .panel h3.nilm-hdr .toggle select{max-width:100%}
-.panel h3.nilm-hdr .hdrhint{white-space:normal;word-break:break-word}
+/* v0.43：提示只占一行——过长时省略号截断（完整文字在 title 悬停可见），不再折成多行 */
+.panel h3.nilm-hdr .hdrhint{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%}
 /* 事件表 14 列：单元格不折行、整表横向滚动，避免窄列时文字挤成多行 */
 #nilm-table th,#nilm-table td,#nilm-table-br th,#nilm-table-br td{white-space:nowrap}
 

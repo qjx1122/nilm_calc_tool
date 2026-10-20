@@ -664,7 +664,7 @@
       <h2>负荷辨识事件 · 设备启停检测（逐周波 P/Q/I 突变：阈值差分 / 双滑窗 / CUSUM / GLR / 稳态分段 / 中值滤波差分）</h2>
       <div class="cards" id="nilm-cards"></div>
       <div class="panel">
-        <h3 class="curvehdr nilm-hdr"><span><span id="nilm-pqs-title">P / Q / S 趋势</span><small class="hdrhint">（与总览面板同一曲线；竖线＝各算法检测到的负荷事件起点，颜色＝算法，图内 <span id="nilm-pqs-n">0</span> 条）<span class="curvespan" data-curve="power"></span></small></span>
+        <h3 class="curvehdr nilm-hdr"><span><span id="nilm-pqs-title">P / Q / S 趋势</span><small class="hdrhint" title="竖线＝各算法检测到的负荷事件起点，颜色＝算法">（竖线＝各算法检测到的负荷事件起点，颜色＝算法，图内 <span id="nilm-pqs-n">0</span> 条）<span class="curvespan" data-curve="power"></span></small></span>
           <span class="toggle">
             <label title="v0.39：趋势曲线——auto：按当前检测量（P 口径画 P/Q/S，I 口径画三相电流）；显示哪几相用曲线下方的图例勾选">曲线 <select id="nilm-pqs-kind"><option value="auto">自动</option><option value="pqs">P / Q / S</option><option value="i">电流 I</option></select></label>
             <label>对象 <select id="nilm-pqs-ch"><option value="">全部</option><option value="total">三相总</option><option value="A">A 相</option><option value="B">B 相</option><option value="C">C 相</option></select></label>
@@ -673,7 +673,7 @@
         <canvas id="nilm-pqs" height="260"></canvas>
       </div>
       <div class="panel">
-        <h3 class="curvehdr nilm-hdr"><span>周波窗<small class="hdrhint">（最近 <span id="nilm-win-n">0</span> 个周波，竖线＝检测到的事件起点）</small></span>
+        <h3 class="curvehdr nilm-hdr"><span>周波窗<small class="hdrhint" title="最近 N 个周波，竖线＝检测到的事件起点">（最近 <span id="nilm-win-n">0</span> 个周波，竖线＝检测到的事件起点）</small></span>
           <span class="toggle">
             <label>对象 <select id="nilm-ch"><option value="total">三相总</option><option value="A">A 相</option><option value="B">B 相</option><option value="C">C 相</option></select></label>
             <label>量 <select id="nilm-qty"><option value="p">有功 P</option><option value="q">无功 Q</option><option value="i">电流 I</option></select></label>
@@ -682,7 +682,7 @@
         <canvas id="nilm-chart" height="240"></canvas>
       </div>
       <div class="panel">
-        <h3 class="curvehdr nilm-hdr"><span>事件列表<small class="hdrhint">（最近 <span id="nilm-total">0</span> 条；时刻＝数据时间，方向 ↑投入 / ↓切除，幅值＝事件后稳态 − 事件前稳态）</small></span>
+        <h3 class="curvehdr nilm-hdr"><span>事件列表<small class="hdrhint" title="时刻＝数据时间，方向 ↑投入 / ↓切除，幅值＝事件后稳态 − 事件前稳态">（最近 <span id="nilm-total">0</span> 条；时刻＝数据时间，方向 ↑投入 / ↓切除，幅值＝事件后稳态 − 事件前稳态）</small></span>
           <span class="toggle">
             <label>算法 <select id="nilm-filter"><option value="">全部</option></select></label>
             <label>对象 <select id="nilm-chfilter"><option value="">全部</option><option value="total">三相总</option><option value="A">A</option><option value="B">B</option><option value="C">C</option></select></label>
