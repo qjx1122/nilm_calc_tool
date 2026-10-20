@@ -87,7 +87,20 @@ async function main() {
   $('nilm-filter').value = 'glr'; change($('nilm-filter')); await sleep(1200);
   const t2 = $('nilm-table').textContent;
   check('过滤 GLR 后只剩 GLR', t2.includes('GLR') && !t2.includes('CUSUM') && !t2.includes('稳态分段'));
-  $('nilm-filter').value = ''; change($('nilm-filter')); await sleep(800);
+  // v0.48：三块面板的选择各自独立——列表筛选不改变趋势图/周波窗的事件竖线数；周波窗对象/算法不改变趋势图与列表；趋势图对象不改变周波窗与列表
+  const nPqs0 = $('nilm-pqs-n').textContent, nEv0 = window.SD.bus.nl.events.length;
+  check('列表筛选 GLR 后：趋势图竖线数不变、nl.events 仍全量', $('nilm-pqs-n').textContent === nPqs0 && window.SD.bus.nl.events.length === nEv0 && /\//.test($('nilm-total').textContent), JSON.stringify([nPqs0, $('nilm-pqs-n').textContent, $('nilm-total').textContent]));
+  $('nilm-chfilter').value = 'A'; change($('nilm-chfilter')); await sleep(300);
+  check('列表对象筛选 A（无 A 事件）→ 列表「当前筛选下无事件」、趋势图竖线仍不变', /当前筛选下无事件/.test($('nilm-table').textContent) && $('nilm-pqs-n').textContent === nPqs0);
+  $('nilm-chfilter').value = ''; $('nilm-filter').value = ''; change($('nilm-filter')); await sleep(300);
+  const rows0 = $('nilm-table').querySelectorAll('tbody tr').length;
+  $('nilm-mark').value = 'cusum'; $('nilm-qty').value = 'q'; change($('nilm-mark')); await sleep(300);
+  check('周波窗标注算法/量切换 → 列表行数与趋势图竖线数不变', $('nilm-table').querySelectorAll('tbody tr').length === rows0 && $('nilm-pqs-n').textContent === nPqs0);
+  $('nilm-mark').value = ''; $('nilm-qty').value = 'p'; change($('nilm-qty'));
+  const winN0 = $('nilm-win-n').textContent;
+  $('nilm-pqs-ch').value = 'A'; change($('nilm-pqs-ch')); await sleep(300);
+  check('趋势图对象切 A → 竖线变 0，但周波窗周波数与列表行数不变', $('nilm-pqs-n').textContent === '0' && $('nilm-win-n').textContent === winN0 && $('nilm-table').querySelectorAll('tbody tr').length === rows0);
+  $('nilm-pqs-ch').value = ''; change($('nilm-pqs-ch')); await sleep(200);
   $('nilm-glr-threshold').value = '40'; input($('nilm-glr-threshold'));
   click($('btn-nilm-save')); await sleep(1500);
   const puts = bodies('/api/config', 'PUT'); const last = puts[puts.length - 1] || {};

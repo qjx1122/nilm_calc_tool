@@ -3054,9 +3054,10 @@ function setNilmBadge(n, side) {
 async function refreshNilm(side = sideOf()) {
   const nl = NLs(side);
   try {
-    const algo = E(side, 'nilm-filter').value, ch = E(side, 'nilm-chfilter').value;
+    // v0.48：事件始终全量拉取；事件列表的「算法 / 对象」筛选只在渲染表格时做（nl.events 同时供趋势图与周波窗画事件竖线，
+    // 以前按筛选条件拉取会让列表筛选连带改变另外两个面板的竖线）
     const [d, c] = await Promise.all([
-      api(`/api/nilm/events?limit=1000${algo ? '&algos=' + algo : ''}${ch ? '&channel=' + ch : ''}`, undefined, side),
+      api('/api/nilm/events?limit=1000', undefined, side),
       api('/api/nilm/cycles?n=2000', undefined, side),
     ]);
     nl.events = d.events || []; nl.summary = d.summary || null; nl.cycles = c; nl.loaded = true;
@@ -3272,9 +3273,11 @@ function renderNilm() {
   drawLine($('#nilm-chart'), [{ name: `${chn === 'total' ? '三相总' : chn + ' 相'} ${qty.toUpperCase()}（逐周波${useFile ? '，离线装载' : ''}）`, color: useFile ? '#f2b84b' : '#4ea1ff', data: tt.map((x, i) => [x - t0, chd[i]]) }],
            { ylabel: unit, fmtX: x => ts(x + t0), fmtTip: x => ts(x + t0), height: 240, marks,
              empty: (curState().loaded_last && !tt.length) ? '周波窗是内存数据，软件重启后不恢复（上次播放的事件已加载：见事件表与上方 P/Q/S 趋势的事件竖线）；可用上方「装载周波窗」从离线文件读取任意时刻的周波数据' : '暂无周波数据（启动数据源后显示，或非运行状态下用「装载周波窗」从离线文件读取）' });
-  const nsc = nilmScales(NL.events);
-  $('#nilm-total').textContent = String(sm.total || NL.events.length);
-  $('#nilm-table').innerHTML = NL.events.length ? table(nilmHeader(nsc), NL.events.map(e => nilmRow(e, nsc))) : '<div class="notes">暂无事件</div>';
+  const nsc = nilmScales(NL.events);   // 单位按全部事件选，筛选切换时列单位不跳
+  const fAlgo = $('#nilm-filter').value, fCh = $('#nilm-chfilter').value;
+  const listEv = NL.events.filter(e => (!fAlgo || e.algorithm === fAlgo) && (!fCh || e.channel === fCh));
+  $('#nilm-total').textContent = String((fAlgo || fCh) ? `${listEv.length} / ${sm.total || NL.events.length}` : (sm.total || NL.events.length));
+  $('#nilm-table').innerHTML = listEv.length ? table(nilmHeader(nsc), listEv.map(e => nilmRow(e, nsc))) : `<div class="notes">${NL.events.length ? '当前筛选下无事件' : '暂无事件'}</div>`;
   const cfg = curState().config || {};
   fillNilmForm(cfg.nilm);
   const ll = curState().loaded_last;
@@ -3298,8 +3301,8 @@ function bindNilm(side) {
   on('btn-nilm-win-load', 'click', () => loadNilmWindow(side));
   on('btn-nilm-win-live', 'click', () => clearNilmWindow(side));
   on('nilm-win-t', 'keydown', (e) => { if (e.key === 'Enter') loadNilmWindow(side); });
-  on('nilm-filter', 'change', () => refreshNilm(side));
-  on('nilm-chfilter', 'change', () => refreshNilm(side));
+  on('nilm-filter', 'change', render);          // v0.48：列表筛选只影响列表（客户端过滤），不再重新拉取
+  on('nilm-chfilter', 'change', render);
   ['nilm-ch', 'nilm-qty', 'nilm-mark', 'nilm-pqs-ch', 'nilm-pqs-kind'].forEach(id => on(id, 'change', render));
   const pa = E(side, 'nilm-pqs-algos'); if (pa) pa.addEventListener('change', render);
   if (side === 'branch') bindNilmForm('branch');   // 克隆列的表单输入 → 分路侧脏标记
