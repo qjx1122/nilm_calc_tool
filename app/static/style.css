@@ -178,6 +178,16 @@ body.no-branch-nav .navgroup-branch,body.no-branch-nav .navitem[data-side="branc
 body.no-branch-nav .badge-br{display:none !important}
 .dual .tablewrap{overflow:auto}
 #nilm-pqs-algos label,#nilm-pqs-algos-br label{margin-right:6px;white-space:nowrap}
+/* v0.42：负荷辨识页三块面板标题栏——标题+提示独占第一行，控件栏另起一行并可换行（双列/单列都不会把勾选框挤出面板） */
+.panel h3.nilm-hdr{align-items:flex-start;row-gap:8px}
+.panel h3.nilm-hdr>span:first-child{flex:1 1 100%;min-width:0}
+.panel h3.nilm-hdr>.toggle{flex:1 1 100%;flex-wrap:wrap;row-gap:6px;column-gap:12px;align-items:center}
+.panel h3.nilm-hdr>.toggle>.toggle{flex-wrap:wrap;row-gap:6px;column-gap:4px}
+.panel h3.nilm-hdr .toggle label{white-space:nowrap}
+.panel h3.nilm-hdr .toggle select{max-width:100%}
+.panel h3.nilm-hdr .hdrhint{white-space:normal;word-break:break-word}
+/* 事件表 14 列：单元格不折行、整表横向滚动，避免窄列时文字挤成多行 */
+#nilm-table th,#nilm-table td,#nilm-table-br th,#nilm-table-br td{white-space:nowrap}
 
 /* v0.26.1：负荷辨识算法卡片——勾选框紧挨色块与算法名，说明文字另起一行 */
 .nilm-algo h3.algohdr{display:block;margin:0 0 4px}

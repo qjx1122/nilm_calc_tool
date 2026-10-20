@@ -134,6 +134,7 @@ async function main() {
   check('周波窗卡片对象显示 A/B/C', /对象 A\/B\/C/.test($('nilm-cards').textContent));
   check('趋势图曲线选择器存在、标题栏无重复的三相勾选框（v0.40）', !!$('nilm-pqs-kind') && !document.querySelector('#nilm-pqs-phases') && document.querySelectorAll('.nilm-pqs-ph').length === 0);
   check('v0.41 三块面板标题的括号提示为独立块级行（.hdrhint display:block）', ['nilm-pqs-n', 'nilm-win-n', 'nilm-total'].every((id) => { const h = $(id).closest('.hdrhint'); return h && h.tagName === 'SMALL' && h.parentElement === h.closest('h3').firstElementChild; }) && /\.hdrhint\{display:block/.test(await (await fetch(BASE + '/static/style.css')).text()));
+  check('v0.42 三块面板标题栏带 nilm-hdr、控件栏可换行（CSS 规则存在）', ['nilm-pqs-n', 'nilm-win-n', 'nilm-total'].every((id) => $(id).closest('h3').classList.contains('nilm-hdr')) && /h3\.nilm-hdr>\.toggle\{[^}]*flex-wrap:wrap/.test(await (await fetch(BASE + '/static/style.css')).text()) && /#nilm-table th[^{]*\{white-space:nowrap/.test(await (await fetch(BASE + '/static/style.css')).text()));
   check('v0.41 标题文本本身不再含括号提示', !/（/.test($('nilm-pqs-title').textContent) && $('nilm-win-n').closest('h3').firstElementChild.firstChild.textContent.trim() === '周波窗');
   check('auto + I 口径 → 趋势标题为三相电流', /三相电流 I 趋势/.test($('nilm-pqs-title').textContent));
   const cs = document.querySelector('#view-nilm .curvespan'); check('曲线跨度标签切到 current', cs && cs.dataset.curve === 'current', cs && cs.dataset.curve);
