@@ -53,6 +53,7 @@ const S = {
   histMeta: {}, curveLocal: null, curvePending: false,
   // 实时落盘 / 事件 / 负荷辨识的列表与脏标记按侧别放在 SD.bus / SD.branch（v0.24）
 };
+window.S = S;   // 自检脚本可读（tools/ui_r12_check.cjs 等）
 /* ------------------------------------------------------------------ 增量刷新（v0.15）
  * 界面每秒收到 state/result 推送；大多数区域内容并未变化。这里让 innerHTML / textContent 的写入
  * 在「字符串与上次写入相同」时直接跳过（不触碰 DOM、不重排、不打断用户选择/滚动）。
@@ -3095,6 +3096,7 @@ function showCtxMenu(x, y, items) {
   closeCtxMenu();
   const m = document.createElement('div'); m.id = CTX_MENU_ID; m.className = 'ctxmenu';
   items.forEach(it => {
+    if (it.sep) { const hr = document.createElement('div'); hr.className = 'sep'; m.appendChild(hr); return; }
     const d = document.createElement('div'); d.className = 'mi' + (it.disabled ? ' disabled' : '');
     d.innerHTML = esc(it.label) + (it.hint ? `<small>${esc(it.hint)}</small>` : '');
     d.title = it.title || '';
@@ -3119,6 +3121,7 @@ function bindCtxMenu(cv, itemsFn) {
   if (!cv || cv.__ctxBound) return;
   cv.__ctxBound = true;
   cv.addEventListener('contextmenu', (e) => {
+    if (e.shiftKey) return;                                  // v0.47：Shift+右键 ⇒ 不拦截，弹浏览器原生菜单
     e.preventDefault();
     const c = cv.__chart;
     let xEpoch = null, info = null;
@@ -3133,6 +3136,35 @@ function bindCtxMenu(cv, itemsFn) {
   });
 }
 window.showCtxMenu = showCtxMenu; window.closeCtxMenu = closeCtxMenu;
+/* v0.47：画布右键菜单保留浏览器原生菜单对图片的三项功能（复制图片 / 图片另存为 / 在新标签页打开），再追加业务项；
+   网页无法往浏览器原生菜单里加项，所以这里把原生功能复现在自定义菜单中，需要完整原生菜单时按 Shift+右键。 */
+function canvasPngBlob(cv) { return new Promise((res) => { try { cv.toBlob((b) => res(b), 'image/png'); } catch (e) { res(null); } }); }
+async function copyCanvasImage(cv) {
+  const b = await canvasPngBlob(cv);
+  if (!b) { toast('复制图片失败：画布为空', 'err'); return; }
+  try {
+    if (navigator.clipboard && window.ClipboardItem) { await navigator.clipboard.write([new window.ClipboardItem({ 'image/png': b })]); toast('图片已复制到剪贴板', 'ok'); return; }
+  } catch (e) { /* 回退到下载 */ }
+  saveCanvasImage(cv); toast('浏览器不支持直接复制图片，已改为下载 PNG', '');
+}
+function saveCanvasImage(cv, name) {
+  try {
+    const a = document.createElement('a'); a.href = cv.toDataURL('image/png');
+    a.download = (name || cv.id || 'chart') + '_' + fmtLocalInput(Date.now() / 1000).replace(/[^\d]/g, '').slice(0, 14) + '.png';
+    document.body.appendChild(a); a.click(); a.remove();
+  } catch (e) { toast('保存图片失败：' + e.message, 'err'); }
+}
+function openCanvasImage(cv) {
+  try { const w = window.open(); if (w) { w.document.write(`<title>${esc(cv.id || 'chart')}</title><img src="${cv.toDataURL('image/png')}" style="max-width:100%">`); w.document.close(); } else { toast('浏览器拦截了新标签页', 'err'); } }
+  catch (e) { toast('打开图片失败：' + e.message, 'err'); }
+}
+function canvasNativeItems(cv) {
+  return [
+    { key: 'copy-image', label: '复制图片', onClick: () => copyCanvasImage(cv) },
+    { key: 'save-image', label: '图片另存为…', onClick: () => saveCanvasImage(cv) },
+    { key: 'open-image', label: '在新标签页中打开图片', onClick: () => openCanvasImage(cv) },
+  ];
+}
 
 /* v0.46：周波窗手动装载（非运行状态；从当前侧配置的离线文件读） */
 function curRunning(side = sideOf()) { const st = (side === 'branch' ? BRD.state : S.state) || {}; return !!st.running; }
@@ -3196,12 +3228,14 @@ function renderNilmPqs(nl) {
     const running = curRunning(side);
     const nEl = E(side, 'nilm-win-count'); const n = parseInt((nEl && nEl.value) || '300', 10) || 300;
     const noX = !isNum(xEpoch);
-    return [
+    return canvasNativeItems(cv).concat([                   // v0.47：原生菜单项在前、保持不变，业务项追加在后
+      { key: 'sep', sep: true },
       { key: 'show-window', label: `显示周波窗（${noX ? '暂无曲线' : fmtLocalInput(xEpoch)}）`, disabled: running || noX,
         hint: running ? '引擎运行中不可用：请先停止数据源' : noX ? '趋势曲线有数据后，在曲线上右键' : `以该时刻为中心装载 ${n} 个周波（离线文件）`,
         onClick: () => loadNilmWindow(side, xEpoch, n) },
       { key: 'zoom-reset', label: '复位缩放', onClick: () => zoomReset(cv) },
-    ];
+      { key: 'native', label: '浏览器原生菜单（Shift + 右键）', disabled: true },
+    ]);
   });
 }
 

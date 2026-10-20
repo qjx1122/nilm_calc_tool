@@ -147,8 +147,9 @@ async function main() {
   console.log('L8 v0.46 右键「显示周波窗」+ 手动装载（仅非运行）');
   // 运行中：接口 409、按钮禁用、右键菜单项禁用
   await api('/api/engine/start', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ kind: 'csv_file', path: 'data/nilm_bus_mixed.csv', file_speed: 1.0 }) });
-  await sleep(1200); click($('btn-nilm-refresh')); await sleep(600);
-  check('（前提）引擎运行中', (await api('/api/state')).running === true);
+  for (let k = 0; k < 20 && !(window.S && window.S.state && window.S.state.running); k++) await sleep(200);   // 等前端状态推送到位
+  click($('btn-nilm-refresh')); await sleep(600);
+  check('（前提）引擎运行中', (await api('/api/state')).running === true && window.S.state.running === true);
   const rRun = await fetch(BASE + '/api/nilm/cycles_file?n=50');
   check('运行中 GET /api/nilm/cycles_file → 409', rRun.status === 409, String(rRun.status));
   check('运行中「装载周波窗」按钮与输入禁用', $('btn-nilm-win-load').disabled && $('nilm-win-t').disabled && $('nilm-win-count').disabled);
@@ -176,6 +177,10 @@ async function main() {
   rc(cvP, 200); await sleep(200);
   menu = document.getElementById('ctxmenu');
   const mi = menu && menu.querySelector('.mi[data-key="show-window"]');
+  check('v0.47 菜单保留原生图片三项（复制/另存为/新标签页打开）且排在业务项之前', !!menu && ['copy-image', 'save-image', 'open-image'].every((k) => !!menu.querySelector(`.mi[data-key="${k}"]`)) && Array.from(menu.querySelectorAll('.mi')).findIndex((d) => d.dataset.key === 'open-image') < Array.from(menu.querySelectorAll('.mi')).findIndex((d) => d.dataset.key === 'show-window'));
+  { const r0 = cvP.getBoundingClientRect(); const ev = new window.MouseEvent('contextmenu', { bubbles: true, cancelable: true, shiftKey: true, clientX: r0.left + 100, clientY: r0.top + 50 }); const before = document.getElementById('ctxmenu'); window.closeCtxMenu(); cvP.dispatchEvent(ev);
+    check('v0.47 Shift+右键不拦截（defaultPrevented=false、不弹自定义菜单）→ 浏览器原生菜单', !ev.defaultPrevented && !document.getElementById('ctxmenu')); rc(cvP, 200); await sleep(200); menu = document.getElementById('ctxmenu'); void before; }
+  const mi2 = menu && menu.querySelector('.mi[data-key="show-window"]'); void mi2;
   check('非运行右键：「显示周波窗（时刻）」可点', !!mi && !mi.classList.contains('disabled') && /显示周波窗（\d{4}-/.test(mi.textContent), mi ? mi.textContent.slice(0, 50) : 'none');
   if (mi) { mi.dispatchEvent(new window.Event('click', { bubbles: true })); await sleep(2500); }
   check('右键装载后周波窗为 center 模式、时刻输入框回填', nlBus.winFile && nlBus.winFile.source.mode === 'center' && /^\d{4}-\d{2}-\d{2} /.test($('nilm-win-t').value), $('nilm-win-t').value);

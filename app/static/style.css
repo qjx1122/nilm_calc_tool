@@ -236,6 +236,7 @@ canvas:focus{outline:none}
 .ctxmenu .mi:hover{background:#1f2d4d}
 .ctxmenu .mi.disabled{color:#6b7a99;cursor:not-allowed}
 .ctxmenu .mi.disabled:hover{background:transparent}
+.ctxmenu .sep{height:1px;background:#2b3a5c;margin:4px 6px}
 .ctxmenu .mi small{display:block;color:var(--mut);font-size:11px;margin-top:2px;white-space:normal;max-width:300px}
 .nilm-winload{margin:0 0 8px;flex-wrap:wrap}
 .nilm-winload input{font-size:12px}
