@@ -88,8 +88,8 @@ input:disabled, select:disabled { cursor: not-allowed; }
 .curvesave{font-weight:400;font-size:12px;color:var(--mut);display:inline-flex;align-items:center;gap:4px;cursor:pointer}
 .curvesave input{margin:0}
 .curvespan{font-weight:400;font-size:11px;color:var(--mut)}
-/* v0.41：负荷辨识页三块面板标题后的括号提示独占一行，不与标题混排 */
-.hdrhint{display:block;font-weight:400;font-size:12px;color:var(--mut);margin-top:4px;line-height:1.5}
+/* v0.44：负荷辨识页三块面板标题后的括号提示与标题同一行（标题不截断，提示过长时省略号；完整文字见 title） */
+.hdrhint{display:inline;font-weight:400;font-size:12px;color:var(--mut);margin-left:6px;line-height:1.5}
 .hdrhint .curvespan{margin-left:6px}
 #curve-save-list label{display:inline-flex;align-items:center;gap:4px;padding:4px 8px;border:1px solid var(--line);border-radius:6px;cursor:pointer}
 
@@ -185,8 +185,10 @@ body.no-branch-nav .badge-br{display:none !important}
 .panel h3.nilm-hdr>.toggle>.toggle{flex-wrap:wrap;row-gap:6px;column-gap:4px}
 .panel h3.nilm-hdr .toggle label{white-space:nowrap}
 .panel h3.nilm-hdr .toggle select{max-width:100%}
-/* v0.43：提示只占一行——过长时省略号截断（完整文字在 title 悬停可见），不再折成多行 */
-.panel h3.nilm-hdr .hdrhint{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%}
+/* 标题行：标题 + 提示一行排列，不折行；提示部分可被省略号截断 */
+.panel h3.nilm-hdr>span:first-child{display:flex;align-items:baseline;white-space:nowrap;overflow:hidden}
+.panel h3.nilm-hdr>span:first-child>:first-child{flex:0 0 auto}
+.panel h3.nilm-hdr .hdrhint{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis}
 /* 事件表 14 列：单元格不折行、整表横向滚动，避免窄列时文字挤成多行 */
 #nilm-table th,#nilm-table td,#nilm-table-br th,#nilm-table-br td{white-space:nowrap}
 
