@@ -211,3 +211,28 @@ def test_suggest_keeps_default_transient_params_for_clean_steps_and_pure_noise()
     sg = tune.suggest(tune.measure(z), 600, z)
     assert sg["transient"]["n_transients"] == 0 and sg["algorithms"]["steady_state"]["max_transient_cycles"] == 100
     assert tune.suggest(tune.measure(z), 600)["transient"] is None     # 不给序列 → 向后兼容
+
+
+def test_estimate_min_load_handles_ramps_split_steps_and_ripple():
+    """v0.57 复查修复：旧实现按相邻周波 |Δ|>8σ 切段，(a) 软启斜坡切不开 → 斜坡+平台并成一段、中位数无意义、候选错却标可靠；
+    (b) 跨周波边界劈成两半的阶跃（每半 <8σ）同样切不开；(c) 纹波时也应稳定。现在与 longest_transient 共用"是否在动"掩码。"""
+    from elec_tool.nilm_tuning import estimate_min_load
+    rng = np.random.default_rng(3)
+    # (a) 现场形状：1.66 → 冲击 → 40 s 斜坡 → 4.56 → 斜坡降 → 3.40 → 1.73；真实最小一次投切 = 1.16 A（4.56→3.40）
+    x = np.full(9000, 1.66); x[2000:2010] += 0.7; x[2010:4000] = np.linspace(2.14, 4.56, 1990); x[4000:6000] = 4.56
+    x[6000:6500] = np.linspace(4.56, 3.4, 500); x[6500:7500] = 3.4; x[7500:] = 1.73; x += rng.normal(0, 0.019, x.size)
+    e = estimate_min_load(x, tune.measure(x, "A")["sigma_cycle"], "A")
+    assert e["reliable"] and abs(e["candidate"] - 1.16) < 0.03 and e["candidate_from"] == "step", e
+    assert [round(v, 1) for v in e["levels"]] == [1.7, 3.4, 4.6], e["levels"]
+    # (b) 300 W 阶跃被劈成 150+150（每半 7.5σ）+ 后面 600 W：候选应是 300（不可靠：< 20σ=400，但数值要对）
+    y = np.full(3000, 5000.0); y[1000] = 5150; y[1001:] = 5300; y[2000:] += 600; y += rng.normal(0, 20, 3000)
+    e = estimate_min_load(y, tune.measure(y)["sigma_cycle"])
+    assert abs(e["candidate"] - 300) < 30 and len(e["levels"]) == 3 and not e["reliable"], e
+    # (c) 叠加 30 W / 100 周波的纹波（差分 MAD 低估 σ）：仍只有 2 个台阶、候选 600
+    z = 5000 + 30 * np.sin(np.arange(3000) * 2 * np.pi / 100) + rng.normal(0, 20, 3000); z[1500:] += 600
+    e = estimate_min_load(z, tune.measure(z)["sigma_cycle"])
+    assert e["reliable"] and abs(e["candidate"] - 600) < 30 and len(e["levels"]) == 2, e
+    # 两个不相邻状态之差小于任何一次直接投切 → candidate_from=level_gap 并在 note 里说明
+    u = np.concatenate([np.full(600, 1.66), np.full(600, 4.56), np.full(600, 3.33), np.full(600, 1.73), np.full(600, 1.30)]) + rng.normal(0, 0.006, 3000)
+    e = estimate_min_load(u, 0.006, "A")
+    assert e["candidate_from"] == "level_gap" and abs(e["candidate"] - 0.07) < 0.01 and "不相邻状态" in e["note"], e

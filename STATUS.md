@@ -81,6 +81,7 @@
 - 范围边界：~~本 session 不写业务代码~~ ❌**已失效**（该边界属上一任务；本任务即为写代码）；仍然遵守：不新建台账外散文件、不把数据/产物入库
 
 ## 已完成
+- **v0.57**：复查修复 `estimate_min_load`：改用"是否在动"掩码切稳态（斜坡/劈半阶跃/纹波都正确），新增 `candidate_from`。
 - **v0.56**：`longest_transient` 量最长暂态；>100 周波时 `suggest` 自动放大 `steady_state.max_transient_cycles` / `min_steady_cycles` 并给 `window_cycles`；CLI/界面显示暂态行；`gen_nilm_sample.py --soft-start`。
 - **v0.55**：`estimate_min_load` 从分路侧含启停录波的投切台阶估计最小关心负荷；CLI `--min-load-auto`、端点 `min_load_auto`、界面勾选 + 估计行 + 「填入输入框」。
 - **v0.54**：调参结果 JSON / 保存文件 `_tuning` / 界面结果区均附带等价 `tools/nilm_tune.py` 命令（`build_cli_command`）。

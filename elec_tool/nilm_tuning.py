@@ -74,33 +74,87 @@ def measure(p: np.ndarray, unit: str = "W") -> dict:
     }
 
 
+def _moving_mask(x: np.ndarray, sigma: float, *, W: int = 25, k: float = 4.0, floor: float = 0.0) -> np.ndarray:
+    """"是否在动"掩码（v0.56/v0.57 共用）：W 周波滑动均值前后窗之差 |sm[i+W]−sm[i]| 超过门槛且 ≥ ±3W/4 邻域峰值一半处
+    （两窗交界 i+W 附近 3 个周波）、或单周波 |Δ| > 6σ 处记为在动；再做闭运算把 < W 的缝并入。
+    门槛 = max(k·σ·√(2/W), 3×dm 自身的稳健尺度(20% 分位/0.2533), floor)：第二项让纹波/非白噪声（σ 被差分 MAD 低估）不会被整段判成在动。"""
+    L = int(x.size)
+    moving = np.zeros(L, dtype=bool)
+    if L < 2 * W + 2:
+        return moving
+    d1 = np.abs(np.diff(x))
+    for i in np.where(d1 > 6.0 * sigma)[0]:
+        moving[i:i + 2] = True
+    sm = np.convolve(x, np.ones(W) / W, mode="valid")            # sm[i] = mean(x[i:i+W])
+    dm = np.abs(sm[W:] - sm[:-W])                                 # 相隔 W 的两个均值窗之差，变化发生在 x[i : i+2W)
+    if dm.size:
+        s_dm = float(np.quantile(dm, 0.2)) / 0.2533                 # dm 自身的稳健尺度：|N(0,s)| 的 20% 分位 = 0.2533 s（用低分位，斜坡占文件一半时也只高估 ~2×）
+        thr = max(k * sigma * math.sqrt(2.0 / W), 3.0 * s_dm, float(floor))
+        h = (3 * W) // 4                                            # ±3W/4 邻域：硬阶跃仍只标 ±W/2；紧邻阶跃的斜坡少被压掉，且 2W 长的平台不被两侧阶跃吃掉
+        pad = np.pad(dm, h, mode="edge")
+        loc_max = np.lib.stride_tricks.sliding_window_view(pad, 2 * h + 1).max(axis=1)
+        for i in np.where((dm > thr) & (dm >= 0.5 * loc_max))[0]:
+            moving[i + W - 1: i + W + 2] = True
+        i = 0
+        while i < L:
+            if moving[i]:
+                i += 1
+                continue
+            j = i
+            while j < L and not moving[j]:
+                j += 1
+            if 0 < i and j < L and j - i < W:
+                moving[i:j] = True
+            i = j
+    return moving
+
+
+def _anchors(x: np.ndarray, moving: np.ndarray, min_steady_cycles: int) -> List[Tuple[int, int, float]]:
+    """连续"不动" ≥ min_steady_cycles 的区间 → (起, 止, 均值)。"""
+    out: List[Tuple[int, int, float]] = []
+    L = int(x.size)
+    i = 0
+    while i < L:
+        if moving[i]:
+            i += 1
+            continue
+        j = i
+        while j < L and not moving[j]:
+            j += 1
+        if j - i >= min_steady_cycles:
+            out.append((i, j, float(np.mean(x[i:j]))))
+        i = j
+    return out
+
+
 def estimate_min_load(x: np.ndarray, sigma: float, unit: str = "W", *, min_steady_cycles: int = 25,
                       jump_k: float = 8.0, merge_k: float = 6.0) -> Dict[str, Any]:
     """v0.55：从**含投切的分路侧录波**估计"最小关心负荷"的候选值（逐周波 P 或 I 序列）。
 
-    方法：相邻周波 |Δ| > ``jump_k``·σ 处切段 → 长度 ≥ ``min_steady_cycles`` 的段取中位数为稳态台阶（滤掉启动冲击 /
-    软启斜坡的碎段与尖峰）→ 台阶按 ``merge_k``·σ 合并去重 → 候选 = min(相邻稳态台阶最小间距, 相邻稳态段之间最小跳变幅值)。
-    ``reliable``：至少 2 个稳态台阶、候选 ≥ 20σ（远离噪声底）且 ≥ 1 % 最大台阶（排除碎段）。总线侧多设备混合文件
-    量出的是"所有设备里最小的一次"，不代表目标设备——调用方应只对分路侧文件使用。
+    v0.57 改为与 ``longest_transient`` 同一套"是否在动"判据（``_moving_mask``）切稳态：原来按相邻周波 |Δ| > 8σ 切段，
+    软启斜坡（每周波只变零点几 σ）和跨周波边界被劈成两半的阶跃（每半 < 8σ）都切不开，斜坡 / 两个台阶会被并进同一段、
+    中位数变成无意义的中间值，候选错还标"可靠"。现在：不动 ≥ ``min_steady_cycles`` 的区间为稳态台阶（均值），
+    相邻稳态之间（不论中间是硬跳变、冲击还是几十秒斜坡）的均值差为一次投切；台阶按 ``merge_k``·σ 合并去重；
+    候选 = min(相邻稳态最小跳变, 台阶最小间距)。``candidate_from``：``step``＝文件里直接看到过这么大的一次投切；
+    ``level_gap``＝来自两个不相邻状态之差（没直接看到这么小的投切，只是两种状态差这么多，更可能是上界候选）。
+    ``reliable``：至少 2 个台阶、候选 ≥ 20σ（远离噪声底）且 ≥ 1 % 最大台阶。``jump_k`` 保留仅为兼容（不再使用）。
+    总线侧多设备混合文件量出的是"所有设备里最小的一次"，不代表目标设备——调用方应只对分路侧文件使用。
     """
     x = np.asarray(x, dtype=np.float64)
-    out: Dict[str, Any] = {"unit": unit, "candidate": None, "min_step": None, "min_level_gap": None, "levels": [],
-                           "n_steady": 0, "n_events": 0, "reliable": False, "note": ""}
+    out: Dict[str, Any] = {"unit": unit, "candidate": None, "candidate_from": None, "min_step": None, "min_level_gap": None,
+                           "levels": [], "n_steady": 0, "n_events": 0, "reliable": False, "note": ""}
     if x.size < 2 * min_steady_cycles or not (sigma > 0) or not math.isfinite(sigma):
         out["note"] = "数据太短或噪声尺度无效，无法估计"
         return out
-    d = np.diff(x)
-    idx = np.where(np.abs(d) > jump_k * sigma)[0]
-    bounds = [0] + [int(i) + 1 for i in idx] + [int(x.size)]
-    segs = [(a, b, float(np.median(x[a:b]))) for a, b in zip(bounds[:-1], bounds[1:]) if b - a >= min_steady_cycles]
+    moving = _moving_mask(x, sigma)
+    segs = _anchors(x, moving, min_steady_cycles)
     out["n_steady"] = len(segs)
-    out["n_events"] = int(idx.size)
+    steps_all = [abs(segs[i + 1][2] - segs[i][2]) for i in range(len(segs) - 1)]
+    steps = [v for v in steps_all if v > merge_k * sigma]
+    out["n_events"] = len(steps)
     if len(segs) < 2:
         out["note"] = ("文件中未发现投切（只有 1 个稳态台阶）" if segs else "没有足够长的稳态段") + "，无法估计最小关心负荷；请改用噪声底或手填"
         return out
-    # 相邻稳态段之间的跳变幅值（跨过中间的暂态碎段）
-    steps = [abs(segs[i + 1][2] - segs[i][2]) for i in range(len(segs) - 1)]
-    steps = [v for v in steps if v > merge_k * sigma]
     levels: List[float] = []
     for lv in sorted(sg[2] for sg in segs):
         if levels and abs(lv - levels[-1]) < merge_k * sigma:
@@ -109,17 +163,21 @@ def estimate_min_load(x: np.ndarray, sigma: float, unit: str = "W", *, min_stead
     gaps = [levels[i + 1] - levels[i] for i in range(len(levels) - 1)]
     out["levels"] = [float(_ceil_sig(v, 4)) if v > 0 else float(v) for v in levels]
     if not steps or not gaps:
-        out["note"] = "稳态台阶之间没有显著差异，无法估计最小关心负荷"
+        out["note"] = "文件中未发现投切（稳态台阶之间没有显著差异）" + "，无法估计最小关心负荷；请改用噪声底或手填"
         return out
     out["min_step"] = float(min(steps)); out["min_level_gap"] = float(min(gaps))
     cand = min(out["min_step"], out["min_level_gap"])
     out["candidate"] = float(cand)
+    out["candidate_from"] = "step" if out["min_step"] <= out["min_level_gap"] else "level_gap"
     top = max(abs(v) for v in levels) or 1.0
     reliable = cand >= 20.0 * sigma and cand >= 0.01 * top
     out["reliable"] = bool(reliable)
-    out["note"] = (f"由 {len(segs)} 个稳态段（≥{min_steady_cycles} 周波）/ {len(levels)} 个台阶估计：最小跳变 {out['min_step']:.4g} {unit}，"
+    n_tr = int(np.sum(np.diff(moving.astype(np.int8)) == 1) + (1 if moving[0] else 0))
+    out["n_transients"] = n_tr
+    out["note"] = (f"由 {len(segs)} 个稳态段（不动 ≥{min_steady_cycles} 周波）/ {len(levels)} 个台阶估计：最小跳变 {out['min_step']:.4g} {unit}，"
                    f"最小台阶间距 {out['min_level_gap']:.4g} {unit} → 候选 {cand:.4g} {unit}"
-                   + ("" if reliable else f"（⚠ 候选过小：< 20σ={20 * sigma:.3g} 或 < 1% 最大台阶，可能是斜坡/碎段，建议手填）")
+                   + ("" if out["candidate_from"] == "step" else "（来自两个不相邻状态之差，文件里没直接看到这么小的一次投切）")
+                   + ("" if reliable else f"（⚠ 候选过小：< 20σ={20 * sigma:.3g} 或 < 1% 最大台阶，可能是漂移/碎段，建议手填）")
                    + "。仅对分路侧单设备录波有效；若现场不关心二级负荷，请手工改大")
     return out
 
@@ -143,45 +201,8 @@ def longest_transient(x: np.ndarray, sigma: float, min_delta: float, *, min_stea
     W = max(2, int(smooth_cycles))
     if L < 2 * W + 2 * min_steady_cycles or not (sigma > 0) or not math.isfinite(sigma):
         return out
-    moving = np.zeros(L, dtype=bool)
-    d1 = np.abs(np.diff(x))
-    for i in np.where(d1 > 6.0 * sigma)[0]:
-        moving[i:i + 2] = True
-    sm = np.convolve(x, np.ones(W) / W, mode="valid")            # sm[i] = mean(x[i:i+W])
-    dm = np.abs(sm[W:] - sm[:-W])                                 # 相隔 W 的两个均值窗之差，变化发生在 x[i : i+2W)
-    thr = max(k * sigma * math.sqrt(2.0 / W), 0.05 * float(min_delta))   # 噪声极小（合成/高精度）时用 5% min_delta 兜底，防纹波被当成在动
-    # 只在 dm 超门槛且 ≥ 其 ±W 邻域峰值一半处记"在动"（位置 i+W 即两窗交界）：硬阶跃的三角形 dm 轮廓只标出 ±W/2，
-    # 不会把相邻的短平台吃掉；斜坡的 dm 轮廓是平的，整条都标上
-    if dm.size:
-        pad = np.pad(dm, W, mode="edge")
-        loc_max = np.lib.stride_tricks.sliding_window_view(pad, 2 * W + 1).max(axis=1)
-        for i in np.where((dm > thr) & (dm >= 0.5 * loc_max))[0]:
-            moving[i + W - 1: i + W + 2] = True
-        # 闭运算：两段"在动"之间短于 W 的缝（斜坡上 dm 被噪声压到半峰以下的凹坑）并入暂态；≥ W 的真平台保留
-        i = 0
-        while i < L:
-            if moving[i]:
-                i += 1
-                continue
-            j = i
-            while j < L and not moving[j]:
-                j += 1
-            if 0 < i and j < L and j - i < W:
-                moving[i:j] = True
-            i = j
-    # 连续不动 ≥ min_steady 的区间 = 锚点稳态
-    anchors: List[Tuple[int, int, float]] = []
-    i = 0
-    while i < L:
-        if moving[i]:
-            i += 1
-            continue
-        j = i
-        while j < L and not moving[j]:
-            j += 1
-        if j - i >= min_steady_cycles:
-            anchors.append((i, j, float(np.mean(x[i:j]))))
-        i = j
+    moving = _moving_mask(x, sigma, W=W, k=k, floor=0.05 * float(min_delta))
+    anchors = _anchors(x, moving, min_steady_cycles)
     out["n_steady"] = len(anchors)
     trs: List[Dict[str, Any]] = []
     for (a0, b0, l0), (a1, b1, l1) in zip(anchors, anchors[1:]):

@@ -244,7 +244,7 @@ async function main() {
   const estJ = JSON.parse($('nt-json').textContent);
   check('v0.55 载荷 min_load_auto=true、结果 min_load_source=estimated、候选≈300000 W', nb && nb.min_load_auto === true && estJ.min_load_source === 'estimated' && Math.abs(estJ.min_load_estimate.candidate - 300000) < 2000, JSON.stringify(estJ.min_load_estimate));
   check('估计行可见：候选 3e+05 W ✓ 可靠（本次已采用）、命令含 --min-load-auto', $('nt-estrow').style.display !== 'none' && /候选/.test($('nt-est-text').textContent) && /可靠/.test($('nt-est-text').textContent) && /本次已采用/.test($('nt-est-text').textContent) && /--min-load-auto/.test($('nt-cmd').textContent), $('nt-est-text').textContent.slice(0, 80));
-  check('建议 min_delta_w = ceil2(候选/2) = 160000', /min_delta_w=160000/.test($('nt-result').textContent));
+  check('建议 min_delta_w = ceil2(候选/2) ≈ 150000', /min_delta_w=1[56]0000/.test($('nt-result').textContent));   // 候选 ≈3e5 落在 300000 两侧时 ceil2 给 150000 或 160000
   click($('btn-nt-est-fill')); await sleep(200);
   check('「填入输入框」→ 最小关心负荷(W)=300000、自动估计勾选被取消', +$('nt-minw').value === 300000 && !$('nt-minauto').checked && $('nt-mina').value === '', $('nt-minw').value);
   // 纯背景文件 → 不可靠，按未指定处理
