@@ -202,6 +202,44 @@ async function main() {
   $('rs-path').value = 'data/不存在.csv'; input($('rs-path')); await sleep(600);
   check('界面预览提示源文件不存在', /不存在/.test($('rs-preview').textContent));
 
+  console.log('\n=== E8. v0.52 负荷辨识调参面板 ===');
+  await nav('process'); await sleep(500);
+  check('面板控件齐全', ['nt-files', 'nt-path', 'nt-tstart', 'nt-tend', 'nt-duration', 'nt-side', 'nt-quantity', 'nt-channel', 'nt-minw', 'nt-mina', 'nt-save', 'nt-name', 'btn-nt-run', 'btn-nt-apply', 'nt-result'].every((id) => !!$(id)));
+  check('文件下拉已从 /api/files 填充且含 nilm_steps.csv', [...$('nt-files').options].some((o) => o.value === 'data/nilm_steps.csv'));
+  $('nt-files').value = 'data/nilm_steps.csv'; change($('nt-files'));
+  check('选中即填路径', $('nt-path').value === 'data/nilm_steps.csv');
+  check('默认：保存未勾选、文件名空、套用按钮禁用', !$('nt-save').checked && $('nt-name').value === '' && $('btn-nt-apply').disabled);
+  const cfgBefore = JSON.stringify((await (await fetch(BASE + '/api/config')).json()).nilm);
+  $('nt-minw').value = '500'; click($('btn-nt-run')); await sleep(3000);
+  let nb = bodies('/api/process/nilm_tune', 'POST').pop();
+  check('整文件：载荷 t_start/t_end 空、duration null、save=false', nb && nb.t_start === '' && nb.t_end === '' && nb.duration_s === null && nb.save === false && nb.min_load_w === '500', JSON.stringify(nb));
+  check('结果区显示周波 300 / 时间段 整个文件 / 未保存', /周波 300/.test($('nt-status').textContent) && /整个文件/.test($('nt-status').textContent) && /未保存结果文件/.test($('nt-status').textContent), $('nt-status').textContent.slice(0, 160));
+  check('建议表含 6 算法且 threshold min_delta_w=250', /threshold/.test($('nt-result').textContent) && /steady_state/.test($('nt-result').textContent) && /min_delta_w=250/.test($('nt-result').textContent));
+  check('运行配置未被改动', JSON.stringify((await (await fetch(BASE + '/api/config')).json()).nilm) === cfgBefore);
+  check('套用按钮已启用', !$('btn-nt-apply').disabled);
+  // 时间段：起始 = 文件开头 + 1 s（取结果里的 t_first），时长 2 s；保存，默认名
+  const tFirst = JSON.parse($('nt-json').textContent).t_range.t_first;
+  $('nt-tstart').value = String((tFirst + 1).toFixed(3)); $('nt-duration').value = '2'; $('nt-save').checked = true;
+  click($('btn-nt-run')); await sleep(3000);
+  nb = bodies('/api/process/nilm_tune', 'POST').pop();
+  check('时间段载荷：t_start 填、duration_s=2、save=true、name 空', nb && nb.t_start === String((tFirst + 1).toFixed(3)) && nb.duration_s === '2' && nb.save === true && nb.name === '', JSON.stringify(nb));
+  const stTxt = $('nt-status').textContent;
+  check('结果：周波≈100、已保存到 output/nilm/tune_<时间>.json', /周波 (99|100|101)/.test(stTxt) && /已保存结果到/.test(stTxt) && /output\/nilm\/tune_\d{8}_\d{6}\.json/.test(stTxt), stTxt.slice(0, 200));
+  const savedRel = (stTxt.match(/output\/nilm\/tune_\d{8}_\d{6}\.json/) || [])[0];
+  check('保存的文件真实存在且含 suggest', !!savedRel && fs.existsSync(path.join(ROOT, savedRel)) && JSON.parse(fs.readFileSync(path.join(ROOT, savedRel), 'utf8')).suggest.algorithms.glr.threshold === 25);
+  // 自定义文件名
+  $('nt-name').value = 'site_bg'; click($('btn-nt-run')); await sleep(3000);
+  check('自定义名 → output/nilm/site_bg.json', /output\/nilm\/site_bg\.json/.test($('nt-status').textContent) && fs.existsSync(path.join(ROOT, 'output/nilm/site_bg.json')));
+  // 非法时间 → 界面显示失败
+  $('nt-tstart').value = 'abc'; $('nt-save').checked = false; click($('btn-nt-run')); await sleep(1500);
+  check('非法起始时间 → 显示失败信息', /失败/.test($('nt-status').textContent) && /无法解析/.test($('nt-status').textContent), $('nt-status').textContent.slice(0, 120));
+  // 套用到运行配置（用上次成功结果）
+  click($('btn-nt-apply')); await sleep(1500);
+  const cfgAfter = (await (await fetch(BASE + '/api/config')).json()).nilm;
+  check('套用后运行配置 threshold.min_delta_w=250（热生效）', cfgAfter.algorithms.threshold.min_delta_w === 250 && /已套用 \d+ 项/.test($('nt-status').textContent));
+  await fetch(BASE + '/api/config', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ nilm: JSON.parse(cfgBefore) }) });
+  try { if (savedRel) fs.unlinkSync(path.join(ROOT, savedRel)); fs.unlinkSync(path.join(ROOT, 'output/nilm/site_bg.json')); } catch (e) { /* ignore */ }
+
   // 收尾：删除测试文件
   try { fs.unlinkSync(outPath); fs.unlinkSync(path.join(ROOT, 'data', SRC_NAME)); } catch (e) { /* ignore */ }
   console.log(`\n=== 结果：PASS ${pass} / FAIL ${fail} ===`);

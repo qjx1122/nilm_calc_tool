@@ -90,6 +90,8 @@ New-Item -ItemType Directory -Force output | Out-Null
 .\.venv\Scripts\python.exe tools\nilm_tune.py --file data\bus_bg.csv --config configs\default.json --min-load-w 300000 --json > output\tune.json
 ```
 
+**（v0.52）不想开命令行？** 同样的功能在 Web 界面「🧮 数据处理 → 负荷辨识调参」里：选波形文件（或手填路径）→ 可选填**起始时间 / 结束时间（或时长）**（都留空＝整个文件）→ 选基准配置（总线侧 / 分路侧运行配置，决定 PT/CT 与列映射）→ 填最小关心负荷 → 「量噪声并给出参数」。结果表与本节命令输出一一对应；勾选「保存结果到配置文件」才会把结果 JSON 写到 `output\nilm\`（文件名可填，默认 `tune_{时间}.json`，默认**不保存**）；「套用到运行配置」＝ §7-2′ 的一键热生效。详见附录 H.13。
+
 **（v0.50）想一步到位、直接得到"套好参数的完整配置"**：加 `--apply`。脚本会在**当前运行配置**（`--config` 指定的文件；不填时取界面保存的 `configs\runtime.json`，没有则 `configs\default.json`）基础上只替换 `nilm.quantity / rel_tol_pct / min_delta_pct` 和 6 种算法的建议参数，其余（PT/CT、列映射、输出目录、各算法 `enabled`、建议里没给的键）一律保留，把更新后的**完整配置**写到输出目录 `output\nilm\nilm_tuned_config_<时间戳>.json`；**默认不改配置文件本身**：
 
 ```powershell
@@ -670,6 +672,9 @@ Invoke-RestMethod -Method Put -Uri http://localhost:8000/api/branch/config -Cont
 | `--min-load-w <W>` | | 不填 | 现场**最小关心负荷**的有功（一次侧 W）。P 口径用；给了它 `min_delta_w` 才有"针对这台设备"的含义 |
 | `--min-load-a <A>` | | 不填 | 同上，电流版（一次侧 A）。I 口径用 |
 | `--quantity auto\|p\|i` | | 跟随 `--config` 的 `nilm.quantity`；配置也没有才 `auto` | 检测量：`p` 逐周波有功、`i` 逐周波电流有效值、`auto`＝有电压取 P、无电压取 I |
+| `--t-start <时间>` | | 空＝文件开头 | v0.52：分析起始时间。写法同播放时间段：`2026-10-13 08:00:02.5` / `08:00:02.5`（与文件时标当天时刻比较）/ epoch 秒 |
+| `--t-end <时间>` | | 空＝文件结尾 | v0.52：分析结束时间，格式同上 |
+| `--duration <秒>` | | 空 | v0.52：从起始时间（或文件开头）起分析的时长；与 `--t-end` 同时给时取先到者 |
 | `--max-cycles <n>` | | `30000`（≈10 min@50 Hz） | 最多分析多少个周波，防止超大文件跑太久 |
 | `--json` | | 关 | 只输出一份 JSON（机器可读，给 `nilm_replay.py --params`、`POST /api/nilm/tune/apply` 或留档） |
 | `--apply` | | 关 | 把建议叠加到 `--config` 基准配置上，写出**完整配置**到 `output\nilm\nilm_tuned_config_<时间戳>.json`；**不改配置文件** |
@@ -726,6 +731,21 @@ Invoke-RestMethod -Method Put -Uri http://localhost:8000/api/branch/config -Cont
 ```
 
 `--config` 决定三件事：① PT/CT 与列映射（影响量出来的数值和单位口径）；② 缺省检测量 `nilm.quantity`；③ `--apply` 的基准。**不填**时取界面保存过的 `configs\runtime.json`，没有才是 `configs\default.json`——所以在已经用界面改过 PT/CT 的机器上，不填 `--config` 得到的就是"和界面一样"的口径。
+
+### H.4′ 用法 3′：只分析文件中的一段时间（v0.52）
+
+背景文件里只有某一段是"干净稳态"时，不必先切文件：
+
+```powershell
+# 08:00:10 ~ 08:00:40 这 30 s（与文件时标当天时刻比较，也可写完整日期或 epoch 秒）
+.\.venv\Scripts\python.exe tools\nilm_tune.py --file data\bus_bg.csv --t-start 08:00:10 --t-end 08:00:40 --min-load-w 300000
+# 从 08:00:10 起 30 s
+.\.venv\Scripts\python.exe tools\nilm_tune.py --file data\bus_bg.csv --t-start "2026-10-13 08:00:10" --duration 30 --min-load-w 300000
+# 文件开头起 20 s
+.\.venv\Scripts\python.exe tools\nilm_tune.py --file data\bus_bg.csv --duration 20 --min-load-w 300000
+```
+
+首行之后多一行「时间段  起 → 止   实际 <首个周波时刻> → <末个周波时刻>」，请核对"实际"一栏确认落在你想要的段上。三个参数都不填＝整个文件（受 `--max-cycles` 限制）。段内没有数据、结束早于开始、时间文本无法解析都会退出码 2 并说明原因。JSON 输出里对应 `t_range{start,end,duration_s,t_first,t_last,whole_file}`。
 
 ### H.5 用法 4：机器可读输出 `--json`（供回放脚本 / 接口 / 留档）
 
@@ -849,3 +869,20 @@ Invoke-RestMethod -Method Post -Uri http://localhost:8000/api/nilm/tune/apply -C
 | `max|diff|` 带 ⚠ | 背景段混了投切 | 允许（稳健统计），建议切两半各跑一次比对 σ |
 | `nilm.min_delta_pct` 被置 0 并提示"基荷相对门槛过小" | 基荷很小（设备侧、设备关着） | 正常：门槛以各算法绝对值 W/A 为准 |
 | `--apply` 后界面没变 | `--apply` 只写输出目录文件，不碰运行配置 | 用 §7-2′ 推送，或 `--save-config` 后重启 |
+
+### H.13 用法 10：在 Web 界面「数据处理」里做同样的事（v0.52）
+
+「🧮 数据处理」页下半部分「负荷辨识调参（量背景噪声 → 6 种算法参数）」与本脚本**同一实现**（`POST /api/process/nilm_tune`），对应关系：
+
+| 界面项 | 对应命令行参数 | 说明 |
+|---|---|---|
+| 波形文件（下拉 / 路径） | `--file` | 下拉列出 `data\` 下的 CSV；也可手填仓库内相对路径或绝对路径 |
+| 起始时间 / 结束时间 | `--t-start` / `--t-end` | 都留空＝整个文件 |
+| 或 时长 (s) | `--duration` | 与结束时间同时填时取先到者 |
+| 基准配置（总线侧 / 分路侧运行配置） | `--config` | 用该侧**正在运行**的配置的 PT/CT、列映射、缺省 `nilm.quantity`；不改动它 |
+| 检测量 / 检测对象 | `--quantity` / `--channel` | 留空＝跟随配置 / 默认对象 |
+| 最小关心负荷 (W) / (A) | `--min-load-w` / `--min-load-a` | |
+| 保存结果到配置文件 + 文件名 | （相当于 `--json > 文件`） | **默认不保存**；勾选后写到 `output\nilm\<文件名>`，文件名留空＝`tune_{时间}.json`，可写 `{时间}` 占位符；内容＝`--json` 结构，可给 `nilm_replay.py --params` / 「套用」用 |
+| 「套用到运行配置」按钮 | 相当于 §7-2′ 的 `POST /api/nilm/tune/apply` | 把本次结果热生效到所选侧，更新后的完整配置写 `output\nilm\nilm_tuned_config_<侧>_<时间戳>.json`，**不写配置文件** |
+
+结果区：第一行＝文件 / 对象 / 周波数 / 时长 / 口径 / 检测量；第二行＝时间段与实际落到的首末周波时刻；之后是噪声统计表与建议参数表（与命令行输出逐项相同）；「原始结果 JSON」可展开复制。错误（文件不存在、时间文本无法解析、段内无数据、I 口径填三相总）直接显示在结果区，不会改动任何配置。

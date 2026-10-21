@@ -595,3 +595,68 @@ def test_web_nilm_tune_apply_hot_updates_running_config_without_persist(client):
     html = (ROOT / "app/static/index.html").read_text(encoding="utf-8"); js = (ROOT / "app/static/app.js").read_text(encoding="utf-8")
     assert all(x in html for x in ('id="nilm-tune-file"', 'id="btn-nilm-tune-apply"', 'id="nilm-tune-persist"', 'id="nilm-tune-note"'))
     assert "/api/nilm/tune/apply" in js and "function applyNilmTune(" in js
+
+
+# ------------------------------------------------------------------ v0.52：数据处理子界面「负荷辨识调参」
+def test_run_tune_time_range_and_errors(tmp_path):
+    from elec_tool.nilm_tuning import TuneError, run_tune, tune_result_path
+    p = _write_csv(tmp_path / "bg.csv", dur=6.0)
+    base = AppConfig()
+    whole = run_tune(base, str(p))
+    assert whole["t_range"]["whole_file"] and whole["measure"]["cycles"] == 300 and whole["quantity"] == "p"
+    d2 = run_tune(base, str(p), duration_s=2.0)
+    assert 99 <= d2["measure"]["cycles"] <= 101 and d2["t_range"]["duration_s"] == 2.0 and not d2["t_range"]["whole_file"]
+    t0 = whole["t_range"]["t_first"]
+    seg = run_tune(base, str(p), t_start=f"{t0 + 1.0:.3f}", t_end=f"{t0 + 3.0:.3f}")
+    assert 98 <= seg["measure"]["cycles"] <= 101 and abs(seg["t_range"]["t_first"] - (t0 + 1.0)) < 0.03
+    both = run_tune(base, str(p), t_start=f"{t0 + 1.0:.3f}", t_end=f"{t0 + 5.0:.3f}", duration_s=1.0)   # 先到者
+    assert 49 <= both["measure"]["cycles"] <= 51
+    with pytest.raises(TuneError):
+        run_tune(base, str(p), t_start=f"{t0 + 100:.3f}")                                     # 段内无数据
+    with pytest.raises(TuneError):
+        run_tune(base, str(p), t_start=f"{t0 + 3:.3f}", t_end=f"{t0 + 1:.3f}")                # 结束早于开始
+    with pytest.raises(TuneError):
+        run_tune(base, str(p), duration_s=0)
+    with pytest.raises(ConfigError):
+        run_tune(base, str(p), t_start="not a time")
+    with pytest.raises(TuneError):
+        run_tune(base, str(p), quantity="i", channel="total")
+    fp = tune_result_path(base, "", out_dir=str(tmp_path))
+    assert os.path.basename(fp).startswith("tune_") and fp.endswith(".json")
+    assert os.path.basename(tune_result_path(base, "../x_{时间}", out_dir=str(tmp_path))).startswith("x_20") and ".." not in tune_result_path(base, "../x", out_dir=str(tmp_path))[len(str(tmp_path)):]
+
+
+def test_web_process_nilm_tune_endpoint(client):
+    client.post("/api/engine/stop")
+    p = _write_csv(client.dir / "bg.csv", dur=6.0)
+    assert client.post("/api/process/nilm_tune", json={}).status_code == 400
+    assert client.post("/api/process/nilm_tune", json={"path": str(client.dir / "nope.csv")}).status_code == 400
+    cfg_before = client.get("/api/config").json()
+    r = client.post("/api/process/nilm_tune", json={"path": str(p), "min_load_w": 500})
+    assert r.status_code == 200, r.text
+    d = r.json()
+    assert d["ok"] and d["saved_to"] is None and d["measure"]["cycles"] == 300 and d["t_range"]["whole_file"]
+    assert d["suggest"]["algorithms"]["threshold"]["min_delta_w"] == 250 and d["side"] == "bus"
+    assert client.get("/api/config").json() == cfg_before                               # 不改运行配置
+    # 时间段 + 保存（默认文件名 tune_<时间>.json，落在 nilm 目录）
+    t0 = d["t_range"]["t_first"]
+    r = client.post("/api/process/nilm_tune", json={"path": str(p), "t_start": f"{t0 + 1:.3f}", "duration_s": 2, "save": True}).json()
+    assert r["ok"] and 99 <= r["measure"]["cycles"] <= 101 and r["saved_to"]
+    saved = Path(r["saved_to"]) if os.path.isabs(r["saved_to"]) else ROOT / r["saved_to"]
+    assert saved.is_file() and saved.name.startswith("tune_") and saved.suffix == ".json"
+    assert str(saved.parent) == os.path.abspath(os.environ.get("ELEC_TOOL_NILM_DIR") or cfg_before["nilm"]["nilm_dir"])
+    import json as _j
+    assert _j.loads(saved.read_text(encoding="utf-8"))["suggest"]["algorithms"]["glr"]["threshold"] == 25.0
+    # 自定义文件名 + {时间} 占位符
+    r = client.post("/api/process/nilm_tune", json={"path": str(p), "save": True, "name": "site_{时间}"}).json()
+    assert r["ok"] and os.path.basename(r["saved_to"]).startswith("site_20") and r["saved_to"].endswith(".json")
+    # 错误：无效时间 / I 口径 total / 段内无数据 → 400
+    assert client.post("/api/process/nilm_tune", json={"path": str(p), "t_start": "xx"}).status_code == 400
+    assert client.post("/api/process/nilm_tune", json={"path": str(p), "quantity": "i", "channel": "total"}).status_code == 400
+    assert client.post("/api/process/nilm_tune", json={"path": str(p), "t_start": f"{t0 + 999:.0f}"}).status_code == 400
+    # 结果可直接套用
+    a = client.post("/api/nilm/tune/apply", json={"params": d, "hot": False}).json()
+    assert a["ok"] and a["config"]["nilm"]["algorithms"]["threshold"]["min_delta_w"] == 250
+    html = (ROOT / "app/static/index.html").read_text(encoding="utf-8"); js = (ROOT / "app/static/app.js").read_text(encoding="utf-8")
+    assert all(f'id="{i}"' in html for i in ("nt-path", "nt-files", "nt-tstart", "nt-tend", "nt-duration", "nt-side", "nt-save", "nt-name", "btn-nt-run", "btn-nt-apply", "nt-result"))
+    assert "/api/process/nilm_tune" in js and "function ntRun(" in js

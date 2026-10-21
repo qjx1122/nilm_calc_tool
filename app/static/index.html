@@ -875,6 +875,53 @@
           <details><summary>原始结果 JSON</summary><pre id="rs-json" class="pre"></pre></details>
         </div>
       </div>
+      <h2 style="margin-top:18px">数据处理 · 负荷辨识调参（量背景噪声 → 6 种算法参数）</h2>
+      <div class="grid2">
+        <div class="panel">
+          <h3>调参参数（与 <code>tools/nilm_tune.py</code> 同一实现）</h3>
+          <div class="form" id="nt-form">
+            <label>波形文件（data 目录下拉或手填路径）
+              <select id="nt-files"><option value="">— 选择 data/ 下的 CSV —</option></select>
+            </label>
+            <label>波形文件路径 <input id="nt-path" placeholder="data/bus_bg.csv 或绝对路径"></label>
+            <div class="row2">
+              <label title="分析起始时间；空＝文件开头。写法同播放时间段：2026-10-13 08:00:02.5 / 08:00:02.5（与文件时标当天时刻比较）/ epoch 秒">起始时间（空＝文件开头） <input id="nt-tstart" placeholder="2026-10-13 08:00:02.000"></label>
+              <label title="分析结束时间；空＝文件结尾（或由时长决定）">结束时间（空＝文件结尾） <input id="nt-tend" placeholder="2026-10-13 08:00:32.000"></label>
+            </div>
+            <div class="row2">
+              <label title="从起始时间（或文件开头）起分析的时长；与结束时间同时填时取先到者">或 时长 (s，空＝到结束时间/文件结尾) <input id="nt-duration" type="number" min="0.02" step="0.1" placeholder="空"></label>
+              <label title="PT/CT、列映射、缺省检测量取自该侧当前运行配置；不改动运行配置">基准配置 <select id="nt-side"><option value="bus">总线侧运行配置</option><option value="branch">分路侧运行配置</option></select></label>
+            </div>
+            <div class="row2">
+              <label>检测量 <select id="nt-quantity"><option value="">跟随配置 nilm.quantity</option><option value="auto">auto（无电压→I）</option><option value="p">p 有功</option><option value="i">i 电流有效值</option></select></label>
+              <label>检测对象 <select id="nt-channel"><option value="">默认（P→三相总，I→A 相）</option><option value="total">三相总</option><option value="A">A 相</option><option value="B">B 相</option><option value="C">C 相</option></select></label>
+            </div>
+            <div class="row2">
+              <label>最小关心负荷 (W，P 口径) <input id="nt-minw" type="number" min="0" step="any" placeholder="空＝max(6σ, 2%×基荷)"></label>
+              <label>最小关心负荷电流 (A，I 口径) <input id="nt-mina" type="number" min="0" step="any" placeholder="空＝max(6σ, 2%×基荷)"></label>
+            </div>
+            <div class="row2">
+              <label class="check" title="默认不保存；勾选后把结果 JSON（nilm_tune --json 同结构，可供回放脚本 --params / 「套用」使用）写到 output/nilm/ 下"><input id="nt-save" type="checkbox"> 保存结果到配置文件</label>
+              <label>文件名（留空＝tune_{时间}.json） <input id="nt-name" placeholder="tune_{时间}.json"></label>
+            </div>
+            <div class="btnrow">
+              <button id="btn-nt-run" class="primary">量噪声并给出参数</button>
+              <button id="btn-nt-refresh">刷新文件列表</button>
+              <button id="btn-nt-apply" disabled title="把上次结果套用到所选侧正在运行的配置（热生效，更新后的完整配置写 output/nilm/，不写配置文件）">套用到运行配置</button>
+            </div>
+            <div id="nt-hint" class="notes">
+              <div>理想输入是<b>没有投切的稳态段</b>（几十秒即可）；段内偶有开关会由稳健统计削弱，并在结果里提示。单位口径与界面一致（启用 PT/CT 时为一次侧 W / A）。</div>
+              <div>只做噪声统计与参数建议，<b>不改运行配置、不启动引擎</b>；「保存结果到配置文件」默认关闭。建议值的复核与回放对账见 <code>NILM_TUNING_GUIDE.md</code> §3–§5。</div>
+            </div>
+          </div>
+        </div>
+        <div class="panel">
+          <h3>结果</h3>
+          <div id="nt-status" class="notes"></div>
+          <div id="nt-result" class="tablewrap"></div>
+          <details><summary>原始结果 JSON</summary><pre id="nt-json" class="pre"></pre></details>
+        </div>
+      </div>
     </section>
   </main>
 </div>

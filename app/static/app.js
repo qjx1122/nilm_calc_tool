@@ -3521,8 +3521,86 @@ function rsUseAsSource() {
   toast(`已填入离线源 ${path}；请确认配置采样率 fs=${b.dataset.fs} 后点「启动」`);
 }
 
+/* v0.52：数据处理 · 负荷辨识调参（POST /api/process/nilm_tune） */
+const NT = { last: null, side: 'bus' };
+async function ntListFiles() {
+  const sel = $('#nt-files'); if (!sel) return;
+  try {
+    const r = await api('/api/files?sub=data');
+    const files = (r.files || []).filter(f => !f.dir && f.name.toLowerCase().endsWith('.csv'));
+    const cur = sel.value;
+    sel.innerHTML = '<option value="">— 选择 data/ 下的 CSV —</option>' + files.map(f => `<option value="${esc(f.name)}">${esc(f.name)} (${f.size_mb} MB)</option>`).join('');
+    if (cur && files.some(f => f.name === cur)) sel.value = cur;
+  } catch (e) { toast('读取文件列表失败：' + e.message, 'err'); }
+}
+function ntPayload() {
+  const v = id => ($('#' + id).value || '').trim();
+  return { path: v('nt-path'), t_start: v('nt-tstart'), t_end: v('nt-tend'), duration_s: v('nt-duration') || null,
+           quantity: v('nt-quantity') || null, channel: v('nt-channel') || null,
+           min_load_w: v('nt-minw') || null, min_load_a: v('nt-mina') || null,
+           save: !!$('#nt-save').checked, name: v('nt-name') };
+}
+function ntFmt(x) { return (typeof x === 'number') ? (Number.isInteger(x) ? String(x) : (+x.toPrecision(4)).toString()) : String(x); }
+function ntRender(d) {
+  const m = d.measure, sg = d.suggest, u = d.unit, tr = d.t_range || {};
+  const st = $('#nt-status');
+  const rng = tr.whole_file ? '整个文件' : `${tr.start || '文件开头'} → ${tr.end || (tr.duration_s ? '+' + tr.duration_s + ' s' : '文件结尾')}`;
+  st.innerHTML = `<div>文件 <code>${esc(d.file)}</code> · 对象 <b>${esc(d.channel)}</b> · 周波 ${m.cycles} · 时长 ${(+d.t_span_s).toFixed(1)} s · 口径 ${d.scaled ? '一次侧(PT/CT)' : '二次侧'} · 检测量 <b>${d.quantity === 'p' ? '有功 P' : '电流有效值 I'}</b>（${esc(d.quantity_requested)}${d.quantity === 'i' && !d.voltage_present ? '，数据源无电压 → I' : ''}）</div>`
+    + `<div>时间段 ${esc(rng)} · 实际 ${esc(fmtLocalInput(tr.t_first))} → ${esc(fmtLocalInput(tr.t_last))}</div>`
+    + (d.saved_to ? `<div>已保存结果到 <code>${esc(d.saved_to)}</code></div>` : '<div class="muted">未保存结果文件（默认）</div>')
+    + (d.notes || []).map(n => `<div class="muted">提示：${esc(n)}</div>`).join('');
+  let h = `<table><thead><tr><th colspan="3">噪声统计（${u}）</th></tr></thead><tbody>`
+    + `<tr><td>基荷 |${d.quantity === 'p' ? 'P' : 'I'}| 中位数 level</td><td>${ntFmt(m.level)}</td><td></td></tr>`
+    + `<tr><td>单周波噪声 σ sigma</td><td>${ntFmt(m.sigma_cycle)}</td><td>${(+m.sigma_cycle_pct).toFixed(3)} % 基荷</td></tr>`
+    + `<tr><td>相邻周波最大 |Δ|</td><td>${ntFmt(m.max_abs_diff)}</td><td>${m.has_events_hint ? '⚠ >10σ：段内含事件/尖峰，统计已用稳健口径' : ''}</td></tr>`
+    + `<tr><td>5 周波极差 95 分位 range5</td><td>${ntFmt(m.range5_p95)}</td><td>→ settle_tol 的依据</td></tr>`
+    + `<tr><td>10 周波极差 95 分位 range10</td><td>${ntFmt(m.range10_p95)}</td><td>→ steady_state.tol 的依据</td></tr>`
+    + `<tr><td>10 周波均值差 σ sigma_m10</td><td>${ntFmt(m.sigma_mean10)}</td><td>→ 双滑窗/GLR 的噪声尺度</td></tr>`
+    + `</tbody></table>`;
+  h += `<table style="margin-top:8px"><thead><tr><th colspan="2">建议参数（起点）</th></tr></thead><tbody>`
+    + `<tr><td colspan="2">${esc(sg.note)}</td></tr>`
+    + `<tr><td>nilm</td><td>quantity=${esc(sg.quantity)}  rel_tol_pct=${sg.rel_tol_pct}  min_delta_pct=${sg.min_delta_pct}</td></tr>`
+    + Object.entries(sg.algorithms).map(([k, v]) => `<tr><td>${esc(k)}</td><td>${Object.entries(v).map(([kk, vv]) => `${esc(kk)}=${ntFmt(vv)}`).join('  ')}</td></tr>`).join('')
+    + `</tbody></table>`;
+  $('#nt-result').innerHTML = h;
+  $('#nt-json').textContent = JSON.stringify(d, null, 2);
+}
+async function ntRun() {
+  const p = ntPayload();
+  if (!p.path) { toast('请填写波形文件路径', 'err'); return; }
+  const side = $('#nt-side').value || 'bus';
+  const btn = $('#btn-nt-run'); btn.disabled = true; $('#nt-status').textContent = '正在读取并统计…';
+  try {
+    const d = await api('/api/process/nilm_tune', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(p) }, side);
+    NT.last = d; NT.side = side; $('#btn-nt-apply').disabled = false;
+    ntRender(d);
+    toast('调参完成' + (d.saved_to ? '，结果已保存 ' + d.saved_to : ''), 'ok');
+  } catch (e) { $('#nt-status').innerHTML = `<span class="err">失败：${esc(e.message)}</span>`; toast(e.message, 'err'); }
+  finally { btn.disabled = false; }
+}
+async function ntApply() {
+  if (!NT.last) return;
+  const side = NT.side;
+  try {
+    const d = await api('/api/nilm/tune/apply', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ params: NT.last, hot: true, persist: false }) }, side);
+    if (d && d.config) {
+      if (side === 'branch') { if (BRD.state) BRD.state.config = d.config; BR.loaded = false; } else if (S.state) S.state.config = d.config;
+      if (NLs(side).formBuilt) fillNilmForm(d.config.nilm, side);
+    }
+    $('#nt-status').insertAdjacentHTML('beforeend', `<div>已套用 ${d.changes.length} 项到${side === 'branch' ? '分路侧' : '总线侧'}运行配置并热生效，更新后的完整配置保存到 <code>${esc(d.saved_to)}</code>（配置文件未改动）</div>`);
+    toast('已套用到' + (side === 'branch' ? '分路侧' : '总线侧') + '运行配置', 'ok');
+  } catch (e) { toast('套用失败：' + e.message, 'err'); }
+}
+
 function bindProcess() {
   if (!$('#view-process')) return;
+  if ($('#nt-form')) {
+    $('#nt-files').addEventListener('change', () => { if ($('#nt-files').value) $('#nt-path').value = $('#nt-files').value; });
+    $('#btn-nt-run').addEventListener('click', ntRun);
+    $('#btn-nt-refresh').addEventListener('click', ntListFiles);
+    $('#btn-nt-apply').addEventListener('click', ntApply);
+    ntListFiles();
+  }
   $('#rs-files').addEventListener('change', () => { if ($('#rs-files').value) { $('#rs-path').value = $('#rs-files').value; rsPreview(); } });
   ['rs-path', 'rs-fs'].forEach(id => $('#' + id).addEventListener('input', rsPreview));
   $('#btn-rs-probe').addEventListener('click', rsProbe);

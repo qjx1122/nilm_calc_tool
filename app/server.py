@@ -39,7 +39,7 @@ from elec_tool import __version__
 from elec_tool.config import (AppConfig, ConfigError, parse_time_text, CURVE_KEYS, QUANTITY_KEYS, SourceConfig, WindowSpec,
                               load_or_default)
 from elec_tool.engine import LiveEngine
-from elec_tool.nilm_tuning import export_tuned_config
+from elec_tool.nilm_tuning import TuneError, export_tuned_config, run_tune, tune_result_path
 from elec_tool.pace import PaceClock
 from elec_tool.timefmt import fmt_local
 from elec_tool.metrics import MetricsResult
@@ -2037,6 +2037,64 @@ async def process_resample_status() -> Dict[str, Any]:
 @app.post("/api/process/resample/cancel")
 async def process_resample_cancel() -> Dict[str, Any]:
     return RESAMPLE.cancel()
+
+
+@app.post("/api/process/nilm_tune")
+async def process_nilm_tune(payload: Dict[str, Any]) -> Any:
+    """v0.52：数据处理子界面「负荷辨识调参」——对指定波形文件（可选时间段）量噪声、给出 6 种算法参数建议
+    （与 ``tools/nilm_tune.py`` 同一实现）。基准配置（PT/CT、列映射、缺省 nilm.quantity）＝当前侧运行配置
+    （``/api/branch/process/nilm_tune`` 为分路侧）；不改运行配置、不启动引擎。
+
+    body：{path, channel?, quantity?, min_load_w?, min_load_a?, max_cycles?, t_start?, t_end?, duration_s?,
+           save?: false, name?: "tune_{时间}.json"}
+    * t_start / t_end 都空且 duration_s 空＝整个文件；
+    * save=true 时把结果 JSON（``nilm_tune --json`` 同结构）写到 ``nilm.nilm_dir``（默认 output/nilm）下的 name
+      （空＝``tune_<YYYYmmdd_HHMMSS>.json``；``{时间}`` 占位符替换为时间戳）；默认不保存。
+    """
+    path = str(payload.get("path") or "").strip()
+    if not path:
+        return JSONResponse(status_code=400, content={"ok": False, "error": "请填写波形文件路径"})
+    src_abs = _abs_path(path)
+    if not os.path.isfile(src_abs):
+        return JSONResponse(status_code=400, content={"ok": False, "error": f"文件不存在：{path}"})
+
+    def _num(k: str) -> Optional[float]:
+        v = payload.get(k)
+        if v in (None, ""):
+            return None
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            raise TuneError(f"{k} 必须是数字（当前 {v!r}）")
+
+    try:
+        base = AppConfig.from_dict(RUNNER.cfg.to_dict())
+        kw = dict(channel=(str(payload.get("channel") or "").strip() or None),
+                  quantity=(str(payload.get("quantity") or "").strip() or None),
+                  min_load_w=_num("min_load_w"), min_load_a=_num("min_load_a"),
+                  max_cycles=int(_num("max_cycles") or 30000),
+                  t_start=str(payload.get("t_start") or ""), t_end=str(payload.get("t_end") or ""),
+                  duration_s=_num("duration_s"))
+        if kw["quantity"] not in (None, "auto", "p", "i"):
+            raise TuneError(f"quantity 必须是 auto / p / i（当前 {kw['quantity']!r}）")
+        out = await asyncio.to_thread(run_tune, base, src_abs, **kw)
+        out["file"] = _display_path(src_abs)
+        out["side"] = current_side()
+        out["saved_to"] = None
+        if bool(payload.get("save", False)):
+            nl_dir = os.environ.get("ELEC_TOOL_NILM_DIR") or base.nilm.nilm_dir
+            fp = tune_result_path(base, str(payload.get("name") or ""), out_dir=nl_dir)
+            if not os.path.isabs(fp):
+                fp = os.path.join(ROOT, fp)
+            os.makedirs(os.path.dirname(fp), exist_ok=True)
+            with open(fp, "w", encoding="utf-8") as fh:
+                json.dump(out, fh, ensure_ascii=False, indent=2); fh.write("\n")
+            out["saved_to"] = _display_path(fp)
+        return {"ok": True, **out}
+    except (TuneError, ConfigError, ValueError) as exc:
+        return JSONResponse(status_code=400, content={"ok": False, "error": str(exc)})
+    except Exception as exc:
+        return JSONResponse(status_code=400, content={"ok": False, "error": f"{type(exc).__name__}: {exc}"})
 
 
 @app.get("/api/process/resample/preview")
