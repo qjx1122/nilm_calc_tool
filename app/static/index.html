@@ -901,7 +901,7 @@
               <label>最小关心负荷电流 (A，I 口径) <input id="nt-mina" type="number" min="0" step="any" placeholder="空＝max(6σ, 2%×基荷)"></label>
             </div>
             <div class="row2">
-              <label class="check" title="默认不保存；勾选后把结果 JSON（nilm_tune --json 同结构，可供回放脚本 --params / 「套用」使用）写到 output/nilm/ 下"><input id="nt-save" type="checkbox"> 保存结果到配置文件</label>
+              <label class="check" title="默认不保存；勾选后以所选侧的原配置文件（configs/runtime.json 或 branch_runtime.json）为基准，只更新算法参数、其它参数不变，把更新后的完整配置写到 output/nilm/ 下（原配置文件不改动；可直接作 --config / 回放配置使用）"><input id="nt-save" type="checkbox"> 保存为配置文件（原配置基础上更新算法参数）</label>
               <label>文件名（留空＝tune_{时间}.json） <input id="nt-name" placeholder="tune_{时间}.json"></label>
             </div>
             <div class="btnrow">

@@ -90,7 +90,7 @@ New-Item -ItemType Directory -Force output | Out-Null
 .\.venv\Scripts\python.exe tools\nilm_tune.py --file data\bus_bg.csv --config configs\default.json --min-load-w 300000 --json > output\tune.json
 ```
 
-**（v0.52）不想开命令行？** 同样的功能在 Web 界面「🧮 数据处理 → 负荷辨识调参」里：选波形文件（或手填路径）→ 可选填**起始时间 / 结束时间（或时长）**（都留空＝整个文件）→ 选基准配置（总线侧 / 分路侧运行配置，决定 PT/CT 与列映射）→ 填最小关心负荷 → 「量噪声并给出参数」。结果表与本节命令输出一一对应；勾选「保存结果到配置文件」才会把结果 JSON 写到 `output\nilm\`（文件名可填，默认 `tune_{时间}.json`，默认**不保存**）；「套用到运行配置」＝ §7-2′ 的一键热生效。详见附录 H.13。
+**（v0.52）不想开命令行？** 同样的功能在 Web 界面「🧮 数据处理 → 负荷辨识调参」里：选波形文件（或手填路径）→ 可选填**起始时间 / 结束时间（或时长）**（都留空＝整个文件）→ 选基准配置（总线侧 / 分路侧运行配置，决定 PT/CT 与列映射）→ 填最小关心负荷 → 「量噪声并给出参数」。结果表与本节命令输出一一对应；勾选「保存为配置文件」才会在该侧原配置文件（`runtime.json` / `branch_runtime.json`）基础上只更新算法参数、其它不变，把完整配置写到 `output\nilm\`（文件名可填，默认 `tune_{时间}.json`，默认**不保存**，原配置文件不改动）；「套用到运行配置」＝ §7-2′ 的一键热生效。详见附录 H.13。
 
 **（v0.50）想一步到位、直接得到"套好参数的完整配置"**：加 `--apply`。脚本会在**当前运行配置**（`--config` 指定的文件；不填时取界面保存的 `configs\runtime.json`，没有则 `configs\default.json`）基础上只替换 `nilm.quantity / rel_tol_pct / min_delta_pct` 和 6 种算法的建议参数，其余（PT/CT、列映射、输出目录、各算法 `enabled`、建议里没给的键）一律保留，把更新后的**完整配置**写到输出目录 `output\nilm\nilm_tuned_config_<时间戳>.json`；**默认不改配置文件本身**：
 
@@ -882,7 +882,7 @@ Invoke-RestMethod -Method Post -Uri http://localhost:8000/api/nilm/tune/apply -C
 | 基准配置（总线侧 / 分路侧运行配置） | `--config` | 用该侧**正在运行**的配置的 PT/CT、列映射、缺省 `nilm.quantity`；不改动它 |
 | 检测量 / 检测对象 | `--quantity` / `--channel` | 留空＝跟随配置 / 默认对象 |
 | 最小关心负荷 (W) / (A) | `--min-load-w` / `--min-load-a` | |
-| 保存结果到配置文件 + 文件名 | （相当于 `--json > 文件`） | **默认不保存**；勾选后写到 `output\nilm\<文件名>`，文件名留空＝`tune_{时间}.json`，可写 `{时间}` 占位符；内容＝`--json` 结构，可给 `nilm_replay.py --params` / 「套用」用 |
+| 保存为配置文件（原配置基础上更新算法参数）+ 文件名 | 相当于 `--config <本侧原配置文件> --apply --out output\nilm\<文件名>` | **默认不保存**；勾选后以所选侧的**原配置文件**（总线侧 `configs\runtime.json`、分路侧 `configs\branch_runtime.json`，即界面改动的持久化文件）为基准，**只更新** `nilm.quantity / rel_tol_pct / min_delta_pct` 与各算法建议参数，**其它参数原样保留**，把更新后的完整配置写到 `output\nilm\<文件名>`（留空＝`tune_{时间}.json`，可写 `{时间}` 占位符）；原配置文件本身不改动。文件可直接作 `--config` / `ELEC_TOOL_CONFIG_PATH` / 回放配置使用，`_tuning` 块里附带本次 measure/suggest 与时间段。原配置文件尚不存在（界面从未保存过）时以该侧当前运行配置为基准并在结果里注明（v0.53） |
 | 「套用到运行配置」按钮 | 相当于 §7-2′ 的 `POST /api/nilm/tune/apply` | 把本次结果热生效到所选侧，更新后的完整配置写 `output\nilm\nilm_tuned_config_<侧>_<时间戳>.json`，**不写配置文件** |
 
 结果区：第一行＝文件 / 对象 / 周波数 / 时长 / 口径 / 检测量；第二行＝时间段与实际落到的首末周波时刻；之后是噪声统计表与建议参数表（与命令行输出逐项相同）；「原始结果 JSON」可展开复制。错误（文件不存在、时间文本无法解析、段内无数据、I 口径填三相总）直接显示在结果区，不会改动任何配置。

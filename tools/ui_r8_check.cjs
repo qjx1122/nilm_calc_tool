@@ -213,7 +213,7 @@ async function main() {
   $('nt-minw').value = '500'; click($('btn-nt-run')); await sleep(3000);
   let nb = bodies('/api/process/nilm_tune', 'POST').pop();
   check('整文件：载荷 t_start/t_end 空、duration null、save=false', nb && nb.t_start === '' && nb.t_end === '' && nb.duration_s === null && nb.save === false && nb.min_load_w === '500', JSON.stringify(nb));
-  check('结果区显示周波 300 / 时间段 整个文件 / 未保存', /周波 300/.test($('nt-status').textContent) && /整个文件/.test($('nt-status').textContent) && /未保存结果文件/.test($('nt-status').textContent), $('nt-status').textContent.slice(0, 160));
+  check('结果区显示周波 300 / 时间段 整个文件 / 未保存', /周波 300/.test($('nt-status').textContent) && /整个文件/.test($('nt-status').textContent) && /未保存配置文件/.test($('nt-status').textContent), $('nt-status').textContent.slice(0, 160));
   check('建议表含 6 算法且 threshold min_delta_w=250', /threshold/.test($('nt-result').textContent) && /steady_state/.test($('nt-result').textContent) && /min_delta_w=250/.test($('nt-result').textContent));
   check('运行配置未被改动', JSON.stringify((await (await fetch(BASE + '/api/config')).json()).nilm) === cfgBefore);
   check('套用按钮已启用', !$('btn-nt-apply').disabled);
@@ -224,9 +224,12 @@ async function main() {
   nb = bodies('/api/process/nilm_tune', 'POST').pop();
   check('时间段载荷：t_start 填、duration_s=2、save=true、name 空', nb && nb.t_start === String((tFirst + 1).toFixed(3)) && nb.duration_s === '2' && nb.save === true && nb.name === '', JSON.stringify(nb));
   const stTxt = $('nt-status').textContent;
-  check('结果：周波≈100、已保存到 output/nilm/tune_<时间>.json', /周波 (99|100|101)/.test(stTxt) && /已保存结果到/.test(stTxt) && /output\/nilm\/tune_\d{8}_\d{6}\.json/.test(stTxt), stTxt.slice(0, 200));
+  check('结果：周波≈100、已保存到 output/nilm/tune_<时间>.json', /周波 (99|100|101)/.test(stTxt) && /已保存到/.test(stTxt) && /原配置文件/.test(stTxt) && /output\/nilm\/tune_\d{8}_\d{6}\.json/.test(stTxt), stTxt.slice(0, 200));
   const savedRel = (stTxt.match(/output\/nilm\/tune_\d{8}_\d{6}\.json/) || [])[0];
-  check('保存的文件真实存在且含 suggest', !!savedRel && fs.existsSync(path.join(ROOT, savedRel)) && JSON.parse(fs.readFileSync(path.join(ROOT, savedRel), 'utf8')).suggest.algorithms.glr.threshold === 25);
+  const savedObj = savedRel && fs.existsSync(path.join(ROOT, savedRel)) ? JSON.parse(fs.readFileSync(path.join(ROOT, savedRel), 'utf8')) : null;
+  check('v0.53 保存的是完整配置：含 sampling/transform/source，nilm.threshold.min_delta_w=250，_tuning 带 suggest', !!savedObj && savedObj.sampling && savedObj.transform && savedObj.source && savedObj.nilm.algorithms.threshold.min_delta_w === 250 && savedObj._tuning.suggest.algorithms.glr.threshold === 25, savedObj ? Object.keys(savedObj).join(',') : 'none');
+  const runCfg = await (await fetch(BASE + '/api/config')).json();
+  check('保存配置的非算法参数与原配置一致（sampling / transform / columns / window_cycles）', !!savedObj && JSON.stringify(savedObj.sampling) === JSON.stringify(runCfg.sampling) && JSON.stringify(savedObj.transform) === JSON.stringify(runCfg.transform) && JSON.stringify(savedObj.columns) === JSON.stringify(runCfg.columns) && savedObj.nilm.window_cycles === runCfg.nilm.window_cycles);
   // 自定义文件名
   $('nt-name').value = 'site_bg'; click($('btn-nt-run')); await sleep(3000);
   check('自定义名 → output/nilm/site_bg.json', /output\/nilm\/site_bg\.json/.test($('nt-status').textContent) && fs.existsSync(path.join(ROOT, 'output/nilm/site_bg.json')));

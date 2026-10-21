@@ -2048,8 +2048,9 @@ async def process_nilm_tune(payload: Dict[str, Any]) -> Any:
     body：{path, channel?, quantity?, min_load_w?, min_load_a?, max_cycles?, t_start?, t_end?, duration_s?,
            save?: false, name?: "tune_{时间}.json"}
     * t_start / t_end 都空且 duration_s 空＝整个文件；
-    * save=true 时把结果 JSON（``nilm_tune --json`` 同结构）写到 ``nilm.nilm_dir``（默认 output/nilm）下的 name
-      （空＝``tune_<YYYYmmdd_HHMMSS>.json``；``{时间}`` 占位符替换为时间戳）；默认不保存。
+    * save=true（默认 false）：以本侧**原配置文件**（runtime.json / branch_runtime.json）为基准，只更新算法参数、其它参数不变，
+      把更新后的**完整配置**写到 ``nilm.nilm_dir``（默认 output/nilm）下的 name（空＝``tune_<YYYYmmdd_HHMMSS>.json``；
+      ``{时间}`` 占位符替换为时间戳），并在 ``_tuning`` 里附带 measure/suggest；原配置文件本身不改动（v0.53）。
     """
     path = str(payload.get("path") or "").strip()
     if not path:
@@ -2081,15 +2082,26 @@ async def process_nilm_tune(payload: Dict[str, Any]) -> Any:
         out["file"] = _display_path(src_abs)
         out["side"] = current_side()
         out["saved_to"] = None
+        out["base_config"] = None
         if bool(payload.get("save", False)):
+            # v0.53：保存的是**完整配置**——以本侧原配置文件（runtime.json / branch_runtime.json，即界面改动的持久化文件）
+            # 为基准，只更新 nilm.quantity / rel_tol_pct / min_delta_pct 与各算法建议参数，其它参数原样保留；
+            # 原配置文件本身不改动，写到 output/nilm/<name>（默认 tune_<时间>.json）。
+            # 原配置文件尚不存在（界面从未保存过）时退回本侧当前运行配置，并在 base_config 中注明。
+            pp = RUNNER.persist_path
+            if pp and os.path.isfile(pp):
+                base_file = AppConfig.load(pp); base_label = _display_path(pp)
+            else:
+                base_file = base; base_label = f"(运行配置；{_display_path(pp) if pp else '持久化文件'} 尚不存在)"
             nl_dir = os.environ.get("ELEC_TOOL_NILM_DIR") or base.nilm.nilm_dir
             fp = tune_result_path(base, str(payload.get("name") or ""), out_dir=nl_dir)
             if not os.path.isabs(fp):
                 fp = os.path.join(ROOT, fp)
-            os.makedirs(os.path.dirname(fp), exist_ok=True)
-            with open(fp, "w", encoding="utf-8") as fh:
-                json.dump(out, fh, ensure_ascii=False, indent=2); fh.write("\n")
-            out["saved_to"] = _display_path(fp)
+            _cfg, fp, changes = export_tuned_config(base_file, out, out_path=fp,
+                                                    meta={"side": current_side(), "base_config": base_label,
+                                                          "measure": out["measure"], "suggest": out["suggest"],
+                                                          "t_range": out["t_range"]})
+            out["saved_to"] = _display_path(fp); out["base_config"] = base_label; out["changes"] = changes
         return {"ok": True, **out}
     except (TuneError, ConfigError, ValueError) as exc:
         return JSONResponse(status_code=400, content={"ok": False, "error": str(exc)})

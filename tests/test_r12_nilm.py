@@ -632,6 +632,7 @@ def test_web_process_nilm_tune_endpoint(client):
     assert client.post("/api/process/nilm_tune", json={}).status_code == 400
     assert client.post("/api/process/nilm_tune", json={"path": str(client.dir / "nope.csv")}).status_code == 400
     cfg_before = client.get("/api/config").json()
+    raw_before = (client.dir / "cfg.json").read_text(encoding="utf-8")
     r = client.post("/api/process/nilm_tune", json={"path": str(p), "min_load_w": 500})
     assert r.status_code == 200, r.text
     d = r.json()
@@ -646,7 +647,18 @@ def test_web_process_nilm_tune_endpoint(client):
     assert saved.is_file() and saved.name.startswith("tune_") and saved.suffix == ".json"
     assert str(saved.parent) == os.path.abspath(os.environ.get("ELEC_TOOL_NILM_DIR") or cfg_before["nilm"]["nilm_dir"])
     import json as _j
-    assert _j.loads(saved.read_text(encoding="utf-8"))["suggest"]["algorithms"]["glr"]["threshold"] == 25.0
+    data = _j.loads(saved.read_text(encoding="utf-8"))
+    # v0.53：保存的是以原配置文件（ELEC_TOOL_CONFIG_PATH=cfg.json）为基准、只更新算法参数的完整配置
+    base_file = _j.loads((client.dir / "cfg.json").read_text(encoding="utf-8"))
+    assert data["nilm"]["algorithms"]["threshold"]["min_delta_w"] == r["suggest"]["algorithms"]["threshold"]["min_delta_w"]
+    assert data["nilm"]["rel_tol_pct"] == r["suggest"]["rel_tol_pct"] and data["nilm"]["quantity"] == "p"
+    norm = AppConfig.from_dict(base_file).to_dict()
+    assert data["sampling"] == norm["sampling"] and data["transform"] == norm["transform"] and data["columns"] == norm["columns"]
+    assert data["nilm"]["window_cycles"] == norm["nilm"]["window_cycles"] and data["nilm"]["algorithms"]["glr"]["enabled"] == norm["nilm"]["algorithms"]["glr"]["enabled"]
+    assert data["_tuning"]["suggest"]["algorithms"]["glr"]["threshold"] == 25.0 and r["base_config"].endswith("cfg.json") and len(r["changes"]) >= 4
+    assert AppConfig.load(str(saved)).nilm.algorithms["threshold"]["min_delta_w"] == r["suggest"]["algorithms"]["threshold"]["min_delta_w"]
+    assert (client.dir / "cfg.json").read_text(encoding="utf-8") == raw_before          # 原配置文件内容未变
+    assert client.get("/api/config").json() == cfg_before                               # 运行配置也未变
     # 自定义文件名 + {时间} 占位符
     r = client.post("/api/process/nilm_tune", json={"path": str(p), "save": True, "name": "site_{时间}"}).json()
     assert r["ok"] and os.path.basename(r["saved_to"]).startswith("site_20") and r["saved_to"].endswith(".json")

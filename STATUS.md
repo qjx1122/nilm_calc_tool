@@ -81,6 +81,7 @@
 - 范围边界：~~本 session 不写业务代码~~ ❌**已失效**（该边界属上一任务；本任务即为写代码）；仍然遵守：不新建台账外散文件、不把数据/产物入库
 
 ## 已完成
+- **v0.53**：调参面板「保存」＝以本侧原配置文件（runtime.json / branch_runtime.json）为基准只更新算法参数的完整配置，写 `output/nilm/tune_<时间>.json`，原文件不动。
 - **v0.52**：「数据处理」页新增「负荷辨识调参」面板（文件/时间段或时长/基准侧/保存勾选+文件名默认 `tune_{时间}.json`），`POST /api/process/nilm_tune`，`run_tune` 入 `elec_tool/nilm_tuning.py`，CLI 新增 `--t-start/--t-end/--duration`。
 - **v0.51**：`NILM_TUNING_GUIDE.md` 附录 H：`nilm_tune.py` 命令手册（全部参数 + 9 种用法逐条举例）。
 - **v0.50**：nilm_tune 结果一键套用到当前运行配置（`nilm_tune.py --apply`、`POST /api/nilm/tune/apply`、界面「套用 nilm_tune 结果」），更新后的完整配置写 `output/nilm/nilm_tuned_config_*.json`，默认不写配置文件；手册 §3/§7-2′ 同步。

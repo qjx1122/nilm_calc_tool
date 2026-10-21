@@ -333,3 +333,5 @@
 - **[2026-10-21] v0.51**（用户：附录单独一节详述 nilm_tune.py 命令并逐用法举例）。新增附录 H.0–H.12，示例输出来自实跑。仅文档。
 
 - **[2026-10-21] v0.52**（用户：把 nilm_tune 量噪声调参加入数据处理子界面：文件路径、起止时间/时长（空＝整文件）、是否保存与文件名默认 tune_{时间}.json）。核心迁入 `elec_tool/nilm_tuning.run_tune`，新端点 `POST /api/process/nilm_tune`，界面面板 + 套用按钮，CLI 增时间段参数；test_r12_nilm +2、ui_r8 +15 → 62/62；手册 §3/H.1/H.4′/H.13。
+
+- **[2026-10-21] v0.53**（用户：调参保存须在原配置文件 runtime.json/branch_runtime.json 基础上更新算法参数、其它不变）。端点 save 改走 `export_tuned_config(AppConfig.load(persist_path), …)`，不存在时退回运行配置并注明；界面文案/结果行更新；test_r12_nilm 改写、ui_r8 63/63。

@@ -3547,7 +3547,7 @@ function ntRender(d) {
   const rng = tr.whole_file ? '整个文件' : `${tr.start || '文件开头'} → ${tr.end || (tr.duration_s ? '+' + tr.duration_s + ' s' : '文件结尾')}`;
   st.innerHTML = `<div>文件 <code>${esc(d.file)}</code> · 对象 <b>${esc(d.channel)}</b> · 周波 ${m.cycles} · 时长 ${(+d.t_span_s).toFixed(1)} s · 口径 ${d.scaled ? '一次侧(PT/CT)' : '二次侧'} · 检测量 <b>${d.quantity === 'p' ? '有功 P' : '电流有效值 I'}</b>（${esc(d.quantity_requested)}${d.quantity === 'i' && !d.voltage_present ? '，数据源无电压 → I' : ''}）</div>`
     + `<div>时间段 ${esc(rng)} · 实际 ${esc(fmtLocalInput(tr.t_first))} → ${esc(fmtLocalInput(tr.t_last))}</div>`
-    + (d.saved_to ? `<div>已保存结果到 <code>${esc(d.saved_to)}</code></div>` : '<div class="muted">未保存结果文件（默认）</div>')
+    + (d.saved_to ? `<div>已保存到 <code>${esc(d.saved_to)}</code>：以原配置文件 <code>${esc(d.base_config || '')}</code> 为基准只更新算法参数（${(d.changes || []).length} 项）、其它参数不变的完整配置；原配置文件未改动</div>` : '<div class="muted">未保存配置文件（默认）</div>')
     + (d.notes || []).map(n => `<div class="muted">提示：${esc(n)}</div>`).join('');
   let h = `<table><thead><tr><th colspan="3">噪声统计（${u}）</th></tr></thead><tbody>`
     + `<tr><td>基荷 |${d.quantity === 'p' ? 'P' : 'I'}| 中位数 level</td><td>${ntFmt(m.level)}</td><td></td></tr>`
