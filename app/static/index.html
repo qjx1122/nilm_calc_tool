@@ -901,6 +901,9 @@
               <label>最小关心负荷电流 (A，I 口径) <input id="nt-mina" type="number" min="0" step="any" placeholder="空＝max(6σ, 2%×基荷)"></label>
             </div>
             <div class="row2">
+              <label class="check" title="v0.55：未手填最小关心负荷时，从文件中的投切台阶估计（相邻稳态台阶最小间距 / 最小跳变幅值）。只对分路侧单设备、含启停的录波有效；纯背景文件或总线侧多设备文件估计不可靠时按未指定处理。估计值是上界候选，现场不关心二级负荷请手工改大"><input id="nt-minauto" type="checkbox"> 从文件投切台阶估计最小关心负荷（分路侧含启停录波）</label>
+            </div>
+            <div class="row2">
               <label class="check" title="默认不保存；勾选后以所选侧的原配置文件（configs/runtime.json 或 branch_runtime.json）为基准，只更新算法参数、其它参数不变，把更新后的完整配置写到 output/nilm/ 下（原配置文件不改动；可直接作 --config / 回放配置使用）"><input id="nt-save" type="checkbox"> 保存为配置文件（原配置基础上更新算法参数）</label>
               <label>文件名（留空＝tune_{时间}.json） <input id="nt-name" placeholder="tune_{时间}.json"></label>
             </div>
@@ -918,6 +921,7 @@
         <div class="panel">
           <h3>结果</h3>
           <div id="nt-status" class="notes"></div>
+          <div id="nt-estrow" class="notes" style="display:none"><b>最小关心负荷估计</b> <span id="nt-est-text"></span> <button id="btn-nt-est-fill" type="button" style="padding:1px 8px;font-size:12px" title="把候选值填入上方「最小关心负荷」输入框（按检测量填 W 或 A），再点一次「量噪声并给出参数」即按手填值计算">填入输入框</button></div>
           <div id="nt-cmdrow" class="notes" style="display:none" title="与本次界面操作等价的 tools/nilm_tune.py 命令（结果 JSON 的 command 字段；保存时含 --apply --out）">等价命令 <code id="nt-cmd"></code> <button id="btn-nt-copy" type="button" style="padding:1px 8px;font-size:12px">复制</button></div>
           <div id="nt-result" class="tablewrap"></div>
           <details><summary>原始结果 JSON</summary><pre id="nt-json" class="pre"></pre></details>

@@ -237,6 +237,21 @@ async function main() {
   const cmd2 = $('nt-cmd').textContent;
   check('保存时命令含 --t-start/--duration 与 --apply --out output/nilm/site_bg.json', /--t-start \S+ --duration 2 --json --apply --out output\/nilm\/site_bg\.json$/.test(cmd2) && JSON.parse(fs.readFileSync(path.join(ROOT, 'output/nilm/site_bg.json'), 'utf8'))._tuning.command === cmd2, cmd2);
   check('自定义名 → output/nilm/site_bg.json', /output\/nilm\/site_bg\.json/.test($('nt-status').textContent) && fs.existsSync(path.join(ROOT, 'output/nilm/site_bg.json')));
+  // v0.55 从文件估计最小关心负荷
+  $('nt-tstart').value = ''; $('nt-duration').value = ''; $('nt-save').checked = false; $('nt-name').value = '';
+  $('nt-minw').value = ''; $('nt-minauto').checked = true; click($('btn-nt-run')); await sleep(3000);
+  nb = bodies('/api/process/nilm_tune', 'POST').pop();
+  const estJ = JSON.parse($('nt-json').textContent);
+  check('v0.55 载荷 min_load_auto=true、结果 min_load_source=estimated、候选≈300000 W', nb && nb.min_load_auto === true && estJ.min_load_source === 'estimated' && Math.abs(estJ.min_load_estimate.candidate - 300000) < 2000, JSON.stringify(estJ.min_load_estimate));
+  check('估计行可见：候选 3e+05 W ✓ 可靠（本次已采用）、命令含 --min-load-auto', $('nt-estrow').style.display !== 'none' && /候选/.test($('nt-est-text').textContent) && /可靠/.test($('nt-est-text').textContent) && /本次已采用/.test($('nt-est-text').textContent) && /--min-load-auto/.test($('nt-cmd').textContent), $('nt-est-text').textContent.slice(0, 80));
+  check('建议 min_delta_w = ceil2(候选/2) = 160000', /min_delta_w=160000/.test($('nt-result').textContent));
+  click($('btn-nt-est-fill')); await sleep(200);
+  check('「填入输入框」→ 最小关心负荷(W)=300000、自动估计勾选被取消', +$('nt-minw').value === 300000 && !$('nt-minauto').checked && $('nt-mina').value === '', $('nt-minw').value);
+  // 纯背景文件 → 不可靠，按未指定处理
+  $('nt-minw').value = ''; $('nt-minauto').checked = true; $('nt-files').value = 'data/sample_6400hz.csv'; change($('nt-files')); click($('btn-nt-run')); await sleep(3000);
+  check('纯背景文件：无法估计、提示未发现投切、本次未采用', /无法估计/.test($('nt-est-text').textContent) && /未发现投切/.test($('nt-est-text').textContent) && JSON.parse($('nt-json').textContent).min_load_source === 'none' && $('btn-nt-est-fill').disabled, $('nt-est-text').textContent.slice(0, 80));
+  $('nt-minauto').checked = false; $('nt-files').value = 'data/nilm_steps.csv'; change($('nt-files')); $('nt-minw').value = '500';
+  click($('btn-nt-run')); await sleep(3000);          // 恢复「nilm_steps + 500 W」结果，供后面的「套用」使用
   // 非法时间 → 界面显示失败
   $('nt-tstart').value = 'abc'; $('nt-save').checked = false; click($('btn-nt-run')); await sleep(1500);
   check('非法起始时间 → 显示失败信息', /失败/.test($('nt-status').textContent) && /无法解析/.test($('nt-status').textContent), $('nt-status').textContent.slice(0, 120));

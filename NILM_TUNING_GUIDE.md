@@ -671,6 +671,7 @@ Invoke-RestMethod -Method Put -Uri http://localhost:8000/api/branch/config -Cont
 | `--channel total\|A\|B\|C` | | P 口径 `total`，I 口径 `A` | 量哪个对象的噪声。I 口径不接受 `total`（电流有效值不能跨相相加） |
 | `--min-load-w <W>` | | 不填 | 现场**最小关心负荷**的有功（一次侧 W）。P 口径用；给了它 `min_delta_w` 才有"针对这台设备"的含义 |
 | `--min-load-a <A>` | | 不填 | 同上，电流版（一次侧 A）。I 口径用 |
+| `--min-load-auto` | | 关 | v0.55：未手填最小关心负荷时，从文件里的**投切台阶**估计它（见 H.4″）。只对分路侧单设备、含启停的录波有效；估计不可靠则按未指定处理 |
 | `--quantity auto\|p\|i` | | 跟随 `--config` 的 `nilm.quantity`；配置也没有才 `auto` | 检测量：`p` 逐周波有功、`i` 逐周波电流有效值、`auto`＝有电压取 P、无电压取 I |
 | `--t-start <时间>` | | 空＝文件开头 | v0.52：分析起始时间。写法同播放时间段：`2026-10-13 08:00:02.5` / `08:00:02.5`（与文件时标当天时刻比较）/ epoch 秒 |
 | `--t-end <时间>` | | 空＝文件结尾 | v0.52：分析结束时间，格式同上 |
@@ -746,6 +747,30 @@ Invoke-RestMethod -Method Put -Uri http://localhost:8000/api/branch/config -Cont
 ```
 
 首行之后多一行「时间段  起 → 止   实际 <首个周波时刻> → <末个周波时刻>」，请核对"实际"一栏确认落在你想要的段上。三个参数都不填＝整个文件（受 `--max-cycles` 限制）。段内没有数据、结束早于开始、时间文本无法解析都会退出码 2 并说明原因。JSON 输出里对应 `t_range{start,end,duration_s,t_first,t_last,whole_file}`。
+
+### H.4″ 用法 3″：让脚本从分路侧录波里估计最小关心负荷（v0.55）
+
+**能不能从文件直接得到最小关心负荷？** 分情况：
+
+- **纯背景文件（没有投切）**：不能。文件里只有噪声，只能量出"能检出的最小幅值"≈6σ，这不是"关心"的含义。此时脚本按未指定处理（`max(6σ, 2%×基荷)`）。
+- **分路侧、含设备启停的录波**：可以——文件里就有这台设备的负荷台阶。脚本把逐周波 P（或 I）按 |Δ| > 8σ 切段，取长度 ≥ 25 周波的段为稳态台阶（滤掉启动冲击 / 软启斜坡的碎段），再取 **min(相邻稳态台阶最小间距, 相邻稳态段最小跳变幅值)** 为候选值；候选 ≥ 20σ 且 ≥ 1 % 最大台阶才算"可靠"。
+- **总线侧多设备混合文件**：量出的是"所有设备里最小的一次"，不是目标设备的——不要在总线侧用它（附录 D 的分工）。
+
+```powershell
+# 分路侧录波（含这台设备的开/关）：自动估计并直接用于建议参数
+.\.venv\Scripts\python.exe tools\nilm_tune.py --file data\dev_onoff.csv --config configs\branch_runtime.json --min-load-auto
+```
+
+输出多一段：
+
+```
+—— 最小关心负荷估计（文件投切台阶）——
+  候选 3e+05 W  （最小跳变 4.5e+05，最小台阶间距 3e+05，稳态段 4，台阶 [1501000, 1801000, 2250000]）  ✓ 可靠  → 本次已采用（--min-load-auto）
+```
+
+不加 `--min-load-auto` 时这一段也会打印（仅供参考，不采用）；手填了 `--min-load-w/-a` 时手填优先。JSON 里对应 `min_load_estimate{candidate, min_step, min_level_gap, levels, n_steady, n_events, reliable, note}`、`min_load_used`、`min_load_source = manual | estimated | none`。
+
+> 它给的是**上界候选**：样例里设备有 1.5 / 1.8 / 2.25 MW 三档，候选 300 kW 能覆盖它所有状态变化；若现场只关心主负荷（750 kW 启停）、不关心二级档位切换，请手工改大。界面上对应「从文件投切台阶估计最小关心负荷」勾选和结果区的「填入输入框」按钮（H.13）。
 
 ### H.5 用法 4：机器可读输出 `--json`（供回放脚本 / 接口 / 留档）
 
@@ -882,6 +907,7 @@ Invoke-RestMethod -Method Post -Uri http://localhost:8000/api/nilm/tune/apply -C
 | 基准配置（总线侧 / 分路侧运行配置） | `--config` | 用该侧**正在运行**的配置的 PT/CT、列映射、缺省 `nilm.quantity`；不改动它 |
 | 检测量 / 检测对象 | `--quantity` / `--channel` | 留空＝跟随配置 / 默认对象 |
 | 最小关心负荷 (W) / (A) | `--min-load-w` / `--min-load-a` | |
+| 从文件投切台阶估计最小关心负荷（勾选） | `--min-load-auto` | v0.55：未手填时由文件里的投切台阶估计（H.4″）；结果区「最小关心负荷估计」行显示候选 / 可靠性 / 依据与是否已采用，「填入输入框」把候选写进 W 或 A 输入框并取消勾选，再点一次即按手填值计算 |
 | 保存为配置文件（原配置基础上更新算法参数）+ 文件名 | 相当于 `--config <本侧原配置文件> --apply --out output\nilm\<文件名>` | **默认不保存**；勾选后以所选侧的**原配置文件**（总线侧 `configs\runtime.json`、分路侧 `configs\branch_runtime.json`，即界面改动的持久化文件）为基准，**只更新** `nilm.quantity / rel_tol_pct / min_delta_pct` 与各算法建议参数，**其它参数原样保留**，把更新后的完整配置写到 `output\nilm\<文件名>`（留空＝`tune_{时间}.json`，可写 `{时间}` 占位符）；原配置文件本身不改动。文件可直接作 `--config` / `ELEC_TOOL_CONFIG_PATH` / 回放配置使用，`_tuning` 块里附带本次 measure/suggest 与时间段。原配置文件尚不存在（界面从未保存过）时以该侧当前运行配置为基准并在结果里注明（v0.53） |
 | 「套用到运行配置」按钮 | 相当于 §7-2′ 的 `POST /api/nilm/tune/apply` | 把本次结果热生效到所选侧，更新后的完整配置写 `output\nilm\nilm_tuned_config_<侧>_<时间戳>.json`，**不写配置文件** |
 

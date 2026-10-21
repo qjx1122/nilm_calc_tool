@@ -3522,7 +3522,7 @@ function rsUseAsSource() {
 }
 
 /* v0.52：数据处理 · 负荷辨识调参（POST /api/process/nilm_tune） */
-const NT = { last: null, side: 'bus', command: '' };
+const NT = { last: null, side: 'bus', command: '', est: null };
 async function ntListFiles() {
   const sel = $('#nt-files'); if (!sel) return;
   try {
@@ -3537,7 +3537,7 @@ function ntPayload() {
   const v = id => ($('#' + id).value || '').trim();
   return { path: v('nt-path'), t_start: v('nt-tstart'), t_end: v('nt-tend'), duration_s: v('nt-duration') || null,
            quantity: v('nt-quantity') || null, channel: v('nt-channel') || null,
-           min_load_w: v('nt-minw') || null, min_load_a: v('nt-mina') || null,
+           min_load_w: v('nt-minw') || null, min_load_a: v('nt-mina') || null, min_load_auto: !!$('#nt-minauto').checked,
            save: !!$('#nt-save').checked, name: v('nt-name') };
 }
 function ntFmt(x) { return (typeof x === 'number') ? (Number.isInteger(x) ? String(x) : (+x.toPrecision(4)).toString()) : String(x); }
@@ -3550,6 +3550,17 @@ function ntRender(d) {
     + (d.saved_to ? `<div>已保存到 <code>${esc(d.saved_to)}</code>：以原配置文件 <code>${esc(d.base_config || '')}</code> 为基准只更新算法参数（${(d.changes || []).length} 项）、其它参数不变的完整配置；原配置文件未改动</div>` : '<div class="muted">未保存配置文件（默认）</div>')
     + (d.notes || []).map(n => `<div class="muted">提示：${esc(n)}</div>`).join('')
 ;
+  const er = $('#nt-estrow'), est = d.min_load_estimate;
+  if (er) {
+    if (est) {
+      er.style.display = '';
+      const src = d.min_load_source === 'estimated' ? '（本次已采用）' : (d.min_load_source === 'manual' ? `（本次按手填 ${ntFmt(d.min_load_used)} ${u} 计算，估计仅供参考）` : '（本次未采用：按 max(6σ, 2%×基荷)）');
+      $('#nt-est-text').innerHTML = est.candidate === null ? `无法估计：${esc(est.note)}`
+        : `候选 <b>${ntFmt(est.candidate)} ${u}</b> ${est.reliable ? '✓ 可靠' : '⚠ 不可靠'} ${esc(src)}<br><span class="muted">${esc(est.note)}</span>`;
+      $('#btn-nt-est-fill').disabled = est.candidate === null;
+      NT.est = { value: est.candidate, unit: u };
+    } else { er.style.display = 'none'; NT.est = null; }
+  }
   const cr = $('#nt-cmdrow');
   if (cr) { cr.style.display = d.command ? '' : 'none'; $('#nt-cmd').textContent = d.command || ''; NT.command = d.command || ''; }
   let h = `<table><thead><tr><th colspan="3">噪声统计（${u}）</th></tr></thead><tbody>`
@@ -3603,6 +3614,13 @@ function bindProcess() {
     $('#btn-nt-run').addEventListener('click', ntRun);
     $('#btn-nt-refresh').addEventListener('click', ntListFiles);
     $('#btn-nt-apply').addEventListener('click', ntApply);
+    $('#btn-nt-est-fill').addEventListener('click', () => {
+      if (!NT.est || NT.est.value === null) return;
+      const v = +(+NT.est.value).toPrecision(4);
+      if (NT.est.unit === 'A') { $('#nt-mina').value = v; $('#nt-minw').value = ''; } else { $('#nt-minw').value = v; $('#nt-mina').value = ''; }
+      $('#nt-minauto').checked = false;
+      toast(`已填入最小关心负荷 ${v} ${NT.est.unit}，再点「量噪声并给出参数」按此值计算`, 'ok');
+    });
     $('#btn-nt-copy').addEventListener('click', async () => {
       if (!NT.command) return;
       try { await navigator.clipboard.writeText(NT.command); toast('命令已复制', 'ok'); }

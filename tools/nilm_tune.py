@@ -46,6 +46,8 @@ def main() -> int:
                     help="检测对象（默认：P 口径 total，I 口径 A）。I 口径没有跨相合并，只能单相（A/B/C），不接受 total")
     ap.add_argument("--min-load-w", type=float, default=None, help="现场最小关心负荷（W，计算口径；P 口径用）")
     ap.add_argument("--min-load-a", type=float, default=None, help="现场最小关心负荷电流（A，计算口径；I 口径用）")
+    ap.add_argument("--min-load-auto", action="store_true",
+                    help="v0.55：未手填 --min-load-w/-a 时，从文件中的投切台阶估计最小关心负荷（仅分路侧含启停的录波有效；估计不可靠则按未指定处理）")
     ap.add_argument("--quantity", default=None, choices=("auto", "p", "i"),
                     help="检测量：p 有功 / i 电流有效值 / auto（数据源无电压时自动 i）。不填时取 --config 里的 nilm.quantity（v0.45）")
     ap.add_argument("--t-start", default="", help="v0.52：分析起始时间（'2026-10-13 08:00:02.5' / '08:00:02.5' / epoch 秒；空＝文件开头）")
@@ -66,7 +68,7 @@ def main() -> int:
     try:
         out = run_tune(base_cfg, a.file, channel=a.channel, quantity=a.quantity, min_load_w=a.min_load_w,
                        min_load_a=a.min_load_a, max_cycles=a.max_cycles, t_start=a.t_start, t_end=a.t_end,
-                       duration_s=a.duration)
+                       duration_s=a.duration, min_load_auto=a.min_load_auto)
     except (TuneError, ConfigError) as exc:
         print(f"⚠ {exc}", file=sys.stderr)
         return 2
@@ -107,6 +109,14 @@ def main() -> int:
     print(f"  10 周波极差 95 分位    range10    = {m['range10_p95']:.4g}   → steady_state.tol{sx} 的依据")
     print(f"  10 周波均值差 σ        sigma_m10  = {m['sigma_mean10']:.4g}   → 双滑窗/GLR 的噪声尺度")
     print(f"  范围                   [{m['min']:.4g}, {m['max']:.4g}]")
+    est = out["min_load_estimate"]
+    print(f"—— 最小关心负荷估计（文件投切台阶）——")
+    if est["candidate"] is None:
+        print(f"  无法估计：{est['note']}")
+    else:
+        print(f"  候选 {est['candidate']:.4g} {unit}  （最小跳变 {est['min_step']:.4g}，最小台阶间距 {est['min_level_gap']:.4g}，"
+              f"稳态段 {est['n_steady']}，台阶 {est['levels']}）  {'✓ 可靠' if est['reliable'] else '⚠ 不可靠'}"
+              + ("" if out["min_load_source"] != "estimated" else "  → 本次已采用（--min-load-auto）"))
     print("—— 建议参数（起点，按 NILM_TUNING_GUIDE.md 复核）——")
     print(f"  {sg['note']}")
     print(f"  nilm.quantity = {qty}   nilm.rel_tol_pct = {sg['rel_tol_pct']}   nilm.min_delta_pct = {sg['min_delta_pct']}")

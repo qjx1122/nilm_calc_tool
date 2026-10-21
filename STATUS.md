@@ -81,6 +81,7 @@
 - 范围边界：~~本 session 不写业务代码~~ ❌**已失效**（该边界属上一任务；本任务即为写代码）；仍然遵守：不新建台账外散文件、不把数据/产物入库
 
 ## 已完成
+- **v0.55**：`estimate_min_load` 从分路侧含启停录波的投切台阶估计最小关心负荷；CLI `--min-load-auto`、端点 `min_load_auto`、界面勾选 + 估计行 + 「填入输入框」。
 - **v0.54**：调参结果 JSON / 保存文件 `_tuning` / 界面结果区均附带等价 `tools/nilm_tune.py` 命令（`build_cli_command`）。
 - **v0.53**：调参面板「保存」＝以本侧原配置文件（runtime.json / branch_runtime.json）为基准只更新算法参数的完整配置，写 `output/nilm/tune_<时间>.json`，原文件不动。
 - **v0.52**：「数据处理」页新增「负荷辨识调参」面板（文件/时间段或时长/基准侧/保存勾选+文件名默认 `tune_{时间}.json`），`POST /api/process/nilm_tune`，`run_tune` 入 `elec_tool/nilm_tuning.py`，CLI 新增 `--t-start/--t-end/--duration`。

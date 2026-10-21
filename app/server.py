@@ -2045,8 +2045,9 @@ async def process_nilm_tune(payload: Dict[str, Any]) -> Any:
     （与 ``tools/nilm_tune.py`` 同一实现）。基准配置（PT/CT、列映射、缺省 nilm.quantity）＝当前侧运行配置
     （``/api/branch/process/nilm_tune`` 为分路侧）；不改运行配置、不启动引擎。
 
-    body：{path, channel?, quantity?, min_load_w?, min_load_a?, max_cycles?, t_start?, t_end?, duration_s?,
+    body：{path, channel?, quantity?, min_load_w?, min_load_a?, min_load_auto?: false, max_cycles?, t_start?, t_end?, duration_s?,
            save?: false, name?: "tune_{时间}.json"}
+    * min_load_auto（v0.55）：未手填最小关心负荷时从文件投切台阶估计（``min_load_estimate``，仅分路侧含启停录波有效）；
     * t_start / t_end 都空且 duration_s 空＝整个文件；
     * save=true（默认 false）：以本侧**原配置文件**（runtime.json / branch_runtime.json）为基准，只更新算法参数、其它参数不变，
       把更新后的**完整配置**写到 ``nilm.nilm_dir``（默认 output/nilm）下的 name（空＝``tune_<YYYYmmdd_HHMMSS>.json``；
@@ -2076,7 +2077,7 @@ async def process_nilm_tune(payload: Dict[str, Any]) -> Any:
                   min_load_w=_num("min_load_w"), min_load_a=_num("min_load_a"),
                   max_cycles=int(_num("max_cycles") or 30000),
                   t_start=str(payload.get("t_start") or ""), t_end=str(payload.get("t_end") or ""),
-                  duration_s=_num("duration_s"))
+                  duration_s=_num("duration_s"), min_load_auto=bool(payload.get("min_load_auto", False)))
         if kw["quantity"] not in (None, "auto", "p", "i"):
             raise TuneError(f"quantity 必须是 auto / p / i（当前 {kw['quantity']!r}）")
         out = await asyncio.to_thread(run_tune, base, src_abs, **kw)
@@ -2089,7 +2090,7 @@ async def process_nilm_tune(payload: Dict[str, Any]) -> Any:
         cfg_arg = _display_path(pp0) if (pp0 and os.path.isfile(pp0)) else None
         cmd_kw = dict(config=cfg_arg, channel=kw["channel"], quantity=kw["quantity"], min_load_w=kw["min_load_w"],
                       min_load_a=kw["min_load_a"], max_cycles=kw["max_cycles"], t_start=kw["t_start"], t_end=kw["t_end"],
-                      duration_s=kw["duration_s"])
+                      duration_s=kw["duration_s"], min_load_auto=kw["min_load_auto"])
         out["command"] = build_cli_command(out["file"], **cmd_kw)
         if bool(payload.get("save", False)):
             # v0.53：保存的是**完整配置**——以本侧原配置文件（runtime.json / branch_runtime.json，即界面改动的持久化文件）

@@ -74,6 +74,56 @@ def measure(p: np.ndarray, unit: str = "W") -> dict:
     }
 
 
+def estimate_min_load(x: np.ndarray, sigma: float, unit: str = "W", *, min_steady_cycles: int = 25,
+                      jump_k: float = 8.0, merge_k: float = 6.0) -> Dict[str, Any]:
+    """v0.55：从**含投切的分路侧录波**估计"最小关心负荷"的候选值（逐周波 P 或 I 序列）。
+
+    方法：相邻周波 |Δ| > ``jump_k``·σ 处切段 → 长度 ≥ ``min_steady_cycles`` 的段取中位数为稳态台阶（滤掉启动冲击 /
+    软启斜坡的碎段与尖峰）→ 台阶按 ``merge_k``·σ 合并去重 → 候选 = min(相邻稳态台阶最小间距, 相邻稳态段之间最小跳变幅值)。
+    ``reliable``：至少 2 个稳态台阶、候选 ≥ 20σ（远离噪声底）且 ≥ 1 % 最大台阶（排除碎段）。总线侧多设备混合文件
+    量出的是"所有设备里最小的一次"，不代表目标设备——调用方应只对分路侧文件使用。
+    """
+    x = np.asarray(x, dtype=np.float64)
+    out: Dict[str, Any] = {"unit": unit, "candidate": None, "min_step": None, "min_level_gap": None, "levels": [],
+                           "n_steady": 0, "n_events": 0, "reliable": False, "note": ""}
+    if x.size < 2 * min_steady_cycles or not (sigma > 0) or not math.isfinite(sigma):
+        out["note"] = "数据太短或噪声尺度无效，无法估计"
+        return out
+    d = np.diff(x)
+    idx = np.where(np.abs(d) > jump_k * sigma)[0]
+    bounds = [0] + [int(i) + 1 for i in idx] + [int(x.size)]
+    segs = [(a, b, float(np.median(x[a:b]))) for a, b in zip(bounds[:-1], bounds[1:]) if b - a >= min_steady_cycles]
+    out["n_steady"] = len(segs)
+    out["n_events"] = int(idx.size)
+    if len(segs) < 2:
+        out["note"] = ("文件中未发现投切（只有 1 个稳态台阶）" if segs else "没有足够长的稳态段") + "，无法估计最小关心负荷；请改用噪声底或手填"
+        return out
+    # 相邻稳态段之间的跳变幅值（跨过中间的暂态碎段）
+    steps = [abs(segs[i + 1][2] - segs[i][2]) for i in range(len(segs) - 1)]
+    steps = [v for v in steps if v > merge_k * sigma]
+    levels: List[float] = []
+    for lv in sorted(sg[2] for sg in segs):
+        if levels and abs(lv - levels[-1]) < merge_k * sigma:
+            continue
+        levels.append(lv)
+    gaps = [levels[i + 1] - levels[i] for i in range(len(levels) - 1)]
+    out["levels"] = [float(_ceil_sig(v, 4)) if v > 0 else float(v) for v in levels]
+    if not steps or not gaps:
+        out["note"] = "稳态台阶之间没有显著差异，无法估计最小关心负荷"
+        return out
+    out["min_step"] = float(min(steps)); out["min_level_gap"] = float(min(gaps))
+    cand = min(out["min_step"], out["min_level_gap"])
+    out["candidate"] = float(cand)
+    top = max(abs(v) for v in levels) or 1.0
+    reliable = cand >= 20.0 * sigma and cand >= 0.01 * top
+    out["reliable"] = bool(reliable)
+    out["note"] = (f"由 {len(segs)} 个稳态段（≥{min_steady_cycles} 周波）/ {len(levels)} 个台阶估计：最小跳变 {out['min_step']:.4g} {unit}，"
+                   f"最小台阶间距 {out['min_level_gap']:.4g} {unit} → 候选 {cand:.4g} {unit}"
+                   + ("" if reliable else f"（⚠ 候选过小：< 20σ={20 * sigma:.3g} 或 < 1% 最大台阶，可能是斜坡/碎段，建议手填）")
+                   + "。仅对分路侧单设备录波有效；若现场不关心二级负荷，请手工改大")
+    return out
+
+
 def suggest(m: dict, min_load: float | None) -> dict:
     """由噪声统计给出参数建议（规则见 NILM_TUNING_GUIDE.md §2）。单位随 ``m["unit"]``：W → ``*_w``，A → ``*_a``。"""
     unit = m.get("unit", "W")
@@ -115,8 +165,12 @@ def suggest(m: dict, min_load: float | None) -> dict:
 
 def run_tune(base: AppConfig, file: str, *, channel: Optional[str] = None, quantity: Optional[str] = None,
              min_load_w: Optional[float] = None, min_load_a: Optional[float] = None, max_cycles: int = 30000,
-             t_start: str = "", t_end: str = "", duration_s: Optional[float] = None) -> Dict[str, Any]:
+             t_start: str = "", t_end: str = "", duration_s: Optional[float] = None,
+             min_load_auto: bool = False) -> Dict[str, Any]:
     """量一段背景数据的逐周波噪声并给出参数建议（``tools/nilm_tune.py`` 与 ``POST /api/process/nilm_tune`` 共用）。
+
+    - ``min_load_auto``（v0.55）：未手填最小关心负荷时，从文件中的投切台阶估计（``estimate_min_load``），估计可靠才采用；
+      结果里总是带 ``min_load_estimate`` 供复核；
 
     - ``base``：提供 PT/CT、fs、f_nom、列映射与缺省 ``nilm.quantity`` 的配置（不被修改）；
     - ``t_start`` / ``t_end``：分析时间段，文本格式同播放时间段（``2026-10-13 08:00:02.5`` / ``08:00:02.5`` / epoch 秒），
@@ -196,8 +250,18 @@ def run_tune(base: AppConfig, file: str, *, channel: Optional[str] = None, quant
     t = np.concatenate(ts)[:max_cycles]
     m = measure(p, unit)
     min_load = min_load_w if qty == "p" else min_load_a
-    sg = suggest(m, min_load)
     notes: List[str] = []
+    est = estimate_min_load(p, m["sigma_cycle"], unit)
+    min_load_source = "manual" if min_load is not None else "none"
+    if min_load_auto and min_load is None:
+        if est["reliable"]:
+            min_load = est["candidate"]; min_load_source = "estimated"
+            notes.append(f"最小关心负荷取自文件估计：{min_load:.4g} {unit}（{est['note']}）")
+        else:
+            notes.append("已勾选从文件估计最小关心负荷，但估计不可靠：" + est["note"] + "；本次按未指定处理（max(6σ, 2%×基荷)）")
+    elif min_load_auto and min_load is not None:
+        notes.append(f"已手填最小关心负荷 {min_load:g} {unit}，文件估计（{est['candidate']}）仅供参考")
+    sg = suggest(m, min_load)
     if qty == "i" and min_load_w is not None and min_load_a is None:
         notes.append("I 口径请用 min_load_a（A）；min_load_w 已忽略")
     return {"file": file, "channel": ch, "fs": cfg.sampling.fs, "f_nom": cfg.sampling.f_nom,
@@ -205,6 +269,8 @@ def run_tune(base: AppConfig, file: str, *, channel: Optional[str] = None, quant
             "scaled": bool(cfg.transform.enabled), "t_span_s": float(t[-1] - t[0]) if len(t) > 1 else 0.0,
             "t_range": {"start": ts_txt, "end": te_txt, "duration_s": duration_s,
                         "t_first": float(t[0]), "t_last": float(t[-1]), "whole_file": not (ts_txt or te_txt or duration_s)},
+            "min_load_used": (None if min_load is None else float(min_load)), "min_load_source": min_load_source,
+            "min_load_estimate": est,
             "notes": notes, "measure": m, "suggest": sg}
 
 
@@ -212,7 +278,7 @@ def build_cli_command(file: str, *, config: Optional[str] = None, channel: Optio
                       quantity: Optional[str] = None, min_load_w: Optional[float] = None, min_load_a: Optional[float] = None,
                       max_cycles: Optional[int] = None, t_start: str = "", t_end: str = "", duration_s: Optional[float] = None,
                       json_out: bool = True, apply: bool = False, out: Optional[str] = None,
-                      python: str = "python") -> str:
+                      python: str = "python", min_load_auto: bool = False) -> str:
     """生成与一次调参等价的 ``tools/nilm_tune.py`` 命令行（v0.54，界面结果 JSON 的 ``command`` 字段）。
 
     只写实际给出的参数；路径/时间含空格时加引号（POSIX 写法，Windows PowerShell 把 ``python`` 换成
@@ -238,6 +304,8 @@ def build_cli_command(file: str, *, config: Optional[str] = None, channel: Optio
         parts += ["--min-load-w", num(min_load_w)]
     if min_load_a is not None:
         parts += ["--min-load-a", num(min_load_a)]
+    if min_load_auto:
+        parts.append("--min-load-auto")
     if str(t_start or "").strip():
         parts += ["--t-start", q(str(t_start).strip())]
     if str(t_end or "").strip():

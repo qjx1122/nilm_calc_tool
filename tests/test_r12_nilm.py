@@ -696,3 +696,50 @@ def test_build_cli_command_and_endpoint_command(client):
     import json as _j
     assert _j.loads(saved.read_text(encoding="utf-8"))["_tuning"]["command"] == d["command"]
     assert "nt-cmd" in (ROOT / "app/static/app.js").read_text(encoding="utf-8")
+
+
+# ------------------------------------------------------------------ v0.55：从文件投切台阶估计最小关心负荷
+def test_estimate_min_load_rules():
+    from elec_tool.nilm_tuning import estimate_min_load
+    rng = np.random.default_rng(3)
+    sig = 20.0
+    # 单设备三档：1.5M → 1.8M → 2.25M → 1.8M → 1.5M（每段 60 周波）；最小台阶间距 300k、最小跳变 300k
+    lv = [1.5e6, 1.8e6, 2.25e6, 1.8e6, 1.5e6]
+    x = np.concatenate([l + rng.normal(0, sig, 60) for l in lv])
+    e = estimate_min_load(x, sig, "W")
+    assert e["reliable"] and abs(e["candidate"] - 3e5) < 2e3 and e["n_steady"] == 5 and len(e["levels"]) == 3
+    # 纯背景 → 不可靠、候选 None
+    e0 = estimate_min_load(1.5e6 + rng.normal(0, sig, 300), sig, "W")
+    assert not e0["reliable"] and e0["candidate"] is None and "未发现投切" in e0["note"]
+    # 软启斜坡：碎段 < 25 周波不计稳态；起止两个稳态仍给出一次跳变
+    ramp = np.concatenate([1.5e6 + rng.normal(0, sig, 60), np.linspace(1.5e6, 2.0e6, 40) + rng.normal(0, sig, 40), 2.0e6 + rng.normal(0, sig, 60)])
+    er = estimate_min_load(ramp, sig, "W")
+    assert er["n_steady"] == 2 and er["reliable"] and abs(er["candidate"] - 5e5) < 5e3
+    # 候选过小（< 20σ）→ 不可靠
+    tiny = np.concatenate([100.0 + rng.normal(0, 1.0, 60), 112.0 + rng.normal(0, 1.0, 60)])
+    assert estimate_min_load(tiny, 1.0, "W")["reliable"] is False
+
+
+def test_run_tune_min_load_auto_and_endpoint(client, tmp_path):
+    from elec_tool.nilm_tuning import build_cli_command, run_tune
+    p = _write_csv(tmp_path / "steps.csv", dur=6.0)
+    base = AppConfig()
+    r = run_tune(base, str(p), min_load_auto=True)
+    est = r["min_load_estimate"]
+    assert est["candidate"] is not None and r["min_load_source"] in ("estimated", "none") and "min_load_used" in r
+    if est["reliable"]:
+        assert r["min_load_source"] == "estimated" and r["min_load_used"] == est["candidate"]
+        assert r["suggest"]["algorithms"]["threshold"]["min_delta_w"] >= 0.5 * est["candidate"] * 0.9
+    r2 = run_tune(base, str(p), min_load_auto=True, min_load_w=500)        # 手填优先
+    assert r2["min_load_source"] == "manual" and r2["min_load_used"] == 500 and any("仅供参考" in n for n in r2["notes"])
+    r3 = run_tune(base, str(p))                                              # 不勾选也带估计，但不采用
+    assert r3["min_load_source"] == "none" and r3["min_load_estimate"]["candidate"] is not None
+    assert build_cli_command("x.csv", min_load_auto=True) == "python tools/nilm_tune.py --file x.csv --min-load-auto --json"
+    # 端点
+    client.post("/api/engine/stop")
+    d = client.post("/api/process/nilm_tune", json={"path": str(p), "min_load_auto": True}).json()
+    assert d["ok"] and "min_load_estimate" in d and "--min-load-auto" in d["command"] and d["min_load_source"] == r["min_load_source"]
+    d = client.post("/api/process/nilm_tune", json={"path": str(p)}).json()
+    assert d["ok"] and "--min-load-auto" not in d["command"] and d["min_load_source"] == "none"
+    html = (ROOT / "app/static/index.html").read_text(encoding="utf-8"); js = (ROOT / "app/static/app.js").read_text(encoding="utf-8")
+    assert all(f'id="{i}"' in html for i in ("nt-minauto", "nt-estrow", "nt-est-text", "btn-nt-est-fill")) and "min_load_auto" in js

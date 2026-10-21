@@ -337,3 +337,5 @@
 - **[2026-10-21] v0.53**（用户：调参保存须在原配置文件 runtime.json/branch_runtime.json 基础上更新算法参数、其它不变）。端点 save 改走 `export_tuned_config(AppConfig.load(persist_path), …)`，不存在时退回运行配置并注明；界面文案/结果行更新；test_r12_nilm 改写、ui_r8 63/63。
 
 - **[2026-10-21] v0.54**（用户：界面调参结果 JSON 一并输出执行的调参命令）。`build_cli_command` + 端点 `command` 字段 + 保存文件 `_tuning.command` + 界面「等价命令/复制」；CLI 复现与界面结果一致；test_r12_nilm +1、ui_r8 65/65。
+
+- **[2026-10-21] v0.55**（用户：能否从设备录波直接获取最小关心负荷 → 分析后确认实现）。`estimate_min_load` + `run_tune(min_load_auto)` + CLI/端点/界面；样例 300 kW / 19.24 A，纯背景不可估计；test_r12_nilm +2、ui_r8 70/70；手册 H.4″。
