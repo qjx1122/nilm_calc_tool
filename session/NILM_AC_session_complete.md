@@ -329,3 +329,5 @@
 - **[2026-10-19] v0.49**（用户：详细说明六种检测算法实现流程并写入调参手册附录 G）。按 nilm.py 逐函数整理 G.0~G.8，仅文档。
 
 - **[2026-10-21] v0.50**（用户：nilm_tune 量噪声后支持在当前运行配置基础上更新算法参数、保存到输出目录、默认不写配置文件；同步手册）。新增 `elec_tool/nilm_tuning.py` 共用套用/导出逻辑；`nilm_tune.py --apply/--out/--save-config`；`POST /api/nilm/tune/apply`（hot 默认 true、persist 默认 false）+ 界面「套用 nilm_tune 结果」；手册 §3/§7-2′/附录 C/G.8。test_r12_nilm +3、ui_r12 +6 → 68/68。
+
+- **[2026-10-21] v0.51**（用户：附录单独一节详述 nilm_tune.py 命令并逐用法举例）。新增附录 H.0–H.12，示例输出来自实跑。仅文档。

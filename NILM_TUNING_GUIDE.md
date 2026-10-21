@@ -647,3 +647,205 @@ Invoke-RestMethod -Method Put -Uri http://localhost:8000/api/branch/config -Cont
 `settle_tol = 5 周波极差 P95 × 1.2`（threshold / median 的稳态容差）；`steady_state.tol = 10 周波极差 P95 × 1.2`；`min_delta = max(最小关心负荷/2, 6σ)`；`cusum.drift = max(min_delta/4, 0.5σ)`、`cusum.threshold = max(2(min_delta − drift), 5σ)`；`glr.noise = σ`；其余窗长 / 周波数用默认值。A 口径同一套公式作用在 I 序列上，输出 `*_a`。
 
 **建议值怎么进配置（v0.50）**：套用逻辑在 `elec_tool/nilm_tuning.py`（`apply_nilm_params` / `export_tuned_config`），`nilm_tune.py --apply`、`nilm_replay.py --params`、`POST /api/nilm/tune/apply` 与界面「套用 nilm_tune 结果」共用同一份：在基准配置的**副本**上只覆盖 `nilm.quantity / rel_tol_pct / min_delta_pct` 和各算法里 `NILM_ALGO_DEFAULTS` 认识的键（`enabled` 与未知键不动），`validate()` 通过后写成完整配置到 `nilm.nilm_dir`（默认 `output/nilm`），文件名 `nilm_tuned_config[_<侧>]_<YYYYmmdd_HHMMSS>.json`，附 `_tuning` 元信息；是否回写正式配置文件由调用方显式决定（CLI `--save-config` / API `persist`），默认一律不写。
+
+---
+
+## 附录 H（v0.51）：`nilm_tune.py` 命令手册——每个参数、每种用法一条命令
+
+> 正文 §3 只讲"现场最常用的一条命令"；这里把脚本的**全部参数**和**每一种用法**单独列出来，每种都给一条可直接复制的命令和你会看到的输出要点。命令都在仓库根目录、以 Windows PowerShell 写法给出（`.\.venv\Scripts\python.exe`）；Linux/macOS 把开头换成 `.venv/bin/python`、`\` 换成 `/` 即可。随时可 `python tools\nilm_tune.py --help` 看参数表。
+
+### H.0 这个脚本做什么、不做什么
+
+- **做**：读一段"背景"数据（最好是没有投切的稳态段，几十秒即可）→ 按 §E 的规则量 5 个噪声统计量 → 给出 `nilm.quantity / rel_tol_pct / min_delta_pct` 和 6 种算法的一套**起点参数**。可选地（`--apply`）把这套参数叠加到一份配置上并写出完整配置文件。
+- **不做**：不回放、不对账（那是 `nilm_replay.py` / `nilm_check.py`）；**默认不改任何配置文件**，只有显式 `--save-config` 才回写。
+- **退出码**：`0` 成功；`2` 输入不满足（没有整周波数据 / 无电压却要按 P 调参 / I 口径填了 `total`），错误原因打印到 stderr，不会给出一套没意义的参数。
+
+### H.1 参数一览
+
+| 参数 | 必填 | 默认 | 作用 |
+|---|---|---|---|
+| `--file <csv>` | ✅ | — | 背景数据文件，格式与软件数据源一致（`时间戳,A相电压,A相电流,…`，列映射用 `--config` 里的） |
+| `--config <json>` | | `configs\runtime.json`（界面保存过的当前运行配置）→ 没有则 `configs\default.json`；设了环境变量 `ELEC_TOOL_CONFIG_PATH` 则用它 | 从这里读 **PT/CT、fs、f_nom、列映射、`nilm.quantity`**；也是 `--apply` 的**基准配置** |
+| `--channel total\|A\|B\|C` | | P 口径 `total`，I 口径 `A` | 量哪个对象的噪声。I 口径不接受 `total`（电流有效值不能跨相相加） |
+| `--min-load-w <W>` | | 不填 | 现场**最小关心负荷**的有功（一次侧 W）。P 口径用；给了它 `min_delta_w` 才有"针对这台设备"的含义 |
+| `--min-load-a <A>` | | 不填 | 同上，电流版（一次侧 A）。I 口径用 |
+| `--quantity auto\|p\|i` | | 跟随 `--config` 的 `nilm.quantity`；配置也没有才 `auto` | 检测量：`p` 逐周波有功、`i` 逐周波电流有效值、`auto`＝有电压取 P、无电压取 I |
+| `--max-cycles <n>` | | `30000`（≈10 min@50 Hz） | 最多分析多少个周波，防止超大文件跑太久 |
+| `--json` | | 关 | 只输出一份 JSON（机器可读，给 `nilm_replay.py --params`、`POST /api/nilm/tune/apply` 或留档） |
+| `--apply` | | 关 | 把建议叠加到 `--config` 基准配置上，写出**完整配置**到 `output\nilm\nilm_tuned_config_<时间戳>.json`；**不改配置文件** |
+| `--out <path>` | | 自动命名 | `--apply` 的输出文件路径 |
+| `--save-config` | | 关 | 与 `--apply` 连用：**额外**把更新后的配置回写到 `--config` 那个文件（显式要求才做） |
+
+> 单位口径：所有阈值与软件界面一致——配置里启用 PT/CT（`transform.enabled=true`）时是**一次侧** W / A，否则是二次侧。首行输出会写明「口径 一次侧(PT/CT)」或「二次侧」。
+
+### H.2 用法 1：最基本——只看噪声，拿一套通用起点
+
+```powershell
+.\.venv\Scripts\python.exe tools\nilm_tune.py --file data\bus_bg.csv
+```
+
+不给 `--min-load-w` 时 `min_delta_w = max(6σ, 2%×基荷)`，注释行会写「未指定 --min-load-w … 请按现场最小关心负荷改」。输出分三段：
+
+```
+文件 data\bus_bg.csv  对象 total  周波 300  时长 6.0 s  口径 一次侧(PT/CT)  检测量 有功 P（配置 nilm.quantity=auto）
+—— 噪声统计（W）——
+  基荷 |P| 中位数        level      = 1.8e+06
+  单周波噪声 σ(稳健)     sigma      = 27.92  (0.002 % 基荷)
+  相邻周波最大 |Δ|       max|diff|  = 7.5e+05   ⚠ >10σ：段内含事件/尖峰，统计已用稳健口径
+  5 周波极差 95 分位     range5     = 122.5   → settle_tol_w 的依据
+  10 周波极差 95 分位    range10    = 161.9   → steady_state.tol_w 的依据
+  10 周波均值差 σ        sigma_m10  = 14.83   → 双滑窗/GLR 的噪声尺度
+—— 建议参数（起点，按 NILM_TUNING_GUIDE.md 复核）——
+  未指定 --min-load-w，min_delta_w 取 max(6σ, 2%×基荷)；请按现场最小关心负荷改
+  nilm.quantity = p   nilm.rel_tol_pct = 0.05   nilm.min_delta_pct = 2.06
+  threshold     min_delta_w=37000  settle_cycles=5  settle_tol_w=150  max_rise_cycles=40
+  …（6 行，一算法一行）
+```
+
+第 1 行告诉你**数据怎么被理解的**（对象、口径、检测量及其来源）；第 2 段是量出来的数（含义见 §3 的"靠不靠谱"表与附录 E）；第 3 段就是可以填进界面「检测参数」的值。
+
+### H.3 用法 2：针对一台设备——给出最小关心负荷（现场最常用）
+
+```powershell
+# 这台设备额定 300 kW（一次侧口径）
+.\.venv\Scripts\python.exe tools\nilm_tune.py --file data\bus_bg.csv --config configs\default.json --min-load-w 300000
+```
+
+此时 `min_delta_w = max(最小关心负荷/2, 6σ)`，门槛放在设备幅值的一半、但不低于噪声底，其余算法参数据此联动（CUSUM 的 `drift/threshold`、GLR 的 `noise` 等，见附录 E / G.8）。关键看注释行：
+
+- `min_delta_w = max(最小关心负荷/2, 6σ)` 且无 ⚠ → 好检，继续；
+- `⚠ 最小关心负荷 … 的一半低于噪声底 …` → 这台设备在这一侧淹没在噪声里，换**分路侧**文件重跑（附录 D）。
+
+### H.4 用法 3：指定配置文件 / 指定对象 / 限制分析长度
+
+```powershell
+# 用现场配置（PT/CT、列映射与生产一致），只量 A 相
+.\.venv\Scripts\python.exe tools\nilm_tune.py --file data\bus_bg.csv --config configs\site.json --channel A --min-load-w 300000
+# 文件很大（几十分钟），只分析前 6000 个周波（≈2 min@50 Hz）
+.\.venv\Scripts\python.exe tools\nilm_tune.py --file data\bus_bg_long.csv --max-cycles 6000 --min-load-w 300000
+```
+
+`--config` 决定三件事：① PT/CT 与列映射（影响量出来的数值和单位口径）；② 缺省检测量 `nilm.quantity`；③ `--apply` 的基准。**不填**时取界面保存过的 `configs\runtime.json`，没有才是 `configs\default.json`——所以在已经用界面改过 PT/CT 的机器上，不填 `--config` 得到的就是"和界面一样"的口径。
+
+### H.5 用法 4：机器可读输出 `--json`（供回放脚本 / 接口 / 留档）
+
+```powershell
+New-Item -ItemType Directory -Force output | Out-Null
+.\.venv\Scripts\python.exe tools\nilm_tune.py --file data\bus_bg.csv --config configs\default.json --min-load-w 300000 --json > output\tune.json
+```
+
+JSON 结构（节选）：
+
+```json
+{
+  "file": "data/bus_bg.csv", "channel": "total", "fs": 6400.0, "f_nom": 50.0,
+  "quantity": "p", "quantity_requested": "auto", "unit": "W", "voltage_present": true, "scaled": true,
+  "t_span_s": 5.98,
+  "measure": { "cycles": 300, "level": 1800012.7, "sigma_cycle": 27.9, "range5_p95": 122.5, "range10_p95": 161.9, "sigma_mean10": 14.8, "has_events_hint": true, "...": "..." },
+  "suggest": {
+    "note": "min_delta_w = max(最小关心负荷/2, 6σ)", "quantity": "p",
+    "rel_tol_pct": 0.05, "min_delta_pct": 0.01,
+    "algorithms": { "threshold": { "min_delta_w": 150000, "settle_cycles": 5, "settle_tol_w": 150, "max_rise_cycles": 40 }, "median_diff": { "...": "..." }, "two_window": {}, "cusum": {}, "glr": {}, "steady_state": {} }
+  }
+}
+```
+
+这份文件可以：`nilm_replay.py --params output\tune.json`（§5）；`POST /api/nilm/tune/apply` 的 `params`（§7-2′）；界面「套用 nilm_tune 结果」直接选它。stderr 的警告不会混进 JSON，重定向是安全的。
+
+### H.6 用法 5：数据源只有电流——按 I 口径调参（详见附录 F）
+
+```powershell
+# 文件没有电压列（或电压全 0）：auto 自动按电流有效值 I 统计；--min-load-a 为设备额定电流（一次侧 A）
+.\.venv\Scripts\python.exe tools\nilm_tune.py --file data\bus_bg_i.csv --min-load-a 30
+# 文件有电压、但生产上就是按电流检测：显式 --quantity i（或把 --config 里 nilm.quantity 设成 i，脚本会跟随）
+.\.venv\Scripts\python.exe tools\nilm_tune.py --file data\bus_bg.csv --quantity i --channel B --min-load-a 30 --json > output\tune_i.json
+```
+
+首行会写「检测量 电流有效值 I（… 数据源无电压 → auto 选 I）」，建议行全是 `*_a` 参数并带 `nilm.quantity = i`。两种会直接退出（码 2）的误用：
+
+```powershell
+.\.venv\Scripts\python.exe tools\nilm_tune.py --file data\bus_bg_i.csv --quantity p
+#  ⚠ 数据源没有电压（电压列未映射或全为 0）：有功恒为 0，无法按 P 调参；请用 --quantity i（或 auto）
+.\.venv\Scripts\python.exe tools\nilm_tune.py --file data\bus_bg_i.csv --min-load-a 30 --channel total
+#  ⚠ 仅电流（I 口径）检测不存在跨相合并 … 只能单相：--channel 请填 A / B / C
+```
+
+I 口径下给了 `--min-load-w` 会被忽略并提示「I 口径请用 --min-load-a」。
+
+### H.7 用法 6：`--apply`——直接生成"套好参数的完整配置"（v0.50）
+
+```powershell
+.\.venv\Scripts\python.exe tools\nilm_tune.py --file data\bus_bg.csv --config configs\default.json --min-load-w 300000 --apply
+```
+
+在正常输出之后多一段：
+
+```
+—— 已更新配置（--apply）——
+  基准配置   configs\default.json
+  已保存到   output\nilm\nilm_tuned_config_20261021_103000.json   （完整配置，可作 --config / ELEC_TOOL_CONFIG_PATH 使用，或 nilm_replay.py --config 回放核对）
+  配置文件   未改动（默认；要回写加 --save-config）
+```
+
+规则：只替换 `nilm.quantity / rel_tol_pct / min_delta_pct` 和 6 种算法里建议给出的键；各算法 `enabled`、建议没给的键、PT/CT、列映射、输出目录等全部保留；写出前经过与界面保存同样的配置校验。文件末尾的 `_tuning` 块记录来源文件、对象、时间和逐项改动，软件加载时忽略它。
+
+`--json` 与 `--apply` 可以同时用，JSON 里多一个字段：
+
+```json
+"applied": { "base_config": "configs/default.json", "saved_to": "output/nilm/nilm_tuned_config_20261021_103000.json",
+             "changes": ["nilm.quantity = p", "nilm.rel_tol_pct = 0.05", "threshold: min_delta_w=150000  settle_cycles=5  settle_tol_w=150  max_rise_cycles=40", "..."],
+             "config_file_updated": false }
+```
+
+### H.8 用法 7：`--apply --out`——指定输出文件名
+
+```powershell
+.\.venv\Scripts\python.exe tools\nilm_tune.py --file data\bus_bg.csv --min-load-w 300000 --apply --out output\site_tuned.json
+# 之后回放直接用它当配置，不再需要 --params：
+.\.venv\Scripts\python.exe tools\nilm_replay.py --file data\dev_onoff.csv --config output\site_tuned.json --out output\replay_events.csv
+```
+
+### H.9 用法 8：`--apply --save-config`——显式回写配置文件
+
+```powershell
+.\.venv\Scripts\python.exe tools\nilm_tune.py --file data\bus_bg.csv --config configs\site.json --min-load-w 300000 --apply --save-config
+#   配置文件   已回写（--save-config）
+```
+
+只有加了这个开关才会改 `--config` 指向的文件（没给 `--config` 时就是 `configs\runtime.json` / `default.json`，请确认你真的想改它）。输出目录里的副本仍会生成。**正在运行的软件不会自动重载**，要么重启，要么按 §7-2′ 用界面 / `POST /api/nilm/tune/apply` 推送。基准文件不存在时（例如没给 `--config` 且两份默认文件都不在）会报错退出，不会凭空创建。
+
+### H.10 用法 9：直接套到运行中的软件（不经文件）
+
+脚本本身不连软件；把 `--json` 的输出交给接口即可，软件在**当前侧正在运行的配置**上更新并写 `output\nilm\nilm_tuned_config_<bus|branch>_<时间戳>.json`，默认不写配置文件：
+
+```powershell
+.\.venv\Scripts\python.exe tools\nilm_tune.py --file data\bus_bg.csv --min-load-w 300000 --json > output\tune.json
+$body = [System.Text.Encoding]::UTF8.GetBytes('{"params": ' + (Get-Content output\tune.json -Raw -Encoding UTF8) + ', "hot": true, "persist": false}')
+Invoke-RestMethod -Method Post -Uri http://localhost:8000/api/nilm/tune/apply -ContentType 'application/json; charset=utf-8' -Body $body | Select-Object ok, saved_to, config_file_updated
+# 分路侧：/api/branch/nilm/tune/apply；"persist": true 才回写运行配置文件；"hot": false 只写文件不改运行参数
+```
+
+或在界面「负荷辨识 → 检测参数 → 套用 nilm_tune 结果」里选 `output\tune.json`。
+
+### H.11 组合示例：从拿到数据到上线的最短路径
+
+```powershell
+# ① 量噪声 + 生成完整配置（不改配置文件）
+.\.venv\Scripts\python.exe tools\nilm_tune.py --file data\dev_bg.csv --config configs\site.json --min-load-w 300000 --apply --out output\site_tuned.json --json > output\tune.json
+# ② 用它回放含已知投切的文件
+.\.venv\Scripts\python.exe tools\nilm_replay.py --file data\dev_onoff.csv --config output\site_tuned.json --out output\replay_events.csv
+# ③ 对账
+.\.venv\Scripts\python.exe tools\nilm_check.py --events output\replay_events.csv --truth data\truth.csv
+# ④ ✅ 后推送到运行中的软件（§7-2′），或 ⚠/✗ 则回到 §6 微调
+```
+
+### H.12 常见问题速查
+
+| 现象 | 原因 | 处理 |
+|---|---|---|
+| `没有读到整周波数据`（退出码 2） | 文件不足一个周波 / 列映射不对 / fs 配错 | 检查 `--config` 的 `columns`、`sampling.fs` |
+| 首行「口径 二次侧」但现场参数是一次侧 | `--config` 里 `transform.enabled=false` 或没指到现场配置 | 指定正确的 `--config` |
+| 建议值与界面显示差了 PT×CT 倍 | 同上，口径不一致 | 同上 |
+| `max|diff|` 带 ⚠ | 背景段混了投切 | 允许（稳健统计），建议切两半各跑一次比对 σ |
+| `nilm.min_delta_pct` 被置 0 并提示"基荷相对门槛过小" | 基荷很小（设备侧、设备关着） | 正常：门槛以各算法绝对值 W/A 为准 |
+| `--apply` 后界面没变 | `--apply` 只写输出目录文件，不碰运行配置 | 用 §7-2′ 推送，或 `--save-config` 后重启 |
