@@ -3038,6 +3038,28 @@ async function saveNilmConfig(side = sideOf()) {
   } catch (e) { note.textContent = '保存失败：' + e.message; toast(e.message, 'err'); }
 }
 
+async function applyNilmTune(side = sideOf()) {
+  // v0.50：把 nilm_tune.py --json 的输出叠加到当前运行配置（POST /api/nilm/tune/apply）；默认不写配置文件
+  const fi = E(side, 'nilm-tune-file'), note = E(side, 'nilm-tune-note');
+  const f = fi && fi.files && fi.files[0];
+  if (!f) { toast('请先选择 nilm_tune.py --json 输出的 JSON 文件', 'err'); return; }
+  let params;
+  try { params = JSON.parse(await f.text()); } catch (e) { note.textContent = '不是合法 JSON：' + e.message; toast(note.textContent, 'err'); return; }
+  const persist = !!(E(side, 'nilm-tune-persist') || {}).checked;
+  try {
+    const d = await api('/api/nilm/tune/apply', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ params, hot: true, persist }) }, side);
+    if (d && d.config) {
+      if (side === 'branch') { if (BRD.state) BRD.state.config = d.config; BR.loaded = false; } else if (S.state) S.state.config = d.config;
+      fillNilmForm(d.config.nilm, side);
+    }
+    NLs(side).dirty = false;
+    note.textContent = `已套用 ${d.changes.length} 项并热生效，配置已保存到 ${d.saved_to}` + (d.config_file_updated ? '（配置文件已回写）' : '（配置文件未改动）');
+    toast((side === 'branch' ? '分路侧' : '总线侧') + '已套用调参结果', 'ok');
+    refreshNilm(side);
+  } catch (e) { note.textContent = '套用失败：' + e.message; toast(e.message, 'err'); }
+}
+
 function onNilmPush(list, side = 'bus') {
   const nl = NLs(side);
   list.forEach(e => { if (!nl.events.some(x => x.id === e.id)) nl.events.unshift(e); });
@@ -3298,6 +3320,7 @@ function bindNilm(side) {
   on('btn-nilm-refresh', 'click', () => refreshNilm(side));
   on('btn-nilm-clear', 'click', () => clearNilm(side));
   on('btn-nilm-save', 'click', () => saveNilmConfig(side));
+  on('btn-nilm-tune-apply', 'click', () => applyNilmTune(side));
   on('btn-nilm-win-load', 'click', () => loadNilmWindow(side));
   on('btn-nilm-win-live', 'click', () => clearNilmWindow(side));
   on('nilm-win-t', 'keydown', (e) => { if (e.key === 'Enter') loadNilmWindow(side); });

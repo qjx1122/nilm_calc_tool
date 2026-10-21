@@ -509,3 +509,89 @@ def test_frontend_window_load_wiring():
     assert all(x in html for x in ('id="nilm-win-t"', 'id="nilm-win-count"', 'id="btn-nilm-win-load"', 'id="btn-nilm-win-live"', 'value="300"'))
     assert "function bindCtxMenu(" in js and "key: 'show-window'" in js and "/api/nilm/cycles_file" in js
     assert "disabled: running || noX" in js and "el.disabled = running" in js      # 仅非运行可操作
+
+
+# ------------------------------------------------------------------ v0.50：nilm_tune --apply / POST /api/nilm/tune/apply
+def _tune_json(unit="W"):
+    sx = "_w" if unit == "W" else "_a"
+    return {"file": "bg.csv", "channel": "total", "quantity": "p" if unit == "W" else "i", "unit": unit,
+            "suggest": {"quantity": "p" if unit == "W" else "i", "rel_tol_pct": 1.5, "min_delta_pct": 3.0,
+                        "algorithms": {"threshold": {f"min_delta{sx}": 123.0, f"settle_tol{sx}": 9.0, "bogus": 1},
+                                       "glr": {"threshold": 31.0, f"noise{sx}": 2.5},
+                                       "not_an_algo": {"x": 1}}}}
+
+
+def test_export_tuned_config_keeps_base_untouched_and_writes_full_config(tmp_path):
+    from elec_tool.nilm_tuning import apply_nilm_params, export_tuned_config
+    base = AppConfig.from_dict(AppConfig().to_dict())
+    base.nilm.nilm_dir = str(tmp_path / "nilm"); base.nilm.window_cycles = 321
+    base.nilm.algorithms["glr"] = {"enabled": False, "threshold": 10.0}
+    base_json = base.to_json()
+    cfg, path, notes = export_tuned_config(base, _tune_json())
+    assert base.to_json() == base_json                              # 基准配置未被修改
+    assert path.startswith(str(tmp_path / "nilm")) and os.path.isfile(path)
+    data = __import__("json").load(open(path, encoding="utf-8"))
+    assert data["nilm"]["window_cycles"] == 321                     # 非调参项保留
+    assert data["nilm"]["quantity"] == "p" and data["nilm"]["rel_tol_pct"] == 1.5 and data["nilm"]["min_delta_pct"] == 3.0
+    assert data["nilm"]["algorithms"]["threshold"]["min_delta_w"] == 123.0 and "bogus" not in data["nilm"]["algorithms"]["threshold"]
+    g = data["nilm"]["algorithms"]["glr"]                           # enabled 保留、建议项覆盖、其余为默认值；未知算法忽略
+    assert g["enabled"] is False and g["threshold"] == 31.0 and g["noise_w"] == 2.5 and g["window_cycles"] == 15
+    assert "not_an_algo" not in data["nilm"]["algorithms"]
+    assert data["_tuning"]["changes"] == notes and data["_tuning"]["file"] == "bg.csv"
+    re = AppConfig.load(path)                                       # 写出的是可直接加载的完整配置
+    assert re.nilm.algorithms["glr"]["threshold"] == 31.0
+    assert apply_nilm_params(AppConfig(), {"foo": 1}) == []         # 没有可套用项 → 空
+
+
+def test_nilm_tune_cli_apply_writes_to_output_dir_not_config(tmp_path):
+    import json, subprocess, sys
+    p = _write_csv(tmp_path / "bg.csv", dur=3.0)
+    cfgp = tmp_path / "cfg.json"
+    c = AppConfig.from_dict(AppConfig().to_dict()); c.nilm.nilm_dir = str(tmp_path / "out"); c.save(str(cfgp))
+    before = cfgp.read_text(encoding="utf-8")
+    r = subprocess.run([sys.executable, str(ROOT / "tools" / "nilm_tune.py"), "--file", str(p), "--config", str(cfgp),
+                        "--min-load-w", "500", "--apply", "--json"], capture_output=True, text=True, cwd=str(ROOT))
+    assert r.returncode == 0, r.stderr
+    out = json.loads(r.stdout)
+    ap = out["applied"]
+    assert ap["config_file_updated"] is False and cfgp.read_text(encoding="utf-8") == before   # 默认不改配置文件
+    assert ap["saved_to"].startswith(str(tmp_path / "out")) and os.path.isfile(ap["saved_to"])
+    nc = AppConfig.load(ap["saved_to"])
+    assert nc.nilm.algorithms["threshold"]["min_delta_w"] == out["suggest"]["algorithms"]["threshold"]["min_delta_w"]
+    assert nc.nilm.rel_tol_pct == out["suggest"]["rel_tol_pct"] and nc.nilm.nilm_dir == str(tmp_path / "out")
+    # --save-config 才回写；--out 指定文件
+    r = subprocess.run([sys.executable, str(ROOT / "tools" / "nilm_tune.py"), "--file", str(p), "--config", str(cfgp),
+                        "--min-load-w", "500", "--apply", "--save-config", "--out", str(tmp_path / "x.json")],
+                       capture_output=True, text=True, cwd=str(ROOT))
+    assert r.returncode == 0, r.stderr
+    assert os.path.isfile(tmp_path / "x.json") and "已回写" in r.stdout
+    assert AppConfig.load(str(cfgp)).nilm.algorithms["threshold"]["min_delta_w"] == nc.nilm.algorithms["threshold"]["min_delta_w"]
+
+
+def test_web_nilm_tune_apply_hot_updates_running_config_without_persist(client):
+    client.post("/api/engine/stop")
+    cfg0 = client.get("/api/config").json()
+    cfg_file_before = (client.dir / "cfg.json").read_text(encoding="utf-8")
+    assert client.post("/api/nilm/tune/apply", json={}).status_code == 400
+    assert client.post("/api/nilm/tune/apply", json={"params": {"foo": 1}}).status_code == 400
+    r = client.post("/api/nilm/tune/apply", json={"params": _tune_json()})
+    assert r.status_code == 200, r.text
+    d = r.json()
+    assert d["ok"] and d["hot"] and d["config_file_updated"] is False and len(d["changes"]) >= 4
+    assert d["config"]["nilm"]["algorithms"]["threshold"]["min_delta_w"] == 123.0
+    assert d["config"]["nilm"]["window_cycles"] == cfg0["nilm"]["window_cycles"]
+    assert client.get("/api/config").json()["nilm"]["algorithms"]["glr"]["threshold"] == 31.0   # 已热生效
+    assert (client.dir / "cfg.json").read_text(encoding="utf-8") == cfg_file_before           # 未写配置文件
+    saved = ROOT / d["saved_to"] if not os.path.isabs(d["saved_to"]) else Path(d["saved_to"])
+    assert saved.is_file() and "nilm_tuned_config_bus_" in saved.name
+    exp_dir = os.environ.get("ELEC_TOOL_NILM_DIR") or d["config"]["nilm"]["nilm_dir"]           # 输出目录＝事件 CSV 所在 nilm 目录
+    assert str(saved.parent) == os.path.abspath(exp_dir)
+    # hot=false：只写文件、不改运行配置
+    r = client.post("/api/nilm/tune/apply", json={"params": {"nilm": {"algorithms": {"glr": {"threshold": 44.0}}}}, "hot": False}).json()
+    assert r["ok"] and r["config"]["nilm"]["algorithms"]["glr"]["threshold"] == 44.0
+    assert client.get("/api/config").json()["nilm"]["algorithms"]["glr"]["threshold"] == 31.0
+    # 非法值 → 400
+    assert client.post("/api/nilm/tune/apply", json={"params": {"nilm": {"algorithms": {"glr": {"threshold": 0}}}}}).status_code == 400
+    html = (ROOT / "app/static/index.html").read_text(encoding="utf-8"); js = (ROOT / "app/static/app.js").read_text(encoding="utf-8")
+    assert all(x in html for x in ('id="nilm-tune-file"', 'id="btn-nilm-tune-apply"', 'id="nilm-tune-persist"', 'id="nilm-tune-note"'))
+    assert "/api/nilm/tune/apply" in js and "function applyNilmTune(" in js

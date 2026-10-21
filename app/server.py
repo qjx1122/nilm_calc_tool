@@ -39,6 +39,7 @@ from elec_tool import __version__
 from elec_tool.config import (AppConfig, ConfigError, parse_time_text, CURVE_KEYS, QUANTITY_KEYS, SourceConfig, WindowSpec,
                               load_or_default)
 from elec_tool.engine import LiveEngine
+from elec_tool.nilm_tuning import export_tuned_config
 from elec_tool.pace import PaceClock
 from elec_tool.timefmt import fmt_local
 from elec_tool.metrics import MetricsResult
@@ -1393,6 +1394,39 @@ async def get_nilm_events(limit: int = 500, algos: Optional[str] = None, channel
     """负荷辨识事件列表：algos=逗号分隔算法键；channel=total/A/B/C；since_id 增量拉取。"""
     al = [a.strip() for a in algos.split(",") if a.strip()] if algos else None
     return RUNNER.nilm_events(limit=max(1, min(int(limit), 5000)), algos=al, channel=(channel or None), since_id=int(since_id))
+
+
+@app.post("/api/nilm/tune/apply")
+async def nilm_tune_apply(payload: Dict[str, Any]) -> Any:
+    """v0.50：把 nilm_tune.py --json 的结果叠加到**当前侧正在运行的配置**上。
+
+    payload：``{"params": <nilm_tune --json 整份 / 其 suggest 片段 / {"nilm": {...}}>, "hot": true, "persist": false, "out": null}``
+    * 总是在 ``nilm.nilm_dir``（默认 output/nilm）写出更新后的完整配置 ``nilm_tuned_config_<side>_<时间戳>.json``；
+    * ``hot``（默认 true）：热更新到运行中的引擎（与界面「保存参数」同一路径），但**不写配置文件**；
+    * ``persist``（默认 false）：显式要求时才把配置回写 runtime 配置文件（受 ELEC_TOOL_PERSIST_CONFIG 约束）。
+    """
+    params = payload.get("params") if isinstance(payload, dict) else None
+    if not isinstance(params, dict):
+        return JSONResponse(status_code=400, content={"ok": False, "error": "缺少 params（nilm_tune.py --json 的输出）"})
+    try:
+        side = current_side()
+        nl_dir = os.environ.get("ELEC_TOOL_NILM_DIR") or RUNNER.cfg.nilm.nilm_dir      # 与事件 CSV 同一目录
+        cfg, path, notes = export_tuned_config(RUNNER.cfg, params, out_path=(payload.get("out") or None), out_dir=nl_dir,
+                                               tag=side, meta={"side": side, "base_config": "running"})
+        if not notes:
+            return JSONResponse(status_code=400, content={"ok": False, "error": "params 里没有可套用的 nilm 参数（需 quantity / rel_tol_pct / min_delta_pct / algorithms）"})
+        hot = bool(payload.get("hot", True))
+        persisted = False
+        if hot:
+            RUNNER.set_cfg(cfg)
+            if bool(payload.get("persist", False)) and os.environ.get("ELEC_TOOL_PERSIST_CONFIG", "1") == "1":
+                _persist(cfg); persisted = True
+        return {"ok": True, "side": side, "saved_to": _display_path(path), "changes": notes, "hot": hot,
+                "config_file_updated": persisted, "config": (RUNNER.cfg if hot else cfg).to_dict()}
+    except ConfigError as exc:
+        return JSONResponse(status_code=400, content={"ok": False, "error": str(exc)})
+    except Exception as exc:
+        return JSONResponse(status_code=400, content={"ok": False, "error": f"{type(exc).__name__}: {exc}"})
 
 
 @app.get("/api/nilm/cycles")

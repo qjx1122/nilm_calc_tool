@@ -7,6 +7,11 @@
     python tools/nilm_tune.py --file data/xxx.csv --min-load-w 500  # 指定现场最小关心负荷（W，计算口径），直接给出一套参数
     python tools/nilm_tune.py --file data/xxx.csv --json            # 机器可读输出（可直接 PUT /api/config 的 nilm 片段）
     python tools/nilm_tune.py --file data/只有电流.csv --min-load-a 2  # v0.38：仅电流数据 → 按电流有效值 I 统计，给 *_a（A）阈值
+    python tools/nilm_tune.py --file data/xxx.csv --min-load-w 500 --apply
+        # v0.50：在当前运行配置（--config；缺省＝configs/runtime.json，没有则 configs/default.json）基础上叠加建议参数，
+        # 把更新后的**完整配置**写到输出目录 output/nilm/nilm_tuned_config_<时间戳>.json；**不改配置文件本身**
+    python tools/nilm_tune.py --file data/xxx.csv --apply --out output/site_tuned.json      # 指定输出文件
+    python tools/nilm_tune.py --file data/xxx.csv --apply --save-config                     # 显式要求：同时回写 --config 文件
 
 理想输入是**没有投切事件的稳态段**（几十秒即可）；若文件含事件，脚本用稳健统计量（中位数 / MAD）削弱其影响，
 并提示「窗内极差」供判断。输出的单位与界面一致：启用 PT/CT 时为一次侧 W / A。
@@ -29,8 +34,9 @@ import numpy as np
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
-from elec_tool.config import NILM_ALGO_DEFAULTS, NILM_CHANNELS, load_or_default   # noqa: E402
+from elec_tool.config import NILM_ALGO_DEFAULTS, NILM_CHANNELS, AppConfig, load_or_default   # noqa: E402
 from elec_tool.nilm import CycleFeatures                                            # noqa: E402
+from elec_tool.nilm_tuning import export_tuned_config                               # noqa: E402
 from elec_tool.scaling import scale_block                                           # noqa: E402
 from elec_tool.sources import create_source                                         # noqa: E402
 
@@ -121,7 +127,9 @@ def suggest(m: dict, min_load: float | None) -> dict:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--file", required=True, help="背景数据 CSV（与数据源同格式）")
-    ap.add_argument("--config", default=None, help="配置文件（PT/CT、fs、f_nom 由此读取；默认 configs/default.json）")
+    ap.add_argument("--config", default=None,
+                    help="基准配置文件（PT/CT、fs、f_nom 由此读取，--apply 在其基础上更新）；缺省＝当前运行配置 "
+                         "configs/runtime.json，没有则 configs/default.json")
     ap.add_argument("--channel", default=None, choices=NILM_CHANNELS,
                     help="检测对象（默认：P 口径 total，I 口径 A）。I 口径没有跨相合并，只能单相（A/B/C），不接受 total")
     ap.add_argument("--min-load-w", type=float, default=None, help="现场最小关心负荷（W，计算口径；P 口径用）")
@@ -130,9 +138,17 @@ def main() -> int:
                     help="检测量：p 有功 / i 电流有效值 / auto（数据源无电压时自动 i）。不填时取 --config 里的 nilm.quantity（v0.45）")
     ap.add_argument("--max-cycles", type=int, default=30000, help="最多分析的周波数（默认 30000 ≈ 10 min@50Hz）")
     ap.add_argument("--json", action="store_true", help="只输出 JSON")
+    ap.add_argument("--apply", action="store_true",
+                    help="v0.50：把建议参数叠加到 --config 配置上，写出更新后的完整配置到输出目录（默认 output/nilm/"
+                         "nilm_tuned_config_<时间戳>.json）；不回写配置文件")
+    ap.add_argument("--out", default=None, help="--apply 的输出文件路径（默认见 --apply）")
+    ap.add_argument("--save-config", action="store_true",
+                    help="与 --apply 连用：**额外**把更新后的配置回写到 --config 指定的文件（默认不回写；运行中的服务需重启/重新加载才生效）")
     a = ap.parse_args()
 
-    cfg = load_or_default(a.config) if a.config else load_or_default(None)
+    cfg_path = a.config or _default_config_path()
+    cfg = load_or_default(cfg_path)
+    base_cfg = AppConfig.from_dict(cfg.to_dict())     # --apply 的基准：未被本脚本改动 source 的原始配置
     cfg.source.kind = "csv_file"; cfg.source.path = a.file
     cfg.validate()
     feat = CycleFeatures(cfg.sampling.fs, cfg.sampling.f_nom)
@@ -177,6 +193,18 @@ def main() -> int:
            "quantity": qty, "quantity_requested": q_req, "unit": unit, "voltage_present": u_nonzero,
            "scaled": bool(cfg.transform.enabled), "t_span_s": float(t[-1] - t[0]) if len(t) > 1 else 0.0,
            "measure": m, "suggest": sg}
+    applied = None
+    if a.apply:
+        if a.save_config and not a.config and not os.path.isfile(cfg_path):
+            print(f"⚠ --save-config 需要一个存在的配置文件（当前基准 {cfg_path} 不存在）", file=sys.stderr)
+            return 2
+        new_cfg, path, notes = export_tuned_config(
+            base_cfg, out, out_path=a.out, meta={"base_config": cfg_path if os.path.isfile(cfg_path) else "(内置默认)"})
+        applied = {"base_config": cfg_path, "saved_to": path, "changes": notes, "config_file_updated": False}
+        if a.save_config:
+            new_cfg.save(cfg_path)
+            applied["config_file_updated"] = True
+        out["applied"] = applied
     if a.json:
         print(json.dumps(out, ensure_ascii=False, indent=2))
         return 0
@@ -198,7 +226,22 @@ def main() -> int:
         print(f"  {k:13s} " + "  ".join(f"{kk}={vv:g}" if isinstance(vv, float) else f"{kk}={vv}" for kk, vv in v.items()))
     print("提示：把上面 algorithms 片段填进界面「检测参数」或 PUT /api/config {\"nilm\": {\"algorithms\": {...}}}；"
           "用含已知投切的文件回放核对漏报/误报后再微调。")
+    if applied:
+        print("—— 已更新配置（--apply）——")
+        print(f"  基准配置   {applied['base_config']}")
+        print(f"  已保存到   {applied['saved_to']}   （完整配置，可作 --config / ELEC_TOOL_CONFIG_PATH 使用，"
+              "或 nilm_replay.py --config 回放核对）")
+        print("  配置文件   " + ("已回写（--save-config）" if applied["config_file_updated"] else "未改动（默认；要回写加 --save-config）"))
     return 0
+
+
+def _default_config_path() -> str:
+    """未指定 --config 时的基准：与 Web 服务一致——存在 configs/runtime.json（界面保存的当前运行配置）就用它，否则 configs/default.json。"""
+    env = os.environ.get("ELEC_TOOL_CONFIG_PATH", "").strip()
+    if env:
+        return env
+    rt = os.path.join(ROOT, "configs", "runtime.json")
+    return rt if os.path.isfile(rt) else os.path.join(ROOT, "configs", "default.json")
 
 
 if __name__ == "__main__":

@@ -90,6 +90,18 @@ New-Item -ItemType Directory -Force output | Out-Null
 .\.venv\Scripts\python.exe tools\nilm_tune.py --file data\bus_bg.csv --config configs\default.json --min-load-w 300000 --json > output\tune.json
 ```
 
+**（v0.50）想一步到位、直接得到"套好参数的完整配置"**：加 `--apply`。脚本会在**当前运行配置**（`--config` 指定的文件；不填时取界面保存的 `configs\runtime.json`，没有则 `configs\default.json`）基础上只替换 `nilm.quantity / rel_tol_pct / min_delta_pct` 和 6 种算法的建议参数，其余（PT/CT、列映射、输出目录、各算法 `enabled`、建议里没给的键）一律保留，把更新后的**完整配置**写到输出目录 `output\nilm\nilm_tuned_config_<时间戳>.json`；**默认不改配置文件本身**：
+
+```powershell
+.\.venv\Scripts\python.exe tools\nilm_tune.py --file data\bus_bg.csv --config configs\default.json --min-load-w 300000 --apply
+#   末尾多出一段「—— 已更新配置（--apply）——」：基准配置 / 已保存到 output\nilm\nilm_tuned_config_20261021_103000.json / 配置文件 未改动
+.\.venv\Scripts\python.exe tools\nilm_tune.py --file data\bus_bg.csv --min-load-w 300000 --apply --out output\site_tuned.json   # 自定义输出文件
+.\.venv\Scripts\python.exe tools\nilm_tune.py --file data\bus_bg.csv --config configs\site.json --min-load-w 300000 --apply --save-config
+#   --save-config 才会把更新后的配置**回写到 --config 那个文件**（显式要求才做；运行中的软件要重新加载才生效）
+```
+
+写出的文件是完整配置，可以直接 `--config output\nilm\nilm_tuned_config_xxx.json` 给 `nilm_replay.py` 回放核对（§5 不再需要 `--params`），或作为软件启动配置（`ELEC_TOOL_CONFIG_PATH`）。文件末尾带 `_tuning` 元信息（来源文件、对象、时间、改了哪些项），软件加载时忽略它。`--json` 与 `--apply` 可以同时用，JSON 里多一个 `applied` 字段（`saved_to / changes / config_file_updated`）。
+
 **怎么判断这一步的结果靠不靠谱：**
 
 | 看到什么 | 含义 | 怎么办 |
@@ -235,6 +247,24 @@ Invoke-RestMethod -Method Put -Uri http://localhost:8000/api/branch/config -Cont
 
 看到 `ok : True` 即生效（参数热更新，不清历史事件）。软件默认会把界面改动持久化到 `configs\runtime.json`，重启后仍在。
 
+### 7-2′（v0.50）直接套用 `tune.json`——界面或 `POST /api/nilm/tune/apply`
+
+不想手工拼 `nilm` 片段时，可把 §3 的 `output\tune.json`（`nilm_tune.py --json` 的原始输出）**原样**交给软件，由软件在**当前侧正在运行的配置**基础上更新算法参数：
+
+* **界面**：「负荷辨识」→「检测参数」→ 底部「套用 nilm_tune 结果」选择 `tune.json` → 「套用到当前配置」。表单立即回填、参数热生效，提示行给出更新后的完整配置落在哪（`output\nilm\nilm_tuned_config_<bus|branch>_<时间戳>.json`）。**默认不写配置文件**（提示「配置文件未改动」）；勾选「同时写入配置文件」才回写 `configs\runtime.json`（或分路侧 `branch_runtime.json`）。
+* **命令行**：
+
+```powershell
+$body = Get-Content output\tune.json -Raw -Encoding UTF8
+$body = [System.Text.Encoding]::UTF8.GetBytes('{"params": ' + $body + ', "hot": true, "persist": false}')
+Invoke-RestMethod -Method Post -Uri http://localhost:8000/api/nilm/tune/apply -ContentType 'application/json; charset=utf-8' -Body $body | Select-Object ok, saved_to, config_file_updated
+# 分路侧改 /api/branch/nilm/tune/apply；"persist": true 才回写配置文件；"hot": false 只写文件、不改运行参数
+```
+
+返回 `changes`（逐项改了什么）、`saved_to`（输出目录里的完整配置文件）、`config`（更新后的运行配置）。`params` 可以是整份 `tune.json`、其中的 `suggest` 片段，或 `{"nilm": {...}}`；只有 `quantity / rel_tol_pct / min_delta_pct / algorithms.<算法>.<已知参数>` 会被采用，其它键忽略；非法值（如 `glr.threshold=0`）返回 400 且不改任何东西。
+
+> 与 7-1/7-2 的关系：7-1 是「回放微调后定稿」的路径（`nilm_replay.py --save-config`），7-2′ 是「量完噪声直接套用起点参数」的快捷路径；两者都不会自动替你改 `configs\default.json`。
+
 ### 7-3 在界面上确认
 
 打开浏览器 → 左侧导航「负荷辨识」（总线侧 / 分路侧各一个）→ 下方「检测参数」：各算法的数值应与 `output\site.json` 一致，关掉的算法勾选框为空。
@@ -315,8 +345,14 @@ cd D:\nilm_calc_tool
 .\.venv\Scripts\python.exe tools\nilm_check.py --events output\replay_events.csv --truth data\truth.csv --tol-s 1 --out output\replay_check.csv
 # 4 微调（示例）后重复 2、3
 .\.venv\Scripts\python.exe tools\nilm_replay.py --file data\dev_onoff.csv --config configs\default.json --params output\tune.json --set threshold.min_delta_w=100000 --out output\replay_events.csv
+# 1′（v0.50）量噪声并直接生成套好参数的完整配置（写到 output\nilm\，不改配置文件；回写加 --save-config）
+.\.venv\Scripts\python.exe tools\nilm_tune.py --file data\bus_bg.csv --config configs\default.json --min-load-w 300000 --apply
+#    之后回放可直接 --config output\nilm\nilm_tuned_config_<时间戳>.json，不用 --params
 # 5 定稿 + 推送
 .\.venv\Scripts\python.exe tools\nilm_replay.py --file data\dev_onoff.csv --config configs\default.json --params output\tune.json --set threshold.min_delta_w=100000 --save-config output\site.json --out output\replay_events.csv
+# 5′（v0.50）把 tune.json 直接套到运行中的软件（当前侧运行配置为基准；persist=false 不写配置文件）
+$body = [System.Text.Encoding]::UTF8.GetBytes('{"params": ' + (Get-Content output\tune.json -Raw -Encoding UTF8) + ', "persist": false}')
+Invoke-RestMethod -Method Post -Uri http://localhost:8000/api/nilm/tune/apply -ContentType 'application/json; charset=utf-8' -Body $body | Select-Object ok, saved_to
 $cfg = Get-Content output\site.json -Raw -Encoding UTF8 | ConvertFrom-Json
 $body = [System.Text.Encoding]::UTF8.GetBytes((@{ nilm = $cfg.nilm } | ConvertTo-Json -Depth 10))
 Invoke-RestMethod -Method Put -Uri http://localhost:8000/api/branch/config -ContentType 'application/json; charset=utf-8' -Body $body | Select-Object ok
@@ -609,3 +645,5 @@ Invoke-RestMethod -Method Put -Uri http://localhost:8000/api/branch/config -Cont
 ### G.8 参数与 `nilm_tune.py` 建议值的对应关系（见附录 E）
 
 `settle_tol = 5 周波极差 P95 × 1.2`（threshold / median 的稳态容差）；`steady_state.tol = 10 周波极差 P95 × 1.2`；`min_delta = max(最小关心负荷/2, 6σ)`；`cusum.drift = max(min_delta/4, 0.5σ)`、`cusum.threshold = max(2(min_delta − drift), 5σ)`；`glr.noise = σ`；其余窗长 / 周波数用默认值。A 口径同一套公式作用在 I 序列上，输出 `*_a`。
+
+**建议值怎么进配置（v0.50）**：套用逻辑在 `elec_tool/nilm_tuning.py`（`apply_nilm_params` / `export_tuned_config`），`nilm_tune.py --apply`、`nilm_replay.py --params`、`POST /api/nilm/tune/apply` 与界面「套用 nilm_tune 结果」共用同一份：在基准配置的**副本**上只覆盖 `nilm.quantity / rel_tol_pct / min_delta_pct` 和各算法里 `NILM_ALGO_DEFAULTS` 认识的键（`enabled` 与未知键不动），`validate()` 通过后写成完整配置到 `nilm.nilm_dir`（默认 `output/nilm`），文件名 `nilm_tuned_config[_<侧>]_<YYYYmmdd_HHMMSS>.json`，附 `_tuning` 元信息；是否回写正式配置文件由调用方显式决定（CLI `--save-config` / API `persist`），默认一律不写。

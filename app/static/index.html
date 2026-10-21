@@ -721,6 +721,12 @@
         </div>
         <div id="nilm-algos"></div>
         <div class="row" style="margin-top:10px"><button id="btn-nilm-save">保存参数</button><span id="nilm-form-note" class="mut"></span></div>
+        <div class="row nilm-tune" style="margin-top:6px" title="v0.50：把 tools/nilm_tune.py --json 的输出叠加到当前运行配置：只改 nilm.quantity / rel_tol_pct / min_delta_pct 和各算法参数，其余不动；更新后的完整配置写到 output/nilm/nilm_tuned_config_<侧>_<时间戳>.json，默认不写配置文件">
+          <label>套用 nilm_tune 结果 <input type="file" id="nilm-tune-file" accept=".json,application/json"></label>
+          <button id="btn-nilm-tune-apply">套用到当前配置</button>
+          <label class="check" title="默认只热生效并写到输出目录；勾选后同时回写运行配置文件（configs/runtime.json）"><input type="checkbox" id="nilm-tune-persist"> 同时写入配置文件</label>
+          <span id="nilm-tune-note" class="mut"></span>
+        </div>
         <div id="nilm-notes" class="notes"></div>
       </div>
     </section>

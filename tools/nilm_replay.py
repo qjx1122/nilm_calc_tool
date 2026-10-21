@@ -23,30 +23,15 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
 from elec_tool.config import NILM_ALGO_DEFAULTS, AppConfig, load_or_default   # noqa: E402
+from elec_tool.nilm_tuning import apply_nilm_params                              # noqa: E402
 from elec_tool.nilm import _CSV_FIELDS, NILM_ALGO_NAMES, NilmDetector           # noqa: E402
 from elec_tool.scaling import scale_block                                        # noqa: E402
 from elec_tool.sources import create_source                                      # noqa: E402
 
 
 def apply_params(cfg: AppConfig, params: Dict[str, Any]) -> List[str]:
-    """把 nilm_tune --json 的输出（或其 suggest 片段 / 直接的 nilm 片段）叠加到 cfg.nilm。返回说明行。"""
-    sg = params.get("suggest", params)
-    notes: List[str] = []
-    q = sg.get("quantity") or params.get("quantity")
-    if q in ("auto", "p", "i"):                                     # v0.38：nilm_tune 的检测量一并套用
-        cfg.nilm.quantity = q; notes.append(f"nilm.quantity = {q}")
-    if "rel_tol_pct" in sg:
-        cfg.nilm.rel_tol_pct = float(sg["rel_tol_pct"]); notes.append(f"nilm.rel_tol_pct = {cfg.nilm.rel_tol_pct}")
-    if "min_delta_pct" in sg:
-        cfg.nilm.min_delta_pct = float(sg["min_delta_pct"]); notes.append(f"nilm.min_delta_pct = {cfg.nilm.min_delta_pct}")
-    for algo, prm in (sg.get("algorithms") or {}).items():
-        if algo not in NILM_ALGO_DEFAULTS:
-            continue
-        cur = dict(cfg.nilm.algorithms.get(algo) or {})
-        cur.update({k: v for k, v in prm.items() if k in NILM_ALGO_DEFAULTS[algo]})
-        cfg.nilm.algorithms[algo] = cur
-        notes.append(f"{algo}: " + "  ".join(f"{k}={v:g}" if isinstance(v, float) else f"{k}={v}" for k, v in cur.items()))
-    return notes
+    """把 nilm_tune --json 的输出叠加到 cfg.nilm（v0.50 起实现在 elec_tool.nilm_tuning，与 nilm_tune --apply / API 共用）。"""
+    return apply_nilm_params(cfg, params)
 
 
 def apply_set(cfg: AppConfig, items: List[str]) -> List[str]:

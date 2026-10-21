@@ -205,7 +205,23 @@ async function main() {
   check('清空后表格为空', ($('nilm-table').textContent || '').includes('暂无事件'));
   check('徽标隐藏', $('nav-nilm-badge').style.display === 'none');
   await api('/api/engine/stop', { method: 'POST' });
-  await api('/api/config', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ nilm: { algorithms: { glr: { threshold: 25 } } } }) });
+
+  console.log('L5 v0.50 套用 nilm_tune 结果');
+  check('表单含 nilm-tune-file / btn-nilm-tune-apply / nilm-tune-persist / nilm-tune-note', ['nilm-tune-file', 'btn-nilm-tune-apply', 'nilm-tune-persist', 'nilm-tune-note'].every(id => !!$(id)));
+  check('分路侧也有同名 -br 控件', !!document.getElementById('btn-nilm-tune-apply-br') && !!document.getElementById('nilm-tune-file-br'));
+  const tuneJson = { suggest: { quantity: 'p', rel_tol_pct: 1.5, min_delta_pct: 3, algorithms: { glr: { threshold: 37 }, cusum: { drift_w: 11 } } } };
+  const fileObj = new window.File([JSON.stringify(tuneJson)], 'tune.json', { type: 'application/json' });
+  Object.defineProperty($('nilm-tune-file'), 'files', { value: [fileObj], configurable: true });
+  if (typeof fileObj.text !== 'function') fileObj.text = async () => JSON.stringify(tuneJson);
+  click($('btn-nilm-tune-apply')); await sleep(1500);
+  const note5 = $('nilm-tune-note').textContent || '';
+  check('提示含「已套用 … 项」且「配置文件未改动」', /已套用 \d+ 项/.test(note5) && note5.includes('配置文件未改动'), note5);
+  check('表单 glr.threshold 回填 37、cusum.drift_w 回填 11、rel_tol_pct 1.5', +$('nilm-glr-threshold').value === 37 && +$('nilm-cusum-drift_w').value === 11 && +$('nilm-rel_tol_pct').value === 1.5,
+        `${$('nilm-glr-threshold').value}/${$('nilm-cusum-drift_w').value}/${$('nilm-rel_tol_pct').value}`);
+  const cfg5 = await api('/api/config');
+  check('运行配置已热更新（/api/config glr.threshold=37）', cfg5.nilm.algorithms.glr.threshold === 37);
+  check('提示里给出输出目录文件名 nilm_tuned_config_bus_', /nilm_tuned_config_bus_\d{8}_\d{6}\.json/.test(note5), note5);
+  await api('/api/config', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ nilm: { rel_tol_pct: 1.0, min_delta_pct: 0, algorithms: { glr: { threshold: 25 }, cusum: { drift_w: 10 } } } }) });
 
   console.log(`\n结果：${pass} 通过 / ${fail} 失败${fail ? '：' + fails.join('；') : ''}`);
   window.close();
