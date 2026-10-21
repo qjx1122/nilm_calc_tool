@@ -208,6 +208,53 @@ def run_tune(base: AppConfig, file: str, *, channel: Optional[str] = None, quant
             "notes": notes, "measure": m, "suggest": sg}
 
 
+def build_cli_command(file: str, *, config: Optional[str] = None, channel: Optional[str] = None,
+                      quantity: Optional[str] = None, min_load_w: Optional[float] = None, min_load_a: Optional[float] = None,
+                      max_cycles: Optional[int] = None, t_start: str = "", t_end: str = "", duration_s: Optional[float] = None,
+                      json_out: bool = True, apply: bool = False, out: Optional[str] = None,
+                      python: str = "python") -> str:
+    """生成与一次调参等价的 ``tools/nilm_tune.py`` 命令行（v0.54，界面结果 JSON 的 ``command`` 字段）。
+
+    只写实际给出的参数；路径/时间含空格时加引号（POSIX 写法，Windows PowerShell 把 ``python`` 换成
+    ``.\\.venv\\Scripts\\python.exe``、``/`` 换成 ``\\`` 即可）。
+    """
+    import shlex
+
+    def q(v: Any) -> str:
+        return shlex.quote(str(v))
+
+    def num(v: float) -> str:
+        f = float(v)
+        return str(int(f)) if f.is_integer() else f"{f:g}"
+
+    parts = [python, "tools/nilm_tune.py", "--file", q(file)]
+    if config:
+        parts += ["--config", q(config)]
+    if channel:
+        parts += ["--channel", str(channel)]
+    if quantity:
+        parts += ["--quantity", str(quantity)]
+    if min_load_w is not None:
+        parts += ["--min-load-w", num(min_load_w)]
+    if min_load_a is not None:
+        parts += ["--min-load-a", num(min_load_a)]
+    if str(t_start or "").strip():
+        parts += ["--t-start", q(str(t_start).strip())]
+    if str(t_end or "").strip():
+        parts += ["--t-end", q(str(t_end).strip())]
+    if duration_s is not None:
+        parts += ["--duration", num(duration_s)]
+    if max_cycles is not None and int(max_cycles) != 30000:
+        parts += ["--max-cycles", str(int(max_cycles))]
+    if json_out:
+        parts.append("--json")
+    if apply:
+        parts.append("--apply")
+        if out:
+            parts += ["--out", q(out)]
+    return " ".join(parts)
+
+
 def tune_result_path(cfg: AppConfig, name: str = "", out_dir: Optional[str] = None) -> str:
     """调参结果 JSON 的保存路径：``<nilm_dir>/<name>``，name 空＝``tune_<YYYYmmdd_HHMMSS>.json``；
     name 里的 ``{时间}`` / ``{time}`` 占位符替换为时间戳；只取文件名部分（不允许目录穿越）。"""

@@ -672,3 +672,27 @@ def test_web_process_nilm_tune_endpoint(client):
     html = (ROOT / "app/static/index.html").read_text(encoding="utf-8"); js = (ROOT / "app/static/app.js").read_text(encoding="utf-8")
     assert all(f'id="{i}"' in html for i in ("nt-path", "nt-files", "nt-tstart", "nt-tend", "nt-duration", "nt-side", "nt-save", "nt-name", "btn-nt-run", "btn-nt-apply", "nt-result"))
     assert "/api/process/nilm_tune" in js and "function ntRun(" in js
+
+
+# ------------------------------------------------------------------ v0.54：结果 JSON 带等价命令
+def test_build_cli_command_and_endpoint_command(client):
+    from elec_tool.nilm_tuning import build_cli_command
+    c = build_cli_command("data/bg.csv")
+    assert c == "python tools/nilm_tune.py --file data/bg.csv --json"
+    c = build_cli_command("data/a b.csv", config="configs/runtime.json", channel="A", quantity="i", min_load_a=2.5,
+                          t_start="2026-10-13 08:00:01", duration_s=30, max_cycles=6000, apply=True, out="output/nilm/x.json")
+    assert c == ("python tools/nilm_tune.py --file 'data/a b.csv' --config configs/runtime.json --channel A --quantity i "
+                 "--min-load-a 2.5 --t-start '2026-10-13 08:00:01' --duration 30 --max-cycles 6000 --json --apply --out output/nilm/x.json")
+    assert "--max-cycles" not in build_cli_command("x.csv", max_cycles=30000) and "--min-load-w 500 " in build_cli_command("x.csv", min_load_w=500.0)
+    # 端点：未保存 → --json；保存 → 追加 --apply --out <保存路径>，且写入文件的 _tuning.command 一致；--config 为本侧原配置文件
+    p = _write_csv(client.dir / "bg2.csv", dur=3.0)
+    t0 = None
+    d = client.post("/api/process/nilm_tune", json={"path": str(p), "min_load_w": 500, "channel": "A", "duration_s": 1}).json()
+    assert d["ok"] and d["command"].startswith("python tools/nilm_tune.py --file ")
+    assert "--config " in d["command"] and d["command"].endswith("--channel A --min-load-w 500 --duration 1 --json"), d["command"]
+    d = client.post("/api/process/nilm_tune", json={"path": str(p), "save": True, "name": "cmdchk"}).json()
+    assert d["ok"] and d["command"].endswith(f"--json --apply --out {d['saved_to']}"), d["command"]
+    saved = Path(d["saved_to"]) if os.path.isabs(d["saved_to"]) else ROOT / d["saved_to"]
+    import json as _j
+    assert _j.loads(saved.read_text(encoding="utf-8"))["_tuning"]["command"] == d["command"]
+    assert "nt-cmd" in (ROOT / "app/static/app.js").read_text(encoding="utf-8")

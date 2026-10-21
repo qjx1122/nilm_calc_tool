@@ -216,6 +216,8 @@ async function main() {
   check('结果区显示周波 300 / 时间段 整个文件 / 未保存', /周波 300/.test($('nt-status').textContent) && /整个文件/.test($('nt-status').textContent) && /未保存配置文件/.test($('nt-status').textContent), $('nt-status').textContent.slice(0, 160));
   check('建议表含 6 算法且 threshold min_delta_w=250', /threshold/.test($('nt-result').textContent) && /steady_state/.test($('nt-result').textContent) && /min_delta_w=250/.test($('nt-result').textContent));
   check('运行配置未被改动', JSON.stringify((await (await fetch(BASE + '/api/config')).json()).nilm) === cfgBefore);
+  const cmd1 = $('nt-cmd').textContent;
+  check('v0.54 等价命令行可见且与结果 JSON command 一致（--file … --min-load-w 500 --json）', $('nt-cmdrow').style.display !== 'none' && cmd1 === JSON.parse($('nt-json').textContent).command && /tools\/nilm_tune\.py --file data\/nilm_steps\.csv .*--min-load-w 500 --json$/.test(cmd1), cmd1);
   check('套用按钮已启用', !$('btn-nt-apply').disabled);
   // 时间段：起始 = 文件开头 + 1 s（取结果里的 t_first），时长 2 s；保存，默认名
   const tFirst = JSON.parse($('nt-json').textContent).t_range.t_first;
@@ -232,6 +234,8 @@ async function main() {
   check('保存配置的非算法参数与原配置一致（sampling / transform / columns / window_cycles）', !!savedObj && JSON.stringify(savedObj.sampling) === JSON.stringify(runCfg.sampling) && JSON.stringify(savedObj.transform) === JSON.stringify(runCfg.transform) && JSON.stringify(savedObj.columns) === JSON.stringify(runCfg.columns) && savedObj.nilm.window_cycles === runCfg.nilm.window_cycles);
   // 自定义文件名
   $('nt-name').value = 'site_bg'; click($('btn-nt-run')); await sleep(3000);
+  const cmd2 = $('nt-cmd').textContent;
+  check('保存时命令含 --t-start/--duration 与 --apply --out output/nilm/site_bg.json', /--t-start \S+ --duration 2 --json --apply --out output\/nilm\/site_bg\.json$/.test(cmd2) && JSON.parse(fs.readFileSync(path.join(ROOT, 'output/nilm/site_bg.json'), 'utf8'))._tuning.command === cmd2, cmd2);
   check('自定义名 → output/nilm/site_bg.json', /output\/nilm\/site_bg\.json/.test($('nt-status').textContent) && fs.existsSync(path.join(ROOT, 'output/nilm/site_bg.json')));
   // 非法时间 → 界面显示失败
   $('nt-tstart').value = 'abc'; $('nt-save').checked = false; click($('btn-nt-run')); await sleep(1500);

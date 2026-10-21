@@ -39,7 +39,7 @@ from elec_tool import __version__
 from elec_tool.config import (AppConfig, ConfigError, parse_time_text, CURVE_KEYS, QUANTITY_KEYS, SourceConfig, WindowSpec,
                               load_or_default)
 from elec_tool.engine import LiveEngine
-from elec_tool.nilm_tuning import TuneError, export_tuned_config, run_tune, tune_result_path
+from elec_tool.nilm_tuning import TuneError, build_cli_command, export_tuned_config, run_tune, tune_result_path
 from elec_tool.pace import PaceClock
 from elec_tool.timefmt import fmt_local
 from elec_tool.metrics import MetricsResult
@@ -2051,6 +2051,7 @@ async def process_nilm_tune(payload: Dict[str, Any]) -> Any:
     * save=true（默认 false）：以本侧**原配置文件**（runtime.json / branch_runtime.json）为基准，只更新算法参数、其它参数不变，
       把更新后的**完整配置**写到 ``nilm.nilm_dir``（默认 output/nilm）下的 name（空＝``tune_<YYYYmmdd_HHMMSS>.json``；
       ``{时间}`` 占位符替换为时间戳），并在 ``_tuning`` 里附带 measure/suggest；原配置文件本身不改动（v0.53）。
+    * 返回与保存文件的 ``_tuning`` 都含 ``command``：与本次等价的 ``tools/nilm_tune.py`` 命令行（v0.54）。
     """
     path = str(payload.get("path") or "").strip()
     if not path:
@@ -2083,6 +2084,13 @@ async def process_nilm_tune(payload: Dict[str, Any]) -> Any:
         out["side"] = current_side()
         out["saved_to"] = None
         out["base_config"] = None
+        # v0.54：等价的 nilm_tune.py 命令（--config 取本侧原配置文件；保存时追加 --apply --out <保存路径>）
+        pp0 = RUNNER.persist_path
+        cfg_arg = _display_path(pp0) if (pp0 and os.path.isfile(pp0)) else None
+        cmd_kw = dict(config=cfg_arg, channel=kw["channel"], quantity=kw["quantity"], min_load_w=kw["min_load_w"],
+                      min_load_a=kw["min_load_a"], max_cycles=kw["max_cycles"], t_start=kw["t_start"], t_end=kw["t_end"],
+                      duration_s=kw["duration_s"])
+        out["command"] = build_cli_command(out["file"], **cmd_kw)
         if bool(payload.get("save", False)):
             # v0.53：保存的是**完整配置**——以本侧原配置文件（runtime.json / branch_runtime.json，即界面改动的持久化文件）
             # 为基准，只更新 nilm.quantity / rel_tol_pct / min_delta_pct 与各算法建议参数，其它参数原样保留；
@@ -2102,6 +2110,16 @@ async def process_nilm_tune(payload: Dict[str, Any]) -> Any:
                                                           "measure": out["measure"], "suggest": out["suggest"],
                                                           "t_range": out["t_range"]})
             out["saved_to"] = _display_path(fp); out["base_config"] = base_label; out["changes"] = changes
+            out["command"] = build_cli_command(out["file"], apply=True, out=out["saved_to"], **cmd_kw)
+            # 写入文件的 _tuning 也带上命令（export 时 command 尚未定稿，这里补写）
+            try:
+                with open(fp, encoding="utf-8") as fh:
+                    data = json.load(fh)
+                data.setdefault("_tuning", {})["command"] = out["command"]
+                with open(fp, "w", encoding="utf-8") as fh:
+                    json.dump(data, fh, ensure_ascii=False, indent=2); fh.write("\n")
+            except Exception:
+                pass
         return {"ok": True, **out}
     except (TuneError, ConfigError, ValueError) as exc:
         return JSONResponse(status_code=400, content={"ok": False, "error": str(exc)})

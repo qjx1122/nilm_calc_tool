@@ -3522,7 +3522,7 @@ function rsUseAsSource() {
 }
 
 /* v0.52：数据处理 · 负荷辨识调参（POST /api/process/nilm_tune） */
-const NT = { last: null, side: 'bus' };
+const NT = { last: null, side: 'bus', command: '' };
 async function ntListFiles() {
   const sel = $('#nt-files'); if (!sel) return;
   try {
@@ -3548,7 +3548,10 @@ function ntRender(d) {
   st.innerHTML = `<div>文件 <code>${esc(d.file)}</code> · 对象 <b>${esc(d.channel)}</b> · 周波 ${m.cycles} · 时长 ${(+d.t_span_s).toFixed(1)} s · 口径 ${d.scaled ? '一次侧(PT/CT)' : '二次侧'} · 检测量 <b>${d.quantity === 'p' ? '有功 P' : '电流有效值 I'}</b>（${esc(d.quantity_requested)}${d.quantity === 'i' && !d.voltage_present ? '，数据源无电压 → I' : ''}）</div>`
     + `<div>时间段 ${esc(rng)} · 实际 ${esc(fmtLocalInput(tr.t_first))} → ${esc(fmtLocalInput(tr.t_last))}</div>`
     + (d.saved_to ? `<div>已保存到 <code>${esc(d.saved_to)}</code>：以原配置文件 <code>${esc(d.base_config || '')}</code> 为基准只更新算法参数（${(d.changes || []).length} 项）、其它参数不变的完整配置；原配置文件未改动</div>` : '<div class="muted">未保存配置文件（默认）</div>')
-    + (d.notes || []).map(n => `<div class="muted">提示：${esc(n)}</div>`).join('');
+    + (d.notes || []).map(n => `<div class="muted">提示：${esc(n)}</div>`).join('')
+;
+  const cr = $('#nt-cmdrow');
+  if (cr) { cr.style.display = d.command ? '' : 'none'; $('#nt-cmd').textContent = d.command || ''; NT.command = d.command || ''; }
   let h = `<table><thead><tr><th colspan="3">噪声统计（${u}）</th></tr></thead><tbody>`
     + `<tr><td>基荷 |${d.quantity === 'p' ? 'P' : 'I'}| 中位数 level</td><td>${ntFmt(m.level)}</td><td></td></tr>`
     + `<tr><td>单周波噪声 σ sigma</td><td>${ntFmt(m.sigma_cycle)}</td><td>${(+m.sigma_cycle_pct).toFixed(3)} % 基荷</td></tr>`
@@ -3564,6 +3567,7 @@ function ntRender(d) {
     + `</tbody></table>`;
   $('#nt-result').innerHTML = h;
   $('#nt-json').textContent = JSON.stringify(d, null, 2);
+
 }
 async function ntRun() {
   const p = ntPayload();
@@ -3599,6 +3603,11 @@ function bindProcess() {
     $('#btn-nt-run').addEventListener('click', ntRun);
     $('#btn-nt-refresh').addEventListener('click', ntListFiles);
     $('#btn-nt-apply').addEventListener('click', ntApply);
+    $('#btn-nt-copy').addEventListener('click', async () => {
+      if (!NT.command) return;
+      try { await navigator.clipboard.writeText(NT.command); toast('命令已复制', 'ok'); }
+      catch (e) { toast('复制失败：' + e.message, 'err'); }
+    });
     ntListFiles();
   }
   $('#rs-files').addEventListener('change', () => { if ($('#rs-files').value) { $('#rs-path').value = $('#rs-files').value; rsPreview(); } });

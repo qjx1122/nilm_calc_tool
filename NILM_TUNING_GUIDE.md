@@ -885,4 +885,6 @@ Invoke-RestMethod -Method Post -Uri http://localhost:8000/api/nilm/tune/apply -C
 | 保存为配置文件（原配置基础上更新算法参数）+ 文件名 | 相当于 `--config <本侧原配置文件> --apply --out output\nilm\<文件名>` | **默认不保存**；勾选后以所选侧的**原配置文件**（总线侧 `configs\runtime.json`、分路侧 `configs\branch_runtime.json`，即界面改动的持久化文件）为基准，**只更新** `nilm.quantity / rel_tol_pct / min_delta_pct` 与各算法建议参数，**其它参数原样保留**，把更新后的完整配置写到 `output\nilm\<文件名>`（留空＝`tune_{时间}.json`，可写 `{时间}` 占位符）；原配置文件本身不改动。文件可直接作 `--config` / `ELEC_TOOL_CONFIG_PATH` / 回放配置使用，`_tuning` 块里附带本次 measure/suggest 与时间段。原配置文件尚不存在（界面从未保存过）时以该侧当前运行配置为基准并在结果里注明（v0.53） |
 | 「套用到运行配置」按钮 | 相当于 §7-2′ 的 `POST /api/nilm/tune/apply` | 把本次结果热生效到所选侧，更新后的完整配置写 `output\nilm\nilm_tuned_config_<侧>_<时间戳>.json`，**不写配置文件** |
 
+**等价命令（v0.54）**：每次运行后结果区多一行「等价命令」（带「复制」按钮），结果 JSON 的 `command` 字段、保存文件的 `_tuning.command` 也带同一条——即与这次界面操作完全等价的 `tools/nilm_tune.py` 命令：只列实际填写的参数，`--config` 为该侧原配置文件（不存在则省略），勾选保存时追加 `--apply --out <保存路径>`。例：`python tools/nilm_tune.py --file data/bus_bg.csv --config configs/runtime.json --min-load-w 300000 --t-start 08:00:10 --duration 30 --json --apply --out output/nilm/tune_20261021_103000.json`。用途：留档、在 PowerShell 复现（把 `python` 换成 `.\.venv\Scripts\python.exe`，含空格的路径已自动加引号）、或改几个参数再跑。
+
 结果区：第一行＝文件 / 对象 / 周波数 / 时长 / 口径 / 检测量；第二行＝时间段与实际落到的首末周波时刻；之后是噪声统计表与建议参数表（与命令行输出逐项相同）；「原始结果 JSON」可展开复制。错误（文件不存在、时间文本无法解析、段内无数据、I 口径填三相总）直接显示在结果区，不会改动任何配置。
