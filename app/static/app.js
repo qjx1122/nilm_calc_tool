@@ -3573,7 +3573,8 @@ function ntRender(d) {
     + `</tbody></table>`;
   h += `<table style="margin-top:8px"><thead><tr><th colspan="2">建议参数（起点）</th></tr></thead><tbody>`
     + `<tr><td colspan="2">${esc(sg.note)}</td></tr>`
-    + `<tr><td>nilm</td><td>quantity=${esc(sg.quantity)}  rel_tol_pct=${sg.rel_tol_pct}  min_delta_pct=${sg.min_delta_pct}</td></tr>`
+    + `<tr><td>nilm</td><td>quantity=${esc(sg.quantity)}  rel_tol_pct=${sg.rel_tol_pct}  min_delta_pct=${sg.min_delta_pct}${sg.window_cycles ? '  window_cycles=' + sg.window_cycles : ''}</td></tr>`
+    + (sg.transient ? `<tr><td>暂态</td><td>最长 ${sg.transient.longest} 周波（${(sg.transient.longest / 50).toFixed(1)} s @50Hz）· 暂态 ${sg.transient.n_transients} 次 · 锚点稳态 ${sg.transient.n_steady} 段${sg.transient.longest > 100 ? ' · ⚠ 慢启动：steady_state.max_transient_cycles / min_steady_cycles 已按暂态放大' : ''}</td></tr>` : '')
     + Object.entries(sg.algorithms).map(([k, v]) => `<tr><td>${esc(k)}</td><td>${Object.entries(v).map(([kk, vv]) => `${esc(kk)}=${ntFmt(vv)}`).join('  ')}</td></tr>`).join('')
     + `</tbody></table>`;
   $('#nt-result').innerHTML = h;

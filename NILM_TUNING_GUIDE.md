@@ -671,6 +671,7 @@ Invoke-RestMethod -Method Put -Uri http://localhost:8000/api/branch/config -Cont
 | `--channel total\|A\|B\|C` | | P 口径 `total`，I 口径 `A` | 量哪个对象的噪声。I 口径不接受 `total`（电流有效值不能跨相相加） |
 | `--min-load-w <W>` | | 不填 | 现场**最小关心负荷**的有功（一次侧 W）。P 口径用；给了它 `min_delta_w` 才有"针对这台设备"的含义 |
 | `--min-load-a <A>` | | 不填 | 同上，电流版（一次侧 A）。I 口径用 |
+| （无开关） | | 自动 | v0.56：文件里有 >100 周波的慢启动斜坡时，`steady_state.max_transient_cycles` / `min_steady_cycles` 自动按暂态放大，必要时给 `nilm.window_cycles`（见 H.4‴） |
 | `--min-load-auto` | | 关 | v0.55：未手填最小关心负荷时，从文件里的**投切台阶**估计它（见 H.4″）。只对分路侧单设备、含启停的录波有效；估计不可靠则按未指定处理 |
 | `--quantity auto\|p\|i` | | 跟随 `--config` 的 `nilm.quantity`；配置也没有才 `auto` | 检测量：`p` 逐周波有功、`i` 逐周波电流有效值、`auto`＝有电压取 P、无电压取 I |
 | `--t-start <时间>` | | 空＝文件开头 | v0.52：分析起始时间。写法同播放时间段：`2026-10-13 08:00:02.5` / `08:00:02.5`（与文件时标当天时刻比较）/ epoch 秒 |
@@ -771,6 +772,30 @@ Invoke-RestMethod -Method Put -Uri http://localhost:8000/api/branch/config -Cont
 不加 `--min-load-auto` 时这一段也会打印（仅供参考，不采用）；手填了 `--min-load-w/-a` 时手填优先。JSON 里对应 `min_load_estimate{candidate, min_step, min_level_gap, levels, n_steady, n_events, reliable, note}`、`min_load_used`、`min_load_source = manual | estimated | none`。
 
 > 它给的是**上界候选**：样例里设备有 1.5 / 1.8 / 2.25 MW 三档，候选 300 kW 能覆盖它所有状态变化；若现场只关心主负荷（750 kW 启停）、不关心二级档位切换，请手工改大。界面上对应「从文件投切台阶估计最小关心负荷」勾选和结果区的「填入输入框」按钮（H.13）。
+
+### H.4‴ 用法 3‴：慢启动 / 软启斜坡——`steady_state` 的暂态上限自动放大（v0.56）
+
+**现象**：电机、风机、变频设备投入时电流不是一步到位，而是几秒到几十秒的斜坡（现场分路侧曾录到 ~40 s 从 1.66 A 爬到 4.56 A）。
+`threshold / median_diff / two_window / glr` 只看"突变"，对这种斜坡只会报其中的硬跳变（起动冲击、硬切），爬坡本身漏掉；
+只有 `steady_state`（稳态分段）能把"两个稳态之间的东西"整体当一次事件——前提是它的 `max_transient_cycles`（默认 100 周波 = 2 s）
+装得下整条斜坡，而且 `min_steady_cycles` 要比斜坡上"极差刚好不超 tol 的伪平台"长（否则斜坡被切成一串 < min_delta 的小台阶，照样配不出事件）。
+
+**脚本现在自动做**（`suggest` 收到逐周波序列时）：
+1. 量**最长暂态**：25 周波滑动均值前后窗之差 > max(4σ√(2/25), 5%·min_delta) 或单周波 |Δ| > 6σ 处记为"在动"，连续不动 ≥ 10 周波为锚点稳态，相邻锚点均值差 ≥ min_delta 之间的周波数即一次暂态；
+2. 最长暂态 ≤ 100 周波：参数不变（`max_transient_cycles=100`、`min_steady_cycles=10`）；
+3. 最长暂态 > 100 周波：`steady_state.max_transient_cycles = ⌈1.5 × 最长暂态⌉₂位`，`min_steady_cycles = ⌈1.5 × 斜坡上最长伪平台 + 1⌉₂位`（≥10，封顶 250），并在需要时给出 `nilm.window_cycles ≥ max_transient + 2×min_steady + 20`（检测窗装不下暂态+前后稳态时稳态配对永远配不成；`--apply` / 界面「套用」只放大不缩小 window_cycles）。
+
+```powershell
+# 样例：8 s 软启斜坡（tools/gen_nilm_sample.py --soft-start → data/nilm_softstart.csv）
+.\.venv\Scripts\python.exe tools\gen_nilm_sample.py --soft-start
+.\.venv\Scripts\python.exe tools\nilm_tune.py --file data\nilm_softstart.csv --min-load-w 1000
+```
+
+输出里 note 多一句：`文件中最长暂态 427 周波（8.5 s @50Hz，慢启动/软启斜坡），steady_state.max_transient_cycles 放大到 650、min_steady_cycles 抬到 33（斜坡上最长伪稳态平台 21 周波，稳态必须比它长），nilm.window_cycles 需 ≥ 740 …`；
+文本输出多一行「最长暂态 … 周波（暂态 n 次，锚点稳态 m 段）」，JSON 里对应 `suggest.transient`（longest / n_transients / n_steady / transients[≤5] / max_pseudo_steady / max_transient_cycles / min_steady_cycles / window_cycles）与可选的 `suggest.window_cycles`。
+
+> 代价：`min_steady_cycles` 抬高后，事件要等新稳态积满这么多周波才出现（33 周波 ≈ 0.7 s），且两次投切之间的平台短于它时会被当成同一段暂态；伪平台封顶 250 仍放不下的超缓斜坡（note 带 ⚠），稳态分段只能报其中的硬跳变。
+> 其它四种算法不动：它们对斜坡无能为力，加大 `max_rise_cycles` / 窗长只会增加误报，不如让 `steady_state` 负责斜坡。
 
 ### H.5 用法 4：机器可读输出 `--json`（供回放脚本 / 接口 / 留档）
 
@@ -907,6 +932,7 @@ Invoke-RestMethod -Method Post -Uri http://localhost:8000/api/nilm/tune/apply -C
 | 基准配置（总线侧 / 分路侧运行配置） | `--config` | 用该侧**正在运行**的配置的 PT/CT、列映射、缺省 `nilm.quantity`；不改动它 |
 | 检测量 / 检测对象 | `--quantity` / `--channel` | 留空＝跟随配置 / 默认对象 |
 | 最小关心负荷 (W) / (A) | `--min-load-w` / `--min-load-a` | |
+| （自动）慢启动斜坡 | （自动） | v0.56：结果区「暂态」行显示最长暂态周波数 / 秒数、暂态次数、锚点稳态段数；>100 周波时 steady_state 的 max_transient_cycles / min_steady_cycles 已放大、nilm 行附 window_cycles，「套用」一并写入（H.4‴） |
 | 从文件投切台阶估计最小关心负荷（勾选） | `--min-load-auto` | v0.55：未手填时由文件里的投切台阶估计（H.4″）；结果区「最小关心负荷估计」行显示候选 / 可靠性 / 依据与是否已采用，「填入输入框」把候选写进 W 或 A 输入框并取消勾选，再点一次即按手填值计算 |
 | 保存为配置文件（原配置基础上更新算法参数）+ 文件名 | 相当于 `--config <本侧原配置文件> --apply --out output\nilm\<文件名>` | **默认不保存**；勾选后以所选侧的**原配置文件**（总线侧 `configs\runtime.json`、分路侧 `configs\branch_runtime.json`，即界面改动的持久化文件）为基准，**只更新** `nilm.quantity / rel_tol_pct / min_delta_pct` 与各算法建议参数，**其它参数原样保留**，把更新后的完整配置写到 `output\nilm\<文件名>`（留空＝`tune_{时间}.json`，可写 `{时间}` 占位符）；原配置文件本身不改动。文件可直接作 `--config` / `ELEC_TOOL_CONFIG_PATH` / 回放配置使用，`_tuning` 块里附带本次 measure/suggest 与时间段。原配置文件尚不存在（界面从未保存过）时以该侧当前运行配置为基准并在结果里注明（v0.53） |
 | 「套用到运行配置」按钮 | 相当于 §7-2′ 的 `POST /api/nilm/tune/apply` | 把本次结果热生效到所选侧，更新后的完整配置写 `output\nilm\nilm_tuned_config_<侧>_<时间戳>.json`，**不写配置文件** |

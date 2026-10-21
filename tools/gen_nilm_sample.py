@@ -9,6 +9,10 @@ v0.36 加 ``--current-only``：只写三相电流列（表头 ``时间戳,A相�
 
 v0.22.1 加 ``--bus``：生成「总线上多台设备混合」样例 data/nilm_bus_mixed.csv（10 s）：
     待检设备 2.0 s 开 +500 W / 6.0 s 关 −500 W；其它设备：3.5 s +1500 W、8.0 s −1500 W（大设备）、5.0 s +120 W（小设备）。
+
+v0.56 加 ``--soft-start``：电机软启动样例 data/nilm_softstart.csv（20 s，按现场分路侧录波的形状缩放）：
+    2.0 s 起动冲击 +700 W（0.2 s）回落到 +480 W，随后 8 s 线性斜坡升到 +2900 W；14 s 起 2 s 斜坡降 −1160 W；18 s 硬切 −1670 W。
+    用于验证 nilm_tune 的"长斜坡 → steady_state.max_transient_cycles / min_steady_cycles 自动放大"。
 """
 import csv
 import os
@@ -19,12 +23,23 @@ import numpy as np
 args = [a for a in sys.argv[1:] if not a.startswith("--")]
 BUS = "--bus" in sys.argv
 IONLY = "--current-only" in sys.argv
-fs, dur = 6400, (10.0 if BUS else 6.0)
-default_name = "nilm_bus_mixed.csv" if BUS else ("nilm_steps_i.csv" if IONLY else "nilm_steps.csv")
+SOFT = "--soft-start" in sys.argv
+fs, dur = 6400, (20.0 if SOFT else 10.0 if BUS else 6.0)
+default_name = "nilm_softstart.csv" if SOFT else "nilm_bus_mixed.csv" if BUS else ("nilm_steps_i.csv" if IONLY else "nilm_steps.csv")
 out = args[0] if args else os.path.join(os.path.dirname(__file__), "..", "data", default_name)
 n = int(fs * dur); t = np.arange(n) / fs; w = 2 * np.pi * 50 * t
 P = np.full(n, 1000.0)
-if BUS:
+if SOFT:
+    P[(t >= 2.0) & (t < 2.2)] += 700                    # 起动冲击
+    ramp = (t >= 2.2) & (t < 10.2)
+    P[ramp] += 480 + (2900 - 480) * (t[ramp] - 2.2) / 8.0   # 8 s 软启斜坡
+    P[t >= 10.2] += 2900
+    down = (t >= 14.0) & (t < 16.0)
+    P[down] -= 1160 * (t[down] - 14.0) / 2.0             # 2 s 斜坡降
+    P[t >= 16.0] -= 1160
+    P[t >= 18.0] -= 1670                                 # 硬切
+    desc = "2.0 s 冲击 +700 → 2.2–10.2 s 斜坡 +480→+2900 W → 14–16 s 斜坡降 −1160 → 18 s ↓1670 W"
+elif BUS:
     P[t >= 2.0] += 500; P[t >= 6.0] -= 500              # 待检设备 开/关
     P[t >= 3.5] += 1500; P[t >= 8.0] -= 1500            # 其它大设备
     P[t >= 5.0] += 120                                  # 其它小设备

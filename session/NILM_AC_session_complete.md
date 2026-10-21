@@ -339,3 +339,7 @@
 - **[2026-10-21] v0.54**（用户：界面调参结果 JSON 一并输出执行的调参命令）。`build_cli_command` + 端点 `command` 字段 + 保存文件 `_tuning.command` + 界面「等价命令/复制」；CLI 复现与界面结果一致；test_r12_nilm +1、ui_r8 65/65。
 
 - **[2026-10-21] v0.55**（用户：能否从设备录波直接获取最小关心负荷 → 分析后确认实现）。`estimate_min_load` + `run_tune(min_load_auto)` + CLI/端点/界面；样例 300 kW / 19.24 A，纯背景不可估计；test_r12_nilm +2、ui_r8 70/70；手册 H.4″。
+
+- **[2026-10-21] 第 74 轮（用户贴入现场 1 s 聚合 RMS 录波，要求量噪声并算各算法参数）**：手工转录 3 段稳态共 301 点，1 s σ：Ia 0.0039 A、Ib 0.0021、Ic 0.0062（4.56 A 段 0.0069、1.30 A 段 0.0051）；Ic 台阶 1.66/4.56/3.40/3.33/1.73/1.30，最小间距 0.42 A；周波级 σ 只能外推（k=1～√50，推荐 k=3），给出 Ic/Ia 两套 suggest 参数与限制说明；指出 ~40 s 软启斜坡只有 steady_state 能整体检出且需放大 max_transient_cycles。未改代码。
+
+- **[2026-10-21] v0.56**（用户：把"长斜坡 → steady_state max_transient_cycles 自动放大"做进 suggest）。`longest_transient`（滑动均值前后窗差 + 半峰 + 闭运算 → 锚点稳态 → 暂态时长；附伪平台长度）；`suggest(m, min_load, x)` >100 周波时放大 max_transient_cycles、抬 min_steady_cycles（否则斜坡被 Hart 切成小台阶仍配不出）、需要时给 window_cycles；apply 套用 window_cycles 只放大；CLI/界面显示暂态行；`--soft-start` 样例。两次返工：① 按段线性拟合判漂移在噪声吃掉大半 tol 时失效，改为滑动均值差；② 滑动均值差直接外扩 ±1.5W 会吃掉 50 周波平台 → 半峰规则 + 闭运算。合成斜坡：稳态分段由只报硬跳变 → 整条斜坡一个事件。51 passed；ui_r8 70/70。

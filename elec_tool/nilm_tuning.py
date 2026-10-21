@@ -124,8 +124,99 @@ def estimate_min_load(x: np.ndarray, sigma: float, unit: str = "W", *, min_stead
     return out
 
 
-def suggest(m: dict, min_load: float | None) -> dict:
-    """由噪声统计给出参数建议（规则见 NILM_TUNING_GUIDE.md §2）。单位随 ``m["unit"]``：W → ``*_w``，A → ``*_a``。"""
+def longest_transient(x: np.ndarray, sigma: float, min_delta: float, *, min_steady_cycles: int = 10,
+                      smooth_cycles: int = 25, k: float = 4.0, tol: Optional[float] = None) -> Dict[str, Any]:
+    """v0.56：量文件中**最长的一次暂态**（两个真正稳态之间的周波数），用来给 ``steady_state.max_transient_cycles`` 定尺度。
+
+    Hart 分段看不出软启斜坡（斜坡被切成一串"极差刚好不超 tol"的伪稳态段，相邻段差又 < min_delta）。这里改用
+    "是否在动"判据：``smooth_cycles``（默认 25）周波滑动均值 ``sm``，前后两个均值窗之差 |sm[i+W]−sm[i]| > k·σ·√(2/W)
+    （k=4：σ=0.019 A 时约 0.02 A/25 周波，能看见 1.5 mA/周波 的慢斜坡；下限 5%·min_delta）或单周波 |Δ| > 6σ 的位置记为"在动"，并按窗长
+    外扩；连续"不动" ≥ ``min_steady_cycles`` 的区间为锚点稳态。相邻锚点均值差 ≥ ``min_delta`` 的，两锚点之间的周波数
+    就是一次暂态（含窗长带来的 ≈W 周波抹边，偏保守）。返回 ``longest``（无暂态为 0）、``n_transients``、``n_steady``、
+    ``transients``（最长 5 条：start/end/cycles/delta）。给了 ``tol``（steady_state 的稳态容差）时，另算暂态区间内
+    Hart 分段会切出的**最长伪稳态段** ``max_pseudo_steady``：斜坡上"极差刚好不超 tol"的平台——``min_steady_cycles``
+    必须大于它，稳态分段才不会把斜坡当成一串小台阶而配不出事件。
+    """
+    x = np.asarray(x, dtype=np.float64)
+    out: Dict[str, Any] = {"longest": 0, "n_transients": 0, "n_steady": 0, "transients": [], "smooth_cycles": int(smooth_cycles)}
+    L = int(x.size)
+    W = max(2, int(smooth_cycles))
+    if L < 2 * W + 2 * min_steady_cycles or not (sigma > 0) or not math.isfinite(sigma):
+        return out
+    moving = np.zeros(L, dtype=bool)
+    d1 = np.abs(np.diff(x))
+    for i in np.where(d1 > 6.0 * sigma)[0]:
+        moving[i:i + 2] = True
+    sm = np.convolve(x, np.ones(W) / W, mode="valid")            # sm[i] = mean(x[i:i+W])
+    dm = np.abs(sm[W:] - sm[:-W])                                 # 相隔 W 的两个均值窗之差，变化发生在 x[i : i+2W)
+    thr = max(k * sigma * math.sqrt(2.0 / W), 0.05 * float(min_delta))   # 噪声极小（合成/高精度）时用 5% min_delta 兜底，防纹波被当成在动
+    # 只在 dm 超门槛且 ≥ 其 ±W 邻域峰值一半处记"在动"（位置 i+W 即两窗交界）：硬阶跃的三角形 dm 轮廓只标出 ±W/2，
+    # 不会把相邻的短平台吃掉；斜坡的 dm 轮廓是平的，整条都标上
+    if dm.size:
+        pad = np.pad(dm, W, mode="edge")
+        loc_max = np.lib.stride_tricks.sliding_window_view(pad, 2 * W + 1).max(axis=1)
+        for i in np.where((dm > thr) & (dm >= 0.5 * loc_max))[0]:
+            moving[i + W - 1: i + W + 2] = True
+        # 闭运算：两段"在动"之间短于 W 的缝（斜坡上 dm 被噪声压到半峰以下的凹坑）并入暂态；≥ W 的真平台保留
+        i = 0
+        while i < L:
+            if moving[i]:
+                i += 1
+                continue
+            j = i
+            while j < L and not moving[j]:
+                j += 1
+            if 0 < i and j < L and j - i < W:
+                moving[i:j] = True
+            i = j
+    # 连续不动 ≥ min_steady 的区间 = 锚点稳态
+    anchors: List[Tuple[int, int, float]] = []
+    i = 0
+    while i < L:
+        if moving[i]:
+            i += 1
+            continue
+        j = i
+        while j < L and not moving[j]:
+            j += 1
+        if j - i >= min_steady_cycles:
+            anchors.append((i, j, float(np.mean(x[i:j]))))
+        i = j
+    out["n_steady"] = len(anchors)
+    trs: List[Dict[str, Any]] = []
+    for (a0, b0, l0), (a1, b1, l1) in zip(anchors, anchors[1:]):
+        if abs(l1 - l0) >= min_delta:
+            trs.append({"start": int(b0), "end": int(a1), "cycles": int(a1 - b0), "delta": float(l1 - l0)})
+    trs.sort(key=lambda d: -d["cycles"])
+    out["n_transients"] = len(trs)
+    out["transients"] = trs[:5]
+    out["longest"] = int(trs[0]["cycles"]) if trs else 0
+    if tol is not None and tol > 0 and trs:
+        longest_pseudo = 0
+        for tr in trs:
+            seg = x[tr["start"]:tr["end"]]
+            a = 0
+            lo = hi = seg[0] if seg.size else 0.0
+            for i in range(1, int(seg.size) + 1):
+                if i < seg.size:
+                    lo2, hi2 = min(lo, seg[i]), max(hi, seg[i])
+                    if hi2 - lo2 <= tol:
+                        lo, hi = lo2, hi2
+                        continue
+                longest_pseudo = max(longest_pseudo, i - a)
+                if i < seg.size:
+                    a, lo, hi = i, seg[i], seg[i]
+        out["max_pseudo_steady"] = int(longest_pseudo)
+    return out
+
+
+def suggest(m: dict, min_load: float | None, x: Optional[np.ndarray] = None) -> dict:
+    """由噪声统计给出参数建议（规则见 NILM_TUNING_GUIDE.md §2）。单位随 ``m["unit"]``：W → ``*_w``，A → ``*_a``。
+
+    v0.56：给了逐周波序列 ``x`` 时，量最长暂态（``longest_transient``）；超过 100 周波（2 s）即判为慢启动 / 软启斜坡，
+    ``steady_state.max_transient_cycles`` 自动放大到 ≥ 1.5× 最长暂态（向上取 2 位有效数字），并在需要时给出 ``window_cycles``
+    （检测窗必须装得下 暂态 + 前后各一个稳态段，否则稳态配对在窗内永远配不成）。结果附在 ``transient`` 字段。
+    """
     unit = m.get("unit", "W")
     sx = _SUFFIX[unit]
     s, lvl = m["sigma_cycle"], m["level"]
@@ -148,8 +239,34 @@ def suggest(m: dict, min_load: float | None) -> dict:
         note += f"；基荷相对门槛过小（基荷 < 2×min_delta{sx}），nilm.min_delta_pct 置 0，只用各算法绝对值 {unit}"
     tol10 = _ceil_sig(max(m["range10_p95"] * 1.2, 5 * s))
     noise = _ceil_sig(max(s, 1e-9))
+    max_tr, min_steady = 100, 10
+    tr: Optional[Dict[str, Any]] = None
+    extra: Dict[str, Any] = {}
+    if x is not None:
+        tr = longest_transient(x, s, min_d, tol=tol10)
+        if tr["longest"] > 100:
+            max_tr = int(_ceil_sig(1.5 * tr["longest"]))
+            # 斜坡上会被 Hart 切出的伪稳态平台：min_steady_cycles 要压过它（×1.5 余量），否则斜坡被当成一串 < min_delta 的小台阶
+            pseudo = int(tr.get("max_pseudo_steady") or 0)
+            min_steady = int(max(10, min(_ceil_sig(1.5 * pseudo + 1), 250)))
+            need_win = int(_ceil_sig(max_tr + 2 * min_steady + 20))     # 暂态 + 前后各一个稳态段 + 余量
+            tr["max_transient_cycles"] = max_tr; tr["min_steady_cycles"] = min_steady
+            note += (f"；文件中最长暂态 {tr['longest']} 周波（{tr['longest'] / 50:.1f} s @50Hz，慢启动/软启斜坡），"
+                     f"steady_state.max_transient_cycles 放大到 {max_tr}")
+            if min_steady > 10:
+                note += f"、min_steady_cycles 抬到 {min_steady}（斜坡上最长伪稳态平台 {pseudo} 周波，稳态必须比它长）"
+            if 1.5 * pseudo + 1 > 250:
+                note += "（⚠ 伪平台过长，已封顶 250：斜坡太缓，稳态分段可能仍只报其中的硬跳变）"
+            if need_win > 300:
+                extra["window_cycles"] = need_win
+                tr["window_cycles"] = need_win
+                note += f"，nilm.window_cycles 需 ≥ {need_win}（检测窗要装得下暂态+前后稳态）"
+            note += "；threshold/median_diff/two_window/glr 看不到这种斜坡，只会报其中的硬跳变"
+        else:
+            tr["max_transient_cycles"] = max_tr
     return {
         "note": note, "unit": unit, "quantity": "p" if unit == "W" else "i",
+        **extra, "transient": tr,
         "rel_tol_pct": round(min(5.0, max(0.05, 100.0 * tol / lvl)), 2) if lvl else 1.0,
         "min_delta_pct": round(mdp, 2),
         "algorithms": {
@@ -158,7 +275,7 @@ def suggest(m: dict, min_load: float | None) -> dict:
             "two_window":   {"pre_cycles": 10, "post_cycles": 10, f"min_delta{sx}": min_d, "k_sigma": 3.0},
             "cusum":        {f"drift{sx}": k, f"threshold{sx}": h, f"min_delta{sx}": min_d, "settle_cycles": 5},
             "glr":          {"window_cycles": 15, "threshold": 25.0, f"min_delta{sx}": min_d, f"noise{sx}": noise, "settle_cycles": 5},
-            "steady_state": {f"tol{sx}": tol10, "min_steady_cycles": 10, f"min_delta{sx}": min_d, "max_transient_cycles": 100},
+            "steady_state": {f"tol{sx}": tol10, "min_steady_cycles": min_steady, f"min_delta{sx}": min_d, "max_transient_cycles": max_tr},
         },
     }
 
@@ -261,7 +378,7 @@ def run_tune(base: AppConfig, file: str, *, channel: Optional[str] = None, quant
             notes.append("已勾选从文件估计最小关心负荷，但估计不可靠：" + est["note"] + "；本次按未指定处理（max(6σ, 2%×基荷)）")
     elif min_load_auto and min_load is not None:
         notes.append(f"已手填最小关心负荷 {min_load:g} {unit}，文件估计（{est['candidate']}）仅供参考")
-    sg = suggest(m, min_load)
+    sg = suggest(m, min_load, p)
     if qty == "i" and min_load_w is not None and min_load_a is None:
         notes.append("I 口径请用 min_load_a（A）；min_load_w 已忽略")
     return {"file": file, "channel": ch, "fs": cfg.sampling.fs, "f_nom": cfg.sampling.f_nom,
@@ -355,6 +472,8 @@ def apply_nilm_params(cfg: AppConfig, params: Dict[str, Any]) -> List[str]:
         cfg.nilm.rel_tol_pct = float(sg["rel_tol_pct"]); notes.append(f"nilm.rel_tol_pct = {cfg.nilm.rel_tol_pct}")
     if "min_delta_pct" in sg:
         cfg.nilm.min_delta_pct = float(sg["min_delta_pct"]); notes.append(f"nilm.min_delta_pct = {cfg.nilm.min_delta_pct}")
+    if sg.get("window_cycles") is not None and int(sg["window_cycles"]) > int(cfg.nilm.window_cycles):   # v0.56：只放大不缩小
+        cfg.nilm.window_cycles = int(sg["window_cycles"]); notes.append(f"nilm.window_cycles = {cfg.nilm.window_cycles}")
     for algo, prm in (sg.get("algorithms") or {}).items():
         if algo not in NILM_ALGO_DEFAULTS or not isinstance(prm, dict):
             continue

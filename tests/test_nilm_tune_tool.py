@@ -154,3 +154,60 @@ def test_cli_quantity_defaults_to_config_nilm_quantity(tmp_path):
     r2 = subprocess.run([sys.executable, os.path.join(ROOT, "tools", "nilm_tune.py"), "--file", sample, "--config", str(cfgp), "--quantity", "p", "--json"],
                         capture_output=True, text=True, cwd=ROOT, check=True)
     assert json.loads(r2.stdout)["quantity"] == "p"
+
+
+def test_suggest_enlarges_steady_state_for_soft_start_ramp():
+    """v0.56：含 40 s 软启斜坡的分路侧电流 → 量出最长暂态，steady_state.max_transient_cycles / min_steady_cycles 自动放大，
+    并给 window_cycles；放大后稳态分段把整条斜坡配成一个事件（1.66 → 4.56 A），默认 100 周波时只报硬跳变。"""
+    from elec_tool.nilm import params_for_current
+    from elec_tool.config import NILM_ALGO_DEFAULTS, AppConfig
+    rng = np.random.default_rng(3)
+    x = np.full(9000, 1.66)
+    x[2000:2010] += 0.7                                   # 起动冲击
+    x[2010:4000] = np.linspace(2.14, 4.56, 1990)          # ≈40 s 斜坡
+    x[4000:6000] = 4.56
+    x[6000:6500] = np.linspace(4.56, 3.4, 500)            # 10 s 斜坡降
+    x[6500:7500] = 3.4
+    x[7500:] = 1.73
+    x += rng.normal(0, 0.019, x.size)
+    m = tune.measure(x, "A")
+    sg = tune.suggest(m, 0.42, x)
+    tr = sg["transient"]
+    assert 1800 <= tr["longest"] <= 2200 and tr["n_transients"] >= 3
+    ss = sg["algorithms"]["steady_state"]
+    assert ss["max_transient_cycles"] >= 1.5 * tr["longest"] and ss["min_steady_cycles"] > tr["max_pseudo_steady"]
+    assert sg["window_cycles"] >= ss["max_transient_cycles"] + 2 * ss["min_steady_cycles"]
+    assert "慢启动" in sg["note"]
+    lvl = float(np.median(np.abs(x)))
+
+    def run(prm):
+        eff = effective_params(params_for_current({**NILM_ALGO_DEFAULTS["steady_state"], **prm, "enabled": True}), lvl, sg["rel_tol_pct"], sg["min_delta_pct"])
+        return detect_steps("steady_state", x, eff)
+    st = run(ss)
+    ramp = [s for s in st if abs(s[2] - 1.66) < 0.1 and abs(s[3] - 4.56) < 0.1]
+    assert len(ramp) == 1 and 1900 <= ramp[0][1] - ramp[0][0] <= 2300, st
+    st0 = run({**ss, "max_transient_cycles": 100, "min_steady_cycles": 10})
+    assert not [s for s in st0 if abs(s[3] - 4.56) < 0.1]           # 默认参数看不到斜坡
+    # 套用：window_cycles 只放大不缩小
+    from elec_tool.nilm_tuning import apply_nilm_params
+    cfg = AppConfig()
+    notes = apply_nilm_params(cfg, sg)
+    assert cfg.nilm.window_cycles == sg["window_cycles"] and any("window_cycles" in n for n in notes)
+    assert cfg.nilm.algorithms["steady_state"]["max_transient_cycles"] == ss["max_transient_cycles"]
+    cfg.validate()
+    cfg2 = AppConfig(); cfg2.nilm.window_cycles = 99999
+    apply_nilm_params(cfg2, sg)
+    assert cfg2.nilm.window_cycles == 99999
+
+
+def test_suggest_keeps_default_transient_params_for_clean_steps_and_pure_noise():
+    rng = np.random.default_rng(5)
+    y = np.full(3000, 5000.0); y[1500:] += 600; y += rng.normal(0, 20, 3000)
+    sg = tune.suggest(tune.measure(y), 600, y)
+    assert sg["transient"]["longest"] <= 100 and sg["transient"]["n_transients"] == 1
+    assert sg["algorithms"]["steady_state"]["max_transient_cycles"] == 100 and sg["algorithms"]["steady_state"]["min_steady_cycles"] == 10
+    assert "window_cycles" not in sg
+    z = 5000 + rng.normal(0, 20, 3000)
+    sg = tune.suggest(tune.measure(z), 600, z)
+    assert sg["transient"]["n_transients"] == 0 and sg["algorithms"]["steady_state"]["max_transient_cycles"] == 100
+    assert tune.suggest(tune.measure(z), 600)["transient"] is None     # 不给序列 → 向后兼容
