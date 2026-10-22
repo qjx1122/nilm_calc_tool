@@ -30,7 +30,7 @@ from typing import Any, Deque, Dict, List, Optional, Tuple
 import numpy as np
 
 from .config import AppConfig, EventConfig
-from .timefmt import fmt_local, local_day
+from .timefmt import fmt_local, wall_day
 from .metrics import MetricsResult, QuantityResult, _pick
 
 EVENT_TYPES: Dict[str, str] = {
@@ -125,7 +125,7 @@ class EventWriter:
         self.errors: List[str] = []
 
     def _open_for(self, t: float) -> None:
-        day = local_day(t)
+        day = wall_day()                        # v0.58：按墙钟本地日期分文件（t 为数据时间，不再用于命名）
         path = os.path.join(self.dir, f"events_{day}.csv")
         if self._fh is not None and self._path == path:
             return

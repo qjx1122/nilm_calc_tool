@@ -61,3 +61,10 @@ def local_tod_s(t: float) -> float:
     """本地「当天时刻」秒数（含小数）。"""
     _, _, _, hh, mm, ss = local_tuple(float(t))
     return hh * 3600.0 + mm * 60.0 + ss + (float(t) % 1.0)
+
+
+def wall_day() -> str:
+    """v0.58：**当前墙钟**的本地日期 'YYYYMMDD'——实时落盘 / 事件 / 负荷事件 CSV 按它分文件（不再按数据时间）：
+    总线侧与分路侧即使播放的是不同日期的离线文件，同一次运行也写进同一个 <名>_<今天>.csv。"""
+    import time as _time
+    return local_day(_time.time())

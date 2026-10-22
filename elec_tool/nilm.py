@@ -34,7 +34,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 
 from .blocks import SampleBlock
-from .timefmt import fmt_local, local_day
+from .timefmt import fmt_local, wall_day
 from .config import AppConfig, NILM_ALGO_DEFAULTS, NILM_ALGO_NAMES, NILM_CHANNELS, NILM_W_TO_A, NilmConfig
 
 __all__ = ["NilmEvent", "NilmDetector", "CycleFeatures", "detect_steps", "NILM_ALGO_NAMES"]
@@ -376,7 +376,7 @@ class NilmWriter:
         self.errors: List[str] = []
 
     def _open_for(self, t: float) -> None:
-        day = local_day(t)
+        day = wall_day()                        # v0.58：按墙钟本地日期分文件（t 为数据时间，不再用于命名）
         path = os.path.join(self.dir, f"nilm_events_{day}.csv")
         if self._fh is not None and self._path == path:
             return

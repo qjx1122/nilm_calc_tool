@@ -74,4 +74,6 @@ def test_nilm_and_events_listing_with_clock_file(windows_like_localtime, tmp_pat
     assert evs and all(e["t_start"] > 0 for e in evs)
     assert any(e["t_start_local"].endswith("00:12:41.500") for e in evs), [e["t_start_local"] for e in evs]
     assert eng.detector.list(limit=10) is not None
-    assert eng.nilm.writer.rows_written == len(evs) and list((tmp_path / "nilm").glob("nilm_events_19700102.csv"))
+    from elec_tool.timefmt import wall_day
+    # v0.58：文件名按墙钟日期，不再是数据日期 19700102
+    assert eng.nilm.writer.rows_written == len(evs) and list((tmp_path / "nilm").glob(f"nilm_events_{wall_day()}.csv"))

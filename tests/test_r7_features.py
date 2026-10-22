@@ -107,9 +107,12 @@ def test_realtime_writer_appends_to_existing_file_without_second_header(csv_fact
     assert open(next(rt.glob("power_*.csv")), "rb").read().count(b"\xef\xbb\xbf") == 1
 
 
-def test_realtime_writer_rotates_by_data_date(tmp_path, monkeypatch):
-    """按**数据时间**日期分文件：两条相差一天的记录 → 两个文件（撤销 day 判断 → 只有一个文件）。"""
+def test_realtime_writer_rotates_by_wall_clock_not_data_date(tmp_path, monkeypatch):
+    """v0.58：按**墙钟**日期分文件，与数据时间无关：两条数据时间相差一天的记录 → 同一个 <今天> 文件；
+    墙钟跨午夜（monkeypatch time.time）→ 换文件。"""
+    import time as _time
     from elec_tool.metrics import MetricsResult, QuantityResult
+    from elec_tool import timefmt
     monkeypatch.delenv("ELEC_TOOL_REALTIME_DIR", raising=False)
     cfg = AppConfig()
     cfg.output.realtime_dir = str(tmp_path / "rt")
@@ -122,10 +125,18 @@ def test_realtime_writer_rotates_by_data_date(tmp_path, monkeypatch):
                            units={}, window={"length_s_requested": 1.0}, t_ref=t)
         return MetricsResult(t_ref=t, fs=6400.0, f_used=50.0, f_source="test", quantities={"power": q})
 
+    wall = [parse_time_text("2026-10-20 23:59:59")]
+    monkeypatch.setattr(_time, "time", lambda: wall[0])
     assert w.write(fake(t0)) == 1
-    assert w.write(fake(t0 + 2.0)) == 1          # 跨到次日 00:00:01
+    assert w.write(fake(t0 + 2.0)) == 1          # 数据跨到次日 → 仍同一文件
+    assert w.write(fake(t0 - 86400 * 30)) == 1   # 数据时间一个月前 → 仍同一文件
     names = sorted(p.name for p in (tmp_path / "rt").glob("power_*.csv"))
-    assert names == ["power_20261012.csv", "power_20261013.csv"], names
+    assert names == ["power_20261020.csv"], names
+    wall[0] += 2.0                               # 墙钟跨午夜
+    assert w.write(fake(t0)) == 1
+    names = sorted(p.name for p in (tmp_path / "rt").glob("power_*.csv"))
+    assert names == ["power_20261020.csv", "power_20261021.csv"], names
+    assert timefmt.wall_day() == "20261021"
     w.close()
 
 

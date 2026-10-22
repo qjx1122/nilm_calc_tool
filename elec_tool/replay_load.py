@@ -75,16 +75,6 @@ def _run_ok(head: List[str], row: List[str], run_id: Optional[int]) -> bool:
     return rid is None or rid == int(run_id)
 
 
-def _anchor_day(t_anchor: Optional[float]) -> Optional[str]:
-    if t_anchor is None:
-        return None
-    try:
-        from .timefmt import local_day
-        return local_day(t_anchor)
-    except Exception:
-        return None
-
-
 def load_curves(dir_: str, source_id: int, hours: float, keys: Iterable[str] = CURVE_KEYS,
                 max_points: int = 200000, t_anchor: Optional[float] = None, run_id: Optional[int] = None) -> Dict[str, Any]:
     """返回 {"records": {key: [{"t":..., field: value, ...}, ...]}, "files": [...], "t_first":..., "t_last":...}。
@@ -97,13 +87,11 @@ def load_curves(dir_: str, source_id: int, hours: float, keys: Iterable[str] = C
     files: List[Dict[str, Any]] = []
     t_lo: Optional[float] = None
     t_hi: Optional[float] = None
-    a_day = _anchor_day(t_anchor)
     for key in keys:
         recs: List[Dict[str, Any]] = []
         latest: Optional[float] = None
         for day, path in _files_by_day(dir_, key):
-            if a_day is not None and day > a_day:
-                continue                        # 比锚点还新的日期文件与上次播放无关
+            # v0.58：文件名日期＝写入时的墙钟日期，与数据时间无关 → 不再按文件名跳过，只靠行内时间窗 / run_id 过滤
             head, rows = _read_rows(path)
             if not head or head[0] != "t_epoch_s":
                 continue

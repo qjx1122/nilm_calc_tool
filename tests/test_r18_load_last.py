@@ -296,10 +296,10 @@ def test_event_writers_rotate_old_header_and_write_run_id(tmp_path, monkeypatch)
     import csv
     from elec_tool import events as ev, nilm as nm
     from elec_tool.config import AppConfig
-    from elec_tool.timefmt import local_day
+    from elec_tool.timefmt import wall_day
     monkeypatch.delenv("ELEC_TOOL_NILM_DIR", raising=False); monkeypatch.delenv("ELEC_TOOL_EVENTS_DIR", raising=False)
     cfg = AppConfig.from_dict({"nilm": {"nilm_dir": str(tmp_path / "nl")}, "events": {"events_dir": str(tmp_path / "ev")}})
-    t = 1791878400.0; day = local_day(t)
+    t = 1791878400.0; day = wall_day()                           # v0.58：文件名按墙钟日期
     (tmp_path / "nl").mkdir(); old = tmp_path / "nl" / f"nilm_events_{day}.csv"
     old.write_text(",".join(nm._CSV_FIELDS[:-1]) + "\n0,1,cusum,C,total,1,x,1,x,0,0,up,1,1,0,0,0,1,1\n", encoding="utf-8-sig")
     w = nm.NilmWriter(cfg.nilm, source_id=0, run_id=4242)

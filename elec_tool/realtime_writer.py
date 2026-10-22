@@ -3,7 +3,8 @@
 设计要点：
 - 与趋势曲线/「保存曲线数据」共用同一提取规则（``metrics.curve_record``），文件内容与界面曲线一致；
 - 受 ``output.curve_save`` 勾选控制：未勾选的曲线不落盘（与手工保存口径一致）；
-- 按**数据时间**的本地日期分文件（``voltage_20261012.csv``），跨午夜自动换文件；离线回放同样成立；
+- 按**墙钟（写入时刻）**的本地日期分文件（``voltage_20261012.csv``），跨午夜自动换文件（v0.58 起不再按数据时间：
+  总线侧与分路侧播放不同日期的离线文件时也写进同一个文件，只用 source_id 区分；行内 ``t_epoch_s/time_local`` 仍是数据时间）；
 - 追加写、每次写后 flush：进程被杀最多丢最后一行；文件已存在且非空时沿用其表头字段顺序，不重复写表头；
 - 表头字段顺序由该曲线第一条记录决定，后续记录只按表头列输出（新增字段不会破坏列对齐）；
 - UTF-8-BOM，Excel 直接双击可开。
@@ -21,7 +22,7 @@ import time
 from typing import Any, Dict, List, Optional
 
 from .config import AppConfig, CURVE_KEYS
-from .timefmt import fmt_local, local_day
+from .timefmt import fmt_local, wall_day
 from .metrics import MetricsResult, curve_record
 
 
@@ -90,7 +91,7 @@ class RealtimeCurveWriter:
 
     # ---------- 内部 ----------
     def _append(self, key: str, t: float, rec: Dict[str, Any]) -> None:
-        day = local_day(t)
+        day = wall_day()                            # v0.58：按墙钟本地日期分文件（不按数据时间），两侧同一运行日同一文件
         with SHARED_FILE_LOCK:                      # v0.17.2：两侧共用同一文件，表头/整行写入互斥
             f = self._files.get(key)
             if f is None or f["day"] != day:

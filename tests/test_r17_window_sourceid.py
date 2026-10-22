@@ -221,15 +221,17 @@ def test_realtime_writer_legacy_file_rotated(tmp_path, monkeypatch):
     from elec_tool.realtime_writer import RealtimeCurveWriter
     monkeypatch.delenv("ELEC_TOOL_REALTIME_DIR", raising=False)
     d = tmp_path / "rt"; d.mkdir()
-    (d / "voltage_20261015.csv").write_text("t_epoch_s,time_local,window_s,Ua\r\n1.0,x,1,2\r\n", encoding="utf-8-sig")
+    from elec_tool.timefmt import wall_day
+    day = wall_day()                                               # v0.58：文件名按墙钟日期
+    (d / f"voltage_{day}.csv").write_text("t_epoch_s,time_local,window_s,Ua\r\n1.0,x,1,2\r\n", encoding="utf-8-sig")
     cfg = AppConfig(); cfg.output.realtime_dir = str(d)
     w = RealtimeCurveWriter(cfg)
     t = _t.mktime((2026, 10, 15, 12, 0, 0, 0, 0, -1))
     w._append("voltage", t, {"window_s": 1, "Ua": 3.0}); w.close()
-    assert sorted(p.name for p in d.iterdir()) == ["voltage_20261015.csv", "voltage_20261015.v016.csv"]
-    rows = list(csv.reader(open(d / "voltage_20261015.csv", encoding="utf-8-sig")))
+    assert sorted(p.name for p in d.iterdir()) == [f"voltage_{day}.csv", f"voltage_{day}.v016.csv"]
+    rows = list(csv.reader(open(d / f"voltage_{day}.csv", encoding="utf-8-sig")))
     assert rows[0] == ["t_epoch_s", "time_local", "source_id", "window_s", "Ua"] and rows[1][2] == "0" and len(rows) == 2
-    assert open(d / "voltage_20261015.v016.csv", encoding="utf-8-sig").read().startswith("t_epoch_s,time_local,window_s")
+    assert open(d / f"voltage_{day}.v016.csv", encoding="utf-8-sig").read().startswith("t_epoch_s,time_local,window_s")
 
 
 # ---------- ② 前端契约 ----------
@@ -247,3 +249,41 @@ def test_frontend_zoom_and_window_contract():
         assert s in js, s
     for i in ("src-window", "src-winstart", "src-winend", "br-window", "br-winstart", "br-winend", "br-common-end"):
         assert f'id="{i}"' in html, i
+
+
+# ---------- v0.58：文件名按墙钟日期，两侧不同数据日期也写同一文件 ----------
+def test_both_sides_different_data_dates_share_one_file_named_by_wall_clock(client, files, tmp_path_factory):
+    """总线侧播放 T0 当天的文件、分路侧播放**数据时间差 40 天**的文件 → 实时曲线 / 负荷事件仍在同一个 <名>_<今天>.csv，
+    不再按数据日期拆成两个文件；行内 t_epoch_s 仍是各自的数据时间；「加载上次数据」能按锚点读回旧数据日期的行。"""
+    import os
+    from elec_tool.selftest import build_signal, HarmSpec
+    from elec_tool.timefmt import wall_day, local_day
+    from tests.conftest import write_csv
+    os.environ.pop("ELEC_TOOL_REALTIME_DIR", None)
+    d = tmp_path_factory.mktemp("r58")
+    t2, u2, i2 = build_signal([HarmSpec(1, 57.735, 5.0, phi_deg=0.0)], FS, 4.0, t0=T0 - 40 * 86400)
+    write_csv(str(d / "br_old.csv"), t2, u2, i2)
+    client.post("/api/engine/stop"); client.post("/api/branch/engine/stop")
+    rt = d / "rt"
+    client.put("/api/config", json={"branch": {"enabled": True, "common_window": False},
+                                    "output": {"realtime_save": True, "realtime_dir": str(rt), "curve_save": {"voltage": True}}})
+    client.put("/api/branch/config", json={"source": {"kind": "csv_file", "path": str(d / "br_old.csv"), "file_speed": 0, "custom_time": False, "play_window": False},
+                                           "output": {"realtime_save": True, "curve_save": {"voltage": True}}})
+    r = client.post("/api/engine/start", json={"kind": "csv_file", "path": str(files / "bus.csv"), "file_speed": 0, "play_window": False}).json()
+    assert r["ok"] and r["branch"]["ok"], r
+    _wait_done(client); _wait_done(client, "/api/branch/state")
+    vfiles = sorted(p.name for p in rt.glob("voltage_*.csv"))
+    assert vfiles == [f"voltage_{wall_day()}.csv"], vfiles           # 只有一个文件，名字是今天（墙钟）
+    assert local_day(T0 - 40 * 86400) != wall_day()
+    rows = list(csv.reader(open(rt / vfiles[0], encoding="utf-8-sig")))
+    by = {}
+    for rr in rows[1:]:
+        by.setdefault(rr[2], []).append(float(rr[0]))
+    assert set(by) == {"0", "1"}
+    assert all(abs(t - T0) < 10 for t in by["0"]) and all(abs(t - (T0 - 40 * 86400)) < 10 for t in by["1"])   # 行内仍是数据时间
+    # 加载上次数据：分路侧锚点在 40 天前，文件名却是今天 → 仍能读回（v0.58 去掉了「文件日期 > 锚点日期就跳过」）
+    from elec_tool.replay_load import load_curves
+    got = load_curves(str(rt), 1, 24.0, keys=["voltage"], t_anchor=T0 - 40 * 86400 + 4.0)
+    assert len(got["records"]["voltage"]) == len(set(by["1"])) > 0        # 加载器按时间去重
+    client.post("/api/engine/stop"); client.post("/api/branch/engine/stop")
+    client.put("/api/config", json={"branch": {"enabled": False}, "output": {"realtime_save": False}})
