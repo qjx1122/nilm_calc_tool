@@ -251,3 +251,9 @@ canvas:focus{outline:none}
 .wp-wave{border-left-color:#4ea1ff}.wp-wave .wp-tag,.wp-tag-wave{background:#4ea1ff}
 .wp-rmsg{border-left-color:#f2b84b}.wp-rmsg .wp-tag,.wp-tag-rms{background:#f2b84b}
 #wp-base-fs[readonly]{opacity:.85;cursor:not-allowed;background:rgba(255,255,255,.04)}
+
+/* v0.67 波形预览：配置 ‖ 曲线 并排（左窄右宽），窄屏折回单列 */
+.wp-pair{grid-template-columns:minmax(300px,2fr) 3fr}
+.wp-pair .panel{margin-bottom:0;min-width:0}
+.wp-pair .wp-group{margin-top:0}
+@media(max-width:1100px){.wp-pair{grid-template-columns:1fr}}

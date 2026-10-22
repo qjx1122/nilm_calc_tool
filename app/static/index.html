@@ -939,9 +939,9 @@
       <h2 style="margin-top:18px">数据处理 · 波形预览（离线波形 CSV：文件信息 / 原始波形 / 逐周波有效值）</h2>
       <div class="grid2">
         <div class="panel">
-          <h3>波形文件与配置 <span class="navhint">三组：公共配置 → 波形曲线配置 → 有效值曲线配置</span></h3>
+          <h3>波形文件与公共配置 <span class="navhint">下方：波形曲线配置 ‖ 波形曲线；有效值曲线配置 ‖ 逐周波 RMS 曲线；周波窗（有效值）‖ 周波窗 2（瞬时值）</span></h3>
           <div class="form" id="wp-form">
-            <!-- ① 公共配置（v0.65：波形曲线与有效值曲线共用） -->
+            <!-- ① 公共配置（v0.65：波形曲线与有效值曲线共用；v0.67：波形/有效值配置移到各自曲线左侧） -->
             <div class="wp-group wp-common" id="wp-sec-common">
               <div class="wp-group-title"><span class="wp-tag">公共配置</span> 波形曲线与有效值曲线<b>共用</b>：文件、基准配置、自定义时间（独立于总线 / 分路侧运行配置；改动保存在浏览器本地）</div>
               <label>波形文件（data 目录下拉或手填路径）
@@ -974,61 +974,10 @@
               </div>
             </div>
             <!-- ② 波形曲线配置 -->
-            <div class="wp-group wp-wave" id="wp-sec-wave">
-              <div class="wp-group-title"><span class="wp-tag">波形曲线配置</span> 只影响「波形曲线」：重采样、起止时刻、周波数、通道、最多点数（数据按上方公共配置解释）</div>
-              <div class="row2">
-                <label>重采样率 (Hz，空＝原始采样率) <input id="wp-fs" type="number" min="1" step="any" placeholder="原始采样率"></label>
-                <label title="与「重采样」功能同一组方法：linear 线性插值 / nearest 最近邻 / fft 频域（降采样自带抗混叠）">重采样方式
-                  <select id="wp-method"><option value="linear">linear 线性插值</option><option value="nearest">nearest 最近邻</option><option value="fft">fft 频域（抗混叠）</option></select>
-                </label>
-              </div>
-              <div class="row2">
-                <label title="空＝文件数据起始时间（自定义时间启用时＝自定义起始时间）。写法：2026-10-13 08:00:02.5 / epoch 秒（文件时间模式还可只写 08:00:02.5）">起始时刻（空＝数据起始时间） <input id="wp-tstart" placeholder="空＝数据起始时间"></label>
-                <label title="空＝文件数据结束时间（按采样率计算；自定义结束时间填了则＝它）；与周波数同时给出时取先到者">结束时刻（空＝数据结束时间） <input id="wp-tend" placeholder="空＝数据结束时间"></label>
-              </div>
-              <div class="row2">
-                <label title="从起始时刻起加载的周波数（点数 = 周波数 × 每周波点数，按重采样率计）；空＝起止时刻之间全部（受「最多加载点数」限制，默认 2000 万）">加载周波数（空＝整段） <input id="wp-ncyc" type="number" min="1" step="1" value="300"></label>
-                <label title="单次加载波形最多返回的点数（每通道）；默认 20000000；超出则截断并提示">最多加载点数 <input id="wp-maxpts" type="number" min="1" step="1" value="20000000"></label>
-              </div>
-              <div class="row2">
-                <label>通道（默认全部）
-                  <span class="toggle" id="wp-chans">
-                    <label class="chk"><input type="checkbox" class="wp-ch" value="Ua" checked> Ua</label>
-                    <label class="chk"><input type="checkbox" class="wp-ch" value="Ub" checked> Ub</label>
-                    <label class="chk"><input type="checkbox" class="wp-ch" value="Uc" checked> Uc</label>
-                    <label class="chk"><input type="checkbox" class="wp-ch" value="Ia" checked> Ia</label>
-                    <label class="chk"><input type="checkbox" class="wp-ch" value="Ib" checked> Ib</label>
-                    <label class="chk"><input type="checkbox" class="wp-ch" value="Ic" checked> Ic</label>
-                  </span>
-                </label>
-                <span></span>
-              </div>
-              <div class="btnrow">
-                <button id="btn-wp-load" class="primary">加载波形曲线</button>
-              </div>
-            </div>
             <!-- ③ 有效值曲线配置 -->
-            <div class="wp-group wp-rmsg" id="wp-sec-rms">
-              <div class="wp-group-title"><span class="wp-tag">有效值曲线配置</span> 只影响「有效值曲线」：起止时刻 / 时长、统计窗、右键周波窗周波数（数据按上方公共配置解释，通道随波形曲线的勾选）</div>
-              <div class="row2">
-                <label title="空＝文件数据起始时间（自定义时间启用时＝自定义起始时间）">起始时刻（空＝数据起始时间） <input id="wp-rms-tstart" placeholder="空＝数据起始时间"></label>
-                <label title="空＝文件数据结束时间（或由时长决定）">结束时刻（空＝数据结束时间） <input id="wp-rms-tend" placeholder="空＝数据结束时间"></label>
-              </div>
-              <div class="row2">
-                <label title="从起始时刻起统计的时长；与结束时刻同时填时取先到者">或 时长 (s) <input id="wp-rms-dur" type="number" min="0.02" step="0.1" placeholder="空"></label>
-                <label title="每个点合并的周波数（1＝逐周波）；点数超过 20 万时自动加大">统计窗（周波/点） <input id="wp-rms-agg" type="number" min="1" step="1" value="1"></label>
-              </div>
-              <div class="row2">
-                <label title="右键有效值曲线「显示周波窗」/「显示周波窗 2」时，以鼠标所指时刻为中心加载的周波数">周波窗周波数（右键用） <input id="wp-cyc-n" type="number" min="1" max="20000" step="1" value="300"></label>
-                <span></span>
-              </div>
-              <div class="btnrow">
-                <button id="btn-wp-rms" class="primary">加载有效值曲线</button>
-              </div>
-            </div>
             <div id="wp-hint" class="notes">
               <div>只读文件、不改运行配置、不启动引擎。<b>公共配置</b>对两条曲线同时生效：采样率由文件数据时间推算（不可改）；时长＝行数 / 采样率，结束时间＝起始 + (行数−1) / 采样率。</div>
-              <div>有效值曲线右键：「显示周波窗」→ 下方「周波窗」显示该段的<b>逐周波有效值</b>；「显示周波窗 2」→ 下方「周波窗 2」显示该段的<b>采样瞬时值</b>；两者都以该时刻为中心取「周波窗周波数」个周波。加载周波数默认 300（6400 Hz 时 38400 点）。</div>
+              <div>有效值曲线右键：「显示周波窗」→「周波窗（有效值）曲线」显示该段的<b>逐周波有效值</b>；「显示周波窗 2」→「周波窗 2（瞬时值）」显示该段的<b>采样瞬时值</b>；两者都以该时刻为中心取「周波窗周波数」个周波。加载周波数默认 300（6400 Hz 时 38400 点）。</div>
               <div>曲线操作与负荷辨识页一致：滚轮缩放 X、Shift+滚轮缩放 Y、放大后拖动平移、双击或「复位」恢复全图；右键菜单含复制 / 保存图片。</div>
             </div>
           </div>
@@ -1039,22 +988,92 @@
           <div id="wp-status" class="notes"></div>
         </div>
       </div>
-      <div class="panel">
-        <h3 class="curvehdr"><span><span class="wp-tag wp-tag-wave">波形曲线</span> 原始波形<small class="hdrhint" id="wp-wave-sub">（未加载）</small></span></h3>
-        <canvas id="wp-wave" height="260"></canvas>
+      <!-- v0.67：波形曲线配置 ‖ 波形曲线 并排 -->
+      <div class="grid2 wp-pair">
+        <div class="panel">
+          <h3><span class="wp-tag wp-tag-wave">波形曲线配置</span> 只影响右侧「波形曲线」</h3>
+          <div class="form" id="wp-form-wave">
+          <div class="wp-group wp-wave" id="wp-sec-wave">
+            <div class="wp-group-title">重采样、起止时刻、周波数、通道、最多点数（数据按上方公共配置解释）</div>
+            <div class="row2">
+              <label>重采样率 (Hz，空＝原始采样率) <input id="wp-fs" type="number" min="1" step="any" placeholder="原始采样率"></label>
+              <label title="与「重采样」功能同一组方法：linear 线性插值 / nearest 最近邻 / fft 频域（降采样自带抗混叠）">重采样方式
+                <select id="wp-method"><option value="linear">linear 线性插值</option><option value="nearest">nearest 最近邻</option><option value="fft">fft 频域（抗混叠）</option></select>
+              </label>
+            </div>
+            <div class="row2">
+              <label title="空＝文件数据起始时间（自定义时间启用时＝自定义起始时间）。写法：2026-10-13 08:00:02.5 / epoch 秒（文件时间模式还可只写 08:00:02.5）">起始时刻（空＝数据起始时间） <input id="wp-tstart" placeholder="空＝数据起始时间"></label>
+              <label title="空＝文件数据结束时间（按采样率计算；自定义结束时间填了则＝它）；与周波数同时给出时取先到者">结束时刻（空＝数据结束时间） <input id="wp-tend" placeholder="空＝数据结束时间"></label>
+            </div>
+            <div class="row2">
+              <label title="从起始时刻起加载的周波数（点数 = 周波数 × 每周波点数，按重采样率计）；空＝起止时刻之间全部（受「最多加载点数」限制，默认 2000 万）">加载周波数（空＝整段） <input id="wp-ncyc" type="number" min="1" step="1" value="300"></label>
+              <label title="单次加载波形最多返回的点数（每通道）；默认 20000000；超出则截断并提示">最多加载点数 <input id="wp-maxpts" type="number" min="1" step="1" value="20000000"></label>
+            </div>
+            <div class="row2">
+              <label>通道（默认全部）
+                <span class="toggle" id="wp-chans">
+                  <label class="chk"><input type="checkbox" class="wp-ch" value="Ua" checked> Ua</label>
+                  <label class="chk"><input type="checkbox" class="wp-ch" value="Ub" checked> Ub</label>
+                  <label class="chk"><input type="checkbox" class="wp-ch" value="Uc" checked> Uc</label>
+                  <label class="chk"><input type="checkbox" class="wp-ch" value="Ia" checked> Ia</label>
+                  <label class="chk"><input type="checkbox" class="wp-ch" value="Ib" checked> Ib</label>
+                  <label class="chk"><input type="checkbox" class="wp-ch" value="Ic" checked> Ic</label>
+                </span>
+              </label>
+              <span></span>
+            </div>
+            <div class="btnrow">
+              <button id="btn-wp-load" class="primary">加载波形曲线</button>
+            </div>
+          </div>
+          </div>
+        </div>
+        <div class="panel">
+          <h3 class="curvehdr"><span><span class="wp-tag wp-tag-wave">波形曲线</span> 原始波形<small class="hdrhint" id="wp-wave-sub">（未加载）</small></span></h3>
+          <canvas id="wp-wave" height="300"></canvas>
+        </div>
       </div>
-      <div class="panel">
-        <h3 class="curvehdr"><span><span class="wp-tag wp-tag-rms">有效值曲线</span> 逐周波 RMS<small class="hdrhint" id="wp-rms-sub">（未加载；右键曲线可「显示周波窗」/「显示周波窗 2」）</small></span></h3>
-        <canvas id="wp-rms" height="260"></canvas>
+      <!-- v0.67：有效值曲线配置 ‖ 逐周波 RMS 曲线 并排 -->
+      <div class="grid2 wp-pair">
+        <div class="panel">
+          <h3><span class="wp-tag wp-tag-rms">有效值曲线配置</span> 只影响右侧「逐周波 RMS 曲线」</h3>
+          <div class="form" id="wp-form-rms">
+          <div class="wp-group wp-rmsg" id="wp-sec-rms">
+            <div class="wp-group-title">起止时刻 / 时长、统计窗、右键周波窗周波数（数据按上方公共配置解释，通道随波形曲线的勾选）</div>
+            <div class="row2">
+              <label title="空＝文件数据起始时间（自定义时间启用时＝自定义起始时间）">起始时刻（空＝数据起始时间） <input id="wp-rms-tstart" placeholder="空＝数据起始时间"></label>
+              <label title="空＝文件数据结束时间（或由时长决定）">结束时刻（空＝数据结束时间） <input id="wp-rms-tend" placeholder="空＝数据结束时间"></label>
+            </div>
+            <div class="row2">
+              <label title="从起始时刻起统计的时长；与结束时刻同时填时取先到者">或 时长 (s) <input id="wp-rms-dur" type="number" min="0.02" step="0.1" placeholder="空"></label>
+              <label title="每个点合并的周波数（1＝逐周波）；点数超过 20 万时自动加大">统计窗（周波/点） <input id="wp-rms-agg" type="number" min="1" step="1" value="1"></label>
+            </div>
+            <div class="row2">
+              <label title="右键逐周波 RMS 曲线「显示周波窗」/「显示周波窗 2」时，以鼠标所指时刻为中心加载的周波数">周波窗周波数（右键用） <input id="wp-cyc-n" type="number" min="1" max="20000" step="1" value="300"></label>
+              <span></span>
+            </div>
+            <div class="btnrow">
+              <button id="btn-wp-rms" class="primary">加载有效值曲线</button>
+            </div>
+          </div>
+          </div>
+        </div>
+        <div class="panel">
+          <h3 class="curvehdr"><span><span class="wp-tag wp-tag-rms">逐周波 RMS 曲线</span> 有效值曲线<small class="hdrhint" id="wp-rms-sub">（未加载；右键曲线可「显示周波窗」/「显示周波窗 2」）</small></span></h3>
+          <canvas id="wp-rms" height="300"></canvas>
+        </div>
       </div>
-      <div class="panel">
-        <h3 class="curvehdr"><span><span class="wp-tag wp-tag-rms">有效值曲线 · 右键</span> 周波窗（逐周波有效值）<small class="hdrhint" id="wp-cyc-sub">（在有效值曲线上右键「显示周波窗」后显示：以该时刻为中心 N 个周波的逐周波有效值）</small></span></h3>
-        <canvas id="wp-cyc" height="240"></canvas>
-      </div>
-      <div class="panel">
-        <h3 class="curvehdr"><span><span class="wp-tag wp-tag-rms">有效值曲线 · 右键</span> 周波窗 2（瞬时值）<small class="hdrhint" id="wp-cyc2-sub">（在有效值曲线上右键「显示周波窗 2」后显示：以该时刻为中心的 N 个周波采样瞬时值曲线）</small></span>
-          <span class="toggle"><button id="btn-wp-cyc2-clear" title="清除周波窗 2">清除</button></span></h3>
-        <canvas id="wp-cyc2" height="240"></canvas>
+      <!-- v0.67：周波窗（有效值）‖ 周波窗 2（瞬时值） 左右布局 -->
+      <div class="grid2 wp-pair">
+        <div class="panel">
+          <h3 class="curvehdr"><span><span class="wp-tag wp-tag-rms">周波窗（有效值）曲线</span><small class="hdrhint" id="wp-cyc-sub">（在逐周波 RMS 曲线上右键「显示周波窗」后显示：以该时刻为中心 N 个周波的逐周波有效值）</small></span></h3>
+          <canvas id="wp-cyc" height="260"></canvas>
+        </div>
+        <div class="panel">
+          <h3 class="curvehdr"><span><span class="wp-tag wp-tag-rms">周波窗 2（瞬时值）</span><small class="hdrhint" id="wp-cyc2-sub">（在逐周波 RMS 曲线上右键「显示周波窗 2」后显示：以该时刻为中心 N 个周波的采样瞬时值）</small></span>
+            <span class="toggle"><button id="btn-wp-cyc2-clear" title="清除周波窗 2">清除</button></span></h3>
+          <canvas id="wp-cyc2" height="260"></canvas>
+        </div>
       </div>
     </section>
   </main>
