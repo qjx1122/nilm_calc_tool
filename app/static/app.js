@@ -3636,8 +3636,22 @@ const WP_BASE_KEY = 'elec_tool.wave_preview.base';   // v0.62：基准配置存�
 function wpVal(id) { const el = $('#' + id); return el ? String(el.value || '').trim() : ''; }
 /* v0.62：基准配置（fs / f_nom / PT·CT / UTC）——独立字段，随每次请求以查询参数传给服务端 */
 function wpBase() {
-  return { fs: wpVal('wp-base-fs'), f_nom: wpVal('wp-base-fnom'), pt_ct_enabled: $('#wp-base-ptct') ? ($('#wp-base-ptct').checked ? '1' : '0') : '',
-           pt_ratio: wpVal('wp-base-pt'), ct_ratio: wpVal('wp-base-ct'), file_time_utc: $('#wp-base-utc') ? ($('#wp-base-utc').checked ? '1' : '0') : '' };
+  const chk = (id) => ($('#' + id) ? ($('#' + id).checked ? '1' : '0') : '');
+  const custom = chk('wp-base-custom');
+  return { fs: wpVal('wp-base-fs'), f_nom: wpVal('wp-base-fnom'), pt_ct_enabled: chk('wp-base-ptct'),
+           pt_ratio: wpVal('wp-base-pt'), ct_ratio: wpVal('wp-base-ct'), file_time_utc: chk('wp-base-utc'),
+           // v0.64：自定义时间（启用时：时间轴＝自定义起始(空＝文件数据起始) + 行号/fs；结束空＝按采样率计算）
+           custom_time: custom, custom_time_start: custom === '1' ? wpVal('wp-base-cstart') : '', custom_time_end: custom === '1' ? wpVal('wp-base-cend') : '' };
+}
+function wpMaxPoints() { const v = parseInt(wpVal('wp-maxpts'), 10); return Number.isFinite(v) && v > 0 ? v : ((WP.defaults || {}).max_points_default || 20000000); }
+function wpSyncCustom() {
+  const on = !!($('#wp-base-custom') && $('#wp-base-custom').checked);
+  const row = $('#wp-custom-row'); if (row) row.style.display = on ? '' : 'none';
+  // 起止时刻输入框的占位提示随模式变化（空＝数据起止时间）
+  const i = WP.info;
+  const ps = on ? '空＝自定义起始时间' : '空＝数据起始时间', pe = on ? '空＝按采样率计算的结束时间' : '空＝数据结束时间';
+  ['wp-tstart', 'wp-rms-tstart'].forEach(id => { const el = $('#' + id); if (el) el.placeholder = (i && i.t_start_local) ? `空＝${i.t_start_local}` : ps; });
+  ['wp-tend', 'wp-rms-tend'].forEach(id => { const el = $('#' + id); if (el) el.placeholder = (i && i.t_end_local) ? `空＝${i.t_end_local}` : pe; });
 }
 function wpSetBase(b) {
   if (!b) return;
@@ -3645,8 +3659,12 @@ function wpSetBase(b) {
   set('wp-base-fs', b.fs); set('wp-base-fnom', b.f_nom); set('wp-base-pt', b.pt_ratio); set('wp-base-ct', b.ct_ratio);
   if ($('#wp-base-ptct')) $('#wp-base-ptct').checked = !!(b.pt_ct_enabled === true || b.pt_ct_enabled === '1' || b.pt_ct_enabled === 1);
   if ($('#wp-base-utc')) $('#wp-base-utc').checked = !!(b.file_time_utc === true || b.file_time_utc === '1' || b.file_time_utc === 1);
+  if ($('#wp-base-custom') && b.custom_time !== undefined) $('#wp-base-custom').checked = !!(b.custom_time === true || b.custom_time === '1' || b.custom_time === 1);
+  set('wp-base-cstart', b.custom_time_start); set('wp-base-cend', b.custom_time_end);
+  if (b.max_points !== undefined && b.max_points !== null && b.max_points !== '') set('wp-maxpts', b.max_points);
+  wpSyncCustom();
 }
-function wpSaveBase() { try { localStorage.setItem(WP_BASE_KEY, JSON.stringify(wpBase())); } catch (e) { /* 隐私模式 */ } }
+function wpSaveBase() { try { localStorage.setItem(WP_BASE_KEY, JSON.stringify(Object.assign(wpBase(), { custom_time_start: wpVal('wp-base-cstart'), custom_time_end: wpVal('wp-base-cend'), max_points: wpVal('wp-maxpts') }))); } catch (e) { /* 隐私模式 */ } }
 async function wpLoadDefaults() {
   try {
     const d = await api('/api/process/wave/defaults', undefined, 'bus');
@@ -3685,7 +3703,8 @@ function wpRenderInfo(d) {
     ['通道数', `${d.n_channels}（${(d.channels || []).join(' / ')}）`],
     ['采样率', `${wpFs(d.fs)} Hz${isNum(d.fs_est) ? `（时标推算 ${(+d.fs_est).toFixed(2)} Hz，配置 ${d.fs_configured} Hz）` : `（配置值 ${d.fs_configured} Hz）`} · 每周波 ${d.samples_per_cycle} 点（f_nom ${d.f_nom} Hz）`],
     ['时长', `${fmtDur(d.duration_s)}（${(+d.duration_s).toFixed(3)} s）`],
-    ['起始时间', wpFmtT(d.t_start)], ['结束时间', wpFmtT(d.t_end)],
+    ['时间模式', d.custom_time ? `自定义时间（起始＝${d.custom_time_start ? esc(d.custom_time_start) : '文件数据起始时间'}；结束＝${d.custom_time_end ? esc(d.custom_time_end) : '起始 + (行数−1)/fs'}）` : '文件数据时间'],
+    ['起始时间', wpFmtT(d.t_start)], ['结束时间', wpFmtT(d.t_end) + (isNum(d.t_end_custom) ? '（自定义结束时间）' : '')],
     ['口径', d.pt_ct && d.pt_ct.enabled ? `一次侧（PT ${d.pt_ct.pt_ratio} / CT ${d.pt_ct.ct_ratio}）` : '二次侧（PT/CT 未启用）'],
   ];
   box.innerHTML = `<table><tbody>${rows.map(([k, v]) => `<tr><th style="text-align:left;white-space:nowrap">${k}</th><td>${v}</td></tr>`).join('')}</tbody></table>` +
@@ -3697,9 +3716,8 @@ async function wpInfo(silent) {
   try {
     const d = await api('/api/process/wave/info?' + wpQuery(Object.assign({ path }, wpBase())), undefined, 'bus');
     WP.info = d; wpRenderInfo(d);
-    // v0.62：默认起止时刻＝文件数据起止时间（波形与有效值两组都填）；静默刷新（加载后补取信息）只填空着的输入框，不覆盖用户已填的值
-    ['wp-tstart', 'wp-rms-tstart'].forEach(id => { const el = $('#' + id); if (el && (!silent || !el.value)) el.value = d.t_start_local || ''; });
-    ['wp-tend', 'wp-rms-tend'].forEach(id => { const el = $('#' + id); if (el && (!silent || !el.value)) el.value = d.t_end_local || ''; });
+    // v0.64：起止时刻默认为空＝文件数据起止时间（自定义时间启用时＝自定义起始 / 按采样率计算的结束）；不再自动填入，只把实际时间写进占位提示
+    wpSyncCustom();
     // 通道勾选框：文件里没有的通道置灰；静默刷新不改动已有勾选
     document.querySelectorAll('#wp-chans .wp-ch').forEach(c => { const has = (d.channels || []).includes(c.value); c.disabled = !has; c.parentElement.classList.toggle('off', !has); if (!has) c.checked = false; else if (!silent && !WP.chTouched) c.checked = true; });
     if (!silent) toast(`文件信息：${d.n_channels} 通道 · ${wpFs(d.fs)} Hz · ${fmtDur(d.duration_s)}`, 'ok');
@@ -3734,7 +3752,7 @@ async function wpLoad() {
   if (!path) { toast('请先填写波形文件路径', 'err'); return; }
   const chans = wpChans();
   const params = Object.assign({ path, t_start: wpVal('wp-tstart'), t_end: wpVal('wp-tend'), n_cycles: wpVal('wp-ncyc'), fs_out: wpVal('wp-fs'),
-                                 method: wpVal('wp-method') || 'linear', channels: chans.join(',') }, wpBase());
+                                 method: wpVal('wp-method') || 'linear', channels: chans.join(','), max_points: wpMaxPoints() }, wpBase());
   const btn = $('#btn-wp-load'); if (btn) btn.disabled = true;
   wpStatus('加载波形中…');
   try {
@@ -3821,7 +3839,8 @@ function bindWavePreview() {
   if (!$('#wp-form')) return;
   $('#wp-files').addEventListener('change', () => { if ($('#wp-files').value) { $('#wp-path').value = $('#wp-files').value; WP.info = null; wpInfo(true); } });
   $('#wp-path').addEventListener('change', () => { WP.info = null; });
-  ['wp-base-fs', 'wp-base-fnom', 'wp-base-pt', 'wp-base-ct', 'wp-base-ptct', 'wp-base-utc'].forEach(id => $('#' + id).addEventListener('change', () => { WP.info = null; wpSaveBase(); }));
+  ['wp-base-fs', 'wp-base-fnom', 'wp-base-pt', 'wp-base-ct', 'wp-base-ptct', 'wp-base-utc', 'wp-base-custom', 'wp-base-cstart', 'wp-base-cend'].forEach(id => $('#' + id).addEventListener('change', () => { WP.info = null; wpSaveBase(); wpSyncCustom(); }));
+  $('#wp-maxpts').addEventListener('change', wpSaveBase);
   $('#btn-wp-info').addEventListener('click', () => wpInfo(false));
   $('#btn-wp-load').addEventListener('click', wpLoad);
   $('#btn-wp-rms').addEventListener('click', wpRms);

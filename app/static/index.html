@@ -954,17 +954,25 @@
               <label>CT 变比 <input id="wp-base-ct" type="number" min="0.000001" step="any"></label>
             </div>
             <div class="row2">
+              <label class="chk" title="勾选＝不用文件内时标，时间轴＝自定义起始时间 + 行号 / 采样率；不勾选＝按文件内数据时间"><input id="wp-base-custom" type="checkbox"> 启用自定义时间</label>
+              <label title="单次加载波形最多返回的点数（每通道）；默认 20000000；超出则截断并提示">最多加载点数 <input id="wp-maxpts" type="number" min="1" step="1" value="20000000"></label>
+            </div>
+            <div class="row2" id="wp-custom-row" style="display:none">
+              <label title="空＝文件数据起始时间（文件第 1 条数据的时标）；写法 2026-10-13 08:00:00[.fff] / epoch 秒">自定义起始时间（空＝文件数据起始时间） <input id="wp-base-cstart" placeholder="空＝文件数据起始时间"></label>
+              <label title="空＝起始时间 + (行数−1) / 采样率（按采样率计算的文件数据结束时间）；填写则只取到该时刻">自定义结束时间（空＝按采样率计算） <input id="wp-base-cend" placeholder="空＝起始 + (行数−1)/fs"></label>
+            </div>
+            <div class="row2">
               <label>重采样率 (Hz，空＝原始采样率) <input id="wp-fs" type="number" min="1" step="any" placeholder="原始采样率"></label>
               <label title="与「重采样」功能同一组方法：linear 线性插值 / nearest 最近邻 / fft 频域（降采样自带抗混叠）">重采样方式
                 <select id="wp-method"><option value="linear">linear 线性插值</option><option value="nearest">nearest 最近邻</option><option value="fft">fft 频域（抗混叠）</option></select>
               </label>
             </div>
             <div class="row2">
-              <label title="默认＝文件数据起始时间（获取文件信息后自动填入）。写法同播放时间段：2026-10-13 08:00:02.5 / 08:00:02.5 / epoch 秒">起始时刻（默认＝数据起始时间） <input id="wp-tstart" placeholder="空＝数据起点"></label>
-              <label title="默认＝文件数据结束时间；与周波数同时给出时取先到者">结束时刻（默认＝数据结束时间） <input id="wp-tend" placeholder="空＝文件末尾"></label>
+              <label title="空＝文件数据起始时间（自定义时间启用时＝自定义起始时间）。写法：2026-10-13 08:00:02.5 / epoch 秒（文件时间模式还可只写 08:00:02.5）">起始时刻（空＝数据起始时间） <input id="wp-tstart" placeholder="空＝数据起始时间"></label>
+              <label title="空＝文件数据结束时间（按采样率计算；自定义结束时间填了则＝它）；与周波数同时给出时取先到者">结束时刻（空＝数据结束时间） <input id="wp-tend" placeholder="空＝数据结束时间"></label>
             </div>
             <div class="row2">
-              <label title="从起始时刻起加载的周波数（点数 = 周波数 × 每周波点数，按重采样率计）；空＝起止时刻之间全部（单次最多 100 万点）">加载周波数（空＝整段） <input id="wp-ncyc" type="number" min="1" step="1" value="300"></label>
+              <label title="从起始时刻起加载的周波数（点数 = 周波数 × 每周波点数，按重采样率计）；空＝起止时刻之间全部（受「最多加载点数」限制，默认 2000 万）">加载周波数（空＝整段） <input id="wp-ncyc" type="number" min="1" step="1" value="300"></label>
               <label>通道（默认全部）
                 <span class="toggle" id="wp-chans">
                   <label class="chk"><input type="checkbox" class="wp-ch" value="Ua" checked> Ua</label>
@@ -983,8 +991,8 @@
             </div>
             <h3 style="margin-top:10px">有效值曲线（逐周波 RMS）</h3>
             <div class="row2">
-              <label title="默认＝文件数据起始时间（获取文件信息后自动填入）">起始时刻（默认＝数据起始时间） <input id="wp-rms-tstart" placeholder="空＝数据起点"></label>
-              <label title="默认＝文件数据结束时间（或由时长决定）">结束时刻（默认＝数据结束时间） <input id="wp-rms-tend" placeholder="空＝文件结尾"></label>
+              <label title="空＝文件数据起始时间（自定义时间启用时＝自定义起始时间）">起始时刻（空＝数据起始时间） <input id="wp-rms-tstart" placeholder="空＝数据起始时间"></label>
+              <label title="空＝文件数据结束时间（或由时长决定）">结束时刻（空＝数据结束时间） <input id="wp-rms-tend" placeholder="空＝数据结束时间"></label>
             </div>
             <div class="row2">
               <label title="从起始时刻起统计的时长；与结束时刻同时填时取先到者">或 时长 (s) <input id="wp-rms-dur" type="number" min="0.02" step="0.1" placeholder="空"></label>

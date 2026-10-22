@@ -107,7 +107,8 @@ def test_load_waveform_defaults_and_options(cfg, wave_file):
 def test_make_base_independent(cfg, wave_file):
     from elec_tool.wave_preview import base_defaults, load_waveform, make_base, WaveError
     bd = base_defaults(cfg)
-    assert bd == {"fs": 6400.0, "f_nom": 50.0, "pt_ct_enabled": True, "pt_ratio": 100.0, "ct_ratio": 15.0, "file_time_utc": False}
+    assert bd == {"fs": 6400.0, "f_nom": 50.0, "pt_ct_enabled": True, "pt_ratio": 100.0, "ct_ratio": 15.0, "file_time_utc": False,
+                  "custom_time": False, "custom_time_start": "", "custom_time_end": "", "max_points": 20_000_000}   # v0.64 +4
     b = make_base(cfg, fs="6400", f_nom="50", pt_ct_enabled="0", pt_ratio="", ct_ratio=None)
     assert b.transform.enabled is False and b.transform.pt_ratio == 100.0 and b.sampling.fs == 6400.0
     d = load_waveform(b, str(wave_file), n_cycles=2, channels=["Ua"])
@@ -192,3 +193,62 @@ def test_wave_endpoints(client, wave_file):
     # 不改运行配置、不启动引擎
     st = client.get("/api/state").json()
     assert not st["running"] and st["config"]["source"]["path"] != p
+
+
+# ---------- v0.64：最多加载点数可配（默认 2000 万）/ 自定义时间 / 谐波次数限制放宽 ----------
+def test_r64_max_points_custom_time_and_harmonic_relax(cfg, wave_file, client):
+    from elec_tool.wave_preview import MAX_POINTS_DEFAULT, file_info, load_waveform, make_base, rms_curve
+    p = str(wave_file)
+    # 1) 最多加载点数：默认 2000 万；界面可配，超出截断并提示
+    assert MAX_POINTS_DEFAULT == 20_000_000
+    d = client.get("/api/process/wave/defaults").json()
+    assert d["max_points_default"] == 20_000_000 and d["base"]["max_points"] == 20_000_000 and d["base"]["custom_time"] is False
+    r = client.get("/api/process/wave/load", params={"path": p}).json()                     # 不传 ⇒ 默认上限，整段 25600 点不截断
+    assert r["ok"] and r["n"] == 25600 and not r["truncated"]
+    r = client.get("/api/process/wave/load", params={"path": p, "max_points": 1000}).json()
+    assert r["ok"] and r["n"] == 1000 and r["truncated"] and any("1000" in n for n in r["notes"])
+    r = client.get("/api/process/wave/load", params={"path": p, "max_points": 0})
+    assert r.status_code == 400
+    # 2) 自定义时间：起始空＝文件数据起始时间；起始给定 → 轴＝起始 + 行号/fs；结束空＝起始 + (行数−1)/fs
+    b0 = make_base(cfg)
+    i0 = file_info(b0, p)
+    b1 = make_base(cfg, custom_time="1")
+    i1 = file_info(b1, p)
+    assert i1["custom_time"] is True and abs(i1["t_start"] - i0["t_start"]) < 1e-6 and abs(i1["t_end"] - i0["t_end"]) < 1e-6
+    b2 = make_base(cfg, custom_time="1", custom_time_start="2026-01-01 00:00:00")
+    i2 = file_info(b2, p)
+    from elec_tool.config import parse_time_text
+    c0 = parse_time_text("2026-01-01 00:00:00")
+    assert abs(i2["t_start"] - c0) < 1e-6 and abs(i2["t_end"] - (c0 + (i2["rows"] - 1) / FS)) < 1e-6 and abs(i2["duration_s"] - i2["rows"] / FS) < 1e-9
+    w = load_waveform(b2, p, t_start="2026-01-01 00:00:01", t_end="2026-01-01 00:00:01.5")            # 自定义轴上定位
+    assert w["n"] == 3200 and abs(w["t_first"] - (c0 + 1.0)) < 1e-6 and w["t_last"] < c0 + 1.5 + 1e-9
+    w = load_waveform(b2, p, n_cycles=10)                                                             # 起止空 ⇒ 从自定义起始开始
+    assert w["n"] == 1280 and abs(w["t_first"] - c0) < 1e-6
+    rm = rms_curve(b2, p, t_start="2026-01-01 00:00:02", t_end="2026-01-01 00:00:03")
+    assert rm["n"] == 50 and abs(rm["t_first"] - (c0 + 2.0)) < 1e-6
+    # 自定义结束时间：早于按采样率计算的结束 ⇒ 只取到它
+    b3 = make_base(cfg, custom_time="1", custom_time_start="2026-01-01 00:00:00", custom_time_end="2026-01-01 00:00:02")
+    i3 = file_info(b3, p)
+    assert abs(i3["t_end"] - (c0 + 2.0)) < 1e-6 and i3["t_end_custom"] is not None
+    w = load_waveform(b3, p)
+    assert w["n"] == 12800 and w["t_last"] <= c0 + 2.0 + 1e-9
+    with pytest.raises(Exception):
+        make_base(cfg, custom_time="1", custom_time_start="2026-01-01 00:00:02", custom_time_end="2026-01-01 00:00:01")
+    # REST 透传
+    r = client.get("/api/process/wave/info", params={"path": p, "custom_time": "1", "custom_time_start": "2026-01-01 00:00:00"}).json()
+    assert r["ok"] and r["custom_time"] is True and r["t_start_local"].startswith("2026-01-01 00:00:00")
+    r = client.get("/api/process/wave/load", params={"path": p, "custom_time": "1", "custom_time_start": "2026-01-01 00:00:00",
+                                                      "t_start": "2026-01-01 00:00:03", "n_cycles": 5}).json()
+    assert r["ok"] and r["n"] == 640 and abs(r["t_first"] - (c0 + 3.0)) < 1e-6
+    # 未启用自定义时间：起止空＝文件数据起止（与之前一致），结束时刻按终点裁剪
+    w = load_waveform(b0, p, t_start=f"{T0 + 1:.3f}", t_end=f"{T0 + 2:.3f}")
+    assert w["n"] == 6400 and w["t_last"] < T0 + 2.0 + 1e-9
+    # 3) 基准配置 fs=1000（harmonic.order_max=50 → 2500 Hz ≥ Nyquist 500 Hz）不再报错：次数自动压到 9
+    b4 = make_base(cfg, fs=1000)
+    assert b4.harmonic.order_max == 9 and b4.harmonic.thd_order_max <= 9
+    r = client.get("/api/process/wave/load", params={"path": p, "fs": 1000, "n_cycles": 10}).json()
+    assert r["ok"] and r["n"] > 0, r
+    b5 = make_base(cfg, fs=200, f_nom=50)                                                             # 极低采样率：order 1 仍合法
+    assert b5.harmonic.order_min == 1 and b5.harmonic.order_max == 1
+    r = client.get("/api/process/wave/load", params={"path": p, "fs": 80, "f_nom": 50})                 # f_nom ≥ Nyquist 仍是真错误
+    assert r.status_code == 400 and "Nyquist" in r.json()["error"]

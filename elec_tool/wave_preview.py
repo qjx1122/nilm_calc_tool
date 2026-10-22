@@ -21,7 +21,7 @@ from .config import AppConfig, ConfigError, parse_play_start, parse_time_text
 
 CHANNELS: Tuple[str, ...] = ("Ua", "Ub", "Uc", "Ia", "Ib", "Ic")
 _FIELD_OF = {"Ua": "ua", "Ub": "ub", "Uc": "uc", "Ia": "ia", "Ib": "ib", "Ic": "ic"}
-MAX_POINTS_DEFAULT = 1_000_000       # 单次返回的最多采样点（每通道）
+MAX_POINTS_DEFAULT = 20_000_000      # v0.64：单次返回的最多采样点（每通道），界面可配，默认 2000 万
 MAX_RMS_POINTS_DEFAULT = 200_000     # 有效值曲线最多点数，超过则合并相邻周波
 RESAMPLE_METHODS: Tuple[str, ...] = ("linear", "nearest", "fft")   # v0.62：与「重采样」功能同一组方法
 DEFAULT_CYCLES = 300                 # v0.62：默认加载 / 周波窗的周波数
@@ -31,12 +31,46 @@ class WaveError(ValueError):
     pass
 
 
-def _prep_cfg(base: AppConfig, path: str, t_start: str = "", t_end: str = "") -> AppConfig:
+def _prep_cfg(base: AppConfig, path: str, t_start: str = "", t_end: str = "", info: Optional[Dict[str, Any]] = None) -> AppConfig:
+    """按起止时刻构造读文件用的配置。
+
+    * 文件时间模式：起点＝按文件时标定位（``play_start_mode=time``），终点＝``play_end_time``；
+    * 自定义时间模式（v0.64，``base.source.custom_time``）：时间轴＝自定义起始时间（空＝文件第 1 条数据时间）+ 行号 / fs；
+      起止时刻按这条时间轴换算成**行号**定位（``play_start_mode=row``）与终点 epoch；自定义结束时间（``base.source.play_end_time``）
+      在终点为空时作为默认终点。需要 ``info``（file_info 结果）给出文件首行时间。
+    """
     cfg = AppConfig.from_dict(base.to_dict())
     cfg.source.kind = "csv_file"; cfg.source.path = path
-    cfg.source.file_speed = 0.0; cfg.source.play_window = False; cfg.source.play_end_time = ""
+    cfg.source.file_speed = 0.0; cfg.source.play_window = False
+    custom_end = str(base.source.play_end_time or "").strip() if bool(base.source.custom_time) else ""
+    cfg.source.play_end_time = ""
     cfg.source.play_start_mode = "begin"; cfg.source.play_start_value = ""
     ts_txt, te_txt = str(t_start or "").strip(), str(t_end or "").strip()
+    if bool(cfg.source.custom_time):
+        if info is None:
+            info = file_info(base, path)
+        fs = float(info["fs"])
+        t0c = float(info["t_start"])                       # 自定义起始时间（空＝文件第 1 条数据时间），file_info 已算好
+        cfg.source.custom_time_start = repr(t0c)           # 显式写死：定位跳过的行也要算进时间轴
+        if not te_txt and custom_end:
+            te_txt = custom_end
+        def _abs(txt: str, what: str) -> float:
+            kind, v = parse_play_start("time", txt)
+            if kind != "abs":
+                raise WaveError(f"自定义时间模式下{what}请写完整日期时间或 epoch 秒（当前 {txt!r}）")
+            return float(v)
+        a = _abs(ts_txt, "起始时刻") if ts_txt else None
+        b = _abs(te_txt, "结束时刻") if te_txt else None
+        if a is not None and b is not None and b <= a:
+            raise WaveError(f"结束时间必须晚于起始时间（{ts_txt} → {te_txt}）")
+        if a is not None:
+            skip = int(round((a - t0c) * fs))
+            if skip > 0:
+                cfg.source.play_start_mode = "row"; cfg.source.play_start_value = str(skip + 1)
+        if b is not None:
+            cfg.source.play_end_time = repr(b)
+        cfg.validate()
+        return cfg
     if ts_txt:
         parse_play_start("time", ts_txt)
         cfg.source.play_start_mode = "time"; cfg.source.play_start_value = ts_txt
@@ -137,8 +171,10 @@ def file_info(base: AppConfig, path: str) -> Dict[str, Any]:
         txt = str(cfg.source.custom_time_start or "").strip()
         if txt:
             t0 = float(parse_time_text(txt))
-        t1 = (t0 if t0 is not None else 0.0) + (n_rows - 1) / fs
-        notes.append("基准配置启用了自定义播放时间：时间轴＝起始时间 + 行号 / fs")
+        if t0 is None:
+            t0 = 0.0
+        t1 = t0 + (n_rows - 1) / fs
+        notes.append("已启用自定义时间：时间轴＝自定义起始时间" + ("" if txt else "（空＝文件第 1 条数据时间）") + " + 行号 / fs；结束时间＝起始 + (行数−1)/fs")
     elif t0 is None:
         notes.append("文件没有时间列或时标无法解析：时间轴按 行号 / fs 计")
         t0 = 0.0; t1 = (n_rows - 1) / fs
@@ -146,6 +182,16 @@ def file_info(base: AppConfig, path: str) -> Dict[str, Any]:
     t_end_ts = t1
     duration = (n_rows / fs) if fs > 0 else 0.0
     t1 = t0 + (n_rows - 1) / fs
+    t_end_custom = None
+    if cfg.source.custom_time and str(cfg.source.play_end_time or "").strip():
+        t_end_custom = float(parse_time_text(str(cfg.source.play_end_time).strip()))
+        if t_end_custom <= t0:
+            raise WaveError(f"自定义结束时间必须晚于起始时间（{fmt_t(t0)} → {fmt_t(t_end_custom)}）")
+        if t_end_custom < t1:
+            notes.append(f"自定义结束时间 {fmt_t(t_end_custom)} 早于按采样率计算的结束时间 {fmt_t(t1)}：只取到自定义结束时间")
+            t1 = t_end_custom; duration = (t1 - t0) + 1.0 / fs
+        else:
+            t_end_custom = None
     if t_end_ts is not None and abs(t_end_ts - t1) > max(1.0 / fs, 1e-3) * 2:
         notes.append(f"按时标末行的结束时间 {t_end_ts:.3f} 与按 采样率×点数 计算的 {t1:.3f} 相差 {t_end_ts - t1:+.3f} s（文件内有缺口或时标不均匀）")
     if fs_est and abs(fs_est - fs_cfg) / fs_cfg > 0.02:
@@ -156,6 +202,9 @@ def file_info(base: AppConfig, path: str) -> Dict[str, Any]:
             "fs": fs, "fs_est": fs_est, "fs_configured": fs_cfg, "f_nom": float(cfg.sampling.f_nom),
             "samples_per_cycle": int(round(fs / float(cfg.sampling.f_nom))),
             "duration_s": duration, "t_start": t0, "t_end": t1, "t_end_by_timestamp": t_end_ts, "ts_mode": ts_mode, "custom_time": bool(cfg.source.custom_time),
+            "custom_time_start": (str(cfg.source.custom_time_start or "").strip() or None) if cfg.source.custom_time else None,
+            "custom_time_end": (str(cfg.source.play_end_time or "").strip() or None) if cfg.source.custom_time else None,
+            "t_end_custom": t_end_custom, "max_points_default": MAX_POINTS_DEFAULT,
             "pt_ct": {"enabled": bool(cfg.transform.enabled), "pt_ratio": cfg.transform.pt_ratio, "ct_ratio": cfg.transform.ct_ratio},
             "notes": notes}
 
@@ -221,8 +270,8 @@ def load_waveform(base: AppConfig, path: str, *, t_start: str = "", t_end: str =
     """
     if not path or not os.path.isfile(path):
         raise WaveError(f"文件不存在：{path}")
-    cfg = _prep_cfg(base, path, t_start, t_end)
     info = file_info(base, path)
+    cfg = _prep_cfg(base, path, t_start, t_end, info)
     fs_src = float(info["fs"])
     chans = _norm_channels(channels, info["channels"])
     fs_o = float(fs_out) if fs_out else fs_src
@@ -232,7 +281,7 @@ def load_waveform(base: AppConfig, path: str, *, t_start: str = "", t_end: str =
     method = str(method or "linear").strip().lower()
     if method not in RESAMPLE_METHODS:
         raise WaveError(f"重采样方式必须是 {'/'.join(RESAMPLE_METHODS)} 之一（当前 {method!r}）")
-    te = _parse_t(t_end)
+    te = _parse_t(cfg.source.play_end_time) if str(cfg.source.play_end_time or "").strip() else None
     n_req: Optional[int] = None
     if n_points is not None and str(n_points) != "":
         n_req = int(n_points)
@@ -261,6 +310,11 @@ def load_waveform(base: AppConfig, path: str, *, t_start: str = "", t_end: str =
         raise WaveError("指定时间段内没有读到数据（时刻超出文件范围或文件为空）")
     t = np.concatenate(ts)
     arr = {c: np.concatenate(data[c]) for c in chans}
+    if te is not None and t.size and float(t[-1]) > te:            # 源按块停止：末块裁到终点（含终点）
+        m = int(np.searchsorted(t, te + 1e-9, side="right"))
+        if m <= 0:
+            raise WaveError("指定时间段内没有读到数据（结束时刻早于数据起点）")
+        t = t[:m]; arr = {c: arr[c][:m] for c in chans}
     truncated = False
     fs_eff: Optional[float] = None
     if resample:
@@ -329,8 +383,9 @@ def rms_curve(base: AppConfig, path: str, *, t_start: str = "", t_end: str = "",
     """
     if not path or not os.path.isfile(path):
         raise WaveError(f"文件不存在：{path}")
-    cfg = _prep_cfg(base, path, t_start, t_end)
     info = file_info(base, path)
+    cfg = _prep_cfg(base, path, t_start, t_end, info)
+    te = _parse_t(cfg.source.play_end_time) if str(cfg.source.play_end_time or "").strip() else None
     fs = float(info["fs"]); f_nom = float(cfg.sampling.f_nom)
     n_cyc = max(4, int(round(fs / f_nom)))
     chans = _norm_channels(channels, info["channels"])
@@ -354,6 +409,13 @@ def rms_curve(base: AppConfig, path: str, *, t_start: str = "", t_end: str = "",
         if m == 0:
             continue
         tc = t[: m * n_cyc: n_cyc]
+        if te is not None:                                      # 只保留整周波落在终点之前的
+            keep = (tc + (n_cyc - 1) / fs) <= te + 1e-9
+            if not keep.all():
+                m = int(keep.sum()); stop = True
+                if m == 0:
+                    break
+                tc = tc[:m]
         if t_first is None:
             t_first = float(tc[0])
         if duration_s is not None:
@@ -397,14 +459,44 @@ def rms_curve(base: AppConfig, path: str, *, t_start: str = "", t_end: str = "",
 
 
 # ------------------------------------------------------------------ v0.62：独立的基准配置（不与总线 / 分路侧运行配置关联）
-BASE_FIELDS: Tuple[str, ...] = ("fs", "f_nom", "pt_ct_enabled", "pt_ratio", "ct_ratio", "file_time_utc")
+BASE_FIELDS: Tuple[str, ...] = ("fs", "f_nom", "pt_ct_enabled", "pt_ratio", "ct_ratio", "file_time_utc",
+                                "custom_time", "custom_time_start", "custom_time_end")   # v0.64 +3
+
+
+def fmt_t(x: float) -> str:
+    from .timefmt import fmt_local
+    try:
+        return fmt_local(float(x))
+    except Exception:
+        return f"{x:.3f}"
+
+
+def relax_harmonic_limits(cfg: AppConfig) -> Optional[str]:
+    """v0.64：预览不算谐波——把 harmonic.order_max / thd_order_max 压到当前 fs 的 Nyquist 允许的最高次，
+    免得「harmonic.order_max=50 次 ≥ Nyquist」让低采样率文件加载失败。返回说明文字（未改动返回 None）。"""
+    fs = float(cfg.sampling.fs); fn = float(cfg.sampling.f_nom)
+    if not (fs > 0 and fn > 0):
+        return None
+    nyq = fs / 2.0
+    k_max = int(math.ceil(nyq / fn)) - 1                 # 满足 k·f_nom < Nyquist 的最大 k
+    if k_max < 1:
+        return None                                      # f_nom ≥ Nyquist：由 sampling 校验给出正确错误
+    h = cfg.harmonic; changed = []
+    if int(h.order_max) > k_max:
+        changed.append(f"order_max {h.order_max}→{k_max}"); h.order_max = k_max
+    if int(getattr(h, "thd_order_max", 0) or 0) > k_max:
+        changed.append(f"thd_order_max {h.thd_order_max}→{k_max}"); h.thd_order_max = k_max
+    if int(h.order_min) > int(h.order_max):
+        changed.append(f"order_min {h.order_min}→{h.order_max}"); h.order_min = int(h.order_max)
+    return ("预览不计算谐波：按 fs=%g Hz 自动放宽谐波次数限制（%s）" % (fs, "，".join(changed))) if changed else None
 
 
 def base_defaults(cfg: AppConfig) -> Dict[str, Any]:
     """界面「基准配置」的初始值（来自出厂配置 configs/default.json）。"""
     return {"fs": float(cfg.sampling.fs), "f_nom": float(cfg.sampling.f_nom), "pt_ct_enabled": bool(cfg.transform.enabled),
             "pt_ratio": float(cfg.transform.pt_ratio), "ct_ratio": float(cfg.transform.ct_ratio),
-            "file_time_utc": bool(cfg.source.file_time_utc)}
+            "file_time_utc": bool(cfg.source.file_time_utc),
+            "custom_time": False, "custom_time_start": "", "custom_time_end": "", "max_points": MAX_POINTS_DEFAULT}
 
 
 def make_base(default_cfg: AppConfig, **overrides: Any) -> AppConfig:
@@ -429,7 +521,8 @@ def make_base(default_cfg: AppConfig, **overrides: Any) -> AppConfig:
             return None
         return str(v).strip().lower() in ("1", "true", "on", "yes")
     fs = _f("fs", 0); fn = _f("f_nom", 0); pt = _f("pt_ratio", 0); ct = _f("ct_ratio", 0)
-    en = _b("pt_ct_enabled"); utc = _b("file_time_utc")
+    en = _b("pt_ct_enabled"); utc = _b("file_time_utc"); cust = _b("custom_time")
+    cs = str(overrides.get("custom_time_start") or "").strip(); ce = str(overrides.get("custom_time_end") or "").strip()
     if fs is not None:
         cfg.sampling.fs = fs
     if fn is not None:
@@ -442,6 +535,19 @@ def make_base(default_cfg: AppConfig, **overrides: Any) -> AppConfig:
         cfg.transform.enabled = en
     if utc is not None:
         cfg.source.file_time_utc = utc
+    cfg.source.custom_time = bool(cust); cfg.source.custom_time_start = ""; cfg.source.play_end_time = ""
+    if cust:
+        for txt, what in ((cs, "自定义起始时间"), (ce, "自定义结束时间")):
+            if txt:
+                try:
+                    parse_time_text(txt)
+                except ConfigError as exc:
+                    raise WaveError(f"{what}无法解析：{exc}") from None
+        if cs and ce and parse_time_text(ce) <= parse_time_text(cs):
+            raise WaveError(f"自定义结束时间必须晚于自定义起始时间（{cs} → {ce}）")
+        cfg.source.custom_time_start = cs
+        cfg.source.play_end_time = ce                   # 预览里借用该字段承载「自定义结束时间」（_prep_cfg 按需取用）
+    relax_harmonic_limits(cfg)                          # v0.64：取消谐波次数对预览的限制
     cfg.source.path = "x.csv"                     # 只为通过校验；实际路径由各函数填
     try:
         cfg.validate()

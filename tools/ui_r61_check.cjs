@@ -55,7 +55,8 @@ async function main() {
   $('#btn-wp-info').click(); await sleep(1500);
   const infoTxt = $('#wp-info').textContent;
   check('文件信息表：通道数 6、采样率 6400 Hz、时长 10.000 s（=64000/6400）、起始 / 结束时间（结束＝起始+(行数−1)/fs）', /通道数\s*6/.test(infoTxt) && /6400/.test(infoTxt) && /10\.000 s/.test(infoTxt) && /起始时间\s*2026-10-13 16:00:00\.000/.test(infoTxt) && /结束时间\s*2026-10-13 16:00:09\.999/.test(infoTxt), infoTxt.replace(/\s+/g, ' ').slice(0, 200));
-  check('获取信息后起止时刻默认＝文件数据起止时间（波形与有效值两组）', $('#wp-tstart').value === '2026-10-13 16:00:00.000' && $('#wp-tend').value.startsWith('2026-10-13 16:00:09.99') && $('#wp-rms-tstart').value === '2026-10-13 16:00:00.000' && $('#wp-rms-tend').value === $('#wp-tend').value, $('#wp-tstart').value + ' → ' + $('#wp-tend').value);
+  check('v0.64：获取信息后起止时刻保持为空（空＝文件数据起止时间），占位提示显示实际数据起止时间（波形与有效值两组）', $('#wp-tstart').value === '' && $('#wp-tend').value === '' && $('#wp-rms-tstart').value === '' && $('#wp-rms-tend').value === '' && $('#wp-tstart').placeholder === '空＝2026-10-13 16:00:00.000' && $('#wp-tend').placeholder.startsWith('空＝2026-10-13 16:00:09.99') && $('#wp-rms-tend').placeholder === $('#wp-tend').placeholder, $('#wp-tstart').placeholder + ' → ' + $('#wp-tend').placeholder);
+  check('v0.64：最多加载点数输入框默认 20000000；自定义时间开关默认关、起止输入行隐藏', $('#wp-maxpts').value === '20000000' && !$('#wp-base-custom').checked && $('#wp-custom-row').style.display === 'none');
   const infoCall = calls.filter(x => x.url.includes('/api/process/wave/info')).pop();
   check('信息请求带独立基准配置参数（fs/f_nom/pt_ct_enabled/pt_ratio/ct_ratio/file_time_utc），不带 side', /fs=6400/.test(infoCall.url) && /f_nom=50/.test(infoCall.url) && /pt_ct_enabled=1/.test(infoCall.url) && /pt_ratio=100/.test(infoCall.url) && /ct_ratio=15/.test(infoCall.url) && /file_time_utc=0/.test(infoCall.url) && !/side=/.test(infoCall.url), infoCall.url);
   // 2) 默认加载波形：300 周波 × 128 = 38400 点、原采样率、全部通道（起止时刻已填满整文件，取先到者＝周波数）
@@ -63,7 +64,7 @@ async function main() {
   let c = $('#wp-wave').__chart;
   check('默认加载：波形曲线 6 条、每条 300 周波 × 128 = 38400 点、原采样率 6400', !!c && c.pts.length === 6 && c.pts.every(s => s.data.length === 38400) && /6400/.test($('#wp-wave-sub').textContent), $('#wp-wave-sub').textContent);
   const loadCall = calls.filter(x => x.url.includes('/api/process/wave/load')).pop();
-  check('请求参数：n_cycles=300、method=linear、未传 fs_out、channels 全 6 个、带基准配置', !!loadCall && /n_cycles=300/.test(loadCall.url) && /method=linear/.test(loadCall.url) && !/fs_out=/.test(loadCall.url) && /channels=Ua%2CUb%2CUc%2CIa%2CIb%2CIc/.test(loadCall.url) && /pt_ratio=100/.test(loadCall.url), loadCall && loadCall.url);
+  check('请求参数：n_cycles=300、method=linear、未传 fs_out、channels 全 6 个、带基准配置、max_points=20000000、custom_time=0', !!loadCall && /n_cycles=300/.test(loadCall.url) && /method=linear/.test(loadCall.url) && !/fs_out=/.test(loadCall.url) && /channels=Ua%2CUb%2CUc%2CIa%2CIb%2CIc/.test(loadCall.url) && /pt_ratio=100/.test(loadCall.url) && /max_points=20000000/.test(loadCall.url) && /custom_time=0/.test(loadCall.url), loadCall && loadCall.url);
   // 2b) 基准配置独立：改 PT=1（关掉一次侧换算）→ 幅值变为二次侧；运行配置不变
   const cfgBefore = JSON.stringify((await (await fetch(BASE + '/api/config')).json()).transform);
   $('#wp-base-ptct').checked = false; $('#wp-base-ptct').dispatchEvent(new window.Event('change', { bubbles: true }));
@@ -96,6 +97,41 @@ async function main() {
   const lc2 = calls.filter(x => x.url.includes('/api/process/wave/load')).pop();
   c = $('#wp-wave').__chart;
   check('周波数与结束时刻都为空 ⇒ 不传点数 → 从起点到文件末尾（8 s × 400 Hz ≈ 3200 点）', !!lc2 && !/n_cycles=/.test(lc2.url) && !/[?&]n=/.test(lc2.url) && !!c && c.pts[0].data.length >= 3190 && c.pts[0].data.length <= 3201, lc2 && lc2.url + ' n=' + (c && c.pts[0].data.length));
+  // 4b) v0.64：最多加载点数可配（设 1000 → 截断提示）
+  $('#wp-maxpts').value = '1000'; $('#wp-maxpts').dispatchEvent(new window.Event('change'));
+  $('#btn-wp-load').click(); await sleep(2500);
+  c = $('#wp-wave').__chart;
+  const lc3 = calls.filter(x => x.url.includes('/api/process/wave/load')).pop();
+  check('最多加载点数改为 1000 ⇒ 请求 max_points=1000、返回 1000 点并提示截断', /max_points=1000(&|$)/.test(lc3.url) && c.pts[0].data.length === 1000 && /超过单次上限 1000/.test($('#wp-status').textContent), $('#wp-status').textContent.slice(0, 80));
+  $('#wp-maxpts').value = '20000000'; $('#wp-maxpts').dispatchEvent(new window.Event('change'));
+  // 4c) v0.64：自定义时间：起始 2026-01-01 00:00:00、结束空 ⇒ 结束＝起始+(行数−1)/fs；信息表显示时间模式；加载按自定义轴定位
+  $('#wp-base-custom').checked = true; $('#wp-base-custom').dispatchEvent(new window.Event('change'));
+  check('勾选「启用自定义时间」后显示自定义起止输入行，默认为空', $('#wp-custom-row').style.display !== 'none' && $('#wp-base-cstart').value === '' && $('#wp-base-cend').value === '');
+  $('#wp-base-cstart').value = '2026-01-01 00:00:00'; $('#wp-base-cstart').dispatchEvent(new window.Event('change'));
+  $('#btn-wp-info').click(); await sleep(1500);
+  const it2 = $('#wp-info').textContent;
+  check('自定义时间信息表：时间模式＝自定义、起始 2026-01-01 00:00:00.000、结束 2026-01-01 00:00:09.999（＝起始+(64000−1)/6400）', /自定义时间/.test(it2) && /起始时间\s*2026-01-01 00:00:00\.000/.test(it2) && /结束时间\s*2026-01-01 00:00:09\.999/.test(it2), it2.replace(/\s+/g, ' ').slice(0, 220));
+  $('#wp-tstart').value = '2026-01-01 00:00:02'; $('#wp-tend').value = '2026-01-01 00:00:02.5'; $('#wp-ncyc').value = ''; $('#wp-fs').value = '';
+  $('#btn-wp-load').click(); await sleep(2500);
+  c = $('#wp-wave').__chart;
+  const lc4 = calls.filter(x => x.url.includes('/api/process/wave/load')).pop();
+  check('自定义时间模式按自定义轴定位：2 s→2.5 s 取 3200 点、提示时刻 2026-01-01 00:00:02；请求带 custom_time=1 与 custom_time_start', /custom_time=1/.test(lc4.url) && /custom_time_start=2026-01-01/.test(lc4.url) && c.pts[0].data.length === 3200 && /^2026-01-01 00:00:02/.test(c.opt.fmtTip(0)), lc4.url.slice(-120) + ' n=' + c.pts[0].data.length);
+  $('#wp-base-cend').value = '2026-01-01 00:00:04'; $('#wp-base-cend').dispatchEvent(new window.Event('change'));
+  $('#wp-tstart').value = ''; $('#wp-tend').value = '';
+  $('#btn-wp-load').click(); await sleep(3000);
+  c = $('#wp-wave').__chart;
+  check('自定义结束时间 00:00:04 且起止为空 ⇒ 整段＝起始→自定义结束（4 s × 6400 = 25600 点）', c.pts[0].data.length === 25600 && /^2026-01-01 00:00:03\.999/.test(c.opt.fmtTip(c.pts[0].data[c.pts[0].data.length - 1][0])), 'n=' + c.pts[0].data.length);
+  // 4d) v0.64：基准配置 fs=1000 不再因 harmonic.order_max=50 ≥ Nyquist 失败
+  $('#wp-base-custom').checked = false; $('#wp-base-custom').dispatchEvent(new window.Event('change'));
+  $('#wp-base-fs').value = '1000'; $('#wp-base-fs').dispatchEvent(new window.Event('change'));
+  $('#wp-ncyc').value = '10';
+  $('#btn-wp-load').click(); await sleep(2500);
+  check('基准配置 fs=1000 Hz：加载不再报「harmonic.order_max=50 次 ≥ Nyquist」（按时标推算 6400 Hz 仍正常加载）', !/基准配置无效/.test($('#wp-status').textContent) && !/Nyquist/.test($('#wp-status').textContent) && $('#wp-wave').__chart.pts[0].data.length > 0, $('#wp-status').textContent.slice(0, 100));
+  $('#wp-base-fs').value = '6400'; $('#wp-base-fs').dispatchEvent(new window.Event('change'));
+  $('#wp-tstart').value = ''; $('#wp-tend').value = ''; $('#wp-ncyc').value = ''; $('#wp-fs').value = '400';
+  window.document.querySelectorAll('#wp-chans .wp-ch').forEach(cb => { cb.checked = cb.value === 'Ia' || cb.value === 'Ub'; });   // 上面「获取文件信息」会把通道勾回全部，恢复用例 3 的选择
+  $('#btn-wp-load').click(); await sleep(3000);
+  c = $('#wp-wave').__chart;
   // 5) 缩放 / 平移 / 复位（与负荷辨识页同一 drawLine 机制）
   const cv = $('#wp-wave');
   window.__zoomAxis(cv, 'x', 0.5);

@@ -2330,12 +2330,19 @@ async def process_resample_preview(path: str, fs_new: float) -> Dict[str, Any]:
 
 # ------------------------------------------------------------------ v0.61：数据处理页「波形预览」
 def _wave_base_cfg(fs: Optional[str] = None, f_nom: Optional[str] = None, pt_ct_enabled: Optional[str] = None,
-                   pt_ratio: Optional[str] = None, ct_ratio: Optional[str] = None, file_time_utc: Optional[str] = None) -> AppConfig:
+                   pt_ratio: Optional[str] = None, ct_ratio: Optional[str] = None, file_time_utc: Optional[str] = None,
+                   custom_time: Optional[str] = None, custom_time_start: Optional[str] = None,
+                   custom_time_end: Optional[str] = None) -> AppConfig:
     """v0.62：预览用基准配置**独立**于总线 / 分路侧运行配置：出厂配置 configs/default.json 副本 + 界面给的几项
-    （采样率 / 额定频率 / PT·CT 启用与变比 / 时标 UTC）。不读、不改任何运行配置。"""
+    （采样率 / 额定频率 / PT·CT 启用与变比 / 时标 UTC；v0.64 + 自定义时间 开关 / 起始 / 结束）。不读、不改任何运行配置。
+    v0.64：谐波次数限制按 fs 自动放宽（预览不算谐波）。"""
     from elec_tool.wave_preview import make_base
     return make_base(AppConfig.load(DEFAULT_CONFIG_PATH), fs=fs, f_nom=f_nom, pt_ct_enabled=pt_ct_enabled,
-                     pt_ratio=pt_ratio, ct_ratio=ct_ratio, file_time_utc=file_time_utc)
+                     pt_ratio=pt_ratio, ct_ratio=ct_ratio, file_time_utc=file_time_utc,
+                     custom_time=custom_time, custom_time_start=custom_time_start, custom_time_end=custom_time_end)
+
+
+WAVE_MAX_POINTS_CAP = 100_000_000      # v0.64：界面可配的「最多加载点数」硬上限（默认 20_000_000）
 
 
 def _wave_path(path: str) -> str:
@@ -2355,23 +2362,25 @@ def _wave_err(exc: Exception):
 @app.get("/api/process/wave/defaults")
 async def process_wave_defaults() -> Any:
     """v0.62：界面「基准配置」初始值（出厂配置）、重采样方式列表、默认周波数。"""
-    from elec_tool.wave_preview import DEFAULT_CYCLES, RESAMPLE_METHODS, base_defaults
+    from elec_tool.wave_preview import DEFAULT_CYCLES, MAX_POINTS_DEFAULT, RESAMPLE_METHODS, base_defaults
     return {"ok": True, "base": base_defaults(AppConfig.load(DEFAULT_CONFIG_PATH)), "methods": list(RESAMPLE_METHODS),
-            "default_cycles": DEFAULT_CYCLES}
+            "default_cycles": DEFAULT_CYCLES, "max_points_default": MAX_POINTS_DEFAULT, "max_points_cap": WAVE_MAX_POINTS_CAP}
 
 
 @app.get("/api/process/wave/info")
 async def process_wave_info(path: str, fs: Optional[str] = None, f_nom: Optional[str] = None, pt_ct_enabled: Optional[str] = None,
-                            pt_ratio: Optional[str] = None, ct_ratio: Optional[str] = None, file_time_utc: Optional[str] = None) -> Any:
+                            pt_ratio: Optional[str] = None, ct_ratio: Optional[str] = None, file_time_utc: Optional[str] = None,
+                            custom_time: Optional[str] = None, custom_time_start: Optional[str] = None, custom_time_end: Optional[str] = None) -> Any:
     """波形文件信息：通道数 / 通道 / 采样率（时标推算，<0.5% 偏差按基准配置值）/ 行数 / 时长（＝行数 / 采样率）/ 起止时间
     （结束＝起始 + (行数−1)/采样率）。基准配置项（fs/f_nom/pt_ct_enabled/pt_ratio/ct_ratio/file_time_utc）独立于运行配置。"""
     from elec_tool.wave_preview import file_info
     try:
-        cfg = _wave_base_cfg(fs, f_nom, pt_ct_enabled, pt_ratio, ct_ratio, file_time_utc); p = _wave_path(path)
+        cfg = _wave_base_cfg(fs, f_nom, pt_ct_enabled, pt_ratio, ct_ratio, file_time_utc, custom_time, custom_time_start, custom_time_end); p = _wave_path(path)
         d = await asyncio.to_thread(file_info, cfg, p)
         d["path_display"] = _display_path(p)
         d["t_start_local"] = fmt_local(d["t_start"]) if d.get("t_start") is not None else None
         d["t_end_local"] = fmt_local(d["t_end"]) if d.get("t_end") is not None else None
+        d["t_end_custom_local"] = fmt_local(d["t_end_custom"]) if d.get("t_end_custom") is not None else None
         return d
     except Exception as exc:
         return _wave_err(exc)
@@ -2379,22 +2388,30 @@ async def process_wave_info(path: str, fs: Optional[str] = None, f_nom: Optional
 
 @app.get("/api/process/wave/load")
 async def process_wave_load(path: str, t_start: str = "", t_end: str = "", n: Optional[str] = None, n_cycles: Optional[str] = None,
-                            fs_out: Optional[float] = None, method: str = "linear", channels: str = "", max_points: int = 1_000_000,
+                            fs_out: Optional[float] = None, method: str = "linear", channels: str = "", max_points: Optional[str] = None,
                             fs: Optional[str] = None, f_nom: Optional[str] = None, pt_ct_enabled: Optional[str] = None,
-                            pt_ratio: Optional[str] = None, ct_ratio: Optional[str] = None, file_time_utc: Optional[str] = None) -> Any:
+                            pt_ratio: Optional[str] = None, ct_ratio: Optional[str] = None, file_time_utc: Optional[str] = None,
+                            custom_time: Optional[str] = None, custom_time_start: Optional[str] = None, custom_time_end: Optional[str] = None) -> Any:
     """按 起止时刻、点数 n 或周波数 n_cycles（都空＝整段；v0.62 界面默认 300 周波）、重采样率 fs_out + 方式 method
     （linear/nearest/fft）、通道 加载一段原始波形（一次侧口径）。fs_out 空＝原采样率；channels 空＝全部。"""
     from elec_tool.wave_preview import load_waveform
     try:
-        cfg = _wave_base_cfg(fs, f_nom, pt_ct_enabled, pt_ratio, ct_ratio, file_time_utc); p = _wave_path(path)
+        cfg = _wave_base_cfg(fs, f_nom, pt_ct_enabled, pt_ratio, ct_ratio, file_time_utc, custom_time, custom_time_start, custom_time_end); p = _wave_path(path)
         n_pts: Optional[int] = None; n_cyc: Optional[int] = None
         if n is not None and str(n).strip() != "":
             n_pts = int(float(str(n).strip()))
         elif n_cycles is not None and str(n_cycles).strip() != "":
             n_cyc = int(float(str(n_cycles).strip()))
         chans = [c for c in str(channels or "").split(",") if c.strip()] or None
+        from elec_tool.wave_preview import MAX_POINTS_DEFAULT
+        mp = MAX_POINTS_DEFAULT
+        if max_points is not None and str(max_points).strip() != "":
+            mp = int(float(str(max_points).strip()))
+            if mp <= 0:
+                raise ConfigError(f"最多加载点数必须 > 0（当前 {max_points}）")
+        mp = min(mp, WAVE_MAX_POINTS_CAP)
         d = await asyncio.to_thread(load_waveform, cfg, p, t_start=t_start, t_end=t_end, n_points=n_pts, n_cycles=n_cyc,
-                                    fs_out=fs_out, method=method, channels=chans, max_points=max(1, min(int(max_points), 5_000_000)))
+                                    fs_out=fs_out, method=method, channels=chans, max_points=mp)
         d["path_display"] = _display_path(p)
         return d
     except Exception as exc:
@@ -2405,11 +2422,12 @@ async def process_wave_load(path: str, t_start: str = "", t_end: str = "", n: Op
 async def process_wave_rms(path: str, t_start: str = "", t_end: str = "", duration_s: Optional[float] = None, channels: str = "",
                            agg_cycles: int = 1, max_points: int = 200_000,
                            fs: Optional[str] = None, f_nom: Optional[str] = None, pt_ct_enabled: Optional[str] = None,
-                           pt_ratio: Optional[str] = None, ct_ratio: Optional[str] = None, file_time_utc: Optional[str] = None) -> Any:
+                           pt_ratio: Optional[str] = None, ct_ratio: Optional[str] = None, file_time_utc: Optional[str] = None,
+                            custom_time: Optional[str] = None, custom_time_start: Optional[str] = None, custom_time_end: Optional[str] = None) -> Any:
     """指定时间段的逐周波有效值曲线（Ua/Ub/Uc/Ia/Ib/Ic）；点数过多时自动合并相邻周波。"""
     from elec_tool.wave_preview import rms_curve
     try:
-        cfg = _wave_base_cfg(fs, f_nom, pt_ct_enabled, pt_ratio, ct_ratio, file_time_utc); p = _wave_path(path)
+        cfg = _wave_base_cfg(fs, f_nom, pt_ct_enabled, pt_ratio, ct_ratio, file_time_utc, custom_time, custom_time_start, custom_time_end); p = _wave_path(path)
         chans = [c for c in str(channels or "").split(",") if c.strip()] or None
         d = await asyncio.to_thread(rms_curve, cfg, p, t_start=t_start, t_end=t_end, duration_s=duration_s, channels=chans,
                                     agg_cycles=max(1, int(agg_cycles or 1)), max_points=max(10, min(int(max_points), 2_000_000)))
