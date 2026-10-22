@@ -48,7 +48,12 @@ async function main() {
   check('默认值：周波数 300、重采样率空（原始）、方式 linear、全部通道勾选、周波窗周波数 300', $('#wp-ncyc').value === '300' && $('#wp-fs').value === '' && $('#wp-method').value === 'linear' && Array.from(window.document.querySelectorAll('#wp-chans .wp-ch')).every(c => c.checked) && $('#wp-cyc-n').value === '300');
   check('重采样方式含「重采样」功能的 linear / nearest / fft', Array.from($('#wp-method').options).map(o => o.value).join() === 'linear,nearest,fft');
   await sleep(500);
-  check('基准配置初始值＝出厂配置（fs 6400 / f_nom 50 / PT 100 / CT 15 / PT·CT 启用）', $('#wp-base-fs').value === '6400' && $('#wp-base-fnom').value === '50' && $('#wp-base-pt').value === '100' && $('#wp-base-ct').value === '15' && $('#wp-base-ptct').checked, [$('#wp-base-fs').value, $('#wp-base-fnom').value, $('#wp-base-pt').value, $('#wp-base-ct').value].join('/'));
+  check('基准配置初始值＝出厂配置（f_nom 50 / PT 100 / CT 15 / PT·CT 启用）；采样率框只读且获取信息前为空（v0.65）', $('#wp-base-fs').readOnly && $('#wp-base-fs').value === '' && $('#wp-base-fnom').value === '50' && $('#wp-base-pt').value === '100' && $('#wp-base-ct').value === '15' && $('#wp-base-ptct').checked, [$('#wp-base-fs').value, $('#wp-base-fnom').value, $('#wp-base-pt').value, $('#wp-base-ct').value].join('/'));
+  check('v0.65：三组配置分区存在且各自包含对应控件（公共：路径 / f_nom / PT·CT / 自定义时间；波形：重采样 / 周波数 / 通道 / 最多点数；有效值：时长 / 统计窗 / 周波窗周波数）',
+    !!$('#wp-sec-common') && !!$('#wp-sec-wave') && !!$('#wp-sec-rms') && $('#wp-sec-common').contains($('#wp-path')) && $('#wp-sec-common').contains($('#wp-base-fnom')) && $('#wp-sec-common').contains($('#wp-base-custom')) && $('#wp-sec-common').contains($('#wp-base-fs'))
+    && $('#wp-sec-wave').contains($('#wp-fs')) && $('#wp-sec-wave').contains($('#wp-ncyc')) && $('#wp-sec-wave').contains($('#wp-chans')) && $('#wp-sec-wave').contains($('#wp-maxpts')) && $('#wp-sec-wave').contains($('#btn-wp-load'))
+    && $('#wp-sec-rms').contains($('#wp-rms-dur')) && $('#wp-sec-rms').contains($('#wp-rms-agg')) && $('#wp-sec-rms').contains($('#wp-cyc-n')) && $('#wp-sec-rms').contains($('#btn-wp-rms'))
+    && !!$('#wp-cyc2') && $('#wp-sec-common').classList.contains('wp-common') && $('#wp-sec-wave').classList.contains('wp-wave') && $('#wp-sec-rms').classList.contains('wp-rmsg') && /\.wp-common\{border-left-color/.test(fs.readFileSync(path.join(ROOT, 'app/static/style.css'), 'utf8')));
   check('文件下拉已列出 data/ 下的 CSV', $('#wp-files').options.length > 1, `${$('#wp-files').options.length - 1} 个`);
   // 1) 文件信息
   $('#wp-path').value = 'data/nilm_bus_mixed.csv';
@@ -58,7 +63,8 @@ async function main() {
   check('v0.64：获取信息后起止时刻保持为空（空＝文件数据起止时间），占位提示显示实际数据起止时间（波形与有效值两组）', $('#wp-tstart').value === '' && $('#wp-tend').value === '' && $('#wp-rms-tstart').value === '' && $('#wp-rms-tend').value === '' && $('#wp-tstart').placeholder === '空＝2026-10-13 16:00:00.000' && $('#wp-tend').placeholder.startsWith('空＝2026-10-13 16:00:09.99') && $('#wp-rms-tend').placeholder === $('#wp-tend').placeholder, $('#wp-tstart').placeholder + ' → ' + $('#wp-tend').placeholder);
   check('v0.64：最多加载点数输入框默认 20000000；自定义时间开关默认关、起止输入行隐藏', $('#wp-maxpts').value === '20000000' && !$('#wp-base-custom').checked && $('#wp-custom-row').style.display === 'none');
   const infoCall = calls.filter(x => x.url.includes('/api/process/wave/info')).pop();
-  check('信息请求带独立基准配置参数（fs/f_nom/pt_ct_enabled/pt_ratio/ct_ratio/file_time_utc），不带 side', /fs=6400/.test(infoCall.url) && /f_nom=50/.test(infoCall.url) && /pt_ct_enabled=1/.test(infoCall.url) && /pt_ratio=100/.test(infoCall.url) && /ct_ratio=15/.test(infoCall.url) && /file_time_utc=0/.test(infoCall.url) && !/side=/.test(infoCall.url), infoCall.url);
+  check('v0.65：获取信息后采样率框显示按文件数据时间计算的 6400（只读）', $('#wp-base-fs').value === '6400' && $('#wp-base-fs').readOnly, $('#wp-base-fs').value);
+  check('信息请求带公共配置参数（f_nom/pt_ct_enabled/pt_ratio/ct_ratio/file_time_utc），不带 fs、不带 side', !/[?&]fs=/.test(infoCall.url) && /f_nom=50/.test(infoCall.url) && /pt_ct_enabled=1/.test(infoCall.url) && /pt_ratio=100/.test(infoCall.url) && /ct_ratio=15/.test(infoCall.url) && /file_time_utc=0/.test(infoCall.url) && !/side=/.test(infoCall.url), infoCall.url);
   // 2) 默认加载波形：300 周波 × 128 = 38400 点、原采样率、全部通道（起止时刻已填满整文件，取先到者＝周波数）
   $('#btn-wp-load').click(); await sleep(4000);
   let c = $('#wp-wave').__chart;
@@ -121,13 +127,13 @@ async function main() {
   $('#btn-wp-load').click(); await sleep(3000);
   c = $('#wp-wave').__chart;
   check('自定义结束时间 00:00:04 且起止为空 ⇒ 整段＝起始→自定义结束（4 s × 6400 = 25600 点）', c.pts[0].data.length === 25600 && /^2026-01-01 00:00:03\.999/.test(c.opt.fmtTip(c.pts[0].data[c.pts[0].data.length - 1][0])), 'n=' + c.pts[0].data.length);
-  // 4d) v0.64：基准配置 fs=1000 不再因 harmonic.order_max=50 ≥ Nyquist 失败
+  // 4d) v0.64/v0.65：低采样率文件不再因 harmonic.order_max=50 ≥ Nyquist 失败（采样率按文件时标推算，界面不可改 → 直接打 REST 用 1000 Hz 文件验证）
   $('#wp-base-custom').checked = false; $('#wp-base-custom').dispatchEvent(new window.Event('change'));
-  $('#wp-base-fs').value = '1000'; $('#wp-base-fs').dispatchEvent(new window.Event('change'));
+  {
+    const rr = await (await fetch(BASE + '/api/process/wave/info?path=' + encodeURIComponent(process.env.LOW_FS_FILE || 'data/nilm_bus_mixed.csv'))).json();
+    check('低采样率文件（LOW_FS_FILE）信息：采样率按时标推算、不报 Nyquist', rr.ok && !/Nyquist/.test(JSON.stringify(rr)), 'fs=' + rr.fs + (process.env.LOW_FS_FILE ? '' : '（未设 LOW_FS_FILE，用默认文件）'));
+  }
   $('#wp-ncyc').value = '10';
-  $('#btn-wp-load').click(); await sleep(2500);
-  check('基准配置 fs=1000 Hz：加载不再报「harmonic.order_max=50 次 ≥ Nyquist」（按时标推算 6400 Hz 仍正常加载）', !/基准配置无效/.test($('#wp-status').textContent) && !/Nyquist/.test($('#wp-status').textContent) && $('#wp-wave').__chart.pts[0].data.length > 0, $('#wp-status').textContent.slice(0, 100));
-  $('#wp-base-fs').value = '6400'; $('#wp-base-fs').dispatchEvent(new window.Event('change'));
   $('#wp-tstart').value = ''; $('#wp-tend').value = ''; $('#wp-ncyc').value = ''; $('#wp-fs').value = '400';
   window.document.querySelectorAll('#wp-chans .wp-ch').forEach(cb => { cb.checked = cb.value === 'Ia' || cb.value === 'Ub'; });   // 上面「获取文件信息」会把通道勾回全部，恢复用例 3 的选择
   $('#btn-wp-load').click(); await sleep(3000);
@@ -167,6 +173,17 @@ async function main() {
   const cc = $('#wp-cyc').__chart;
   const centerTxt = $('#wp-cyc-sub').textContent;
   check('周波窗画布（单独曲线）已装载：2 通道 × 50 周波 × 128 点 = 6400 点、原采样率', !!cc && cc.pts.length === 2 && cc.pts.every(s => s.data.length === 6400) && /6400 Hz/.test(centerTxt) && /50 个周波/.test(centerTxt), centerTxt);
+  // v0.65：显示周波窗 2（瞬时值）
+  check('v0.65：有效值曲线右键菜单含「显示周波窗 2」（原有「显示周波窗」保留）', keys.includes('show-window2') && keys.indexOf('show-window2') > keys.indexOf('show-window'), keys.join(','));
+  window.closeCtxMenu && window.closeCtxMenu();
+  rcv.dispatchEvent(new window.MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: r.left + mx, clientY: r.top + 50, button: 2 }));
+  await sleep(100);
+  const sw2 = Array.from(window.document.getElementById('ctxmenu').querySelectorAll('.mi')).find(d => d.dataset.key === 'show-window2');
+  check('「显示周波窗 2」可用、标签含「瞬时值」与鼠标所指时刻', !!sw2 && !sw2.classList.contains('disabled') && /瞬时值/.test(sw2.textContent) && /2026-10-13 16:00:0[12]/.test(sw2.textContent), sw2 && sw2.textContent);
+  sw2.click(); await sleep(3000);
+  const cc2 = $('#wp-cyc2').__chart; const c2txt = $('#wp-cyc2-sub').textContent;
+  check('周波窗 2 画布（单独曲线）已装载采样瞬时值：2 通道 × 6400 点、标注「采样瞬时值」；周波窗 1 不受影响', !!cc2 && cc2.pts.length === 2 && cc2.pts.every(s => s.data.length === 6400) && /采样瞬时值/.test(c2txt) && $('#wp-cyc').__chart.pts.length === 2, c2txt);
+  check('周波窗 2 为瞬时值（同一周波内有正有负、峰值≈√2×有效值），而非有效值', (() => { const a = cc2.pts.find(s => /Ia/.test(s.name)).data.slice(0, 128).map(p => p[1]); const mx = Math.max(...a), mn = Math.min(...a); const rms = Math.sqrt(a.reduce((q, v) => q + v * v, 0) / a.length); return mn < 0 && mx > 0 && Math.abs(mx / rms - Math.SQRT2) < 0.1; })());
   const cycCall = calls.filter(x => x.url.includes('/api/process/wave/load')).pop();
   const m = cycCall && cycCall.url.match(/t_start=([\d.]+).*t_end=([\d.]+)/);
   check('周波窗请求区间＝中心 ± 25 周波（1.0 s），不带点数参数', !!m && Math.abs((+m[2]) - (+m[1]) - 1.0) < 1e-3 && !/n_cycles=/.test(cycCall.url), cycCall && cycCall.url);

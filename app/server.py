@@ -1650,6 +1650,51 @@ async def get_nilm_cycles_file(t: Optional[str] = None, n: int = 300):
         return JSONResponse(status_code=400, content={"ok": False, "error": f"{type(exc).__name__}: {exc}"})
 
 
+@app.get("/api/nilm/wave_file")
+async def get_nilm_wave_file(t: Optional[str] = None, n: int = 300, channels: str = ""):
+    """v0.65：「周波窗 2（瞬时值）」——从当前侧配置的离线文件读取以 t 为中心的 n 个周波**原始采样瞬时值**
+    （Ua/Ub/Uc/Ia/Ib/Ic，按本侧运行配置的 fs / f_nom / PT·CT / 时标 UTC / 自定义时间解释；口径同本侧计算）。
+    t 为空＝数据起点起 n 个周波。只读文件、不改运行配置；引擎运行与否都可用（读的是文件，不是实时缓冲）。"""
+    from elec_tool.config import ConfigError, parse_time_text
+    from elec_tool.wave_preview import WaveError, file_info, load_waveform, relax_harmonic_limits
+    cfg = AppConfig.from_dict(RUNNER.cfg.to_dict())
+    if cfg.source.kind != "csv_file" or not str(cfg.source.path or "").strip():
+        return JSONResponse(status_code=400, content={"ok": False, "error": f"当前侧数据源不是离线文件（{cfg.source.kind}）或未配置文件路径；周波窗 2 只能从离线文件读取瞬时值"})
+    tc: Optional[float] = None
+    if t is not None and str(t).strip():
+        try:
+            tc = float(parse_time_text(str(t).strip()))
+        except ConfigError as exc:
+            return JSONResponse(status_code=400, content={"ok": False, "error": str(exc)})
+    n = max(1, min(int(n), 20000))
+    try:
+        p = _abs_path(cfg.source.path)
+        cfg.source.play_window = False; cfg.source.play_end_time = ""
+        cfg.source.play_start_mode = "begin"; cfg.source.play_start_value = ""
+        relax_harmonic_limits(cfg)
+        def _work() -> Dict[str, Any]:
+            info = file_info(cfg, p)
+            fnom = float(info["f_nom"]); dur = n / fnom
+            t0f, t1f = float(info["t_start"]), float(info["t_end"])
+            if tc is None:
+                a = t0f; mode = "begin"
+            else:
+                a = tc - dur / 2.0; mode = "center"
+                if a < t0f:
+                    a = t0f
+                if a + dur > t1f:                       # 靠近文件末尾：整体左移，仍取 n 个周波
+                    a = max(t0f, t1f - dur)
+            d = load_waveform(cfg, p, t_start=repr(a), n_cycles=n, channels=[c for c in channels.split(",") if c.strip()] or None)
+            d["source"] = {"path": _display_path(p), "mode": mode, "t_center": tc, "n_cycles": n, "t_start": d.get("t_first"), "t_end": d.get("t_last"),
+                           "custom_time": bool(cfg.source.custom_time), "side": current_side(), "n_loaded": d.get("n")}
+            return d
+        return await asyncio.to_thread(_work)
+    except (WaveError, ValueError, ConfigError) as exc:
+        return JSONResponse(status_code=400, content={"ok": False, "error": str(exc)})
+    except Exception as exc:
+        return JSONResponse(status_code=400, content={"ok": False, "error": f"{type(exc).__name__}: {exc}"})
+
+
 # ------------------------------------------------------------------ v0.21：离线文件指定时间段原始数据重新导出
 def _raw_export_sides(payload: Dict[str, Any]) -> Tuple[List[Tuple[AppConfig, int]], List[str], Dict[str, Any]]:
     """**只取当前侧**的离线文件配置（总线侧与分路侧的导出相互独立、互不关联）；非 csv_file 时给出说明。"""

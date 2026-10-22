@@ -199,6 +199,19 @@ async function main() {
   check('右键装载后周波窗为 center 模式、时刻输入框回填', nlBus.winFile && nlBus.winFile.source.mode === 'center' && /^\d{4}-\d{2}-\d{2} /.test($('nilm-win-t').value), $('nilm-win-t').value);
   click($('btn-nilm-win-live')); await sleep(300);
   check('「清除」后回到引擎周波窗', !nlBus.winFile && $('btn-nilm-win-live').disabled);
+  // v0.65：趋势曲线右键「显示周波窗 2」→ 采样瞬时值曲线到单独的「周波窗 2」画布
+  window.closeCtxMenu(); rc(cvP, 200); await sleep(200); menu = document.getElementById('ctxmenu');
+  const mw2 = menu && menu.querySelector('.mi[data-key="show-window2"]');
+  check('v0.65 趋势曲线右键菜单新增「显示周波窗 2（瞬时值）」，排在「显示周波窗」之后、原项保留', !!mw2 && !!menu.querySelector('.mi[data-key="show-window"]') && /瞬时值/.test(mw2.textContent) && !mw2.classList.contains('disabled') && Array.from(menu.querySelectorAll('.mi')).findIndex(d => d.dataset.key === 'show-window') < Array.from(menu.querySelectorAll('.mi')).findIndex(d => d.dataset.key === 'show-window2'), mw2 ? mw2.textContent.slice(0, 60) : 'none');
+  check('页面有「周波窗 2（瞬时值）」画布与清除按钮', !!$('nilm-wave2') && !!$('btn-nilm-wave2-clear') && /瞬时值/.test($('nilm-wave2-sub').textContent));
+  if (mw2) { mw2.dispatchEvent(new window.Event('click', { bubbles: true })); await sleep(3000); }
+  const w2 = nlBus.wave2; const w2c = $('nilm-wave2').__chart;
+  const nExp = w2 ? w2.source.n_cycles * 128 : -1;   // 周波数取右键时「周波窗」面板周波数框的值（随前序用例变化）
+  check('周波窗 2 已装载：6 通道 × 周波数 × 128 点（周波数随「周波数」框），source.mode=center，来自本侧离线文件', !!w2 && w2.n === nExp && w2.source.n_cycles === w2.cyc_n && (w2.channels_loaded || []).length === 6 && w2.source && w2.source.mode === 'center' && /nilm_.*\.csv/.test(w2.source.path) && !!w2c && w2c.pts.length === 6 && w2c.pts[0].data.length === nExp, w2 ? `${w2.n} / ${w2.source && w2.source.mode}` : 'none');
+  check('周波窗 2 是采样瞬时值（Ua 一周波内有正有负、峰值≈√2×RMS），不是逐周波计算值', (() => { if (!w2c) return false; const a = w2c.pts.find(s => /Ua/.test(s.name)).data.slice(0, 128).map(p => p[1]); const mx = Math.max(...a), mn = Math.min(...a); const rms = Math.sqrt(a.reduce((q, v) => q + v * v, 0) / a.length); return mn < 0 && mx > 0 && Math.abs(mx / rms - Math.SQRT2) < 0.1; })());
+  check('周波窗 2 不影响周波窗 1（仍为引擎周波窗，未装载离线数据）', !nlBus.winFile);
+  click($('btn-nilm-wave2-clear')); await sleep(300);
+  check('「周波窗 2 清除」后画布回到空提示', !nlBus.wave2 && /右键「显示周波窗 2」后显示/.test($('nilm-wave2-sub').textContent));
 
   console.log('L4 清空');
   click($('btn-nilm-clear')); await sleep(1500);

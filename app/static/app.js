@@ -3231,6 +3231,35 @@ async function loadNilmWindow(side = sideOf(), tEpoch, nCycles) {
   } catch (e) { toast('装载周波窗失败：' + e.message, 'err'); return false; }
 }
 function clearNilmWindow(side = sideOf()) { const nl = NLs(side); nl.winFile = null; if (S.view === 'nilm') render(); }
+/* v0.65：周波窗 2（瞬时值）——趋势曲线右键，从本侧配置的离线文件读取以 tEpoch 为中心 n 个周波的原始采样，画到单独的「周波窗 2」曲线 */
+async function loadNilmWave2(side = sideOf(), tEpoch, nCycles) {
+  const nl = NLs(side);
+  const n = Math.max(1, Math.min(20000, parseInt(nCycles || '300', 10) || 300));
+  try {
+    const d = await api(`/api/nilm/wave_file?n=${n}${isNum(tEpoch) ? '&t=' + encodeURIComponent(String(tEpoch)) : ''}`, undefined, side);
+    d.cyc_center = tEpoch; d.cyc_n = n; nl.wave2 = d;
+    const sname = (d.source && d.source.path) ? d.source.path.split(/[\\/]/).pop() : '';
+    toast(`${side === 'branch' ? '分路侧' : '总线侧'}周波窗 2 已装载 ${d.n} 点 × ${(d.channels_loaded || []).length} 通道（${sname}，中心 ${fmtLocalInput(tEpoch)}，${n} 个周波，采样瞬时值）`, 'ok');
+    if (S.view === 'nilm') { render(); try { $('#nilm-wave2').scrollIntoView({ behavior: 'smooth', block: 'nearest' }); } catch (e) { /* jsdom */ } }
+    return true;
+  } catch (e) { toast('装载周波窗 2 失败：' + e.message, 'err'); return false; }
+}
+function renderNilmWave2(nl) {
+  const cv = $('#nilm-wave2'); if (!cv) return;
+  const sub = $('#nilm-wave2-sub'); const d = nl.wave2;
+  if (!d || !d.t || !d.t.length) {
+    drawLine(cv, [], { empty: '在上方趋势曲线上右键「显示周波窗 2」后显示（以该时刻为中心的 N 个周波采样瞬时值，从本侧离线文件读取）', height: 240 });
+    if (sub) sub.textContent = '（在趋势曲线上右键「显示周波窗 2」后显示：以该时刻为中心的 N 个周波采样瞬时值，而不是逐周波计算值）';
+    return;
+  }
+  const t0 = d.t[0]; const chans = d.channels_loaded || Object.keys(d.channels || {});
+  const hasU = chans.some(c => c[0] === 'U'), hasI = chans.some(c => c[0] === 'I');
+  drawLine(cv, chans.map(ch => ({ name: `${ch} (${(d.units || {})[ch] || ''})`, color: WP_COLORS[ch] || '#4ea1ff', data: d.t.map((x, i) => [x - t0, d.channels[ch][i]]) })),
+    { ylabel: hasU && hasI ? 'V / A' : hasU ? 'V' : 'A', fmtX: x => ts(x + t0), fmtTip: x => fmtLocalInput(x + t0), tbase: t0, height: 240, zero: true });
+  if (sub) sub.textContent = `（${d.n} 点 × ${chans.length} 通道 · ${d.fs} Hz · ${fmtLocalInput(t0)} → ${fmtLocalInput(d.t[d.t.length - 1])}，中心 ${fmtLocalInput(d.cyc_center)}，${d.cyc_n} 个周波 · 采样瞬时值 · ${(d.source || {}).path || ''}）`;
+  bindCtxMenu(cv, () => canvasNativeItems(cv).concat([{ key: 'sep', sep: true }, { key: 'zoom-reset', label: '复位缩放', onClick: () => zoomReset(cv) },
+    { key: 'native', label: '浏览器原生菜单（Shift + 右键）', disabled: true }]));
+}
 function nilmWinSourceText(nl, running) {
   if (running) return nl.winFile ? '引擎运行中：显示实时周波窗（手动装载的数据已暂存，停止后恢复显示）' : '';
   if (!nl.winFile) return '当前显示引擎最近一次运行的周波窗；可装载离线文件任意时刻的周波数据（或在趋势曲线上右键「显示周波窗」）';
@@ -3275,6 +3304,9 @@ function renderNilmPqs(nl) {
       { key: 'show-window', label: `显示周波窗（${noX ? '暂无曲线' : fmtLocalInput(xEpoch)}）`, disabled: running || noX,
         hint: running ? '引擎运行中不可用：请先停止数据源' : noX ? '趋势曲线有数据后，在曲线上右键' : `以该时刻为中心装载 ${n} 个周波（离线文件）`,
         onClick: () => loadNilmWindow(side, xEpoch, n) },
+      { key: 'show-window2', label: `显示周波窗 2（瞬时值，${noX ? '暂无曲线' : fmtLocalInput(xEpoch)}）`, disabled: noX,     // v0.65
+        hint: noX ? '趋势曲线有数据后，在曲线上右键' : `以该时刻为中心从本侧离线文件读取 ${n} 个周波的采样瞬时值曲线（Ua/Ub/Uc/Ia/Ib/Ic），显示在下方「周波窗 2」`,
+        onClick: () => loadNilmWave2(side, xEpoch, n) },
       { key: 'zoom-reset', label: '复位缩放', onClick: () => zoomReset(cv) },
       { key: 'native', label: '浏览器原生菜单（Shift + 右键）', disabled: true },
     ]);
@@ -3297,6 +3329,7 @@ function renderNilm() {
   $('#nilm-cards').innerHTML = cards.join('');
   if (isNum(sm.total)) setNilmBadge(sm.total);
   renderNilmPqs(NL);
+  renderNilmWave2(NL);
   // 周波窗曲线 + 事件竖线
   const running = curRunning();
   const useFile = !running && !!NL.winFile;
@@ -3330,6 +3363,7 @@ function renderNilm() {
     'v0.39：I 口径不存在跨相合并（三相电流有效值不能像有功那样相加），只能单相检测——检测对象「三相总」被忽略，只配了三相总时按 A/B/C 各自检测；上方趋势图「曲线」可选三相电流（显示哪几相用曲线下方图例勾选），auto 时 I 口径自动画电流。',
     'v0.37：每个算法的绝对阈值分 W（P 口径）与 A（I 口径）两套，检测器只用当前口径那一套，另一套不参与（表单中灰显）；相对门槛 rel_tol_pct / min_delta_pct 对两种口径都按窗内中位数折算。',
     'v0.46：非运行状态下可在趋势曲线上右键「显示周波窗」查看鼠标所指时刻为中心的周波数据，或在周波窗面板填时刻/周波数手动装载（留空＝数据起点起 300 个周波）；数据来自当前侧配置的离线文件，运行中不可用。',
+    'v0.65：趋势曲线右键「显示周波窗 2」：以该时刻为中心、周波数同上，显示的是「采样瞬时值曲线」（Ua/Ub/Uc/Ia/Ib/Ic 原始波形，按本侧配置的 PT/CT / 时标 / 自定义时间解释），而不是逐周波计算的 P/Q/I；从本侧离线文件读取，运行中也可用。',
     '双滑窗均值差与 CUSUM 对单周波尖峰较敏感（会按均值摊成小事件）；需要抗尖峰请看中值滤波差分 / 稳态分段，或抬高 min_delta_pct。',
   ]);
 }
@@ -3342,6 +3376,7 @@ function bindNilm(side) {
   on('btn-nilm-tune-apply', 'click', () => applyNilmTune(side));
   on('btn-nilm-win-load', 'click', () => loadNilmWindow(side));
   on('btn-nilm-win-live', 'click', () => clearNilmWindow(side));
+  on('btn-nilm-wave2-clear', 'click', () => { NLs(side).wave2 = null; render(); });
   on('nilm-win-t', 'keydown', (e) => { if (e.key === 'Enter') loadNilmWindow(side); });
   on('nilm-filter', 'change', render);          // v0.48：列表筛选只影响列表（客户端过滤），不再重新拉取
   on('nilm-chfilter', 'change', render);
@@ -3638,7 +3673,8 @@ function wpVal(id) { const el = $('#' + id); return el ? String(el.value || '').
 function wpBase() {
   const chk = (id) => ($('#' + id) ? ($('#' + id).checked ? '1' : '0') : '');
   const custom = chk('wp-base-custom');
-  return { fs: wpVal('wp-base-fs'), f_nom: wpVal('wp-base-fnom'), pt_ct_enabled: chk('wp-base-ptct'),
+  // v0.65：采样率由文件数据时间推算、不可改 ⇒ 不再作为基准配置上送（wp-base-fs 只显示）
+  return { f_nom: wpVal('wp-base-fnom'), pt_ct_enabled: chk('wp-base-ptct'),
            pt_ratio: wpVal('wp-base-pt'), ct_ratio: wpVal('wp-base-ct'), file_time_utc: chk('wp-base-utc'),
            // v0.64：自定义时间（启用时：时间轴＝自定义起始(空＝文件数据起始) + 行号/fs；结束空＝按采样率计算）
            custom_time: custom, custom_time_start: custom === '1' ? wpVal('wp-base-cstart') : '', custom_time_end: custom === '1' ? wpVal('wp-base-cend') : '' };
@@ -3656,7 +3692,7 @@ function wpSyncCustom() {
 function wpSetBase(b) {
   if (!b) return;
   const set = (id, v) => { const el = $('#' + id); if (el && v !== undefined && v !== null) el.value = v; };
-  set('wp-base-fs', b.fs); set('wp-base-fnom', b.f_nom); set('wp-base-pt', b.pt_ratio); set('wp-base-ct', b.ct_ratio);
+  set('wp-base-fnom', b.f_nom); set('wp-base-pt', b.pt_ratio); set('wp-base-ct', b.ct_ratio);
   if ($('#wp-base-ptct')) $('#wp-base-ptct').checked = !!(b.pt_ct_enabled === true || b.pt_ct_enabled === '1' || b.pt_ct_enabled === 1);
   if ($('#wp-base-utc')) $('#wp-base-utc').checked = !!(b.file_time_utc === true || b.file_time_utc === '1' || b.file_time_utc === 1);
   if ($('#wp-base-custom') && b.custom_time !== undefined) $('#wp-base-custom').checked = !!(b.custom_time === true || b.custom_time === '1' || b.custom_time === 1);
@@ -3701,7 +3737,7 @@ function wpRenderInfo(d) {
   const rows = [
     ['文件', esc(d.path_display || d.path)], ['大小', `${d.size_mb} MB · ${d.rows} 行 · 编码 ${esc(d.encoding)}${d.has_header ? '' : '（无表头）'}`],
     ['通道数', `${d.n_channels}（${(d.channels || []).join(' / ')}）`],
-    ['采样率', `${wpFs(d.fs)} Hz${isNum(d.fs_est) ? `（时标推算 ${(+d.fs_est).toFixed(2)} Hz，配置 ${d.fs_configured} Hz）` : `（配置值 ${d.fs_configured} Hz）`} · 每周波 ${d.samples_per_cycle} 点（f_nom ${d.f_nom} Hz）`],
+    ['采样率', `${wpFs(d.fs)} Hz${isNum(d.fs_est) ? `（按文件数据时间计算：推算值 ${(+d.fs_est).toFixed(2)} Hz）` : `（文件无时标：按出厂配置 ${d.fs_configured} Hz）`} · 每周波 ${d.samples_per_cycle} 点（f_nom ${d.f_nom} Hz）`],
     ['时长', `${fmtDur(d.duration_s)}（${(+d.duration_s).toFixed(3)} s）`],
     ['时间模式', d.custom_time ? `自定义时间（起始＝${d.custom_time_start ? esc(d.custom_time_start) : '文件数据起始时间'}；结束＝${d.custom_time_end ? esc(d.custom_time_end) : '起始 + (行数−1)/fs'}）` : '文件数据时间'],
     ['起始时间', wpFmtT(d.t_start)], ['结束时间', wpFmtT(d.t_end) + (isNum(d.t_end_custom) ? '（自定义结束时间）' : '')],
@@ -3716,6 +3752,7 @@ async function wpInfo(silent) {
   try {
     const d = await api('/api/process/wave/info?' + wpQuery(Object.assign({ path }, wpBase())), undefined, 'bus');
     WP.info = d; wpRenderInfo(d);
+    { const fsEl = $('#wp-base-fs'); if (fsEl) fsEl.value = isNum(d.fs) ? wpFs(d.fs) : ''; }     // v0.65：采样率只显示（按文件数据时间计算）
     // v0.64：起止时刻默认为空＝文件数据起止时间（自定义时间启用时＝自定义起始 / 按采样率计算的结束）；不再自动填入，只把实际时间写进占位提示
     wpSyncCustom();
     // 通道勾选框：文件里没有的通道置灰；静默刷新不改动已有勾选
@@ -3732,17 +3769,18 @@ function wpDrawWave(cv, d, subId, label) {
   if (!cv) return;
   const sub = $('#' + subId);
   if (!d || !d.t || !d.t.length) {
-    drawLine(cv, [], { empty: label === 'cyc' ? '在有效值曲线上右键「显示周波窗」后显示' : '点「加载波形」后显示', height: label === 'cyc' ? 240 : 260 });
-    if (sub) sub.textContent = label === 'cyc' ? '（在有效值曲线上右键「显示周波窗」后显示：以该时刻为中心的 N 个周波原始波形）' : '（未加载）';
+    drawLine(cv, [], { empty: label === 'cyc' ? '在有效值曲线上右键「显示周波窗」后显示' : label === 'cyc2' ? '在有效值曲线上右键「显示周波窗 2」后显示（采样瞬时值曲线）' : '点「加载波形曲线」后显示', height: label === 'wave' ? 260 : 240 });
+    if (sub) sub.textContent = label === 'cyc' ? '（在有效值曲线上右键「显示周波窗」后显示：以该时刻为中心的 N 个周波原始波形）' : label === 'cyc2' ? '（在有效值曲线上右键「显示周波窗 2」后显示：以该时刻为中心的 N 个周波采样瞬时值曲线）' : '（未加载）';
     return;
   }
+  const isCyc = label === 'cyc' || label === 'cyc2';
   const t0 = d.t[0];
   const hasU = (d.channels_loaded || []).some(c => c[0] === 'U'), hasI = (d.channels_loaded || []).some(c => c[0] === 'I');
   drawLine(cv, wpSeries(d, t0), { ylabel: hasU && hasI ? 'V / A' : hasU ? 'V' : 'A', fmtX: x => ts(x + t0), fmtTip: x => fmtLocalInput(x + t0), tbase: t0,
-    height: label === 'cyc' ? 240 : 260, zero: true });
+    height: isCyc ? 240 : 260, zero: true });
   if (sub) {
     const span = d.t[d.t.length - 1] - t0;
-    sub.textContent = `（${d.n} 点 × ${(d.channels_loaded || []).length} 通道 · ${wpFs(d.fs)} Hz${d.resampled ? '（由 ' + wpFs(d.fs_src) + ' Hz ' + (d.method || '') + ' 重采样）' : ''} · ${wpFmtT(t0)} → ${wpFmtT(d.t[d.t.length - 1])}，${span.toFixed(3)} s${label === 'cyc' && d.cyc_center ? '，中心 ' + wpFmtT(d.cyc_center) + '，' + d.cyc_n + ' 个周波' : ''}${d.truncated ? '，已截断' : ''}）`;
+    sub.textContent = `（${d.n} 点 × ${(d.channels_loaded || []).length} 通道 · ${wpFs(d.fs)} Hz${d.resampled ? '（由 ' + wpFs(d.fs_src) + ' Hz ' + (d.method || '') + ' 重采样）' : ''} · ${wpFmtT(t0)} → ${wpFmtT(d.t[d.t.length - 1])}，${span.toFixed(3)} s${isCyc && d.cyc_center ? '，中心 ' + wpFmtT(d.cyc_center) + '，' + d.cyc_n + ' 个周波' : ''}${label === 'cyc2' ? '，采样瞬时值' : ''}${d.truncated ? '，已截断' : ''}）`;
   }
   bindCtxMenu(cv, () => canvasNativeItems(cv).concat([{ key: 'sep', sep: true }, { key: 'zoom-reset', label: '复位缩放', onClick: () => zoomReset(cv) },
     { key: 'native', label: '浏览器原生菜单（Shift + 右键）', disabled: true }]));
@@ -3784,6 +3822,9 @@ function wpDrawRms(d) {
       { key: 'show-window', label: `显示周波窗（${noX ? '暂无曲线' : fmtLocalInput(xEpoch)}）`, disabled: noX,
         hint: noX ? '有效值曲线有数据后，在曲线上右键' : `以该时刻为中心加载 ${n} 个周波的原始波形到下方「周波窗」`,
         onClick: () => wpLoadCycleWindow(xEpoch, n) },
+      { key: 'show-window2', label: `显示周波窗 2（瞬时值，${noX ? '暂无曲线' : fmtLocalInput(xEpoch)}）`, disabled: noX,     // v0.65
+        hint: noX ? '有效值曲线有数据后，在曲线上右键' : `以该时刻为中心加载 ${n} 个周波的采样瞬时值曲线（不是有效值）到下方「周波窗 2」`,
+        onClick: () => wpLoadCycleWindow(xEpoch, n, 2) },
       { key: 'zoom-reset', label: '复位缩放', onClick: () => zoomReset(cv) },
       { key: 'native', label: '浏览器原生菜单（Shift + 右键）', disabled: true },
     ]);
@@ -3806,9 +3847,10 @@ async function wpRms() {
   finally { if (btn) btn.disabled = false; }
 }
 /* 有效值曲线右键 → 以 tEpoch 为中心的 n 个周波原始波形，画到单独的「周波窗」曲线（原采样率、当前勾选通道） */
-async function wpLoadCycleWindow(tEpoch, n) {
+async function wpLoadCycleWindow(tEpoch, n, which = 1) {
   const path = wpVal('wp-path');
   if (!path || !isNum(tEpoch)) return false;
+  const cvId = which === 2 ? 'wp-cyc2' : 'wp-cyc', subId = which === 2 ? 'wp-cyc2-sub' : 'wp-cyc-sub', lbl = which === 2 ? '周波窗 2（瞬时值）' : '周波窗';
   const fnom = (+wpVal('wp-base-fnom')) || (WP.info && WP.info.f_nom) || (WP.rms && WP.rms.f_nom) || 50;
   const half = (n / 2) / fnom;
   let tA = tEpoch - half, tB = tEpoch + half;
@@ -3817,16 +3859,17 @@ async function wpLoadCycleWindow(tEpoch, n) {
     if (tA < WP.info.t_start) { tA = WP.info.t_start; tB = tA + dur; }
     if (tB > WP.info.t_end) { tB = WP.info.t_end; tA = Math.max(WP.info.t_start, tB - dur); }
   }
-  wpStatus(`装载周波窗：中心 ${fmtLocalInput(tEpoch)}，${n} 个周波…`);
+  wpStatus(`装载${lbl}：中心 ${fmtLocalInput(tEpoch)}，${n} 个周波…`);
   try {
     const d = await api('/api/process/wave/load?' + wpQuery(Object.assign({ path, t_start: tA.toFixed(6), t_end: tB.toFixed(6), channels: wpChans().join(',') }, wpBase())), undefined, 'bus');
     d.cyc_center = tEpoch; d.cyc_n = n;
-    WP.cyc = d; zoomReset($('#wp-cyc'));
-    wpDrawWave($('#wp-cyc'), d, 'wp-cyc-sub', 'cyc');
-    wpStatus(`周波窗已装载：${d.n} 点 × ${d.channels_loaded.length} 通道，中心 ${fmtLocalInput(tEpoch)}，${n} 个周波（${wpFs(d.fs)} Hz）`, 'ok');
-    try { $('#wp-cyc').scrollIntoView({ behavior: 'smooth', block: 'nearest' }); } catch (e) { /* jsdom */ }
+    if (which === 2) WP.cyc2 = d; else WP.cyc = d;
+    zoomReset($('#' + cvId));
+    wpDrawWave($('#' + cvId), d, subId, which === 2 ? 'cyc2' : 'cyc');
+    wpStatus(`${lbl}已装载：${d.n} 点 × ${d.channels_loaded.length} 通道，中心 ${fmtLocalInput(tEpoch)}，${n} 个周波（${wpFs(d.fs)} Hz${which === 2 ? '，采样瞬时值' : ''}）`, 'ok');
+    try { $('#' + cvId).scrollIntoView({ behavior: 'smooth', block: 'nearest' }); } catch (e) { /* jsdom */ }
     return true;
-  } catch (e) { wpStatus('装载周波窗失败：' + esc(e.message), 'bad'); toast('装载周波窗失败：' + e.message, 'err'); return false; }
+  } catch (e) { wpStatus(`装载${lbl}失败：` + esc(e.message), 'bad'); toast(`装载${lbl}失败：` + e.message, 'err'); return false; }
 }
 window.wpLoadCycleWindow = wpLoadCycleWindow;
 function renderWavePreview() {
@@ -3834,12 +3877,14 @@ function renderWavePreview() {
   wpDrawWave($('#wp-wave'), WP.wave, 'wp-wave-sub', 'wave');
   wpDrawRms(WP.rms);
   wpDrawWave($('#wp-cyc'), WP.cyc, 'wp-cyc-sub', 'cyc');
+  wpDrawWave($('#wp-cyc2'), WP.cyc2, 'wp-cyc2-sub', 'cyc2');
 }
 function bindWavePreview() {
   if (!$('#wp-form')) return;
   $('#wp-files').addEventListener('change', () => { if ($('#wp-files').value) { $('#wp-path').value = $('#wp-files').value; WP.info = null; wpInfo(true); } });
-  $('#wp-path').addEventListener('change', () => { WP.info = null; });
-  ['wp-base-fs', 'wp-base-fnom', 'wp-base-pt', 'wp-base-ct', 'wp-base-ptct', 'wp-base-utc', 'wp-base-custom', 'wp-base-cstart', 'wp-base-cend'].forEach(id => $('#' + id).addEventListener('change', () => { WP.info = null; wpSaveBase(); wpSyncCustom(); }));
+  $('#wp-path').addEventListener('change', () => { WP.info = null; const fsEl = $('#wp-base-fs'); if (fsEl) fsEl.value = ''; });
+  ['wp-base-fnom', 'wp-base-pt', 'wp-base-ct', 'wp-base-ptct', 'wp-base-utc', 'wp-base-custom', 'wp-base-cstart', 'wp-base-cend'].forEach(id => $('#' + id).addEventListener('change', () => { WP.info = null; wpSaveBase(); wpSyncCustom(); }));
+  $('#btn-wp-cyc2-clear') && $('#btn-wp-cyc2-clear').addEventListener('click', () => { WP.cyc2 = null; renderWavePreview(); });
   $('#wp-maxpts').addEventListener('change', wpSaveBase);
   $('#btn-wp-info').addEventListener('click', () => wpInfo(false));
   $('#btn-wp-load').addEventListener('click', wpLoad);

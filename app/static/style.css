@@ -241,3 +241,13 @@ canvas:focus{outline:none}
 .nilm-winload{margin:0 0 8px;flex-wrap:wrap}
 .nilm-winload input{font-size:12px}
 .nilm-winload .mut{font-size:11.5px}
+
+/* v0.65：波形预览三组配置（公共 / 波形曲线 / 有效值曲线）视觉区分 */
+.wp-group{border:1px solid #243050;border-left:4px solid #6b7a99;border-radius:8px;padding:8px 10px 4px;margin:8px 0;background:rgba(255,255,255,.02)}
+.wp-group>label,.wp-group>.row2,.wp-group>.btnrow{margin-bottom:6px}
+.wp-group-title{font-size:12.5px;color:var(--mut);margin:0 0 8px;line-height:1.45}
+.wp-tag{display:inline-block;font-size:11.5px;font-weight:600;padding:1px 7px;border-radius:10px;margin-right:6px;color:#0b1020;background:#6b7a99;vertical-align:middle}
+.wp-common{border-left-color:#a78bfa}.wp-common .wp-tag{background:#a78bfa}
+.wp-wave{border-left-color:#4ea1ff}.wp-wave .wp-tag,.wp-tag-wave{background:#4ea1ff}
+.wp-rmsg{border-left-color:#f2b84b}.wp-rmsg .wp-tag,.wp-tag-rms{background:#f2b84b}
+#wp-base-fs[readonly]{opacity:.85;cursor:not-allowed;background:rgba(255,255,255,.04)}

@@ -46,9 +46,12 @@ def _prep_cfg(base: AppConfig, path: str, t_start: str = "", t_end: str = "", in
     cfg.source.play_end_time = ""
     cfg.source.play_start_mode = "begin"; cfg.source.play_start_value = ""
     ts_txt, te_txt = str(t_start or "").strip(), str(t_end or "").strip()
+    if info is None:
+        info = file_info(base, path)
+    # v0.65：采样率以文件时标推算值为准（界面不可改）：读文件 / 自定义时间轴 / 周波切分全部按它
+    cfg.sampling.fs = float(info["fs"])
+    relax_harmonic_limits(cfg)
     if bool(cfg.source.custom_time):
-        if info is None:
-            info = file_info(base, path)
         fs = float(info["fs"])
         t0c = float(info["t_start"])                       # 自定义起始时间（空＝文件第 1 条数据时间），file_info 已算好
         cfg.source.custom_time_start = repr(t0c)           # 显式写死：定位跳过的行也要算进时间轴
@@ -165,8 +168,18 @@ def file_info(base: AppConfig, path: str) -> Dict[str, Any]:
             i1 = parse_timestamps(last_ts, cfg.columns.timestamp_unit, tz_h)
             if i1.t.size:
                 t1 = float(i1.t[-1])
-    # 时标 0.1 ms 量化会让推算值带小数尾巴（6400.011…）：与配置值相差 <0.5% 时按配置值；否则取推算值（保留 1 位小数）
-    fs = fs_cfg if (fs_est is None or abs(fs_est - fs_cfg) / fs_cfg < 0.005) else round(fs_est, 1)
+    # 时标 0.1 ms 量化会让推算值带小数尾巴（6400.011…）：与配置值相差 <0.5% 时按配置值；与最近整数相差 <0.5% 时取整；
+    # 否则取推算值（保留 1 位小数）。推算不出（无时标）时才用基准配置 fs
+    if fs_est is None:
+        fs = fs_cfg
+    elif abs(fs_est - fs_cfg) / fs_cfg < 0.005:
+        fs = fs_cfg
+    elif abs(fs_est - round(fs_est)) / fs_est < 0.005:
+        fs = float(round(fs_est))
+    else:
+        fs = round(fs_est, 1)
+    if fs_est is None:
+        notes.append(f"文件没有可用时标、推算不出采样率：按基准配置 fs={fs_cfg:g} Hz")
     if cfg.source.custom_time:
         txt = str(cfg.source.custom_time_start or "").strip()
         if txt:
@@ -195,7 +208,7 @@ def file_info(base: AppConfig, path: str) -> Dict[str, Any]:
     if t_end_ts is not None and abs(t_end_ts - t1) > max(1.0 / fs, 1e-3) * 2:
         notes.append(f"按时标末行的结束时间 {t_end_ts:.3f} 与按 采样率×点数 计算的 {t1:.3f} 相差 {t_end_ts - t1:+.3f} s（文件内有缺口或时标不均匀）")
     if fs_est and abs(fs_est - fs_cfg) / fs_cfg > 0.02:
-        notes.append(f"时标推算采样率 {fs_est:.1f} Hz 与基准配置 sampling.fs={fs_cfg:g} Hz 相差 >2%，波形加载按推算值解释")
+        notes.append(f"采样率按文件时标推算＝{fs:g} Hz（推算值 {fs_est:.2f}；出厂配置 {fs_cfg:g} Hz 不参与）")
     return {"ok": True, "path": path, "size_mb": round(size / 1024 / 1024, 3), "encoding": enc, "has_header": has_header,
             "header": header if has_header else None, "n_channels": len(chans), "channels": chans,
             "columns": {c: idx.get(_FIELD_OF[c]) for c in chans}, "rows": n_rows,

@@ -252,3 +252,42 @@ def test_r64_max_points_custom_time_and_harmonic_relax(cfg, wave_file, client):
     assert b5.harmonic.order_min == 1 and b5.harmonic.order_max == 1
     r = client.get("/api/process/wave/load", params={"path": p, "fs": 80, "f_nom": 50})                 # f_nom ≥ Nyquist 仍是真错误
     assert r.status_code == 400 and "Nyquist" in r.json()["error"]
+
+
+# ---------- v0.65：采样率按文件数据时间计算（不可改）/ 周波窗 2 瞬时值端点 ----------
+def test_r65_fs_from_file_and_nilm_wave_file(cfg, wave_file, client, tmp_path):
+    from elec_tool.selftest import HarmSpec, build_signal
+    from elec_tool.wave_preview import file_info, load_waveform, make_base, rms_curve
+    # 1000 Hz 文件：界面不再上送 fs，采样率按时标推算；读文件 / 周波切分 / 自定义时间轴都按 1000 Hz
+    t, u, i = build_signal([HarmSpec(1, U_RMS, I_RMS, phi_deg=0.0)], 1000.0, 2.0, t0=T0)
+    p = str(tmp_path / "low.csv"); write_csv(p, t, u, i)
+    b = make_base(cfg)                                             # 出厂 fs=6400，不参与
+    info = file_info(b, p)
+    assert info["fs"] == 1000.0 and info["samples_per_cycle"] == 20 and abs(info["duration_s"] - 2.0) < 1e-9
+    w = load_waveform(b, p, n_cycles=5)
+    assert w["n"] == 100 and w["fs"] == 1000.0
+    r = rms_curve(b, p)
+    assert r["samples_per_cycle"] == 20 and r["cycles_total"] == 100
+    bc = make_base(cfg, custom_time="1", custom_time_start="2026-01-01 00:00:00")
+    ic = file_info(bc, p)
+    from elec_tool.config import parse_time_text
+    c0 = parse_time_text("2026-01-01 00:00:00")
+    assert abs(ic["t_end"] - (c0 + (2000 - 1) / 1000.0)) < 1e-6                     # 自定义轴按 1000 Hz
+    w = load_waveform(bc, p, t_start="2026-01-01 00:00:01", n_cycles=5)
+    assert w["n"] == 100 and abs(w["t_first"] - (c0 + 1.0)) < 1e-6
+    rr = client.get("/api/process/wave/info", params={"path": p}).json()
+    assert rr["ok"] and rr["fs"] == 1000.0 and "Nyquist" not in str(rr)
+    # 周波窗 2：从当前侧配置的离线文件取 n 个周波的瞬时值（center 模式居中、靠边平移、非离线源 400）
+    client.post("/api/engine/stop")
+    r = client.put("/api/config", json={"source": {"kind": "csv_file", "path": str(wave_file)}}); assert r.status_code == 200, r.text
+    d = client.get("/api/nilm/wave_file", params={"t": f"{T0 + 2:.3f}", "n": 10}).json()
+    assert d["ok"] and d["n"] == 1280 and d["source"]["mode"] == "center" and d["source"]["n_cycles"] == 10
+    assert abs(d["t_first"] - (T0 + 2 - 0.1)) < 1e-6 and len(d["channels_loaded"]) == 6
+    ia = np.array(d["channels"]["Ia"][:128]); assert ia.min() < 0 < ia.max() and abs(ia.max() / np.sqrt(np.mean(ia ** 2)) - np.sqrt(2)) < 0.05   # 瞬时值
+    d = client.get("/api/nilm/wave_file", params={"t": f"{T0 + 3.99:.3f}", "n": 10}).json()
+    assert d["ok"] and d["n"] == 1280 and d["t_last"] <= T0 + 4.0                 # 靠近末尾整体左移
+    d = client.get("/api/nilm/wave_file", params={"n": 3}).json()
+    assert d["ok"] and d["source"]["mode"] == "begin" and abs(d["t_first"] - T0) < 1e-6
+    client.put("/api/config", json={"source": {"kind": "simulator"}})
+    assert client.get("/api/nilm/wave_file", params={"n": 3}).status_code == 400
+    client.put("/api/config", json={"source": {"kind": "csv_file", "path": str(wave_file)}})
