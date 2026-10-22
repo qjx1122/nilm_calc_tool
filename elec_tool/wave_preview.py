@@ -62,9 +62,10 @@ def _prep_cfg(base: AppConfig, path: str, t_start: str = "", t_end: str = "", in
             # （只写时刻＝自定义起始时间所在当天（本地时间）的该时刻）
             kind, v = parse_play_start("time", txt)
             if kind == "tod":
-                from datetime import datetime
-                d0 = datetime.fromtimestamp(t0c).replace(hour=0, minute=0, second=0, microsecond=0)
-                return d0.timestamp() + float(v)
+                # v0.68.1：不能用 datetime.fromtimestamp —— 无日期时标（0/00/00 HH:MM:SS）文件的起始 epoch 极小 / 为负，
+                # Windows 会抛 OSError [Errno 22]；统一走 timefmt.local_tod_s（跨平台安全）
+                from .timefmt import local_tod_s
+                return t0c - local_tod_s(t0c) + float(v)
             return float(v)
         a = _abs(ts_txt, "起始时刻") if ts_txt else None
         b = _abs(te_txt, "结束时刻") if te_txt else None

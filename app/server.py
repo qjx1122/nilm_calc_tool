@@ -1758,11 +1758,10 @@ async def raw_export_range(payload: Optional[Dict[str, Any]] = None) -> Any:
         kind, val = v
         if kind == "abs":
             return float(val)
-        from datetime import datetime as _dt
+        from elec_tool.timefmt import local_tod_s   # v0.68.1：跨平台安全（无日期时标 epoch 极小时 fromtimestamp 在 Windows 抛 Errno 22）
         r0 = next((r for r in ranges.values() if isinstance(r, dict) and r.get("t0") is not None), {})
         base = float(r0.get("t0") or 0.0)
-        day = _dt.fromtimestamp(base).replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
-        return day + float(val)
+        return base - local_tod_s(base) + float(val)
     tf = _resolve(tf); tt = _resolve(tt)
     if tf is not None and tt is not None and tt <= tf:
         return JSONResponse(status_code=400, content={"ok": False, "error": "结束时间必须晚于开始时间"})

@@ -336,3 +336,38 @@ def test_r68_tod_time_text_in_file_mode():
     b = load_waveform(base, path, t_start=full(s_txt), t_end=full(e_txt), channels=["Ia"])
     assert a["n"] == b["n"] and abs(a["n"] - 0.5 * fs) <= 2
     assert abs(a["t"][0] - b["t"][0]) < 1e-6
+
+
+def test_r68_1_tod_with_dateless_timestamps(tmp_path, monkeypatch):
+    """v0.68.1：无日期时标（0/00/00 HH:MM:SS）文件 + 自定义时间 + 只写 HH:MM:SS 起止 —— 不得走 datetime.fromtimestamp
+    （Windows 对极小 / 负 epoch 抛 OSError Errno 22），且结果与按行号直接截取一致。"""
+    import math
+    import numpy as np
+    from elec_tool.config import AppConfig
+    from elec_tool import wave_preview as wp
+    fs, f = 6400, 50.0
+    n = fs * 120                        # 2 min：00:14:00 → 00:16:00
+    t = np.arange(n) / fs
+    rows = []
+    for i in range(n):
+        tt = 14 * 60 + t[i]
+        hh, mm, ss = int(tt // 3600), int(tt % 3600 // 60), tt % 60
+        rows.append(f"0/00/00 {hh:02d}:{mm:02d}:{ss:07.4f},{math.sin(2*math.pi*f*t[i])*57.7:.3f},{math.sin(2*math.pi*f*t[i])*2:.3f},0,0,0,0")
+    p = tmp_path / "dateless.csv"
+    p.write_text("时间戳,A相电压,A相电流,B相电压,B相电流,C相电压,C相电流\n" + "\n".join(rows) + "\n", encoding="utf-8")
+    # 任何 fromtimestamp 调用都视为失败（模拟 Windows 行为）
+    import datetime as _dt
+    class _Boom(_dt.datetime):
+        @classmethod
+        def fromtimestamp(cls, *a, **k):
+            raise OSError(22, "Invalid argument")
+    monkeypatch.setattr(_dt, "datetime", _Boom)
+    base = AppConfig.from_dict(AppConfig().to_dict())
+    base.source.custom_time = True; base.source.custom_time_start = ""
+    r = wp.load_waveform(base, str(p), t_start="00:14:30", t_end="00:15:30", channels=["Ia"])
+    assert abs(r["n"] - 60 * fs) <= 2, r["n"]
+    r2 = wp.load_waveform(base, str(p), t_start="00:14:30", t_end="00:14:30.5", channels=["Ia"], fs_out=None)
+    assert abs(r2["n"] - fs // 2) <= 2
+    base.source.custom_time = False
+    r3 = wp.load_waveform(base, str(p), t_start="00:14:30", t_end="00:15:30", channels=["Ia"])
+    assert abs(r3["n"] - 60 * fs) <= 2, r3["n"]
