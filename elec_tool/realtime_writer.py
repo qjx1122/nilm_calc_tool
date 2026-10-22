@@ -40,7 +40,7 @@ class RealtimeCurveWriter:
         self.enabled = bool(cfg.output.realtime_save)
         self.source_id = int(getattr(cfg.output, "source_id", 0) or 0)
         # 环境变量 ELEC_TOOL_REALTIME_DIR 可整体改写目录（测试隔离 / 现场把落盘指到数据盘）
-        # v0.59：dir_override＝本次运行目录（离线文件播放 → output/<yyyyMMddHHmmss>/），优先于环境变量与配置
+        # v0.59：dir_override＝本次运行目录（离线文件播放 → output/<yyyyMMdd_HHmmss>/），优先于环境变量与配置
         d = dir_override or os.environ.get("ELEC_TOOL_REALTIME_DIR") or cfg.output.realtime_dir or "output/realtime"
         if not os.path.isabs(d) and root:
             d = os.path.join(root, d)

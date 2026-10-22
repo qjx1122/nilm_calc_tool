@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import os
 import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, Iterator, List, Optional
@@ -72,7 +73,7 @@ class LiveEngine:
                  on_result: Optional[Callable[[MetricsResult], None]] = None,
                  tz_offset_h: Optional[float] = None, output_root: Optional[str] = None,
                  run_dir: Optional[str] = None):
-        """``run_dir``（v0.59）：本次运行的输出目录（离线文件播放 → output/<yyyyMMddHHmmss>/）；给定时实时曲线 /
+        """``run_dir``（v0.59）：本次运行的输出目录（离线文件播放 → output/<yyyyMMdd_HHmmss>/，下设 realtime/ events/ nilm/ 三个子目录）；给定时实时曲线 /
         事件 / 负荷事件 CSV 全部写到该目录（优先于配置与环境变量），两侧传同一目录即写同一批文件。"""
         self.cfg = cfg.validate()
         self.run_dir = run_dir
@@ -91,13 +92,15 @@ class LiveEngine:
         self._last_t: Optional[float] = None
         self._ready: Dict[str, bool] = {k: False for k in QUANTITY_KEYS}
         # 曲线点实时落盘（output.realtime_save）：与趋势历史共用同一提取规则
-        self.writer = RealtimeCurveWriter(self.cfg, root=output_root, run_id=self.run_id, dir_override=run_dir)
+        # v0.60：运行目录内仍按原来的三个子目录存放：realtime/ events/ nilm/
+        rd = lambda sub: (os.path.join(run_dir, sub) if run_dir else None)  # noqa: E731
+        self.writer = RealtimeCurveWriter(self.cfg, root=output_root, run_id=self.run_id, dir_override=rd("realtime"))
         self._output_root = output_root
         # 事件检测（第 9 轮）：每次 compute 后评估；on_event 供 Web 层推送
-        self.detector = EventDetector(self.cfg, root=output_root, run_id=self.run_id, run_dir=run_dir)
+        self.detector = EventDetector(self.cfg, root=output_root, run_id=self.run_id, run_dir=rd("events"))
         self.on_event: Optional[Callable[[List[Dict[str, Any]]], None]] = None
         # 负荷辨识事件检测（第 12 轮）：逐块摄入时按周波评估；on_nilm_event 供 Web 层推送
-        self.nilm = NilmDetector(self.cfg, root=output_root, run_id=self.run_id, run_dir=run_dir)
+        self.nilm = NilmDetector(self.cfg, root=output_root, run_id=self.run_id, run_dir=rd("nilm"))
         self.on_nilm_event: Optional[Callable[[List[Dict[str, Any]]], None]] = None
 
     # ---------------- 生命周期 ----------------
@@ -143,7 +146,8 @@ class LiveEngine:
             self.writer.close()
         except Exception:
             pass
-        self.writer = RealtimeCurveWriter(new_cfg, root=self._output_root, run_id=self.run_id, dir_override=self.run_dir)
+        self.writer = RealtimeCurveWriter(new_cfg, root=self._output_root, run_id=self.run_id,
+                                          dir_override=(os.path.join(self.run_dir, "realtime") if self.run_dir else None))
         self.detector.update_config(new_cfg)
         self.nilm.update_config(new_cfg)
         fs = new_cfg.sampling.fs

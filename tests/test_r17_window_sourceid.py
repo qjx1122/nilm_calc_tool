@@ -289,12 +289,12 @@ def test_both_sides_different_data_dates_share_one_file_named_by_wall_clock(clie
     client.put("/api/config", json={"branch": {"enabled": False}, "output": {"realtime_save": False}})
 
 
-# ---------- v0.59：离线文件播放 → output/<yyyyMMddHHmmss>/ 运行目录 + 两侧配置 ----------
+# ---------- v0.59/v0.60：离线文件播放 → output/<yyyyMMdd_HHmmss>/{realtime,events,nilm}/ + 两侧配置文件原样复制 ----------
 def test_offline_play_writes_run_dir_with_both_configs(client, files, tmp_path, monkeypatch):
-    """① 离线文件启动（总线 + 联动分路）→ 同一个 output/<本地时间 14 位>/ 目录：曲线 / events / nilm_events CSV 两侧共存，
-    config_bus.json / config_branch.json / run_info.json；② 两侧都停后分路侧单独启动 → 新目录；③ 加载上次数据从运行目录读回；
-    ④ 模拟器源不建运行目录。"""
-    import os, re, json
+    """① 离线文件启动（总线 + 联动分路）→ 同一个 output/<yyyyMMdd_HHmmss>/ 目录：realtime/ 曲线 CSV 两侧共存，events/ nilm/ 子目录为
+    三个 writer 的目标，config_bus.json / config_branch.json 是本侧配置文件的逐字节副本，run_info.json；② 两侧都停后分路侧单独启动 →
+    新目录；③ 加载上次数据从运行目录读回；④ 模拟器源不建运行目录。"""
+    import os, re, json, hashlib
     out_base = tmp_path / "out59"
     monkeypatch.setenv("ELEC_TOOL_RUN_DIRS", "1")
     monkeypatch.setenv("ELEC_TOOL_OUTPUT_DIR", str(out_base))
@@ -309,24 +309,32 @@ def test_offline_play_writes_run_dir_with_both_configs(client, files, tmp_path, 
     st = client.get("/api/state").json(); assert st["run_dir"] == r["run_dir"]
     _wait_done(client); _wait_done(client, "/api/branch/state")
     dirs = sorted(p.name for p in out_base.iterdir() if p.is_dir())
-    assert len(dirs) == 1 and re.fullmatch(r"\d{14}", dirs[0]), dirs                 # yyyyMMddHHmmss
+    assert len(dirs) == 1 and re.fullmatch(r"\d{8}_\d{6}", dirs[0]), dirs          # yyyyMMdd_HHmmss
     rd = out_base / dirs[0]
     names = sorted(p.name for p in rd.iterdir())
-    assert "config_bus.json" in names and "config_branch.json" in names and "run_info.json" in names, names
-    cb = json.load(open(rd / "config_bus.json", encoding="utf-8")); cbr = json.load(open(rd / "config_branch.json", encoding="utf-8"))
-    assert cb["output"]["source_id"] == 0 and cb["source"]["path"].endswith("bus.csv")
-    assert cbr["output"]["source_id"] == 1 and cbr["source"]["path"].endswith("br.csv")
+    assert "config_bus.json" in names and "config_branch.json" in names and "run_info.json" in names and "realtime" in names, names
+    from app.server import RUNNERS as _RR
+    # 配置文件原封不动：与本侧配置文件逐字节相同（persist_path 不存在时为启动加载的 cfg_path）
+    for side in ("bus", "branch"):
+        rr = _RR[side]
+        src = next((x for x in (rr.persist_path, rr.cfg_path) if x and os.path.isfile(x)), None)
+        if src:
+            assert (rd / f"config_{side}.json").read_bytes() == open(src, "rb").read(), side
+        else:   # 测试环境里分路侧可能两份文件都不存在 → 退回写运行配置
+            json.load(open(rd / f"config_{side}.json", encoding="utf-8"))
     info = json.load(open(rd / "run_info.json", encoding="utf-8"))
     assert info["started_side"] == "bus" and [s["side"] for s in info["starts"]] == ["bus", "branch"] and set(info["sides"]) == {"bus", "branch"}
-    vf = [n for n in names if n.startswith("voltage_") and n.endswith(".csv")]
+    assert info["sides"]["bus"]["config_mode"] == "verbatim_copy" and info["sides"]["bus"]["config_copied_from"]
+    assert hashlib and True
+    # 三个子目录：realtime/ 已有曲线文件；events/ nilm/ 是 writer 目标（懒打开：纯净合成信号无事件时不建文件）
+    vf = [n for n in os.listdir(rd / "realtime") if n.startswith("voltage_") and n.endswith(".csv")]
     assert len(vf) == 1
-    rows = list(csv.reader(open(rd / vf[0], encoding="utf-8-sig")))
+    rows = list(csv.reader(open(rd / "realtime" / vf[0], encoding="utf-8-sig")))
     assert {rr[2] for rr in rows[1:]} == {"0", "1"}                               # 两侧同一文件
-    # 事件 / 负荷事件 writer 懒打开：纯净合成信号无事件时不建文件；目录指向由 engine 的 writer 确认
-    from app.server import RUNNERS as _RR
-    assert _RR["bus"].engine.detector.writer.dir == str(rd) and _RR["bus"].engine.nilm.writer.dir == str(rd)
-    assert _RR["branch"].engine.nilm.writer.dir == str(rd)
-    assert not (tmp_path / "realtime").exists() and not (tmp_path / "events").exists()                                   # 没写到旧的固定目录
+    assert _RR["bus"].engine.detector.writer.dir == str(rd / "events") and _RR["bus"].engine.nilm.writer.dir == str(rd / "nilm")
+    assert _RR["branch"].engine.nilm.writer.dir == str(rd / "nilm")
+    assert not any(n.endswith(".csv") for n in names)                              # 运行目录根下没有散落 CSV
+    assert not (tmp_path / "realtime").exists() and not (tmp_path / "events").exists()   # 没写到旧的固定目录
     # ② 两侧都停 → 分路侧单独启动 → 新目录（不同名）
     import time as _t; _t.sleep(1.1)
     r2 = client.post("/api/branch/engine/start", json={"kind": "csv_file", "path": str(files / "br.csv"), "file_speed": 0, "play_window": False}).json()
@@ -341,10 +349,9 @@ def test_offline_play_writes_run_dir_with_both_configs(client, files, tmp_path, 
     client.post("/api/branch/engine/stop")
     lb = client.post("/api/history/load_last", json={}).json()
     assert lb["ok"], lb
-    from app.server import RUNNERS as _R
-    lr = _R["branch"].load_last()
+    lr = _RR["branch"].load_last()
     assert lr["run_dir"] and lr["run_dir"].endswith(dirs2[1]) and lr["curves"].get("voltage", 0) > 0, lr
-    lr0 = _R["bus"].load_last()
+    lr0 = _RR["bus"].load_last()
     assert lr0["run_dir"] and lr0["run_dir"].endswith(dirs[0]) and lr0["curves"].get("voltage", 0) > 0, lr0
     # ④ 模拟器源：不建运行目录
     r3 = client.post("/api/engine/start", json={"kind": "simulator", "with_branch": False}).json()

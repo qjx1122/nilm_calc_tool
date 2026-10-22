@@ -54,7 +54,7 @@ def _isolate_realtime_dir(tmp_path, monkeypatch):
     monkeypatch.setenv("ELEC_TOOL_EVENTS_DIR", str(tmp_path / "events"))      # 第 9 轮：事件 CSV 同样隔离
     monkeypatch.setenv("ELEC_TOOL_NILM_DIR", str(tmp_path / "nilm"))          # 第 12 轮：负荷事件 CSV 隔离
     monkeypatch.setenv("ELEC_TOOL_LAST_RESULT_FILE", str(tmp_path / "last_result.json"))   # v0.20：最新结果快照隔离
-    # v0.59：离线文件播放默认写 output/<yyyyMMddHHmmss>/ 运行目录；测试默认关闭（沿用上面三个固定目录），
+    # v0.59：离线文件播放默认写 output/<yyyyMMdd_HHmmss>/ 运行目录；测试默认关闭（沿用上面三个固定目录），
     # 专门验证运行目录的用例自行 setenv ELEC_TOOL_RUN_DIRS=1 + ELEC_TOOL_OUTPUT_DIR=<tmp>
     monkeypatch.setenv("ELEC_TOOL_RUN_DIRS", "0")
     monkeypatch.setenv("ELEC_TOOL_OUTPUT_DIR", str(tmp_path / "output"))

@@ -17,6 +17,7 @@ import contextvars
 import json
 import logging
 import os
+import shutil
 import re
 import threading
 import platform
@@ -60,7 +61,7 @@ SIDES = ("bus", "branch")
 SIDE_LABELS = {"bus": "总线侧", "branch": "分路侧设备"}
 SIDE_SOURCE_ID = {"bus": 0, "branch": 1}      # v0.17：落盘/导出 CSV 的 source_id 列
 
-# ---------- v0.59：离线文件播放 → 每次运行一个输出目录 output/<yyyyMMddHHmmss>/ ----------
+# ---------- v0.59：离线文件播放 → 每次运行一个输出目录 output/<yyyyMMdd_HHmmss>/ ----------
 # 实时曲线 / 事件 / 负荷事件 CSV 与两侧当前配置（config_bus.json / config_branch.json）都写在里面；
 # 总线侧与分路侧共用同一目录：一侧启动时若另一侧正在运行（含联动启动）就沿用它的目录，否则新建。
 # 环境变量 ELEC_TOOL_RUN_DIRS=0 关闭（回到 output/realtime 等固定目录；测试隔离用），ELEC_TOOL_OUTPUT_DIR 改根目录。
@@ -77,7 +78,7 @@ def _output_base() -> str:
 
 
 def _alloc_run_dir(side: str) -> str:
-    """本侧启动离线文件播放时的输出目录：另一侧正在运行 → 沿用其目录；否则新建 output/<本地时间 yyyyMMddHHmmss>/。"""
+    """本侧启动离线文件播放时的输出目录：另一侧正在运行 → 沿用其目录；否则新建 output/<本地时间 yyyyMMdd_HHmmss>/。"""
     with _RUN_DIR_LOCK:
         other = RUNNERS.get("branch" if side == "bus" else "bus") if "RUNNERS" in globals() else None
         if other is not None:
@@ -87,7 +88,7 @@ def _alloc_run_dir(side: str) -> str:
             if alive and eng is not None and getattr(eng, "run_dir", None):
                 return eng.run_dir
         base = _output_base()
-        stamp = time.strftime("%Y%m%d%H%M%S", time.localtime())
+        stamp = time.strftime("%Y%m%d_%H%M%S", time.localtime())   # v0.60：yyyyMMdd_HHmmss
         path = os.path.join(base, stamp)
         k = 1
         while os.path.exists(path):                      # 同一秒内再次启动：加序号
@@ -97,8 +98,10 @@ def _alloc_run_dir(side: str) -> str:
 
 
 def _dump_run_configs(run_dir: str, started_side: str) -> List[str]:
-    """把两侧**当前生效**的配置写进运行目录：config_bus.json / config_branch.json（覆盖写，始终是最新一次启动时的配置），
-    另写 run_info.json（启动时刻、启动侧、两侧数据源）。失败只记日志。"""
+    """把两侧**当前的配置文件原封不动复制**进运行目录（v0.60）：config_bus.json / config_branch.json＝本侧持久化文件
+    （configs/runtime.json / branch_runtime.json；尚不存在时取启动加载的文件，如 default.json / branch.json）的逐字节副本，
+    不重新序列化、不补默认键；两个文件都不存在时才退回写运行配置的 to_dict() 并在 run_info 标明。
+    覆盖写，始终是最新一次启动时的文件；另写 run_info.json（启动时刻、启动侧、两侧数据源、配置来源文件）。失败只记日志。"""
     written: List[str] = []
     info_path = os.path.join(run_dir, "run_info.json")
     info: Dict[str, Any] = {}
@@ -119,11 +122,18 @@ def _dump_run_configs(run_dir: str, started_side: str) -> List[str]:
         try:
             c = r.cfg
             p = os.path.join(run_dir, f"config_{s}.json")
-            with open(p, "w", encoding="utf-8") as fh:
-                json.dump(c.to_dict(), fh, ensure_ascii=False, indent=2)
+            src_file = next((x for x in (r.persist_path, r.cfg_path) if x and os.path.isfile(x)), None)
+            if src_file:
+                shutil.copyfile(src_file, p)                 # 原封不动（字节级复制）
+                how = "verbatim_copy"
+            else:
+                with open(p, "w", encoding="utf-8") as fh:
+                    json.dump(c.to_dict(), fh, ensure_ascii=False, indent=2)
+                how = "runtime_dump"
             written.append(p)
             info["sides"][s] = {"source_kind": c.source.kind, "source_path": c.source.path, "source_id": SIDE_SOURCE_ID[s],
-                                "config_file": os.path.basename(p)}
+                                "config_file": os.path.basename(p), "config_copied_from": _display_path(src_file) if src_file else None,
+                                "config_mode": how}
         except Exception as exc:
             log.warning("运行目录写配置失败（%s）：%s", s, exc)
     try:
@@ -350,8 +360,9 @@ class EngineRunner:
             run_id = int(ent["run_id"])                    # v0.32：只取上次那一次运行写的行（旧文件无 run_id 列仍按时间窗）
             out["run_id"] = run_id
         if ent and ent.get("run_dir") and os.path.isdir(str(ent["run_dir"])):
-            rt_dir = ev_dir = nl_dir = str(ent["run_dir"])   # v0.59：上次是离线文件播放 → 曲线/事件/负荷事件都在运行目录里
-            out["run_dir"] = _display_path(rt_dir)
+            rdir = str(ent["run_dir"])                        # v0.59：上次是离线文件播放 → 都在运行目录里；v0.60：三个子目录
+            rt_dir, ev_dir, nl_dir = os.path.join(rdir, "realtime"), os.path.join(rdir, "events"), os.path.join(rdir, "nilm")
+            out["run_dir"] = _display_path(rdir)
         if result and ent:
             with self.lock:
                 self.latest_merged = ent["result"]
