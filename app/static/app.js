@@ -2047,7 +2047,7 @@ async function startBranchAlone() {
     const r = await fetch('/api/branch/engine/start', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
     const d = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error(d.error || 'HTTP ' + r.status);
-    toast(`已单独启动分路侧数据源：${d.config.source.kind}` + (BR.dirty ? '（提示：量纲/列映射的修改请点「保存分路侧配置」）' : ''), 'ok');
+    toast(`已单独启动分路侧数据源：${d.config.source.kind}` + (d.run_dir ? `；本次输出目录 ${d.run_dir}` : '') + (BR.dirty ? '（提示：量纲/列映射的修改请点「保存分路侧配置」）' : ''), 'ok');
     BR.loaded = false;
     S.state = await api('/api/state'); renderTop(); render(); refreshBranchState(true);
   } catch (e) { toast('分路侧启动失败：' + e.message, 'err'); }
@@ -2662,7 +2662,7 @@ async function startEngine(payloadExtra = {}) {
     let brMsg = '';
     if (r.branch && !r.branch.skipped) brMsg = r.branch.ok ? `；分路侧已同时启动（${r.branch.source_kind}${r.branch.synced_pace ? '，倍速随总线侧' : ''}）` : `；⚠ 分路侧启动失败：${r.branch.error}`;
     if (r.common_window && r.common_window.enabled === false && r.common_window.reason) brMsg += `；ℹ ${r.common_window.reason}`;
-    toast(`已启动${sideLabel()}数据源：${r.config.source.kind}` + brMsg +
+    toast(`已启动${sideLabel()}数据源：${r.config.source.kind}` + brMsg + (r.run_dir ? `；本次输出目录 ${r.run_dir}（实时数据 / 事件 / 两侧配置）` : '') +
       (S.cfgDirty ? '（提示：口径/变比的修改请点「保存配置（热更新）」）' : ''), r.branch && r.branch.error ? 'err' : 'ok');
     S.cfgDirty = false;
     S.state = await api('/api/state');

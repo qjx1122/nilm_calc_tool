@@ -762,7 +762,8 @@
       <div class="panel">
         <h3>实时落盘（计算出的曲线点即时追加到 CSV）</h3>
         <p class="hint">开启后每算出一个曲线点就追加写到 <code>output/realtime/&lt;曲线&gt;_&lt;写入日期&gt;.csv</code>（按写入时刻的本地日期分文件、跨午夜自动换文件，两侧同一文件只用 source_id 区分；
-          每次写入后 flush，进程被杀最多丢最后一行）。受上面「保存曲线」勾选过滤：未勾选的曲线不落盘。</p>
+          每次写入后 flush，进程被杀最多丢最后一行）。受上面「保存曲线」勾选过滤：未勾选的曲线不落盘。
+          <b>离线文件播放</b>时改写到每次启动新建的运行目录 <code>output/&lt;yyyyMMddHHmmss&gt;/</code>（启动时刻本地时间；两侧共用；同目录还有 events / nilm_events CSV 与两侧当前配置 <code>config_bus.json</code>、<code>config_branch.json</code>）。</p>
         <div class="row">
           <label class="chk"><input id="rt-enable" type="checkbox"> 启用实时落盘</label>
           <label>目录 <input id="rt-dir" placeholder="output/realtime"></label>

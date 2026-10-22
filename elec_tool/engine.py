@@ -70,8 +70,12 @@ class EngineState:
 class LiveEngine:
     def __init__(self, cfg: AppConfig, source: Optional[DataSource] = None,
                  on_result: Optional[Callable[[MetricsResult], None]] = None,
-                 tz_offset_h: Optional[float] = None, output_root: Optional[str] = None):
+                 tz_offset_h: Optional[float] = None, output_root: Optional[str] = None,
+                 run_dir: Optional[str] = None):
+        """``run_dir``（v0.59）：本次运行的输出目录（离线文件播放 → output/<yyyyMMddHHmmss>/）；给定时实时曲线 /
+        事件 / 负荷事件 CSV 全部写到该目录（优先于配置与环境变量），两侧传同一目录即写同一批文件。"""
         self.cfg = cfg.validate()
+        self.run_dir = run_dir
         # v0.32：本次运行标识（墙钟毫秒）。写入实时曲线 / 事件 / 负荷事件 CSV 的 run_id 列与 last_result.json，
         # 重启加载时只取「上次那一次运行」的行——同一天、数据时标重叠的多次播放（同一样例反复播）不再互相混入。
         self.run_id = int(time.time() * 1000)
@@ -87,13 +91,13 @@ class LiveEngine:
         self._last_t: Optional[float] = None
         self._ready: Dict[str, bool] = {k: False for k in QUANTITY_KEYS}
         # 曲线点实时落盘（output.realtime_save）：与趋势历史共用同一提取规则
-        self.writer = RealtimeCurveWriter(self.cfg, root=output_root, run_id=self.run_id)
+        self.writer = RealtimeCurveWriter(self.cfg, root=output_root, run_id=self.run_id, dir_override=run_dir)
         self._output_root = output_root
         # 事件检测（第 9 轮）：每次 compute 后评估；on_event 供 Web 层推送
-        self.detector = EventDetector(self.cfg, root=output_root, run_id=self.run_id)
+        self.detector = EventDetector(self.cfg, root=output_root, run_id=self.run_id, run_dir=run_dir)
         self.on_event: Optional[Callable[[List[Dict[str, Any]]], None]] = None
         # 负荷辨识事件检测（第 12 轮）：逐块摄入时按周波评估；on_nilm_event 供 Web 层推送
-        self.nilm = NilmDetector(self.cfg, root=output_root, run_id=self.run_id)
+        self.nilm = NilmDetector(self.cfg, root=output_root, run_id=self.run_id, run_dir=run_dir)
         self.on_nilm_event: Optional[Callable[[List[Dict[str, Any]]], None]] = None
 
     # ---------------- 生命周期 ----------------
@@ -139,7 +143,7 @@ class LiveEngine:
             self.writer.close()
         except Exception:
             pass
-        self.writer = RealtimeCurveWriter(new_cfg, root=self._output_root, run_id=self.run_id)
+        self.writer = RealtimeCurveWriter(new_cfg, root=self._output_root, run_id=self.run_id, dir_override=self.run_dir)
         self.detector.update_config(new_cfg)
         self.nilm.update_config(new_cfg)
         fs = new_cfg.sampling.fs

@@ -60,6 +60,80 @@ SIDES = ("bus", "branch")
 SIDE_LABELS = {"bus": "总线侧", "branch": "分路侧设备"}
 SIDE_SOURCE_ID = {"bus": 0, "branch": 1}      # v0.17：落盘/导出 CSV 的 source_id 列
 
+# ---------- v0.59：离线文件播放 → 每次运行一个输出目录 output/<yyyyMMddHHmmss>/ ----------
+# 实时曲线 / 事件 / 负荷事件 CSV 与两侧当前配置（config_bus.json / config_branch.json）都写在里面；
+# 总线侧与分路侧共用同一目录：一侧启动时若另一侧正在运行（含联动启动）就沿用它的目录，否则新建。
+# 环境变量 ELEC_TOOL_RUN_DIRS=0 关闭（回到 output/realtime 等固定目录；测试隔离用），ELEC_TOOL_OUTPUT_DIR 改根目录。
+_RUN_DIR_LOCK = threading.Lock()
+
+
+def _run_dirs_enabled() -> bool:
+    return os.environ.get("ELEC_TOOL_RUN_DIRS", "1").strip() not in ("0", "false", "off", "")
+
+
+def _output_base() -> str:
+    d = os.environ.get("ELEC_TOOL_OUTPUT_DIR", "").strip() or os.path.join(ROOT, "output")
+    return d if os.path.isabs(d) else os.path.join(ROOT, d)
+
+
+def _alloc_run_dir(side: str) -> str:
+    """本侧启动离线文件播放时的输出目录：另一侧正在运行 → 沿用其目录；否则新建 output/<本地时间 yyyyMMddHHmmss>/。"""
+    with _RUN_DIR_LOCK:
+        other = RUNNERS.get("branch" if side == "bus" else "bus") if "RUNNERS" in globals() else None
+        if other is not None:
+            with other.lock:
+                eng = other.engine
+                alive = bool(other.thread and other.thread.is_alive() and not other.stop_event.is_set() and not other._thread_done)
+            if alive and eng is not None and getattr(eng, "run_dir", None):
+                return eng.run_dir
+        base = _output_base()
+        stamp = time.strftime("%Y%m%d%H%M%S", time.localtime())
+        path = os.path.join(base, stamp)
+        k = 1
+        while os.path.exists(path):                      # 同一秒内再次启动：加序号
+            path = os.path.join(base, f"{stamp}_{k}"); k += 1
+        os.makedirs(path, exist_ok=True)
+        return path
+
+
+def _dump_run_configs(run_dir: str, started_side: str) -> List[str]:
+    """把两侧**当前生效**的配置写进运行目录：config_bus.json / config_branch.json（覆盖写，始终是最新一次启动时的配置），
+    另写 run_info.json（启动时刻、启动侧、两侧数据源）。失败只记日志。"""
+    written: List[str] = []
+    info_path = os.path.join(run_dir, "run_info.json")
+    info: Dict[str, Any] = {}
+    if os.path.isfile(info_path):                         # 另一侧已建目录：保留首次信息，只追加本次启动记录
+        try:
+            with open(info_path, "r", encoding="utf-8") as fh:
+                info = json.load(fh) or {}
+        except Exception:
+            info = {}
+    info.setdefault("created_local", fmt_local(time.time()))
+    info.setdefault("started_side", started_side)
+    info.setdefault("starts", []).append({"side": started_side, "at_local": fmt_local(time.time())})
+    info["sides"] = {}
+    for s in ("bus", "branch"):
+        r = RUNNERS.get(s) if "RUNNERS" in globals() else None
+        if r is None:
+            continue
+        try:
+            c = r.cfg
+            p = os.path.join(run_dir, f"config_{s}.json")
+            with open(p, "w", encoding="utf-8") as fh:
+                json.dump(c.to_dict(), fh, ensure_ascii=False, indent=2)
+            written.append(p)
+            info["sides"][s] = {"source_kind": c.source.kind, "source_path": c.source.path, "source_id": SIDE_SOURCE_ID[s],
+                                "config_file": os.path.basename(p)}
+        except Exception as exc:
+            log.warning("运行目录写配置失败（%s）：%s", s, exc)
+    try:
+        with open(info_path, "w", encoding="utf-8") as fh:
+            json.dump(info, fh, ensure_ascii=False, indent=2)
+    except Exception as exc:
+        log.warning("运行目录写 run_info.json 失败：%s", exc)
+    return written
+
+
 
 def _resolve_cfg_paths() -> Tuple[str, str]:
     """返回 (加载路径, 持久化路径)。
@@ -197,9 +271,10 @@ class EngineRunner:
             src = getattr(self.engine.cfg.source, "path", "") if self.engine is not None else ""
             kind = getattr(self.engine.cfg.source, "kind", "") if self.engine is not None else ""
             run_id = int(getattr(self.engine, "run_id", 0) or 0) if self.engine is not None else 0
+            run_dir = getattr(self.engine, "run_dir", None) if self.engine is not None else None
         sid = str(SIDE_SOURCE_ID[self.side])
         entry = {"side": self.side, "source_id": int(sid), "saved_at": time.time(), "saved_at_local": fmt_local(time.time()),
-                 "source_kind": kind, "source_path": src, "t_ref": d.get("t_ref"), "run_id": run_id, "result": d}
+                 "source_kind": kind, "source_path": src, "t_ref": d.get("t_ref"), "run_id": run_id, "run_dir": run_dir, "result": d}
         path = self._last_result_path()
         try:
             with SHARED_FILE_LOCK:
@@ -274,6 +349,9 @@ class EngineRunner:
         if ent and ent.get("run_id"):
             run_id = int(ent["run_id"])                    # v0.32：只取上次那一次运行写的行（旧文件无 run_id 列仍按时间窗）
             out["run_id"] = run_id
+        if ent and ent.get("run_dir") and os.path.isdir(str(ent["run_dir"])):
+            rt_dir = ev_dir = nl_dir = str(ent["run_dir"])   # v0.59：上次是离线文件播放 → 曲线/事件/负荷事件都在运行目录里
+            out["run_dir"] = _display_path(rt_dir)
         if result and ent:
             with self.lock:
                 self.latest_merged = ent["result"]
@@ -382,7 +460,8 @@ class EngineRunner:
             # 一次运行＝一个数据集：重启引擎必须清空历史，否则导出/趋势会把
             # 不同数据源、不同窗长的结果混在一张表里（误导性极强）。
             self.store.clear()
-            self.engine = LiveEngine(cfg, output_root=ROOT)
+            run_dir = _alloc_run_dir(self.side) if (cfg.source.kind == "csv_file" and _run_dirs_enabled()) else None
+            self.engine = LiveEngine(cfg, output_root=ROOT, run_dir=run_dir)
             # 节拍钟：联动启动时两侧共用一只（严格同步）；单侧启动也用一只（绝对限速，误差不累积）
             src = self.engine.source
             if hasattr(src, "_pace"):
@@ -397,7 +476,9 @@ class EngineRunner:
                                            args=(duration_s, self.engine, self.stop_event, self.pause_event),
                                            daemon=True, name="elec-engine")
             self.thread.start()
-        return {"ok": True, "source_kind": cfg.source.kind}
+        if run_dir:
+            _dump_run_configs(run_dir, self.side)
+        return {"ok": True, "source_kind": cfg.source.kind, "run_dir": (_display_path(run_dir) if run_dir else None)}
 
     def _run(self, duration_s: Optional[float], engine: LiveEngine,
              stop_event: threading.Event, pause_event: Optional[threading.Event] = None) -> None:
@@ -584,6 +665,7 @@ class EngineRunner:
                 "finished": bool(st.get("finished")),
                 "error": self.error,
                 "loaded_last": self.loaded_last,
+                "run_dir": (_display_path(eng.run_dir) if eng is not None and getattr(eng, "run_dir", None) else None),
                 "engine": st,
                 "source": src,
                 "config": cfg.to_dict(),
@@ -1027,9 +1109,9 @@ def _start_branch_if_enabled(bus_cfg: AppConfig, pace_clock=None) -> Optional[Di
             _apply_window_to_source(cfg, cw["branch"], cw["play_start"], cw["play_end"], side="branch")
         else:
             play_user = _apply_play_window(cfg)          # 分路侧自己的指定时间段（未按公共时间段联动时）
-        br.start(cfg, pace_clock=clock, play_user=play_user)
+        sr = br.start(cfg, pace_clock=clock, play_user=play_user)
         br.error = None
-        return {"ok": True, "source_kind": cfg.source.kind, "path": cfg.source.path, "synced_pace": both_file}
+        return {"ok": True, "source_kind": cfg.source.kind, "path": cfg.source.path, "synced_pace": both_file, "run_dir": sr.get("run_dir")}
     except Exception as exc:
         msg = f"{type(exc).__name__}: {exc}"
         br.error = f"分路侧启动失败：{msg}"
@@ -1303,8 +1385,8 @@ async def engine_start(payload: Optional[Dict[str, Any]] = None) -> Any:
         if play_user is None:
             play_user = _apply_play_window(cfg)                # 本侧自己的指定时间段播放（v0.17）
         clock = PaceClock(cfg.source.file_speed) if cfg.source.kind == "csv_file" else None
-        RUNNER.start(cfg, duration_s=payload.get("duration_s"), pace_clock=clock, play_user=play_user)
-        out: Dict[str, Any] = {"ok": True, "side": current_side(), "config": RUNNER.cfg.to_dict()}
+        sr = RUNNER.start(cfg, duration_s=payload.get("duration_s"), pace_clock=clock, play_user=play_user)
+        out: Dict[str, Any] = {"ok": True, "side": current_side(), "config": RUNNER.cfg.to_dict(), "run_dir": sr.get("run_dir")}
         if COMMON_WINDOW.get("enabled"):
             out["common_window"] = {k: v for k, v in COMMON_WINDOW.items() if k not in ("bus", "branch")}
         elif cw_note:

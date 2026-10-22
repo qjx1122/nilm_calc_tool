@@ -81,6 +81,7 @@
 - 范围边界：~~本 session 不写业务代码~~ ❌**已失效**（该边界属上一任务；本任务即为写代码）；仍然遵守：不新建台账外散文件、不把数据/产物入库
 
 ## 已完成
+- **v0.59**：离线文件播放每次启动新建运行目录 `output/<yyyyMMddHHmmss>/`（两侧共用），实时曲线 / 事件 / 负荷事件 CSV 与 `config_bus.json` / `config_branch.json` / `run_info.json` 都写在里面；`run_dir` 进 start 响应 / state / last_result，`load_last` 读回。全量 354 passed / 1 skipped。
 - **v0.58**：实时曲线 / 事件 / 负荷事件 CSV 文件名改按墙钟本地日期（`timefmt.wall_day`），两侧不同数据日期也写同一文件；`load_curves` 去掉按文件名日期跳过。
 - **v0.57**：复查修复 `estimate_min_load`：改用"是否在动"掩码切稳态（斜坡/劈半阶跃/纹波都正确），新增 `candidate_from`。
 - **v0.56**：`longest_transient` 量最长暂态；>100 周波时 `suggest` 自动放大 `steady_state.max_transient_cycles` / `min_steady_cycles` 并给 `window_cycles`；CLI/界面显示暂态行；`gen_nilm_sample.py --soft-start`。

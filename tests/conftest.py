@@ -28,6 +28,25 @@ HEADER_CN = ["时间戳", "A相电压", "A相电流", "B相电压", "B相电流"
 HEADER_EN = ["timestamp", "Ua", "Ia", "Ub", "Ib", "Uc", "Ic"]
 
 
+@pytest.fixture(autouse=True, scope="session")
+def _isolate_session_env(tmp_path_factory):
+    """v0.59：会话级兜底隔离。各测试文件里 scope="module" 的 TestClient fixture 先于函数级 autouse fixture 创建，
+    其 lifespan 里的 _autoload_last 会读到仓库真实 output/last_result.json（若开发者刚实机跑过服务就会把真实事件带进测试）。
+    这里在会话开始就把这些环境变量指到临时目录；函数级 fixture 再逐用例覆盖。"""
+    d = tmp_path_factory.mktemp("session_env")
+    saved = {k: os.environ.get(k) for k in ("ELEC_TOOL_REALTIME_DIR", "ELEC_TOOL_EVENTS_DIR", "ELEC_TOOL_NILM_DIR",
+                                             "ELEC_TOOL_LAST_RESULT_FILE", "ELEC_TOOL_RUN_DIRS", "ELEC_TOOL_OUTPUT_DIR")}
+    os.environ["ELEC_TOOL_REALTIME_DIR"] = str(d / "realtime"); os.environ["ELEC_TOOL_EVENTS_DIR"] = str(d / "events")
+    os.environ["ELEC_TOOL_NILM_DIR"] = str(d / "nilm"); os.environ["ELEC_TOOL_LAST_RESULT_FILE"] = str(d / "last_result.json")
+    os.environ["ELEC_TOOL_RUN_DIRS"] = "0"; os.environ["ELEC_TOOL_OUTPUT_DIR"] = str(d / "output")
+    yield
+    for k, v in saved.items():
+        if v is None:
+            os.environ.pop(k, None)
+        else:
+            os.environ[k] = v
+
+
 @pytest.fixture(autouse=True)
 def _isolate_realtime_dir(tmp_path, monkeypatch):
     """实时落盘（output.realtime_save 默认开）在测试里一律写到临时目录，不污染仓库 output/。"""
@@ -35,6 +54,10 @@ def _isolate_realtime_dir(tmp_path, monkeypatch):
     monkeypatch.setenv("ELEC_TOOL_EVENTS_DIR", str(tmp_path / "events"))      # 第 9 轮：事件 CSV 同样隔离
     monkeypatch.setenv("ELEC_TOOL_NILM_DIR", str(tmp_path / "nilm"))          # 第 12 轮：负荷事件 CSV 隔离
     monkeypatch.setenv("ELEC_TOOL_LAST_RESULT_FILE", str(tmp_path / "last_result.json"))   # v0.20：最新结果快照隔离
+    # v0.59：离线文件播放默认写 output/<yyyyMMddHHmmss>/ 运行目录；测试默认关闭（沿用上面三个固定目录），
+    # 专门验证运行目录的用例自行 setenv ELEC_TOOL_RUN_DIRS=1 + ELEC_TOOL_OUTPUT_DIR=<tmp>
+    monkeypatch.setenv("ELEC_TOOL_RUN_DIRS", "0")
+    monkeypatch.setenv("ELEC_TOOL_OUTPUT_DIR", str(tmp_path / "output"))
     yield
 
 

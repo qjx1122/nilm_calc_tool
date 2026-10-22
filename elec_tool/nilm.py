@@ -364,11 +364,11 @@ def _confirm_cycles(algo: str, prm: Dict[str, Any]) -> int:
 
 # ---------------------------------------------------------------- 落盘
 class NilmWriter:
-    def __init__(self, cfg: NilmConfig, root: Optional[str] = None, source_id: int = 0, run_id: int = 0):
+    def __init__(self, cfg: NilmConfig, root: Optional[str] = None, source_id: int = 0, run_id: int = 0, dir_override: Optional[str] = None):
         self.cfg = cfg
         self.source_id = int(source_id)
         self.run_id = int(run_id or 0)
-        d = os.environ.get("ELEC_TOOL_NILM_DIR") or cfg.nilm_dir
+        d = dir_override or os.environ.get("ELEC_TOOL_NILM_DIR") or cfg.nilm_dir      # v0.59：运行目录优先
         self.dir = d if os.path.isabs(d) else os.path.join(root or os.getcwd(), d)
         self._fh = None
         self._path: Optional[str] = None
@@ -428,13 +428,14 @@ class NilmWriter:
 class NilmDetector:
     """引擎每摄入一块数据调用 ``ingest(scaled_block)``；返回本次新产生的事件（dict 列表）。线程安全。"""
 
-    def __init__(self, cfg: AppConfig, root: Optional[str] = None, run_id: int = 0):
+    def __init__(self, cfg: AppConfig, root: Optional[str] = None, run_id: int = 0, run_dir: Optional[str] = None):
         self.cfg = cfg
         self.ncfg: NilmConfig = cfg.nilm
         self._root = root
         self.run_id = int(run_id or 0)
+        self.run_dir = run_dir
         self.feat = CycleFeatures(cfg.sampling.fs, cfg.sampling.f_nom)
-        self.writer = NilmWriter(self.ncfg, root=root, source_id=int(getattr(cfg.output, "source_id", 0) or 0), run_id=self.run_id)
+        self.writer = NilmWriter(self.ncfg, root=root, source_id=int(getattr(cfg.output, "source_id", 0) or 0), run_id=self.run_id, dir_override=run_dir)
         self._lock = threading.RLock()
         self._t = np.zeros(0)
         self._p = np.zeros((4, 0))
@@ -473,7 +474,7 @@ class NilmDetector:
                 self._t = np.zeros(0); self._p = np.zeros((4, 0)); self._q = np.zeros((4, 0)); self._i = np.zeros((4, 0))
                 self._g0 += 0
             self.writer.close()
-            self.writer = NilmWriter(self.ncfg, root=self._root, source_id=int(getattr(self.cfg.output, "source_id", 0) or 0), run_id=self.run_id)
+            self.writer = NilmWriter(self.ncfg, root=self._root, source_id=int(getattr(self.cfg.output, "source_id", 0) or 0), run_id=self.run_id, dir_override=self.run_dir)
 
     # ---- 主入口
     def ingest(self, block: SampleBlock) -> List[Dict[str, Any]]:

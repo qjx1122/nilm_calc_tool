@@ -34,13 +34,14 @@ class RealtimeCurveWriter:
     FIXED = ("t_epoch_s", "time_local", "source_id")      # v0.17：第 3 列数据来源号 0＝总线 / 1＝分路
     FIXED_LEGACY = ("t_epoch_s", "time_local")           # v0.17 之前的文件：追加时保持原列结构
 
-    def __init__(self, cfg: AppConfig, root: Optional[str] = None, run_id: int = 0):
+    def __init__(self, cfg: AppConfig, root: Optional[str] = None, run_id: int = 0, dir_override: Optional[str] = None):
         self.cfg = cfg
         self.run_id = int(run_id or 0)          # v0.32：本次运行标识，作为末列 run_id 写入
         self.enabled = bool(cfg.output.realtime_save)
         self.source_id = int(getattr(cfg.output, "source_id", 0) or 0)
         # 环境变量 ELEC_TOOL_REALTIME_DIR 可整体改写目录（测试隔离 / 现场把落盘指到数据盘）
-        d = os.environ.get("ELEC_TOOL_REALTIME_DIR") or cfg.output.realtime_dir or "output/realtime"
+        # v0.59：dir_override＝本次运行目录（离线文件播放 → output/<yyyyMMddHHmmss>/），优先于环境变量与配置
+        d = dir_override or os.environ.get("ELEC_TOOL_REALTIME_DIR") or cfg.output.realtime_dir or "output/realtime"
         if not os.path.isabs(d) and root:
             d = os.path.join(root, d)
         self.dir = d

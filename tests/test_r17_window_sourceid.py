@@ -287,3 +287,68 @@ def test_both_sides_different_data_dates_share_one_file_named_by_wall_clock(clie
     assert len(got["records"]["voltage"]) == len(set(by["1"])) > 0        # 加载器按时间去重
     client.post("/api/engine/stop"); client.post("/api/branch/engine/stop")
     client.put("/api/config", json={"branch": {"enabled": False}, "output": {"realtime_save": False}})
+
+
+# ---------- v0.59：离线文件播放 → output/<yyyyMMddHHmmss>/ 运行目录 + 两侧配置 ----------
+def test_offline_play_writes_run_dir_with_both_configs(client, files, tmp_path, monkeypatch):
+    """① 离线文件启动（总线 + 联动分路）→ 同一个 output/<本地时间 14 位>/ 目录：曲线 / events / nilm_events CSV 两侧共存，
+    config_bus.json / config_branch.json / run_info.json；② 两侧都停后分路侧单独启动 → 新目录；③ 加载上次数据从运行目录读回；
+    ④ 模拟器源不建运行目录。"""
+    import os, re, json
+    out_base = tmp_path / "out59"
+    monkeypatch.setenv("ELEC_TOOL_RUN_DIRS", "1")
+    monkeypatch.setenv("ELEC_TOOL_OUTPUT_DIR", str(out_base))
+    client.post("/api/engine/stop"); client.post("/api/branch/engine/stop")
+    client.put("/api/config", json={"branch": {"enabled": True, "common_window": False},
+                                    "output": {"realtime_save": True, "curve_save": {"voltage": True, "power": True}}})
+    client.put("/api/branch/config", json={"source": {"kind": "csv_file", "path": str(files / "br.csv"), "file_speed": 0, "custom_time": False, "play_window": False},
+                                           "output": {"realtime_save": True, "curve_save": {"voltage": True}}})
+    r = client.post("/api/engine/start", json={"kind": "csv_file", "path": str(files / "bus.csv"), "file_speed": 0, "play_window": False}).json()
+    assert r["ok"] and r["branch"]["ok"], r
+    assert r["run_dir"] and r["branch"]["run_dir"] == r["run_dir"], r          # 两侧同一目录
+    st = client.get("/api/state").json(); assert st["run_dir"] == r["run_dir"]
+    _wait_done(client); _wait_done(client, "/api/branch/state")
+    dirs = sorted(p.name for p in out_base.iterdir() if p.is_dir())
+    assert len(dirs) == 1 and re.fullmatch(r"\d{14}", dirs[0]), dirs                 # yyyyMMddHHmmss
+    rd = out_base / dirs[0]
+    names = sorted(p.name for p in rd.iterdir())
+    assert "config_bus.json" in names and "config_branch.json" in names and "run_info.json" in names, names
+    cb = json.load(open(rd / "config_bus.json", encoding="utf-8")); cbr = json.load(open(rd / "config_branch.json", encoding="utf-8"))
+    assert cb["output"]["source_id"] == 0 and cb["source"]["path"].endswith("bus.csv")
+    assert cbr["output"]["source_id"] == 1 and cbr["source"]["path"].endswith("br.csv")
+    info = json.load(open(rd / "run_info.json", encoding="utf-8"))
+    assert info["started_side"] == "bus" and [s["side"] for s in info["starts"]] == ["bus", "branch"] and set(info["sides"]) == {"bus", "branch"}
+    vf = [n for n in names if n.startswith("voltage_") and n.endswith(".csv")]
+    assert len(vf) == 1
+    rows = list(csv.reader(open(rd / vf[0], encoding="utf-8-sig")))
+    assert {rr[2] for rr in rows[1:]} == {"0", "1"}                               # 两侧同一文件
+    # 事件 / 负荷事件 writer 懒打开：纯净合成信号无事件时不建文件；目录指向由 engine 的 writer 确认
+    from app.server import RUNNERS as _RR
+    assert _RR["bus"].engine.detector.writer.dir == str(rd) and _RR["bus"].engine.nilm.writer.dir == str(rd)
+    assert _RR["branch"].engine.nilm.writer.dir == str(rd)
+    assert not (tmp_path / "realtime").exists() and not (tmp_path / "events").exists()                                   # 没写到旧的固定目录
+    # ② 两侧都停 → 分路侧单独启动 → 新目录（不同名）
+    import time as _t; _t.sleep(1.1)
+    r2 = client.post("/api/branch/engine/start", json={"kind": "csv_file", "path": str(files / "br.csv"), "file_speed": 0, "play_window": False}).json()
+    assert r2["ok"] and r2["run_dir"] and r2["run_dir"] != r["run_dir"], r2
+    _wait_done(client, "/api/branch/state")
+    dirs2 = sorted(p.name for p in out_base.iterdir() if p.is_dir())
+    assert len(dirs2) == 2
+    rd2 = out_base / dirs2[1]
+    assert (rd2 / "config_bus.json").exists() and (rd2 / "config_branch.json").exists()
+    assert json.load(open(rd2 / "run_info.json", encoding="utf-8"))["started_side"] == "branch"
+    # ③ 加载上次数据：分路侧从第 2 个运行目录读回；总线侧从第 1 个
+    client.post("/api/branch/engine/stop")
+    lb = client.post("/api/history/load_last", json={}).json()
+    assert lb["ok"], lb
+    from app.server import RUNNERS as _R
+    lr = _R["branch"].load_last()
+    assert lr["run_dir"] and lr["run_dir"].endswith(dirs2[1]) and lr["curves"].get("voltage", 0) > 0, lr
+    lr0 = _R["bus"].load_last()
+    assert lr0["run_dir"] and lr0["run_dir"].endswith(dirs[0]) and lr0["curves"].get("voltage", 0) > 0, lr0
+    # ④ 模拟器源：不建运行目录
+    r3 = client.post("/api/engine/start", json={"kind": "simulator", "with_branch": False}).json()
+    assert r3["ok"] and r3["run_dir"] is None, r3
+    client.post("/api/engine/stop")
+    assert len([p for p in out_base.iterdir() if p.is_dir()]) == 2
+    client.put("/api/config", json={"branch": {"enabled": False}, "output": {"realtime_save": False}})

@@ -112,12 +112,12 @@ def _rotate_if_header_differs(path: str, fields) -> bool:
 class EventWriter:
     """events_<数据日期>.csv 追加写（每行 flush）。"""
 
-    def __init__(self, cfg: EventConfig, root: Optional[str] = None, source_id: int = 0, run_id: int = 0):
+    def __init__(self, cfg: EventConfig, root: Optional[str] = None, source_id: int = 0, run_id: int = 0, dir_override: Optional[str] = None):
         self.cfg = cfg
         self.source_id = int(source_id)
         self.run_id = int(run_id or 0)
         env_dir = os.environ.get("ELEC_TOOL_EVENTS_DIR")
-        d = env_dir or cfg.events_dir
+        d = dir_override or env_dir or cfg.events_dir          # v0.59：运行目录优先
         self.dir = d if os.path.isabs(d) else os.path.join(root or os.getcwd(), d)
         self._fh = None
         self._path: Optional[str] = None
@@ -177,7 +177,7 @@ class EventWriter:
 class EventDetector:
     """把 MetricsResult 流转换为事件流。线程安全（引擎线程 process / Web 线程 list）。"""
 
-    def __init__(self, cfg: AppConfig, root: Optional[str] = None, run_id: int = 0):
+    def __init__(self, cfg: AppConfig, root: Optional[str] = None, run_id: int = 0, run_dir: Optional[str] = None):
         self.cfg = cfg
         self.ecfg: EventConfig = cfg.events
         self._lock = threading.Lock()
@@ -188,7 +188,8 @@ class EventDetector:
         self._p_hist: Deque[Tuple[float, float]] = deque(maxlen=4096)
         self._root_dir = root
         self.run_id = int(run_id or 0)
-        self.writer = EventWriter(self.ecfg, root=root, source_id=int(getattr(cfg.output, "source_id", 0) or 0), run_id=self.run_id)
+        self.run_dir = run_dir
+        self.writer = EventWriter(self.ecfg, root=root, source_id=int(getattr(cfg.output, "source_id", 0) or 0), run_id=self.run_id, dir_override=run_dir)
         self.counts: Dict[str, int] = {k: 0 for k in EVENT_TYPES}
         self.last_eval: Dict[str, Any] = {}
         self.osc_info: Dict[str, Any] = {}
@@ -199,7 +200,7 @@ class EventDetector:
             self.cfg = cfg
             self.ecfg = cfg.events
             self.writer.close()
-            self.writer = EventWriter(self.ecfg, root=self._root_dir, source_id=int(getattr(self.cfg.output, "source_id", 0) or 0), run_id=self.run_id)
+            self.writer = EventWriter(self.ecfg, root=self._root_dir, source_id=int(getattr(self.cfg.output, "source_id", 0) or 0), run_id=self.run_id, dir_override=self.run_dir)
             if self._log.maxlen != int(self.ecfg.max_log):
                 self._log = deque(self._log, maxlen=int(self.ecfg.max_log))
 

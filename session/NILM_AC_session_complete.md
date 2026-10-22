@@ -348,3 +348,5 @@
 
 - **[2026-10-21] 第 76 轮（检查两侧实时数据是否写同一 CSV）**：代码走读 + 实机（联动启动、分路单独启动）确认 8 个曲线文件 / events / nilm_events 两侧共用、一行表头、source_id 0/1 共存；未改代码。
 - **[2026-10-21] v0.58**（用户：两侧写同一 CSV 不分开保存，文件名时间用本地时间而非数据时间）。根因：文件名按数据日期 → 两侧播放不同日期文件时拆成两个文件。三个 writer 改 `wall_day()`；`load_curves` 删除按文件名日期跳过（否则今天写的旧数据被整体跳过）；测试 4 处期望改墙钟 + 新增两侧不同数据日期用例。
+
+- **[2026-10-22] v0.59**（用户：离线文件播放输出写 `output/{yyyyMMddhhmmss}/`，并在目录内输出两侧配置文件）。方案：仅 `csv_file` 源；`_alloc_run_dir`（对侧在跑→沿用，否则新建本地时间目录，同秒加 `_k`）；三 writer 加 `dir_override`，`LiveEngine(run_dir=)`；`_dump_run_configs` 写 config_bus/branch.json + run_info.json（保留首个启动侧，追加 starts）；start 响应 / state / last_result 带 `run_dir`，load_last 读回；界面启动提示显示目录。实机（端口 8013，`ELEC_TOOL_OUTPUT_DIR=/tmp/out59b`）：联动启动两侧同一 `20261022115905/`，run_info started_side=bus starts=[bus,branch]，load_last 两侧均从该目录读回。测试新增 `test_r17::test_offline_play_writes_run_dir_with_both_configs`；修 conftest 会话级环境隔离（module 级 TestClient 先于函数级 autouse，实机留下的真实 last_result.json 曾污染 test_r12）。全量 354 passed / 1 skipped。缺口：旧运行目录不清理；非 csv 源仍写固定目录；load_last 只认最近记录的 run_dir。
