@@ -513,7 +513,8 @@ class SourceConfig:
         if self.kind not in SOURCE_KINDS:
             raise ConfigError(f"source.kind 必须是 {SOURCE_KINDS}（当前 {self.kind}）")
         try:
-            if float(self.file_speed) < 0:
+            self.file_speed = float(self.file_speed)
+            if self.file_speed < 0:
                 raise ValueError
         except (TypeError, ValueError):
             raise ConfigError(f"source.file_speed 必须 ≥ 0（0＝不限速；当前 {self.file_speed!r}）")

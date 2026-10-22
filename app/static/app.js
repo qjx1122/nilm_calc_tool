@@ -2663,7 +2663,7 @@ async function startEngine(payloadExtra = {}) {
     if (r.branch && !r.branch.skipped) brMsg = r.branch.ok ? `；分路侧已同时启动（${r.branch.source_kind}${r.branch.synced_pace ? '，倍速随总线侧' : ''}）` : `；⚠ 分路侧启动失败：${r.branch.error}`;
     if (r.common_window && r.common_window.enabled === false && r.common_window.reason) brMsg += `；ℹ ${r.common_window.reason}`;
     toast(`已启动${sideLabel()}数据源：${r.config.source.kind}` + brMsg + (r.run_dir ? `；本次输出目录 ${r.run_dir}（实时数据 / 事件 / 两侧配置）` : '') +
-      (S.cfgDirty ? '（提示：口径/变比的修改请点「保存配置（热更新）」）' : ''), r.branch && r.branch.error ? 'err' : 'ok');
+      (S.cfgDirty ? '（提示：口径/变比的修改请点「保存配置（热更新）」）' : '') + '（启动不写配置文件；要保留数据源设置请点「保存总线侧配置」）', r.branch && r.branch.error ? 'err' : 'ok');
     S.cfgDirty = false;
     S.state = await api('/api/state');
     renderTop(); render();
@@ -2689,6 +2689,24 @@ async function saveConfig() {
     } else { toast('配置已保存并热更新', 'ok'); }
     S.state = await api('/api/state'); renderTop(); render();
   } catch (e) { toast('保存失败：' + e.message, 'err'); }
+}
+
+// v0.63：总线侧「保存总线侧配置」——数据源 + 量纲口径 + 列映射一起写入 configs/runtime.json（服务端只更新这些键）
+function collectBusSavePayload() {
+  const { payload, skipped } = collectConfigPayload();
+  return { payload: Object.assign({ source: collectSourcePayload() }, payload), skipped };
+}
+async function saveBusSource() {
+  try {
+    const { payload, skipped } = collectBusSavePayload();
+    const src = payload.source || {};
+    if ((src.kind === 'csv_file' || src.kind === 'csv_tail') && !src.path) throw new Error('输入方式为文件时必须填写文件路径');
+    const r = await api('/api/config', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }, 'bus');
+    S.formDirty = false; S.cfgDirty = false; S.srcDirty = false;
+    const where = r.config_file_updated ? `已写入 ${r.config_file}` : '已热更新（服务端未启用配置文件回写）';
+    toast(`总线侧配置${where}：数据源 ${src.kind} + 量纲口径 + 列映射` + (skipped.length ? `；${skipped.join('、')} 为空 → 保留原值` : ''), 'ok');
+    S.state = await api('/api/state'); renderTop(); render();
+  } catch (e) { toast('保存总线侧配置失败：' + e.message, 'err'); }
 }
 
 async function saveWindows(side = sideOf()) {
@@ -2812,6 +2830,7 @@ function bind() {
     } catch (e) { toast(e.message, 'err'); }
   });
   $('#btn-start2').addEventListener('click', () => startEngine());
+  $('#btn-src-save').addEventListener('click', saveBusSource);
   $('#btn-stop2').addEventListener('click', stopEngine);
   $('#btn-pause2').addEventListener('click', togglePause);
   $('#btn-load-last').addEventListener('click', loadLastData);

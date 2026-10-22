@@ -222,12 +222,14 @@
                 <option value="10">10×</option><option value="0.5">0.5×</option><option value="0">不限速（最快）</option>
               </select></label>
             <div class="row">
+              <button id="btn-src-save" class="primary" title="把上方数据源设置与「量纲与口径」「离线文件列映射」写入 configs/runtime.json（只更新这些键，文件里其它内容原样保留）；不启动播放">保存总线侧配置</button>
               <button id="btn-start2" class="primary">启动数据源</button>
               <button id="btn-pause2" title="仅离线文件源">暂停播放</button>
               <button id="btn-stop2" class="danger">停止</button>
               <button id="btn-load-last2" title="未播放时读回上次播放落盘的数据">加载上次数据</button>
             </div>
             <div id="src-loaded-last" class="notes" style="display:none"></div>
+            <div class="notes muted">「保存总线侧配置」保存上方数据源 + 量纲口径 + 列映射到 <code>configs/runtime.json</code>（在原文件基础上只更新这些键，其它配置不变）；「启动数据源」只按当前输入播放，<b>不写配置文件</b>。</div>
             <label class="chk"><input id="autoload-last" type="checkbox"> 软件启动时自动加载上次运行的数据</label>
             <div class="notes muted">勾选后（默认开启）：软件重启时自动把上次运行落盘的曲线 / 事件 / 负荷辨识事件（CSV）和最后一次电气量结果（output/last_result.json，两侧共用、按 source_id 分键）读回各子界面；最新电气量卡片、频谱等显示的是上次运行结束时的值。</div>
             <div class="notes muted">启用分路侧后，这里的「启动 / 暂停 / 停止 / 加载上次数据」同时作用于两侧。<br>「加载上次数据」：不播放时，从 output/realtime、output/events、output/nilm 的 CSV 读回最近 history_hours 内本侧（source_id）的曲线点、事件与负荷辨识事件，供各曲线 / 事件页直接查看；重新启动播放后会被新数据覆盖。</div>

@@ -1318,26 +1318,122 @@ async def put_config(payload: Dict[str, Any]) -> Any:
         _deep_update(data, payload)
         cfg = AppConfig.from_dict(data)
         RUNNER.set_cfg(cfg)
+        persisted = False
         if os.environ.get("ELEC_TOOL_PERSIST_CONFIG", "1") == "1":
             try:
-                _persist(cfg)
+                _persist(cfg, payload); persisted = True
             except Exception:
                 pass
-        return {"ok": True, "config": cfg.to_dict()}
+        return {"ok": True, "config": cfg.to_dict(), "config_file_updated": persisted,
+                "config_file": _display_path(RUNNER.persist_path)}
     except ConfigError as exc:
         return JSONResponse(status_code=400, content={"ok": False, "error": str(exc)})
     except Exception as exc:
         return JSONResponse(status_code=400, content={"ok": False, "error": f"{type(exc).__name__}: {exc}"})
 
 
-def _persist(cfg: AppConfig) -> None:
-    """写运行时配置文件；路径尽量存成相对仓库根的形式，换机器/换目录仍可用。"""
+def _persist_base_doc() -> Dict[str, Any]:
+    """「保存配置」的落盘基准：本侧持久化文件（runtime.json / branch_runtime.json）的**原始 JSON 文本**；
+    文件尚不存在时退回本侧启动时的加载文件（出厂 default.json / 分路模板），再不存在才是空字典（写出完整默认配置）。"""
+    for pth in (RUNNER.persist_path, RUNNER.cfg_path):
+        if pth and os.path.isfile(pth):
+            with open(pth, "r", encoding="utf-8") as fh:
+                doc = json.load(fh)
+            if isinstance(doc, dict):
+                return doc
+    return {}
+
+
+_DEL = object()     # patch 里有、规范化配置里没有的键 ⇒ 从文件中删除（如 series_hidden 送空列表＝取消该项）
+
+
+def _patch_pick(patch: Any, norm: Any) -> Any:
+    """按 patch 的键形状，从 norm（AppConfig.to_dict() 规范化结果）取值：
+    * 字典递归；叶子取规范化后的值（类型/取整与内存配置一致）；
+    * patch 里有而 norm 里没有的键 → ``_DEL``（AppConfig 不认识的垃圾键不写入；已被规范化删除的映射项从文件里同步删掉）。"""
+    if isinstance(patch, dict) and isinstance(norm, dict):
+        out: Dict[str, Any] = {}
+        for k, v in patch.items():
+            out[k] = _patch_pick(v, norm[k]) if k in norm else _DEL
+        return out
+    return norm
+
+
+def _apply_patch(dst: Dict[str, Any], src: Dict[str, Any]) -> None:
+    for k, v in src.items():
+        if v is _DEL:
+            dst.pop(k, None)
+        elif isinstance(v, dict) and isinstance(dst.get(k), dict):
+            _apply_patch(dst[k], v)
+        elif isinstance(v, dict):
+            dst[k] = {}
+            _apply_patch(dst[k], v)
+        else:
+            dst[k] = v
+
+
+def _dict_diff(old: Any, new: Any) -> Any:
+    """new 相对 old 变化的叶子（嵌套字典形状）；无变化返回 {}。"""
+    if isinstance(old, dict) and isinstance(new, dict):
+        out: Dict[str, Any] = {}
+        for k, v in new.items():
+            if k not in old:
+                out[k] = v
+            else:
+                d = _dict_diff(old[k], v)
+                if d != {} or not isinstance(d, dict):
+                    out[k] = d
+        return out
+    return {} if old == new else new
+
+
+def _detect_indent(path: str) -> int:
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            for line in fh:
+                n = len(line) - len(line.lstrip(" "))
+                if n > 0:
+                    return n
+    except Exception:
+        pass
+    return 2
+
+
+def _persist(cfg: AppConfig, patch: Optional[Dict[str, Any]] = None) -> None:
+    """把**本次改动**写进运行时配置文件（v0.63）：读原文件 → 只深合并 patch 对应的键 → 写回。
+
+    * 原文件里其它键（含 AppConfig 不认识的自定义键）与键顺序、缩进原样保留；
+    * 启动参数 / 负荷辨识「套用」等**未经保存**的运行期改动不随本次保存落盘；
+    * 服务启动后用户在外部手改的内容不会被内存配置覆盖；
+    * patch 为 None ＝ 显式要求整份落盘（兼容旧调用）。
+    路径尽量存成相对仓库根的形式，换机器/换目录仍可用。"""
     out = AppConfig.from_dict(cfg.to_dict())
     out.source.play_end_time = ""                 # 运行期自动字段，不落盘
     sp = out.source.path or ""
     if sp.startswith(ROOT + os.sep):
         out.source.path = os.path.relpath(sp, ROOT)
-    out.validate().save(RUNNER.persist_path)
+    out.validate()
+    norm = out.to_dict()
+    path = RUNNER.persist_path
+    if patch is None:
+        doc = _persist_base_doc()
+        _deep_update(doc, norm)
+    else:
+        doc = _persist_base_doc()
+        sel = _patch_pick(patch, norm)
+        if isinstance(sel, dict) and "source" in sel and isinstance(sel["source"], dict):
+            sel["source"].pop("play_end_time", None)
+        if not doc:                                # 无任何基准文件：写完整当前配置（其中已含本次改动）
+            doc = norm
+        else:
+            _apply_patch(doc, sel)
+    AppConfig.from_dict(json.loads(json.dumps(doc))).validate()   # 合并结果必须仍是合法配置
+    indent = _detect_indent(path) if os.path.isfile(path) else 2
+    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        fh.write(json.dumps(doc, ensure_ascii=False, indent=indent) + "\n")
+    os.replace(tmp, path)
 
 
 def _deep_update(dst: Dict[str, Any], src: Dict[str, Any]) -> None:
@@ -1511,9 +1607,10 @@ async def nilm_tune_apply(payload: Dict[str, Any]) -> Any:
         hot = bool(payload.get("hot", True))
         persisted = False
         if hot:
+            before = RUNNER.cfg.to_dict()
             RUNNER.set_cfg(cfg)
             if bool(payload.get("persist", False)) and os.environ.get("ELEC_TOOL_PERSIST_CONFIG", "1") == "1":
-                _persist(cfg); persisted = True
+                _persist(cfg, {"nilm": _dict_diff(before.get("nilm", {}), cfg.to_dict().get("nilm", {}))}); persisted = True
         return {"ok": True, "side": side, "saved_to": _display_path(path), "changes": notes, "hot": hot,
                 "config_file_updated": persisted, "config": (RUNNER.cfg if hot else cfg).to_dict()}
     except ConfigError as exc:

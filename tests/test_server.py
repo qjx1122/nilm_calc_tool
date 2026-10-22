@@ -172,6 +172,7 @@ def test_config_put_rejects_invalid_values(client):
         ({"power": {"apparent": "foo"}}, "apparent"),
     ]
     good = client.get("/api/config").json()
+    disk_before = Path(client.cfg_path).read_bytes()
     for payload, kw in cases:
         r = client.put("/api/config", json=payload)
         assert r.status_code == 400, (payload, r.status_code, r.text)
@@ -180,7 +181,8 @@ def test_config_put_rejects_invalid_values(client):
         assert kw in d["error"], d["error"]
     # 非法配置不得污染生效配置与磁盘
     assert client.get("/api/config").json() == good
-    assert json.loads(Path(client.cfg_path).read_text()) == good
+    # v0.63 起文件只在原文件基础上更新改动键（不再是内存配置的整份转储）→ 对比文件字节未变
+    assert Path(client.cfg_path).read_bytes() == disk_before
 
 
 def test_harmonic_order_max_cannot_alias(client):
