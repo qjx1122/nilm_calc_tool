@@ -3338,6 +3338,7 @@ const RS = { files: [], status: null, timer: null, loaded: false };
 function renderProcess() {
   if (!RS.loaded) { RS.loaded = true; rsListFiles(); rsPoll(); }
   rsPreview();
+  renderWavePreview();     // v0.61：切回本页时按当前画布宽度重绘三张预览曲线
 }
 
 // v0.34：误差统计参数默认值来自配置 processing（状态接口 defaults），只在用户未改动时回填
@@ -3608,8 +3609,186 @@ async function ntApply() {
   } catch (e) { toast('套用失败：' + e.message, 'err'); }
 }
 
+/* v0.61：数据处理 · 波形预览（GET /api/process/wave/info|load|rms） */
+const WP = { info: null, wave: null, rms: null, cyc: null, files: [] };
+window.WP = WP;
+const WP_COLORS = { Ua: '#4ea1ff', Ub: '#3ddc97', Uc: '#ffb648', Ia: '#ff7ac6', Ib: '#9d7bff', Ic: '#5ee0d0' };
+function wpSide() { const el = $('#wp-side'); return el && el.value === 'branch' ? 'branch' : 'bus'; }
+function wpVal(id) { const el = $('#' + id); return el ? String(el.value || '').trim() : ''; }
+function wpChans() { return Array.from(document.querySelectorAll('#wp-chans .wp-ch')).filter(c => c.checked).map(c => c.value); }
+function wpQuery(params) {
+  const q = new URLSearchParams();
+  Object.entries(params).forEach(([k, v]) => { if (v !== undefined && v !== null && v !== '') q.set(k, String(v)); });
+  return q.toString();
+}
+async function wpListFiles() {
+  const sel = $('#wp-files'); if (!sel) return;
+  try {
+    const r = await api('/api/files?sub=data', undefined, 'bus');
+    WP.files = (r.files || []).filter(f => !f.dir && f.name.toLowerCase().endsWith('.csv'));
+    const cur = sel.value;
+    sel.innerHTML = '<option value="">— 选择 data/ 下的 CSV —</option>' + WP.files.map(f => `<option value="${esc(f.name)}">${esc(f.name)} (${f.size_mb} MB)</option>`).join('');
+    if (cur && WP.files.some(f => f.name === cur)) sel.value = cur;
+  } catch (e) { toast('读取文件列表失败：' + e.message, 'err'); }
+}
+function wpStatus(html, cls) { const el = $('#wp-status'); if (el) el.innerHTML = html ? `<div class="${cls || ''}">${html}</div>` : ''; }
+function wpFmtT(t) { return isNum(t) ? fmtLocalInput(t) : '—'; }
+function wpFs(v) { return isNum(v) ? (Number.isInteger(+v) ? String(v) : (+v).toFixed(2)) : '—'; }
+function wpRenderInfo(d) {
+  const box = $('#wp-info'); if (!box) return;
+  if (!d) { box.innerHTML = '<div class="notes">填写路径后点「获取文件信息」</div>'; return; }
+  const rows = [
+    ['文件', esc(d.path_display || d.path)], ['大小', `${d.size_mb} MB · ${d.rows} 行 · 编码 ${esc(d.encoding)}${d.has_header ? '' : '（无表头）'}`],
+    ['通道数', `${d.n_channels}（${(d.channels || []).join(' / ')}）`],
+    ['采样率', `${wpFs(d.fs)} Hz${isNum(d.fs_est) ? `（时标推算 ${(+d.fs_est).toFixed(2)} Hz，配置 ${d.fs_configured} Hz）` : `（配置值 ${d.fs_configured} Hz）`} · 每周波 ${d.samples_per_cycle} 点（f_nom ${d.f_nom} Hz）`],
+    ['时长', `${fmtDur(d.duration_s)}（${(+d.duration_s).toFixed(3)} s）`],
+    ['起始时间', wpFmtT(d.t_start)], ['结束时间', wpFmtT(d.t_end)],
+    ['口径', d.pt_ct && d.pt_ct.enabled ? `一次侧（PT ${d.pt_ct.pt_ratio} / CT ${d.pt_ct.ct_ratio}）` : '二次侧（PT/CT 未启用）'],
+  ];
+  box.innerHTML = `<table><tbody>${rows.map(([k, v]) => `<tr><th style="text-align:left;white-space:nowrap">${k}</th><td>${v}</td></tr>`).join('')}</tbody></table>` +
+    ((d.notes || []).length ? `<div class="notes">${d.notes.map(n => `<div>ℹ ${esc(n)}</div>`).join('')}</div>` : '');
+}
+async function wpInfo(silent) {
+  const path = wpVal('wp-path');
+  if (!path) { if (!silent) toast('请先填写波形文件路径', 'err'); return null; }
+  try {
+    const d = await api('/api/process/wave/info?' + wpQuery({ path, side: wpSide() }), undefined, 'bus');
+    WP.info = d; wpRenderInfo(d);
+    // 通道勾选框：文件里没有的通道置灰
+    document.querySelectorAll('#wp-chans .wp-ch').forEach(c => { const has = (d.channels || []).includes(c.value); c.disabled = !has; c.parentElement.classList.toggle('off', !has); if (!has) c.checked = false; else if (!WP.chTouched) c.checked = true; });
+    if (!silent) toast(`文件信息：${d.n_channels} 通道 · ${wpFs(d.fs)} Hz · ${fmtDur(d.duration_s)}`, 'ok');
+    return d;
+  } catch (e) { WP.info = null; wpRenderInfo(null); toast('获取文件信息失败：' + e.message, 'err'); return null; }
+}
+function wpSeries(d, t0) {
+  return (d.channels_loaded || Object.keys(d.channels || {})).map(ch => ({ name: `${ch} (${(d.units || {})[ch] || ''})`, color: WP_COLORS[ch] || '#4ea1ff',
+    data: d.t.map((x, i) => [x - t0, d.channels[ch][i]]) }));
+}
+function wpDrawWave(cv, d, subId, label) {
+  if (!cv) return;
+  const sub = $('#' + subId);
+  if (!d || !d.t || !d.t.length) {
+    drawLine(cv, [], { empty: label === 'cyc' ? '在有效值曲线上右键「显示周波窗」后显示' : '点「加载波形」后显示', height: label === 'cyc' ? 240 : 260 });
+    if (sub) sub.textContent = label === 'cyc' ? '（在有效值曲线上右键「显示周波窗」后显示：以该时刻为中心的 N 个周波原始波形）' : '（未加载）';
+    return;
+  }
+  const t0 = d.t[0];
+  const hasU = (d.channels_loaded || []).some(c => c[0] === 'U'), hasI = (d.channels_loaded || []).some(c => c[0] === 'I');
+  drawLine(cv, wpSeries(d, t0), { ylabel: hasU && hasI ? 'V / A' : hasU ? 'V' : 'A', fmtX: x => ts(x + t0), fmtTip: x => fmtLocalInput(x + t0), tbase: t0,
+    height: label === 'cyc' ? 240 : 260, zero: true });
+  if (sub) {
+    const span = d.t[d.t.length - 1] - t0;
+    sub.textContent = `（${d.n} 点 × ${(d.channels_loaded || []).length} 通道 · ${wpFs(d.fs)} Hz${d.resampled ? '（由 ' + wpFs(d.fs_src) + ' Hz 重采样）' : ''} · ${wpFmtT(t0)} → ${wpFmtT(d.t[d.t.length - 1])}，${span.toFixed(3)} s${label === 'cyc' && d.cyc_center ? '，中心 ' + wpFmtT(d.cyc_center) + '，' + d.cyc_n + ' 个周波' : ''}${d.truncated ? '，已截断' : ''}）`;
+  }
+  bindCtxMenu(cv, () => canvasNativeItems(cv).concat([{ key: 'sep', sep: true }, { key: 'zoom-reset', label: '复位缩放', onClick: () => zoomReset(cv) },
+    { key: 'native', label: '浏览器原生菜单（Shift + 右键）', disabled: true }]));
+}
+async function wpLoad() {
+  const path = wpVal('wp-path');
+  if (!path) { toast('请先填写波形文件路径', 'err'); return; }
+  const chans = wpChans();
+  const params = { path, side: wpSide(), t_start: wpVal('wp-tstart'), t_end: wpVal('wp-tend'), n: wpVal('wp-n'), fs: wpVal('wp-fs'), channels: chans.join(',') };
+  const btn = $('#btn-wp-load'); if (btn) btn.disabled = true;
+  wpStatus('加载波形中…');
+  try {
+    // 点数为空 ⇒ 显式传 n=（空串＝不限点数：按时间段 / 整段到文件末尾，服务端按 max_points 截断）
+    const d = await api('/api/process/wave/load?' + wpQuery(params) + (params.n ? '' : '&n='), undefined, 'bus');
+    WP.wave = d; zoomReset($('#wp-wave'));
+    wpDrawWave($('#wp-wave'), d, 'wp-wave-sub', 'wave');
+    wpStatus(`已加载波形 ${d.n} 点 × ${d.channels_loaded.length} 通道（${wpFs(d.fs)} Hz）` + ((d.notes || []).length ? '；' + d.notes.map(esc).join('；') : ''), d.truncated ? 'bad' : 'ok');
+    if (!WP.info) wpInfo(true);
+  } catch (e) { wpStatus('加载波形失败：' + esc(e.message), 'bad'); toast('加载波形失败：' + e.message, 'err'); }
+  finally { if (btn) btn.disabled = false; }
+}
+function wpDrawRms(d) {
+  const cv = $('#wp-rms'); if (!cv) return;
+  const sub = $('#wp-rms-sub');
+  if (!d || !d.t || !d.t.length) { drawLine(cv, [], { empty: '点「加载有效值曲线」后显示', height: 260 }); if (sub) sub.textContent = '（未加载；右键曲线可「显示周波窗」）'; return; }
+  const t0 = d.t[0];
+  const chans = Object.keys(d.channels || {});
+  const hasU = chans.some(c => c[0] === 'U'), hasI = chans.some(c => c[0] === 'I');
+  const span = d.t[d.t.length - 1] - t0;
+  drawLine(cv, chans.map(ch => ({ name: `${ch} RMS (${(d.units || {})[ch] || ''})`, color: WP_COLORS[ch] || '#4ea1ff', data: d.t.map((x, i) => [x - t0, d.channels[ch][i]]) })),
+    { ylabel: hasU && hasI ? 'V / A' : hasU ? 'V' : 'A', fmtX: x => tsX(x + t0, span), fmtTip: x => fmtLocalInput(x + t0), tbase: t0, height: 260 });
+  if (sub) sub.textContent = `（${d.n} 点 · ${d.agg_cycles > 1 ? '每 ' + d.agg_cycles + ' 个周波一点' : '逐周波'} · 共 ${d.cycles_total} 周波 · ${wpFmtT(t0)} → ${wpFmtT(d.t[d.t.length - 1])}，${fmtDur(span)}；右键曲线可「显示周波窗」）`;
+  bindCtxMenu(cv, (xEpoch) => {
+    const nEl = $('#wp-cyc-n'); const n = Math.max(1, Math.min(20000, parseInt((nEl && nEl.value) || '1000', 10) || 1000));
+    const noX = !isNum(xEpoch);
+    return canvasNativeItems(cv).concat([
+      { key: 'sep', sep: true },
+      { key: 'show-window', label: `显示周波窗（${noX ? '暂无曲线' : fmtLocalInput(xEpoch)}）`, disabled: noX,
+        hint: noX ? '有效值曲线有数据后，在曲线上右键' : `以该时刻为中心加载 ${n} 个周波的原始波形到下方「周波窗」`,
+        onClick: () => wpLoadCycleWindow(xEpoch, n) },
+      { key: 'zoom-reset', label: '复位缩放', onClick: () => zoomReset(cv) },
+      { key: 'native', label: '浏览器原生菜单（Shift + 右键）', disabled: true },
+    ]);
+  });
+}
+async function wpRms() {
+  const path = wpVal('wp-path');
+  if (!path) { toast('请先填写波形文件路径', 'err'); return; }
+  const params = { path, side: wpSide(), t_start: wpVal('wp-rms-tstart') || wpVal('wp-tstart'), t_end: wpVal('wp-rms-tend'), duration_s: wpVal('wp-rms-dur'),
+                   agg_cycles: wpVal('wp-rms-agg') || 1, channels: wpChans().join(',') };
+  const btn = $('#btn-wp-rms'); if (btn) btn.disabled = true;
+  wpStatus('计算有效值曲线中…');
+  try {
+    const d = await api('/api/process/wave/rms?' + wpQuery(params), undefined, 'bus');
+    WP.rms = d; zoomReset($('#wp-rms'));
+    wpDrawRms(d);
+    wpStatus(`有效值曲线 ${d.n} 点（共 ${d.cycles_total} 周波${d.agg_cycles > 1 ? '，每 ' + d.agg_cycles + ' 周波一点' : ''}）` + ((d.notes || []).length ? '；' + d.notes.map(esc).join('；') : ''), 'ok');
+    if (!WP.info) wpInfo(true);
+  } catch (e) { wpStatus('有效值曲线失败：' + esc(e.message), 'bad'); toast('加载有效值曲线失败：' + e.message, 'err'); }
+  finally { if (btn) btn.disabled = false; }
+}
+/* 有效值曲线右键 → 以 tEpoch 为中心的 n 个周波原始波形，画到单独的「周波窗」曲线（原采样率、当前勾选通道） */
+async function wpLoadCycleWindow(tEpoch, n) {
+  const path = wpVal('wp-path');
+  if (!path || !isNum(tEpoch)) return false;
+  const fnom = (WP.info && WP.info.f_nom) || (WP.rms && WP.rms.f_nom) || 50;
+  const half = (n / 2) / fnom;
+  let tA = tEpoch - half, tB = tEpoch + half;
+  if (WP.info && isNum(WP.info.t_start) && isNum(WP.info.t_end)) {       // 靠近文件两端时整体平移，保证仍是 n 个周波
+    const dur = n / fnom;
+    if (tA < WP.info.t_start) { tA = WP.info.t_start; tB = tA + dur; }
+    if (tB > WP.info.t_end) { tB = WP.info.t_end; tA = Math.max(WP.info.t_start, tB - dur); }
+  }
+  wpStatus(`装载周波窗：中心 ${fmtLocalInput(tEpoch)}，${n} 个周波…`);
+  try {
+    const d = await api('/api/process/wave/load?' + wpQuery({ path, side: wpSide(), t_start: tA.toFixed(6), t_end: tB.toFixed(6), channels: wpChans().join(','), n: '' }) + '&n=', undefined, 'bus');
+    d.cyc_center = tEpoch; d.cyc_n = n;
+    WP.cyc = d; zoomReset($('#wp-cyc'));
+    wpDrawWave($('#wp-cyc'), d, 'wp-cyc-sub', 'cyc');
+    wpStatus(`周波窗已装载：${d.n} 点 × ${d.channels_loaded.length} 通道，中心 ${fmtLocalInput(tEpoch)}，${n} 个周波（${wpFs(d.fs)} Hz）`, 'ok');
+    try { $('#wp-cyc').scrollIntoView({ behavior: 'smooth', block: 'nearest' }); } catch (e) { /* jsdom */ }
+    return true;
+  } catch (e) { wpStatus('装载周波窗失败：' + esc(e.message), 'bad'); toast('装载周波窗失败：' + e.message, 'err'); return false; }
+}
+window.wpLoadCycleWindow = wpLoadCycleWindow;
+function renderWavePreview() {
+  if (!$('#wp-wave')) return;
+  wpDrawWave($('#wp-wave'), WP.wave, 'wp-wave-sub', 'wave');
+  wpDrawRms(WP.rms);
+  wpDrawWave($('#wp-cyc'), WP.cyc, 'wp-cyc-sub', 'cyc');
+}
+function bindWavePreview() {
+  if (!$('#wp-form')) return;
+  $('#wp-files').addEventListener('change', () => { if ($('#wp-files').value) { $('#wp-path').value = $('#wp-files').value; WP.info = null; wpInfo(true); } });
+  $('#wp-path').addEventListener('change', () => { WP.info = null; });
+  $('#wp-side').addEventListener('change', () => { WP.info = null; });
+  $('#btn-wp-info').addEventListener('click', () => wpInfo(false));
+  $('#btn-wp-load').addEventListener('click', wpLoad);
+  $('#btn-wp-rms').addEventListener('click', wpRms);
+  $('#btn-wp-refresh').addEventListener('click', wpListFiles);
+  document.querySelectorAll('#wp-chans .wp-ch').forEach(c => c.addEventListener('change', () => { WP.chTouched = true; }));
+  ['wp-tstart', 'wp-tend', 'wp-n', 'wp-fs'].forEach(id => $('#' + id).addEventListener('keydown', (e) => { if (e.key === 'Enter') wpLoad(); }));
+  ['wp-rms-tstart', 'wp-rms-tend', 'wp-rms-dur'].forEach(id => $('#' + id).addEventListener('keydown', (e) => { if (e.key === 'Enter') wpRms(); }));
+  wpListFiles();
+  renderWavePreview();
+}
+
 function bindProcess() {
   if (!$('#view-process')) return;
+  bindWavePreview();
   if ($('#nt-form')) {
     $('#nt-files').addEventListener('change', () => { if ($('#nt-files').value) $('#nt-path').value = $('#nt-files').value; });
     $('#btn-nt-run').addEventListener('click', ntRun);

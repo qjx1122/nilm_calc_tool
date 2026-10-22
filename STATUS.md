@@ -81,6 +81,7 @@
 - 范围边界：~~本 session 不写业务代码~~ ❌**已失效**（该边界属上一任务；本任务即为写代码）；仍然遵守：不新建台账外散文件、不把数据/产物入库
 
 ## 已完成
+- **v0.61**：数据处理页「波形预览」：文件信息 / 原始波形（重采样率、通道、时间段或起点+点数）/ 逐周波有效值曲线 + 右键「显示周波窗」到单独周波窗曲线；`elec_tool/wave_preview.py`、`/api/process/wave/{info,load,rms}`、`test_r61` 4 项、`ui_r61` 23/23、全量 358 passed / 1 skipped。
 - **v0.60**：运行目录名改 `yyyyMMdd_HHmmss`；`config_bus/branch.json` 改为本侧配置文件逐字节复制；曲线 / 事件 / 负荷事件仍分 `realtime/ events/ nilm/` 子目录。354 passed / 1 skipped。
 - **v0.59**：离线文件播放每次启动新建运行目录 `output/<yyyyMMddHHmmss>/`（两侧共用），实时曲线 / 事件 / 负荷事件 CSV 与 `config_bus.json` / `config_branch.json` / `run_info.json` 都写在里面；`run_dir` 进 start 响应 / state / last_result，`load_last` 读回。全量 354 passed / 1 skipped。
 - **v0.58**：实时曲线 / 事件 / 负荷事件 CSV 文件名改按墙钟本地日期（`timefmt.wall_day`），两侧不同数据日期也写同一文件；`load_curves` 去掉按文件名日期跳过。

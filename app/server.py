@@ -2231,6 +2231,83 @@ async def process_resample_preview(path: str, fs_new: float) -> Dict[str, Any]:
             "src_exists": os.path.isfile(src_abs)}
 
 
+# ------------------------------------------------------------------ v0.61：数据处理页「波形预览」
+def _wave_base_cfg(side: Optional[str]) -> AppConfig:
+    """基准配置（PT/CT、列映射、时标解释）：side=bus|branch，缺省当前侧；配置副本。"""
+    sd = (side or current_side() or "bus").strip().lower()
+    if sd not in RUNNERS:
+        raise ConfigError(f"side 只能是 bus 或 branch（当前 {side!r}）")
+    return AppConfig.from_dict(RUNNERS[sd].cfg.to_dict())
+
+
+def _wave_path(path: str) -> str:
+    p = str(path or "").strip()
+    if not p:
+        raise ConfigError("未填写波形文件路径")
+    return _abs_path(p)
+
+
+def _wave_err(exc: Exception):
+    from elec_tool.wave_preview import WaveError
+    if isinstance(exc, (WaveError, ConfigError, ValueError)):
+        return JSONResponse(status_code=400, content={"ok": False, "error": str(exc)})
+    return JSONResponse(status_code=400, content={"ok": False, "error": f"{type(exc).__name__}: {exc}"})
+
+
+@app.get("/api/process/wave/info")
+async def process_wave_info(path: str, side: Optional[str] = None) -> Any:
+    """波形文件信息：通道数 / 通道 / 采样率（时标推算，<0.5% 偏差按配置值）/ 行数 / 时长 / 起止时间。"""
+    from elec_tool.wave_preview import file_info
+    try:
+        cfg = _wave_base_cfg(side); p = _wave_path(path)
+        d = await asyncio.to_thread(file_info, cfg, p)
+        d["path_display"] = _display_path(p)
+        d["t_start_local"] = fmt_local(d["t_start"]) if d.get("t_start") is not None else None
+        d["t_end_local"] = fmt_local(d["t_end"]) if d.get("t_end") is not None else None
+        d["side"] = (side or current_side())
+        return d
+    except Exception as exc:
+        return _wave_err(exc)
+
+
+@app.get("/api/process/wave/load")
+async def process_wave_load(path: str, side: Optional[str] = None, t_start: str = "", t_end: str = "",
+                            n: Optional[str] = "1000", fs: Optional[float] = None, channels: str = "",
+                            max_points: int = 1_000_000) -> Any:
+    """按 起点时刻 + 终点时刻 / 点数、重采样率、通道 加载一段原始波形（一次侧口径）。
+    n 空字符串＝不限点数（整段 / 整文件，受 max_points 限制）；fs 空＝原采样率；channels 空＝全部。"""
+    from elec_tool.wave_preview import load_waveform
+    try:
+        cfg = _wave_base_cfg(side); p = _wave_path(path)
+        n_pts: Optional[int] = None
+        if n is not None and str(n).strip() != "":
+            n_pts = int(float(str(n).strip()))
+        chans = [c for c in str(channels or "").split(",") if c.strip()] or None
+        d = await asyncio.to_thread(load_waveform, cfg, p, t_start=t_start, t_end=t_end, n_points=n_pts, fs_out=fs,
+                                    channels=chans, max_points=max(1, min(int(max_points), 5_000_000)))
+        d["path_display"] = _display_path(p)
+        return d
+    except Exception as exc:
+        return _wave_err(exc)
+
+
+@app.get("/api/process/wave/rms")
+async def process_wave_rms(path: str, side: Optional[str] = None, t_start: str = "", t_end: str = "",
+                           duration_s: Optional[float] = None, channels: str = "", agg_cycles: int = 1,
+                           max_points: int = 200_000) -> Any:
+    """指定时间段的逐周波有效值曲线（Ua/Ub/Uc/Ia/Ib/Ic）；点数过多时自动合并相邻周波。"""
+    from elec_tool.wave_preview import rms_curve
+    try:
+        cfg = _wave_base_cfg(side); p = _wave_path(path)
+        chans = [c for c in str(channels or "").split(",") if c.strip()] or None
+        d = await asyncio.to_thread(rms_curve, cfg, p, t_start=t_start, t_end=t_end, duration_s=duration_s, channels=chans,
+                                    agg_cycles=max(1, int(agg_cycles or 1)), max_points=max(10, min(int(max_points), 2_000_000)))
+        d["path_display"] = _display_path(p)
+        return d
+    except Exception as exc:
+        return _wave_err(exc)
+
+
 # ------------------------------------------------------------------ WebSocket
 
 WS_STATE_INTERVAL_S = 1.0   # state 定期推送周期（秒）；与 result 流量无关
