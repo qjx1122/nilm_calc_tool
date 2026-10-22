@@ -3687,9 +3687,11 @@ function wpSyncCustom() {
   const row = $('#wp-custom-row'); if (row) row.style.display = on ? '' : 'none';
   // 起止时刻输入框的占位提示随模式变化（空＝数据起止时间）
   const i = WP.info;
-  const ps = on ? '空＝自定义起始时间' : '空＝数据起始时间', pe = on ? '空＝按采样率计算的结束时间' : '空＝数据结束时间';
-  ['wp-tstart', 'wp-rms-tstart'].forEach(id => { const el = $('#' + id); if (el) el.placeholder = (i && i.t_start_local) ? `空＝${i.t_start_local}` : ps; });
-  ['wp-tend', 'wp-rms-tend'].forEach(id => { const el = $('#' + id); if (el) el.placeholder = (i && i.t_end_local) ? `空＝${i.t_end_local}` : pe; });
+  // v0.68：写法提示与数据源页「指定时间段播放」一致（完整日期时间 / epoch 秒 / 只写 HH:MM:SS）
+  const fmtS = '2026-10-12 08:00:00 / epoch 秒 / 08:00:00', fmtE = '2026-10-12 08:10:00 / epoch 秒 / 08:10:00';
+  const ps = (on ? '空＝自定义起始时间' : '空＝数据起始时间') + '；' + fmtS, pe = (on ? '空＝按采样率计算的结束时间' : '空＝数据结束时间') + '；' + fmtE;
+  ['wp-tstart', 'wp-rms-tstart'].forEach(id => { const el = $('#' + id); if (el) el.placeholder = (i && i.t_start_local) ? `空＝${i.t_start_local}；${fmtS}` : ps; });
+  ['wp-tend', 'wp-rms-tend'].forEach(id => { const el = $('#' + id); if (el) el.placeholder = (i && i.t_end_local) ? `空＝${i.t_end_local}；${fmtE}` : pe; });
 }
 function wpSetBase(b) {
   if (!b) return;

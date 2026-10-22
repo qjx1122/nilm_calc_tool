@@ -1002,8 +1002,8 @@
               </label>
             </div>
             <div class="row2">
-              <label title="空＝文件数据起始时间（自定义时间启用时＝自定义起始时间）。写法：2026-10-13 08:00:02.5 / epoch 秒（文件时间模式还可只写 08:00:02.5）">起始时刻（空＝数据起始时间） <input id="wp-tstart" placeholder="空＝数据起始时间"></label>
-              <label title="空＝文件数据结束时间（按采样率计算；自定义结束时间填了则＝它）；与周波数同时给出时取先到者">结束时刻（空＝数据结束时间） <input id="wp-tend" placeholder="空＝数据结束时间"></label>
+              <label title="空＝文件数据起始时间（自定义时间启用时＝自定义起始时间）。写法与数据源页「指定时间段播放」一致：2026-10-12 08:00:00[.fff] / epoch 秒 / 只写 08:00:00（当天时刻）">起始时刻（空＝数据起始时间） <input id="wp-tstart" placeholder="2026-10-12 08:00:00 / epoch 秒 / 08:00:00"></label>
+              <label title="空＝文件数据结束时间（按采样率计算；自定义结束时间填了则＝它）；与周波数同时给出时取先到者。写法同起始时刻：2026-10-12 08:10:00 / epoch 秒 / 08:10:00">结束时刻（空＝数据结束时间） <input id="wp-tend" placeholder="2026-10-12 08:10:00 / epoch 秒 / 08:10:00"></label>
             </div>
             <div class="row2">
               <label title="从起始时刻起加载的周波数（点数 = 周波数 × 每周波点数，按重采样率计）；空＝起止时刻之间全部（受「最多加载点数」限制，默认 2000 万）">加载周波数（空＝整段） <input id="wp-ncyc" type="number" min="1" step="1" value="300"></label>
@@ -1041,8 +1041,8 @@
           <div class="wp-group wp-rmsg" id="wp-sec-rms">
             <div class="wp-group-title">起止时刻 / 时长、统计窗、右键周波窗周波数（数据按上方公共配置解释，通道随波形曲线的勾选）</div>
             <div class="row2">
-              <label title="空＝文件数据起始时间（自定义时间启用时＝自定义起始时间）">起始时刻（空＝数据起始时间） <input id="wp-rms-tstart" placeholder="空＝数据起始时间"></label>
-              <label title="空＝文件数据结束时间（或由时长决定）">结束时刻（空＝数据结束时间） <input id="wp-rms-tend" placeholder="空＝数据结束时间"></label>
+              <label title="空＝文件数据起始时间（自定义时间启用时＝自定义起始时间）。写法与数据源页「指定时间段播放」一致：2026-10-12 08:00:00[.fff] / epoch 秒 / 只写 08:00:00（当天时刻）">起始时刻（空＝数据起始时间） <input id="wp-rms-tstart" placeholder="2026-10-12 08:00:00 / epoch 秒 / 08:00:00"></label>
+              <label title="空＝文件数据结束时间（或由时长决定）。写法同起始时刻：2026-10-12 08:10:00 / epoch 秒 / 08:10:00">结束时刻（空＝数据结束时间） <input id="wp-rms-tend" placeholder="2026-10-12 08:10:00 / epoch 秒 / 08:10:00"></label>
             </div>
             <div class="row2">
               <label title="从起始时刻起统计的时长；与结束时刻同时填时取先到者">或 时长 (s) <input id="wp-rms-dur" type="number" min="0.02" step="0.1" placeholder="空"></label>

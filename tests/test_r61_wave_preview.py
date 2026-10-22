@@ -291,3 +291,48 @@ def test_r65_fs_from_file_and_nilm_wave_file(cfg, wave_file, client, tmp_path):
     client.put("/api/config", json={"source": {"kind": "simulator"}})
     assert client.get("/api/nilm/wave_file", params={"n": 3}).status_code == 400
     client.put("/api/config", json={"source": {"kind": "csv_file", "path": str(wave_file)}})
+
+
+def test_r68_tod_time_text_in_custom_mode(tmp_path):
+    """v0.68：起止时刻写法与数据源页一致——自定义时间模式下也接受只写 HH:MM:SS（＝自定义起始时间当天的该时刻）。"""
+    import os
+    from elec_tool.config import AppConfig
+    from elec_tool.wave_preview import load_waveform, file_info
+    path = os.path.join("data", "nilm_bus_mixed.csv")
+    if not os.path.isfile(path):
+        import pytest
+        pytest.skip("样例文件不存在")
+    base = AppConfig.from_dict(AppConfig().to_dict())
+    base.source.custom_time = True
+    base.source.custom_time_start = "2026-10-12 08:00:00"
+    info = file_info(base, path)
+    fs = float(info["fs"])
+    a = load_waveform(base, path, t_start="08:00:01", t_end="08:00:01.5", channels=["Ia"])
+    b = load_waveform(base, path, t_start="2026-10-12 08:00:01", t_end="2026-10-12 08:00:01.5", channels=["Ia"])
+    assert a["n"] == b["n"] and abs(a["n"] - 0.5 * fs) <= 2
+    assert abs(a["t"][0] - b["t"][0]) < 1e-6
+
+
+def test_r68_tod_time_text_in_file_mode():
+    """v0.68：文件时间模式下起止时刻也可只写 HH:MM:SS（与数据源页一致），与完整日期时间结果相同。"""
+    import os
+    from elec_tool.config import AppConfig
+    from elec_tool.timefmt import local_tod_s
+    from elec_tool.wave_preview import load_waveform, file_info
+    from datetime import datetime
+    path = os.path.join("data", "nilm_bus_mixed.csv")
+    if not os.path.isfile(path):
+        import pytest
+        pytest.skip("样例文件不存在")
+    base = AppConfig.from_dict(AppConfig().to_dict())
+    info = file_info(base, path)
+    t0 = float(info["t_start"]); fs = float(info["fs"])
+    d0 = datetime.fromtimestamp(t0 - local_tod_s(t0))
+    tod = local_tod_s(t0) + 1.0
+    hh, mm, ss = int(tod // 3600), int(tod % 3600 // 60), tod % 60
+    s_txt = f"{hh:02d}:{mm:02d}:{ss:06.3f}"; e_txt = f"{hh:02d}:{mm:02d}:{ss + 0.5:06.3f}"
+    full = lambda x: d0.strftime("%Y-%m-%d ") + x
+    a = load_waveform(base, path, t_start=s_txt, t_end=e_txt, channels=["Ia"])
+    b = load_waveform(base, path, t_start=full(s_txt), t_end=full(e_txt), channels=["Ia"])
+    assert a["n"] == b["n"] and abs(a["n"] - 0.5 * fs) <= 2
+    assert abs(a["t"][0] - b["t"][0]) < 1e-6

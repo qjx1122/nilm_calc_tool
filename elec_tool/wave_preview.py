@@ -58,9 +58,13 @@ def _prep_cfg(base: AppConfig, path: str, t_start: str = "", t_end: str = "", in
         if not te_txt and custom_end:
             te_txt = custom_end
         def _abs(txt: str, what: str) -> float:
+            # v0.68：与数据源页「指定时间段播放」一致：完整日期时间 / epoch 秒 / 只写 HH:MM:SS[.fff]
+            # （只写时刻＝自定义起始时间所在当天（本地时间）的该时刻）
             kind, v = parse_play_start("time", txt)
-            if kind != "abs":
-                raise WaveError(f"自定义时间模式下{what}请写完整日期时间或 epoch 秒（当前 {txt!r}）")
+            if kind == "tod":
+                from datetime import datetime
+                d0 = datetime.fromtimestamp(t0c).replace(hour=0, minute=0, second=0, microsecond=0)
+                return d0.timestamp() + float(v)
             return float(v)
         a = _abs(ts_txt, "起始时刻") if ts_txt else None
         b = _abs(te_txt, "结束时刻") if te_txt else None
@@ -78,8 +82,16 @@ def _prep_cfg(base: AppConfig, path: str, t_start: str = "", t_end: str = "", in
         parse_play_start("time", ts_txt)
         cfg.source.play_start_mode = "time"; cfg.source.play_start_value = ts_txt
     if te_txt:
-        parse_play_start("time", te_txt)
-        cfg.source.play_end_time = te_txt
+        kind, v = parse_play_start("time", te_txt)
+        if kind == "tod":
+            # v0.68：结束时刻只写 HH:MM:SS（与数据源页「时间段结束」写法一致）：按文件数据起始时间所在当天折算成绝对时刻，
+            # 与 csv_file 源对 play_end_time 的处理同一公式（t_start − 当天时刻(t_start) + 指定时刻）
+            from .timefmt import local_tod_s
+            t0f = float(info["t_start"]) if info.get("t_start") is not None else 0.0
+            te_abs = t0f - local_tod_s(t0f) + float(v)
+            cfg.source.play_end_time = repr(te_abs)
+        else:
+            cfg.source.play_end_time = te_txt
     if ts_txt and te_txt:
         a, b = parse_play_start("time", ts_txt), parse_play_start("time", te_txt)
         if a[0] == b[0] and b[1] <= a[1]:
