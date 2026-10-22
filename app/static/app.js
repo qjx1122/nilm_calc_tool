@@ -3610,11 +3610,35 @@ async function ntApply() {
 }
 
 /* v0.61：数据处理 · 波形预览（GET /api/process/wave/info|load|rms） */
-const WP = { info: null, wave: null, rms: null, cyc: null, files: [] };
+const WP = { info: null, wave: null, rms: null, cyc: null, files: [], defaults: null };
 window.WP = WP;
 const WP_COLORS = { Ua: '#4ea1ff', Ub: '#3ddc97', Uc: '#ffb648', Ia: '#ff7ac6', Ib: '#9d7bff', Ic: '#5ee0d0' };
-function wpSide() { const el = $('#wp-side'); return el && el.value === 'branch' ? 'branch' : 'bus'; }
+const WP_BASE_KEY = 'elec_tool.wave_preview.base';   // v0.62：基准配置存浏览器本地（独立于运行配置）
 function wpVal(id) { const el = $('#' + id); return el ? String(el.value || '').trim() : ''; }
+/* v0.62：基准配置（fs / f_nom / PT·CT / UTC）——独立字段，随每次请求以查询参数传给服务端 */
+function wpBase() {
+  return { fs: wpVal('wp-base-fs'), f_nom: wpVal('wp-base-fnom'), pt_ct_enabled: $('#wp-base-ptct') ? ($('#wp-base-ptct').checked ? '1' : '0') : '',
+           pt_ratio: wpVal('wp-base-pt'), ct_ratio: wpVal('wp-base-ct'), file_time_utc: $('#wp-base-utc') ? ($('#wp-base-utc').checked ? '1' : '0') : '' };
+}
+function wpSetBase(b) {
+  if (!b) return;
+  const set = (id, v) => { const el = $('#' + id); if (el && v !== undefined && v !== null) el.value = v; };
+  set('wp-base-fs', b.fs); set('wp-base-fnom', b.f_nom); set('wp-base-pt', b.pt_ratio); set('wp-base-ct', b.ct_ratio);
+  if ($('#wp-base-ptct')) $('#wp-base-ptct').checked = !!(b.pt_ct_enabled === true || b.pt_ct_enabled === '1' || b.pt_ct_enabled === 1);
+  if ($('#wp-base-utc')) $('#wp-base-utc').checked = !!(b.file_time_utc === true || b.file_time_utc === '1' || b.file_time_utc === 1);
+}
+function wpSaveBase() { try { localStorage.setItem(WP_BASE_KEY, JSON.stringify(wpBase())); } catch (e) { /* 隐私模式 */ } }
+async function wpLoadDefaults() {
+  try {
+    const d = await api('/api/process/wave/defaults', undefined, 'bus');
+    WP.defaults = d;
+    wpSetBase(d.base);                                   // 出厂值
+    let saved = null; try { saved = JSON.parse(localStorage.getItem(WP_BASE_KEY) || 'null'); } catch (e) { saved = null; }
+    if (saved && typeof saved === 'object') wpSetBase(saved);   // 浏览器本地保存的改动优先
+    if ($('#wp-ncyc') && !$('#wp-ncyc').value) $('#wp-ncyc').value = d.default_cycles || 300;
+    if ($('#wp-cyc-n') && !$('#wp-cyc-n').value) $('#wp-cyc-n').value = d.default_cycles || 300;
+  } catch (e) { /* 服务不可用时保留 HTML 默认 */ }
+}
 function wpChans() { return Array.from(document.querySelectorAll('#wp-chans .wp-ch')).filter(c => c.checked).map(c => c.value); }
 function wpQuery(params) {
   const q = new URLSearchParams();
@@ -3652,10 +3676,13 @@ async function wpInfo(silent) {
   const path = wpVal('wp-path');
   if (!path) { if (!silent) toast('请先填写波形文件路径', 'err'); return null; }
   try {
-    const d = await api('/api/process/wave/info?' + wpQuery({ path, side: wpSide() }), undefined, 'bus');
+    const d = await api('/api/process/wave/info?' + wpQuery(Object.assign({ path }, wpBase())), undefined, 'bus');
     WP.info = d; wpRenderInfo(d);
-    // 通道勾选框：文件里没有的通道置灰
-    document.querySelectorAll('#wp-chans .wp-ch').forEach(c => { const has = (d.channels || []).includes(c.value); c.disabled = !has; c.parentElement.classList.toggle('off', !has); if (!has) c.checked = false; else if (!WP.chTouched) c.checked = true; });
+    // v0.62：默认起止时刻＝文件数据起止时间（波形与有效值两组都填）；静默刷新（加载后补取信息）只填空着的输入框，不覆盖用户已填的值
+    ['wp-tstart', 'wp-rms-tstart'].forEach(id => { const el = $('#' + id); if (el && (!silent || !el.value)) el.value = d.t_start_local || ''; });
+    ['wp-tend', 'wp-rms-tend'].forEach(id => { const el = $('#' + id); if (el && (!silent || !el.value)) el.value = d.t_end_local || ''; });
+    // 通道勾选框：文件里没有的通道置灰；静默刷新不改动已有勾选
+    document.querySelectorAll('#wp-chans .wp-ch').forEach(c => { const has = (d.channels || []).includes(c.value); c.disabled = !has; c.parentElement.classList.toggle('off', !has); if (!has) c.checked = false; else if (!silent && !WP.chTouched) c.checked = true; });
     if (!silent) toast(`文件信息：${d.n_channels} 通道 · ${wpFs(d.fs)} Hz · ${fmtDur(d.duration_s)}`, 'ok');
     return d;
   } catch (e) { WP.info = null; wpRenderInfo(null); toast('获取文件信息失败：' + e.message, 'err'); return null; }
@@ -3678,7 +3705,7 @@ function wpDrawWave(cv, d, subId, label) {
     height: label === 'cyc' ? 240 : 260, zero: true });
   if (sub) {
     const span = d.t[d.t.length - 1] - t0;
-    sub.textContent = `（${d.n} 点 × ${(d.channels_loaded || []).length} 通道 · ${wpFs(d.fs)} Hz${d.resampled ? '（由 ' + wpFs(d.fs_src) + ' Hz 重采样）' : ''} · ${wpFmtT(t0)} → ${wpFmtT(d.t[d.t.length - 1])}，${span.toFixed(3)} s${label === 'cyc' && d.cyc_center ? '，中心 ' + wpFmtT(d.cyc_center) + '，' + d.cyc_n + ' 个周波' : ''}${d.truncated ? '，已截断' : ''}）`;
+    sub.textContent = `（${d.n} 点 × ${(d.channels_loaded || []).length} 通道 · ${wpFs(d.fs)} Hz${d.resampled ? '（由 ' + wpFs(d.fs_src) + ' Hz ' + (d.method || '') + ' 重采样）' : ''} · ${wpFmtT(t0)} → ${wpFmtT(d.t[d.t.length - 1])}，${span.toFixed(3)} s${label === 'cyc' && d.cyc_center ? '，中心 ' + wpFmtT(d.cyc_center) + '，' + d.cyc_n + ' 个周波' : ''}${d.truncated ? '，已截断' : ''}）`;
   }
   bindCtxMenu(cv, () => canvasNativeItems(cv).concat([{ key: 'sep', sep: true }, { key: 'zoom-reset', label: '复位缩放', onClick: () => zoomReset(cv) },
     { key: 'native', label: '浏览器原生菜单（Shift + 右键）', disabled: true }]));
@@ -3687,12 +3714,13 @@ async function wpLoad() {
   const path = wpVal('wp-path');
   if (!path) { toast('请先填写波形文件路径', 'err'); return; }
   const chans = wpChans();
-  const params = { path, side: wpSide(), t_start: wpVal('wp-tstart'), t_end: wpVal('wp-tend'), n: wpVal('wp-n'), fs: wpVal('wp-fs'), channels: chans.join(',') };
+  const params = Object.assign({ path, t_start: wpVal('wp-tstart'), t_end: wpVal('wp-tend'), n_cycles: wpVal('wp-ncyc'), fs_out: wpVal('wp-fs'),
+                                 method: wpVal('wp-method') || 'linear', channels: chans.join(',') }, wpBase());
   const btn = $('#btn-wp-load'); if (btn) btn.disabled = true;
   wpStatus('加载波形中…');
   try {
-    // 点数为空 ⇒ 显式传 n=（空串＝不限点数：按时间段 / 整段到文件末尾，服务端按 max_points 截断）
-    const d = await api('/api/process/wave/load?' + wpQuery(params) + (params.n ? '' : '&n='), undefined, 'bus');
+    // 周波数为空 ⇒ 不传 n / n_cycles ＝ 起止时刻之间全部（服务端按 max_points 截断）
+    const d = await api('/api/process/wave/load?' + wpQuery(params), undefined, 'bus');
     WP.wave = d; zoomReset($('#wp-wave'));
     wpDrawWave($('#wp-wave'), d, 'wp-wave-sub', 'wave');
     wpStatus(`已加载波形 ${d.n} 点 × ${d.channels_loaded.length} 通道（${wpFs(d.fs)} Hz）` + ((d.notes || []).length ? '；' + d.notes.map(esc).join('；') : ''), d.truncated ? 'bad' : 'ok');
@@ -3712,7 +3740,7 @@ function wpDrawRms(d) {
     { ylabel: hasU && hasI ? 'V / A' : hasU ? 'V' : 'A', fmtX: x => tsX(x + t0, span), fmtTip: x => fmtLocalInput(x + t0), tbase: t0, height: 260 });
   if (sub) sub.textContent = `（${d.n} 点 · ${d.agg_cycles > 1 ? '每 ' + d.agg_cycles + ' 个周波一点' : '逐周波'} · 共 ${d.cycles_total} 周波 · ${wpFmtT(t0)} → ${wpFmtT(d.t[d.t.length - 1])}，${fmtDur(span)}；右键曲线可「显示周波窗」）`;
   bindCtxMenu(cv, (xEpoch) => {
-    const nEl = $('#wp-cyc-n'); const n = Math.max(1, Math.min(20000, parseInt((nEl && nEl.value) || '1000', 10) || 1000));
+    const nEl = $('#wp-cyc-n'); const n = Math.max(1, Math.min(20000, parseInt((nEl && nEl.value) || '300', 10) || 300));
     const noX = !isNum(xEpoch);
     return canvasNativeItems(cv).concat([
       { key: 'sep', sep: true },
@@ -3727,8 +3755,8 @@ function wpDrawRms(d) {
 async function wpRms() {
   const path = wpVal('wp-path');
   if (!path) { toast('请先填写波形文件路径', 'err'); return; }
-  const params = { path, side: wpSide(), t_start: wpVal('wp-rms-tstart') || wpVal('wp-tstart'), t_end: wpVal('wp-rms-tend'), duration_s: wpVal('wp-rms-dur'),
-                   agg_cycles: wpVal('wp-rms-agg') || 1, channels: wpChans().join(',') };
+  const params = Object.assign({ path, t_start: wpVal('wp-rms-tstart') || wpVal('wp-tstart'), t_end: wpVal('wp-rms-tend'), duration_s: wpVal('wp-rms-dur'),
+                                 agg_cycles: wpVal('wp-rms-agg') || 1, channels: wpChans().join(',') }, wpBase());
   const btn = $('#btn-wp-rms'); if (btn) btn.disabled = true;
   wpStatus('计算有效值曲线中…');
   try {
@@ -3744,7 +3772,7 @@ async function wpRms() {
 async function wpLoadCycleWindow(tEpoch, n) {
   const path = wpVal('wp-path');
   if (!path || !isNum(tEpoch)) return false;
-  const fnom = (WP.info && WP.info.f_nom) || (WP.rms && WP.rms.f_nom) || 50;
+  const fnom = (+wpVal('wp-base-fnom')) || (WP.info && WP.info.f_nom) || (WP.rms && WP.rms.f_nom) || 50;
   const half = (n / 2) / fnom;
   let tA = tEpoch - half, tB = tEpoch + half;
   if (WP.info && isNum(WP.info.t_start) && isNum(WP.info.t_end)) {       // 靠近文件两端时整体平移，保证仍是 n 个周波
@@ -3754,7 +3782,7 @@ async function wpLoadCycleWindow(tEpoch, n) {
   }
   wpStatus(`装载周波窗：中心 ${fmtLocalInput(tEpoch)}，${n} 个周波…`);
   try {
-    const d = await api('/api/process/wave/load?' + wpQuery({ path, side: wpSide(), t_start: tA.toFixed(6), t_end: tB.toFixed(6), channels: wpChans().join(','), n: '' }) + '&n=', undefined, 'bus');
+    const d = await api('/api/process/wave/load?' + wpQuery(Object.assign({ path, t_start: tA.toFixed(6), t_end: tB.toFixed(6), channels: wpChans().join(',') }, wpBase())), undefined, 'bus');
     d.cyc_center = tEpoch; d.cyc_n = n;
     WP.cyc = d; zoomReset($('#wp-cyc'));
     wpDrawWave($('#wp-cyc'), d, 'wp-cyc-sub', 'cyc');
@@ -3774,14 +3802,15 @@ function bindWavePreview() {
   if (!$('#wp-form')) return;
   $('#wp-files').addEventListener('change', () => { if ($('#wp-files').value) { $('#wp-path').value = $('#wp-files').value; WP.info = null; wpInfo(true); } });
   $('#wp-path').addEventListener('change', () => { WP.info = null; });
-  $('#wp-side').addEventListener('change', () => { WP.info = null; });
+  ['wp-base-fs', 'wp-base-fnom', 'wp-base-pt', 'wp-base-ct', 'wp-base-ptct', 'wp-base-utc'].forEach(id => $('#' + id).addEventListener('change', () => { WP.info = null; wpSaveBase(); }));
   $('#btn-wp-info').addEventListener('click', () => wpInfo(false));
   $('#btn-wp-load').addEventListener('click', wpLoad);
   $('#btn-wp-rms').addEventListener('click', wpRms);
   $('#btn-wp-refresh').addEventListener('click', wpListFiles);
   document.querySelectorAll('#wp-chans .wp-ch').forEach(c => c.addEventListener('change', () => { WP.chTouched = true; }));
-  ['wp-tstart', 'wp-tend', 'wp-n', 'wp-fs'].forEach(id => $('#' + id).addEventListener('keydown', (e) => { if (e.key === 'Enter') wpLoad(); }));
+  ['wp-tstart', 'wp-tend', 'wp-ncyc', 'wp-fs'].forEach(id => $('#' + id).addEventListener('keydown', (e) => { if (e.key === 'Enter') wpLoad(); }));
   ['wp-rms-tstart', 'wp-rms-tend', 'wp-rms-dur'].forEach(id => $('#' + id).addEventListener('keydown', (e) => { if (e.key === 'Enter') wpRms(); }));
+  wpLoadDefaults();
   wpListFiles();
   renderWavePreview();
 }

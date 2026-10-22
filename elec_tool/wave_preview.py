@@ -23,6 +23,8 @@ CHANNELS: Tuple[str, ...] = ("Ua", "Ub", "Uc", "Ia", "Ib", "Ic")
 _FIELD_OF = {"Ua": "ua", "Ub": "ub", "Uc": "uc", "Ia": "ia", "Ib": "ib", "Ic": "ic"}
 MAX_POINTS_DEFAULT = 1_000_000       # 单次返回的最多采样点（每通道）
 MAX_RMS_POINTS_DEFAULT = 200_000     # 有效值曲线最多点数，超过则合并相邻周波
+RESAMPLE_METHODS: Tuple[str, ...] = ("linear", "nearest", "fft")   # v0.62：与「重采样」功能同一组方法
+DEFAULT_CYCLES = 300                 # v0.62：默认加载 / 周波窗的周波数
 
 
 class WaveError(ValueError):
@@ -140,9 +142,12 @@ def file_info(base: AppConfig, path: str) -> Dict[str, Any]:
     elif t0 is None:
         notes.append("文件没有时间列或时标无法解析：时间轴按 行号 / fs 计")
         t0 = 0.0; t1 = (n_rows - 1) / fs
-    if t1 is None:
-        t1 = t0 + (n_rows - 1) / fs
+    # v0.62：时长与结束时间按 采样率 × 数据点数 计算（结束时间＝起始 + (行数−1)/fs）；时标里的末行时间另记，差异大时提示
+    t_end_ts = t1
     duration = (n_rows / fs) if fs > 0 else 0.0
+    t1 = t0 + (n_rows - 1) / fs
+    if t_end_ts is not None and abs(t_end_ts - t1) > max(1.0 / fs, 1e-3) * 2:
+        notes.append(f"按时标末行的结束时间 {t_end_ts:.3f} 与按 采样率×点数 计算的 {t1:.3f} 相差 {t_end_ts - t1:+.3f} s（文件内有缺口或时标不均匀）")
     if fs_est and abs(fs_est - fs_cfg) / fs_cfg > 0.02:
         notes.append(f"时标推算采样率 {fs_est:.1f} Hz 与基准配置 sampling.fs={fs_cfg:g} Hz 相差 >2%，波形加载按推算值解释")
     return {"ok": True, "path": path, "size_mb": round(size / 1024 / 1024, 3), "encoding": enc, "has_header": has_header,
@@ -150,7 +155,7 @@ def file_info(base: AppConfig, path: str) -> Dict[str, Any]:
             "columns": {c: idx.get(_FIELD_OF[c]) for c in chans}, "rows": n_rows,
             "fs": fs, "fs_est": fs_est, "fs_configured": fs_cfg, "f_nom": float(cfg.sampling.f_nom),
             "samples_per_cycle": int(round(fs / float(cfg.sampling.f_nom))),
-            "duration_s": duration, "t_start": t0, "t_end": t1, "ts_mode": ts_mode, "custom_time": bool(cfg.source.custom_time),
+            "duration_s": duration, "t_start": t0, "t_end": t1, "t_end_by_timestamp": t_end_ts, "ts_mode": ts_mode, "custom_time": bool(cfg.source.custom_time),
             "pt_ct": {"enabled": bool(cfg.transform.enabled), "pt_ratio": cfg.transform.pt_ratio, "ct_ratio": cfg.transform.ct_ratio},
             "notes": notes}
 
@@ -201,14 +206,17 @@ def _pick(blk, ch: str) -> np.ndarray:
 
 
 # ------------------------------------------------------------------ ② 原始波形
-def load_waveform(base: AppConfig, path: str, *, t_start: str = "", t_end: str = "", n_points: Optional[int] = 1000,
-                  fs_out: Optional[float] = None, channels: Optional[Sequence[str]] = None,
-                  max_points: int = MAX_POINTS_DEFAULT) -> Dict[str, Any]:
+def load_waveform(base: AppConfig, path: str, *, t_start: str = "", t_end: str = "", n_points: Optional[int] = None,
+                  n_cycles: Optional[int] = None, fs_out: Optional[float] = None, method: str = "linear",
+                  channels: Optional[Sequence[str]] = None, max_points: int = MAX_POINTS_DEFAULT) -> Dict[str, Any]:
     """读一段原始采样并（可选）重采样。
 
-    - ``t_start`` 空＝文件起点；``t_end`` 给定＝按时间段（忽略 ``n_points``）；否则按 ``n_points``（输出点数，按 ``fs_out`` 计）；
-      ``t_end`` 与 ``n_points`` 都为空＝从起点到文件末尾（受 ``max_points`` 限制，超出截断并提示）。
-    - ``fs_out`` 空或等于原采样率＝原始点；否则线性插值到 起点 + k/fs_out 等间隔网格（降采样无抗混叠，仅作预览）。
+    - ``t_start`` 空＝文件起点；``t_end`` 空＝文件末尾；点数上限＝``n_points``（输出点数，按 ``fs_out`` 计）或
+      ``n_cycles``（周波数 × 每周波点数，v0.62 默认 300 周波）；两者都为空＝整个时间段（受 ``max_points`` 限制，超出截断并提示）。
+      时间段与点数同时给出时取先到者。
+    - ``fs_out`` 空或等于原采样率＝原始点；否则按 ``method`` 重采样到 起点 + k/fs_out 等间隔网格：
+      ``linear`` 线性插值 / ``nearest`` 最近邻 / ``fft`` 频域（与「重采样」功能同一组方法；fft 自带理想低通抗混叠，
+      输出点数取整后实际采样率略有偏差时记入 notes）。
     - 返回：t（epoch 秒）、channels{Ua:[…]…}、units、fs、fs_src、n、truncated、源信息。值为一次侧口径（随基准配置 PT/CT）。
     """
     if not path or not os.path.isfile(path):
@@ -221,12 +229,20 @@ def load_waveform(base: AppConfig, path: str, *, t_start: str = "", t_end: str =
     if not (fs_o > 0):
         raise WaveError(f"重采样率必须 > 0（当前 {fs_out}）")
     resample = abs(fs_o - fs_src) > 1e-9 * max(fs_o, fs_src)
+    method = str(method or "linear").strip().lower()
+    if method not in RESAMPLE_METHODS:
+        raise WaveError(f"重采样方式必须是 {'/'.join(RESAMPLE_METHODS)} 之一（当前 {method!r}）")
     te = _parse_t(t_end)
     n_req: Optional[int] = None
-    if te is None and n_points is not None and str(n_points) != "":
+    if n_points is not None and str(n_points) != "":
         n_req = int(n_points)
         if n_req <= 0:
             raise WaveError(f"点数必须 > 0（当前 {n_points}）")
+    elif n_cycles is not None and str(n_cycles) != "":
+        nc = int(n_cycles)
+        if nc <= 0:
+            raise WaveError(f"周波数必须 > 0（当前 {n_cycles}）")
+        n_req = nc * max(1, int(round(fs_o / float(cfg.sampling.f_nom))))
     max_points = max(1, int(max_points))
     want_out = min(n_req, max_points) if n_req is not None else max_points
     # 需要读入的原始点数（重采样时按比例多读 1 个周波做插值边界）
@@ -246,6 +262,7 @@ def load_waveform(base: AppConfig, path: str, *, t_start: str = "", t_end: str =
     t = np.concatenate(ts)
     arr = {c: np.concatenate(data[c]) for c in chans}
     truncated = False
+    fs_eff: Optional[float] = None
     if resample:
         t0 = float(t[0]); t_last = float(t[-1])
         n_grid = int(math.floor((t_last - t0) * fs_o)) + 1
@@ -254,7 +271,25 @@ def load_waveform(base: AppConfig, path: str, *, t_start: str = "", t_end: str =
         if n_grid > max_points:
             n_grid = max_points; truncated = True
         tg = t0 + np.arange(n_grid) / fs_o
-        out = {c: np.interp(tg, t, arr[c]) for c in chans}
+        if method == "nearest":
+            idx = np.clip(np.rint((tg - t0) * fs_src).astype(np.int64), 0, t.size - 1)
+            out = {c: arr[c][idx] for c in chans}
+        elif method == "fft":
+            # 与 resample.py 同一实现（周期语义）：n_in 点 → n_out = round(n_in·fs_o/fs_src) 点覆盖同一时长
+            n_in = int(t.size); n_out = max(2, int(round(n_in * fs_o / fs_src)))
+            fs_eff = n_out * fs_src / n_in
+            m_out = n_out // 2 + 1
+            out = {}
+            for c in chans:
+                spec = np.fft.rfft(arr[c]); keep = min(spec.size, m_out)
+                ns = np.zeros(m_out, dtype=np.complex128); ns[:keep] = spec[:keep]
+                if n_out % 2 == 0 and keep == m_out and m_out <= spec.size:
+                    ns[-1] = ns[-1].real
+                out[c] = (np.fft.irfft(ns, n=n_out) * (n_out / n_in))[:n_grid]
+            if out[chans[0]].size < n_grid:          # 取整后比网格短：网格按实际输出长度裁剪
+                n_grid = int(out[chans[0]].size); tg = tg[:n_grid]
+        else:
+            out = {c: np.interp(tg, t, arr[c]) for c in chans}
         t_out = tg
     else:
         n_keep = t.size
@@ -268,16 +303,19 @@ def load_waveform(base: AppConfig, path: str, *, t_start: str = "", t_end: str =
     notes: List[str] = list(info.get("notes") or [])
     if truncated:
         notes.append(f"点数超过单次上限 {max_points}，只返回前 {t_out.size} 点；可缩小时间段 / 指定点数 / 降低重采样率")
-    if resample and fs_o < fs_src:
-        notes.append("降采样为线性插值抽取（无抗混叠低通），仅作预览；要保真降采样请用上方「重采样」功能（fft）")
+    if resample and fs_o < fs_src and method != "fft":
+        notes.append(f"降采样方式 {method} 无抗混叠低通（高于新 Nyquist 的谐波会折叠到低频），仅作预览；要保真降采样请选 fft")
+    if fs_eff is not None and abs(fs_eff - fs_o) / fs_o > 1e-9:
+        notes.append(f"fft 方法输出点数取整后实际采样率 {fs_eff:.6f} Hz（目标 {fs_o:g}，偏差 {abs(fs_eff - fs_o) / fs_o * 100:.4f}%）；时间轴仍按目标采样率")
     rnd = 6
-    return {"ok": True, "path": path, "fs": fs_o, "fs_src": fs_src, "resampled": resample, "channels_loaded": chans,
+    return {"ok": True, "path": path, "fs": fs_o, "fs_src": fs_src, "resampled": resample, "method": (method if resample else None),
+            "fs_effective": fs_eff, "samples_per_cycle": max(1, int(round(fs_o / float(cfg.sampling.f_nom)))), "channels_loaded": chans,
             "n": int(t_out.size), "t": [float(x) for x in t_out],
             "channels": {c: [float(round(float(v), rnd)) if math.isfinite(v) else None for v in out[c]] for c in chans},
             "units": {c: ("V" if c[0] == "U" else "A") for c in chans},
             "t_first": float(t_out[0]) if t_out.size else None, "t_last": float(t_out[-1]) if t_out.size else None,
-            "request": {"t_start": str(t_start or ""), "t_end": str(t_end or ""), "n_points": n_req, "fs_out": fs_out,
-                        "channels": list(channels) if channels else None},
+            "request": {"t_start": str(t_start or ""), "t_end": str(t_end or ""), "n_points": n_req, "n_cycles": n_cycles, "fs_out": fs_out,
+                        "method": method, "channels": list(channels) if channels else None},
             "truncated": truncated, "eof": eof, "notes": notes}
 
 
@@ -356,3 +394,57 @@ def rms_curve(base: AppConfig, path: str, *, t_start: str = "", t_end: str = "",
             "request": {"t_start": str(t_start or ""), "t_end": str(t_end or ""), "duration_s": duration_s, "agg_cycles": agg,
                         "channels": list(channels) if channels else None},
             "notes": notes}
+
+
+# ------------------------------------------------------------------ v0.62：独立的基准配置（不与总线 / 分路侧运行配置关联）
+BASE_FIELDS: Tuple[str, ...] = ("fs", "f_nom", "pt_ct_enabled", "pt_ratio", "ct_ratio", "file_time_utc")
+
+
+def base_defaults(cfg: AppConfig) -> Dict[str, Any]:
+    """界面「基准配置」的初始值（来自出厂配置 configs/default.json）。"""
+    return {"fs": float(cfg.sampling.fs), "f_nom": float(cfg.sampling.f_nom), "pt_ct_enabled": bool(cfg.transform.enabled),
+            "pt_ratio": float(cfg.transform.pt_ratio), "ct_ratio": float(cfg.transform.ct_ratio),
+            "file_time_utc": bool(cfg.source.file_time_utc)}
+
+
+def make_base(default_cfg: AppConfig, **overrides: Any) -> AppConfig:
+    """出厂配置副本 + 界面给的几项（采样率 / 额定频率 / PT·CT 启用与变比 / 时标 UTC）→ 预览用基准配置。
+    None / 空串＝沿用出厂值；非法值抛 WaveError。"""
+    cfg = AppConfig.from_dict(default_cfg.to_dict())
+    cfg.source.kind = "csv_file"; cfg.source.custom_time = False; cfg.source.play_window = False
+    def _f(name: str, lo: float) -> Optional[float]:
+        v = overrides.get(name)
+        if v is None or str(v).strip() == "":
+            return None
+        try:
+            x = float(v)
+        except (TypeError, ValueError):
+            raise WaveError(f"基准配置 {name} 不是数字：{v!r}") from None
+        if not (x > lo):
+            raise WaveError(f"基准配置 {name} 必须 > {lo:g}（当前 {x:g}）")
+        return x
+    def _b(name: str) -> Optional[bool]:
+        v = overrides.get(name)
+        if v is None or str(v).strip() == "":
+            return None
+        return str(v).strip().lower() in ("1", "true", "on", "yes")
+    fs = _f("fs", 0); fn = _f("f_nom", 0); pt = _f("pt_ratio", 0); ct = _f("ct_ratio", 0)
+    en = _b("pt_ct_enabled"); utc = _b("file_time_utc")
+    if fs is not None:
+        cfg.sampling.fs = fs
+    if fn is not None:
+        cfg.sampling.f_nom = fn
+    if pt is not None:
+        cfg.transform.pt_ratio = pt
+    if ct is not None:
+        cfg.transform.ct_ratio = ct
+    if en is not None:
+        cfg.transform.enabled = en
+    if utc is not None:
+        cfg.source.file_time_utc = utc
+    cfg.source.path = "x.csv"                     # 只为通过校验；实际路径由各函数填
+    try:
+        cfg.validate()
+    except ConfigError as exc:
+        raise WaveError(f"基准配置无效：{exc}") from None
+    return cfg

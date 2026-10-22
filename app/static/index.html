@@ -938,16 +938,31 @@
               <select id="wp-files"><option value="">— 选择 data/ 下的 CSV —</option></select>
             </label>
             <label>波形文件路径 <input id="wp-path" placeholder="data/bus_bg.csv 或绝对路径"></label>
+            <div class="notes" style="margin:4px 0 2px"><b>基准配置</b>（独立于总线 / 分路侧运行配置，只用于本面板；初始值＝出厂配置，改动保存在浏览器本地）</div>
+            <div class="row2" id="wp-base">
+              <label title="配置采样率：文件时标推算不出或与之相差 <0.5% 时按此值">采样率 fs (Hz) <input id="wp-base-fs" type="number" min="1" step="any"></label>
+              <label title="额定频率：每周波点数 = fs / f_nom">额定频率 f_nom (Hz) <input id="wp-base-fnom" type="number" min="1" step="any"></label>
+            </div>
             <div class="row2">
-              <label title="PT/CT、列映射、时标解释取自该侧当前运行配置；不改动运行配置">基准配置 <select id="wp-side"><option value="bus">总线侧运行配置</option><option value="branch">分路侧运行配置</option></select></label>
+              <label class="chk" title="勾选＝数值换算为一次侧（电压 × PT、电流 × CT）"><input id="wp-base-ptct" type="checkbox"> 启用 PT/CT（一次侧口径）</label>
+              <label class="chk" title="文件时标按 UTC 解释（显示时换算为本地时间）"><input id="wp-base-utc" type="checkbox"> 文件时标为 UTC</label>
+            </div>
+            <div class="row2">
+              <label>PT 变比 <input id="wp-base-pt" type="number" min="0.000001" step="any"></label>
+              <label>CT 变比 <input id="wp-base-ct" type="number" min="0.000001" step="any"></label>
+            </div>
+            <div class="row2">
               <label>重采样率 (Hz，空＝原始采样率) <input id="wp-fs" type="number" min="1" step="any" placeholder="原始采样率"></label>
+              <label title="与「重采样」功能同一组方法：linear 线性插值 / nearest 最近邻 / fft 频域（降采样自带抗混叠）">重采样方式
+                <select id="wp-method"><option value="linear">linear 线性插值</option><option value="nearest">nearest 最近邻</option><option value="fft">fft 频域（抗混叠）</option></select>
+              </label>
             </div>
             <div class="row2">
-              <label title="空＝数据起点。写法同播放时间段：2026-10-13 08:00:02.5 / 08:00:02.5（与文件时标当天时刻比较）/ epoch 秒">起始时刻（空＝数据起点） <input id="wp-tstart" placeholder="2026-10-13 08:00:02.000"></label>
-              <label title="填了结束时刻就按时间段加载（忽略点数）">结束时刻（空＝按点数） <input id="wp-tend" placeholder="空"></label>
+              <label title="默认＝文件数据起始时间（获取文件信息后自动填入）。写法同播放时间段：2026-10-13 08:00:02.5 / 08:00:02.5 / epoch 秒">起始时刻（默认＝数据起始时间） <input id="wp-tstart" placeholder="空＝数据起点"></label>
+              <label title="默认＝文件数据结束时间；与周波数同时给出时取先到者">结束时刻（默认＝数据结束时间） <input id="wp-tend" placeholder="空＝文件末尾"></label>
             </div>
             <div class="row2">
-              <label title="从起始时刻起加载的点数（按重采样率计）；空且结束时刻也为空＝整段到文件末尾（单次最多 100 万点）">加载点数（空＝全部） <input id="wp-n" type="number" min="1" step="1" value="1000"></label>
+              <label title="从起始时刻起加载的周波数（点数 = 周波数 × 每周波点数，按重采样率计）；空＝起止时刻之间全部（单次最多 100 万点）">加载周波数（空＝整段） <input id="wp-ncyc" type="number" min="1" step="1" value="300"></label>
               <label>通道（默认全部）
                 <span class="toggle" id="wp-chans">
                   <label class="chk"><input type="checkbox" class="wp-ch" value="Ua" checked> Ua</label>
@@ -966,8 +981,8 @@
             </div>
             <h3 style="margin-top:10px">有效值曲线（逐周波 RMS）</h3>
             <div class="row2">
-              <label title="空＝数据起点">起始时刻（空＝数据起点） <input id="wp-rms-tstart" placeholder="空＝沿用上方起始时刻"></label>
-              <label title="空＝文件结尾（或由时长决定）">结束时刻（空＝文件结尾） <input id="wp-rms-tend" placeholder="空"></label>
+              <label title="默认＝文件数据起始时间（获取文件信息后自动填入）">起始时刻（默认＝数据起始时间） <input id="wp-rms-tstart" placeholder="空＝数据起点"></label>
+              <label title="默认＝文件数据结束时间（或由时长决定）">结束时刻（默认＝数据结束时间） <input id="wp-rms-tend" placeholder="空＝文件结尾"></label>
             </div>
             <div class="row2">
               <label title="从起始时刻起统计的时长；与结束时刻同时填时取先到者">或 时长 (s) <input id="wp-rms-dur" type="number" min="0.02" step="0.1" placeholder="空"></label>
@@ -975,10 +990,11 @@
             </div>
             <div class="btnrow">
               <button id="btn-wp-rms" class="primary">加载有效值曲线</button>
-              <label class="chk" style="margin-left:8px" title="右键有效值曲线「显示周波窗」时，以鼠标所指时刻为中心加载的周波数">周波窗周波数 <input id="wp-cyc-n" type="number" min="1" max="20000" step="1" value="1000" style="width:80px"></label>
+              <label class="chk" style="margin-left:8px" title="右键有效值曲线「显示周波窗」时，以鼠标所指时刻为中心加载的周波数">周波窗周波数 <input id="wp-cyc-n" type="number" min="1" max="20000" step="1" value="300" style="width:80px"></label>
             </div>
             <div id="wp-hint" class="notes">
-              <div>只读文件、不改运行配置、不启动引擎；数值为<b>一次侧口径</b>（随基准配置的 PT/CT）。采样率由前 3000 行时标推算，与配置值相差 &lt;0.5% 时按配置值。</div>
+              <div>只读文件、不改运行配置、不启动引擎；基准配置独立于运行配置。采样率由前 3000 行时标推算，与基准配置 fs 相差 &lt;0.5% 时按 fs；时长＝行数 / 采样率，结束时间＝起始 + (行数−1) / 采样率。</div>
+              <div>有效值曲线右键「显示周波窗」默认以该时刻为中心 300 个周波；加载周波数默认 300（6400 Hz 时 38400 点）。</div>
               <div>三张曲线与负荷辨识页一致：滚轮缩放 X、Shift+滚轮缩放 Y、放大后拖动平移、双击或「复位」恢复全图；右键菜单含复制 / 保存图片；有效值曲线右键「显示周波窗」在下方单独的周波窗曲线中显示以该时刻为中心的 N 个周波原始波形。</div>
             </div>
           </div>
