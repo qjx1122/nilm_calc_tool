@@ -172,7 +172,9 @@ async function main() {
   sw.click(); await sleep(3000);
   const cc = $('#wp-cyc').__chart;
   const centerTxt = $('#wp-cyc-sub').textContent;
-  check('周波窗画布（单独曲线）已装载：2 通道 × 50 周波 × 128 点 = 6400 点、原采样率', !!cc && cc.pts.length === 2 && cc.pts.every(s => s.data.length === 6400) && /6400 Hz/.test(centerTxt) && /50 个周波/.test(centerTxt), centerTxt);
+  check('v0.66：周波窗画布（单独曲线）已装载该段逐周波有效值：2 通道 × 50 个周波 = 50 点、每点≈RMS（Ia≈75 A 一次侧 / Ub≈5773 V）', !!cc && cc.pts.length === 2 && cc.pts.every(s => s.data.length === 50) && /50 个周波/.test(centerTxt) && /有效值/.test(centerTxt) && (() => { const ia = cc.pts.find(s => /Ia/.test(s.name)).data.map(p => p[1]); return Math.min(...ia) > 0 && Math.max(...ia) < 2 * Math.min(...ia); })(), centerTxt);
+  const cycRmsCall = calls.filter(x => x.url.includes('/api/process/wave/rms') && /agg_cycles=1/.test(x.url)).pop();
+  check('周波窗请求走 /api/process/wave/rms（agg_cycles=1、起止＝中心±N/2 周波）', !!cycRmsCall && /t_start=/.test(cycRmsCall.url) && /t_end=/.test(cycRmsCall.url), cycRmsCall && cycRmsCall.url.slice(0, 120));
   // v0.65：显示周波窗 2（瞬时值）
   check('v0.65：有效值曲线右键菜单含「显示周波窗 2」（原有「显示周波窗」保留）', keys.includes('show-window2') && keys.indexOf('show-window2') > keys.indexOf('show-window'), keys.join(','));
   window.closeCtxMenu && window.closeCtxMenu();
@@ -182,7 +184,7 @@ async function main() {
   check('「显示周波窗 2」可用、标签含「瞬时值」与鼠标所指时刻', !!sw2 && !sw2.classList.contains('disabled') && /瞬时值/.test(sw2.textContent) && /2026-10-13 16:00:0[12]/.test(sw2.textContent), sw2 && sw2.textContent);
   sw2.click(); await sleep(3000);
   const cc2 = $('#wp-cyc2').__chart; const c2txt = $('#wp-cyc2-sub').textContent;
-  check('周波窗 2 画布（单独曲线）已装载采样瞬时值：2 通道 × 6400 点、标注「采样瞬时值」；周波窗 1 不受影响', !!cc2 && cc2.pts.length === 2 && cc2.pts.every(s => s.data.length === 6400) && /采样瞬时值/.test(c2txt) && $('#wp-cyc').__chart.pts.length === 2, c2txt);
+  check('周波窗 2 画布（单独曲线）已装载采样瞬时值：2 通道 × 6400 点、标注「采样瞬时值」；周波窗 1（有效值 50 点）不受影响', !!cc2 && cc2.pts.length === 2 && cc2.pts.every(s => s.data.length === 6400) && /采样瞬时值/.test(c2txt) && $('#wp-cyc').__chart.pts.length === 2 && $('#wp-cyc').__chart.pts[0].data.length === 50, c2txt);
   check('周波窗 2 为瞬时值（同一周波内有正有负、峰值≈√2×有效值），而非有效值', (() => { const a = cc2.pts.find(s => /Ia/.test(s.name)).data.slice(0, 128).map(p => p[1]); const mx = Math.max(...a), mn = Math.min(...a); const rms = Math.sqrt(a.reduce((q, v) => q + v * v, 0) / a.length); return mn < 0 && mx > 0 && Math.abs(mx / rms - Math.SQRT2) < 0.1; })());
   const cycCall = calls.filter(x => x.url.includes('/api/process/wave/load')).pop();
   const m = cycCall && cycCall.url.match(/t_start=([\d.]+).*t_end=([\d.]+)/);

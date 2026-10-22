@@ -44,7 +44,7 @@ async function main() {
     },
   });
   const { window } = dom, { document } = window;
-  window.eval(js + '\n;window.__S = () => S;');
+  window.eval(js + '\n;window.__S = () => S; window.__render = render;');
   if (typeof window.init === 'function') window.init();
   await sleep(1500);
   const $ = (id) => document.getElementById(id);
@@ -212,6 +212,17 @@ async function main() {
   check('周波窗 2 不影响周波窗 1（仍为引擎周波窗，未装载离线数据）', !nlBus.winFile);
   click($('btn-nilm-wave2-clear')); await sleep(300);
   check('「周波窗 2 清除」后画布回到空提示', !nlBus.wave2 && /右键「显示周波窗 2」后显示/.test($('nilm-wave2-sub').textContent));
+  // v0.66：实时源（模拟器）时「显示周波窗 2」不可选
+  await api('/api/config', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ source: { kind: 'simulator' } }) });
+  await api('/api/state').then(st => { window.S.state = st; }); window.__render(); await sleep(300);
+  window.closeCtxMenu(); rc(cvP, 200); await sleep(200); menu = document.getElementById('ctxmenu');
+  const mw2s = menu && menu.querySelector('.mi[data-key="show-window2"]');
+  check('v0.66 输入方式＝模拟器时「显示周波窗 2」灰显不可选（提示注明只能离线文件），原「显示周波窗」不受影响', !!mw2s && mw2s.classList.contains('disabled') && /离线文件/.test(mw2s.title || mw2s.textContent || '') && !!menu.querySelector('.mi[data-key="show-window"]'), mw2s ? (mw2s.title || '').slice(0, 60) : 'none');
+  await api('/api/config', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ source: { kind: 'csv_file', path: 'data/nilm_bus_mixed.csv' } }) });
+  await api('/api/state').then(st => { window.S.state = st; }); window.__render(); await sleep(200);
+  window.closeCtxMenu(); rc(cvP, 200); await sleep(200); menu = document.getElementById('ctxmenu');
+  check('改回离线文件后「显示周波窗 2」恢复可选', !!menu && !!menu.querySelector('.mi[data-key="show-window2"]') && !menu.querySelector('.mi[data-key="show-window2"]').classList.contains('disabled'));
+  window.closeCtxMenu();
 
   console.log('L4 清空');
   click($('btn-nilm-clear')); await sleep(1500);

@@ -3299,13 +3299,15 @@ function renderNilmPqs(nl) {
     const running = curRunning(side);
     const nEl = E(side, 'nilm-win-count'); const n = parseInt((nEl && nEl.value) || '300', 10) || 300;
     const noX = !isNum(xEpoch);
+    const stx = (side === 'branch' ? BRD.state : S.state) || {}; const srcKind = ((stx.config || {}).source || {}).kind || '';
+    const isFile = srcKind === 'csv_file';                    // v0.66：周波窗 2 只对离线文件源可选
     return canvasNativeItems(cv).concat([                   // v0.47：原生菜单项在前、保持不变，业务项追加在后
       { key: 'sep', sep: true },
       { key: 'show-window', label: `显示周波窗（${noX ? '暂无曲线' : fmtLocalInput(xEpoch)}）`, disabled: running || noX,
         hint: running ? '引擎运行中不可用：请先停止数据源' : noX ? '趋势曲线有数据后，在曲线上右键' : `以该时刻为中心装载 ${n} 个周波（离线文件）`,
         onClick: () => loadNilmWindow(side, xEpoch, n) },
-      { key: 'show-window2', label: `显示周波窗 2（瞬时值，${noX ? '暂无曲线' : fmtLocalInput(xEpoch)}）`, disabled: noX,     // v0.65
-        hint: noX ? '趋势曲线有数据后，在曲线上右键' : `以该时刻为中心从本侧离线文件读取 ${n} 个周波的采样瞬时值曲线（Ua/Ub/Uc/Ia/Ib/Ic），显示在下方「周波窗 2」`,
+      { key: 'show-window2', label: `显示周波窗 2（瞬时值，${noX ? '暂无曲线' : fmtLocalInput(xEpoch)}）`, disabled: noX || !isFile,     // v0.65 / v0.66：仅离线文件源可选
+        hint: !isFile ? `当前输入方式为 ${srcKind || '—'}：周波窗 2 只能从离线文件（csv_file）读取瞬时值，实时源不可用` : noX ? '趋势曲线有数据后，在曲线上右键' : `以该时刻为中心从本侧离线文件读取 ${n} 个周波的采样瞬时值曲线（Ua/Ub/Uc/Ia/Ib/Ic），显示在下方「周波窗 2」`,
         onClick: () => loadNilmWave2(side, xEpoch, n) },
       { key: 'zoom-reset', label: '复位缩放', onClick: () => zoomReset(cv) },
       { key: 'native', label: '浏览器原生菜单（Shift + 右键）', disabled: true },
@@ -3363,7 +3365,7 @@ function renderNilm() {
     'v0.39：I 口径不存在跨相合并（三相电流有效值不能像有功那样相加），只能单相检测——检测对象「三相总」被忽略，只配了三相总时按 A/B/C 各自检测；上方趋势图「曲线」可选三相电流（显示哪几相用曲线下方图例勾选），auto 时 I 口径自动画电流。',
     'v0.37：每个算法的绝对阈值分 W（P 口径）与 A（I 口径）两套，检测器只用当前口径那一套，另一套不参与（表单中灰显）；相对门槛 rel_tol_pct / min_delta_pct 对两种口径都按窗内中位数折算。',
     'v0.46：非运行状态下可在趋势曲线上右键「显示周波窗」查看鼠标所指时刻为中心的周波数据，或在周波窗面板填时刻/周波数手动装载（留空＝数据起点起 300 个周波）；数据来自当前侧配置的离线文件，运行中不可用。',
-    'v0.65：趋势曲线右键「显示周波窗 2」：以该时刻为中心、周波数同上，显示的是「采样瞬时值曲线」（Ua/Ub/Uc/Ia/Ib/Ic 原始波形，按本侧配置的 PT/CT / 时标 / 自定义时间解释），而不是逐周波计算的 P/Q/I；从本侧离线文件读取，运行中也可用。',
+    'v0.65：趋势曲线右键「显示周波窗 2」：以该时刻为中心、周波数同上，显示的是「采样瞬时值曲线」（Ua/Ub/Uc/Ia/Ib/Ic 原始波形，按本侧配置的 PT/CT / 时标 / 自定义时间解释），而不是逐周波计算的 P/Q/I；从本侧离线文件读取。v0.66：只有输入方式为离线文件（csv_file）时可选，模拟器 / TCP / 文件追加等实时源下菜单项灰显。',
     '双滑窗均值差与 CUSUM 对单周波尖峰较敏感（会按均值摊成小事件）；需要抗尖峰请看中值滤波差分 / 稳态分段，或抬高 min_delta_pct。',
   ]);
 }
@@ -3820,7 +3822,7 @@ function wpDrawRms(d) {
     return canvasNativeItems(cv).concat([
       { key: 'sep', sep: true },
       { key: 'show-window', label: `显示周波窗（${noX ? '暂无曲线' : fmtLocalInput(xEpoch)}）`, disabled: noX,
-        hint: noX ? '有效值曲线有数据后，在曲线上右键' : `以该时刻为中心加载 ${n} 个周波的原始波形到下方「周波窗」`,
+        hint: noX ? '有效值曲线有数据后，在曲线上右键' : `以该时刻为中心取 ${n} 个周波的逐周波有效值到下方「周波窗」`,
         onClick: () => wpLoadCycleWindow(xEpoch, n) },
       { key: 'show-window2', label: `显示周波窗 2（瞬时值，${noX ? '暂无曲线' : fmtLocalInput(xEpoch)}）`, disabled: noX,     // v0.65
         hint: noX ? '有效值曲线有数据后，在曲线上右键' : `以该时刻为中心加载 ${n} 个周波的采样瞬时值曲线（不是有效值）到下方「周波窗 2」`,
@@ -3861,22 +3863,48 @@ async function wpLoadCycleWindow(tEpoch, n, which = 1) {
   }
   wpStatus(`装载${lbl}：中心 ${fmtLocalInput(tEpoch)}，${n} 个周波…`);
   try {
-    const d = await api('/api/process/wave/load?' + wpQuery(Object.assign({ path, t_start: tA.toFixed(6), t_end: tB.toFixed(6), channels: wpChans().join(',') }, wpBase())), undefined, 'bus');
-    d.cyc_center = tEpoch; d.cyc_n = n;
-    if (which === 2) WP.cyc2 = d; else WP.cyc = d;
-    zoomReset($('#' + cvId));
-    wpDrawWave($('#' + cvId), d, subId, which === 2 ? 'cyc2' : 'cyc');
-    wpStatus(`${lbl}已装载：${d.n} 点 × ${d.channels_loaded.length} 通道，中心 ${fmtLocalInput(tEpoch)}，${n} 个周波（${wpFs(d.fs)} Hz${which === 2 ? '，采样瞬时值' : ''}）`, 'ok');
+    const q = Object.assign({ path, t_start: tA.toFixed(6), t_end: tB.toFixed(6), channels: wpChans().join(',') }, wpBase());
+    if (which === 2) {
+      // 周波窗 2：采样瞬时值（原始波形）
+      const d = await api('/api/process/wave/load?' + wpQuery(q), undefined, 'bus');
+      d.cyc_center = tEpoch; d.cyc_n = n; WP.cyc2 = d;
+      zoomReset($('#' + cvId)); wpDrawWave($('#' + cvId), d, subId, 'cyc2');
+      wpStatus(`${lbl}已装载：${d.n} 点 × ${d.channels_loaded.length} 通道，中心 ${fmtLocalInput(tEpoch)}，${n} 个周波（${wpFs(d.fs)} Hz，采样瞬时值）`, 'ok');
+    } else {
+      // v0.66：周波窗（1）＝该段的逐周波有效值（统计窗 1 周波/点）
+      const d = await api('/api/process/wave/rms?' + wpQuery(Object.assign(q, { agg_cycles: 1 })), undefined, 'bus');
+      d.cyc_center = tEpoch; d.cyc_n = n; WP.cyc = d;
+      zoomReset($('#' + cvId)); wpDrawCycRms(d);
+      wpStatus(`${lbl}已装载：${d.n} 个周波的有效值 × ${Object.keys(d.channels || {}).length} 通道，中心 ${fmtLocalInput(tEpoch)}，${n} 个周波（每周波 ${d.samples_per_cycle} 点）`, 'ok');
+    }
     try { $('#' + cvId).scrollIntoView({ behavior: 'smooth', block: 'nearest' }); } catch (e) { /* jsdom */ }
     return true;
   } catch (e) { wpStatus(`装载${lbl}失败：` + esc(e.message), 'bad'); toast(`装载${lbl}失败：` + e.message, 'err'); return false; }
 }
 window.wpLoadCycleWindow = wpLoadCycleWindow;
+/* v0.66：周波窗（1）画布：该段逐周波有效值（风格同有效值曲线） */
+function wpDrawCycRms(d) {
+  const cv = $('#wp-cyc'); if (!cv) return;
+  const sub = $('#wp-cyc-sub');
+  if (!d || !d.t || !d.t.length) {
+    drawLine(cv, [], { empty: '在有效值曲线上右键「显示周波窗」后显示（该段的逐周波有效值）', height: 240 });
+    if (sub) sub.textContent = '（在有效值曲线上右键「显示周波窗」后显示：以该时刻为中心 N 个周波的逐周波有效值）';
+    return;
+  }
+  const t0 = d.t[0]; const chans = Object.keys(d.channels || {});
+  const hasU = chans.some(c => c[0] === 'U'), hasI = chans.some(c => c[0] === 'I');
+  const span = d.t[d.t.length - 1] - t0;
+  drawLine(cv, chans.map(ch => ({ name: `${ch} RMS (${(d.units || {})[ch] || ''})`, color: WP_COLORS[ch] || '#4ea1ff', data: d.t.map((x, i) => [x - t0, d.channels[ch][i]]) })),
+    { ylabel: hasU && hasI ? 'V / A' : hasU ? 'V' : 'A', fmtX: x => ts(x + t0), fmtTip: x => fmtLocalInput(x + t0), tbase: t0, height: 240 });
+  if (sub) sub.textContent = `（${d.n} 个周波的有效值 × ${chans.length} 通道 · 逐周波 · ${wpFmtT(t0)} → ${wpFmtT(d.t[d.t.length - 1])}，${span.toFixed(3)} s${d.cyc_center ? '，中心 ' + wpFmtT(d.cyc_center) + '，' + d.cyc_n + ' 个周波' : ''}）`;
+  bindCtxMenu(cv, () => canvasNativeItems(cv).concat([{ key: 'sep', sep: true }, { key: 'zoom-reset', label: '复位缩放', onClick: () => zoomReset(cv) },
+    { key: 'native', label: '浏览器原生菜单（Shift + 右键）', disabled: true }]));
+}
 function renderWavePreview() {
   if (!$('#wp-wave')) return;
   wpDrawWave($('#wp-wave'), WP.wave, 'wp-wave-sub', 'wave');
   wpDrawRms(WP.rms);
-  wpDrawWave($('#wp-cyc'), WP.cyc, 'wp-cyc-sub', 'cyc');
+  wpDrawCycRms(WP.cyc);
   wpDrawWave($('#wp-cyc2'), WP.cyc2, 'wp-cyc2-sub', 'cyc2');
 }
 function bindWavePreview() {

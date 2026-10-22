@@ -1028,7 +1028,7 @@
             </div>
             <div id="wp-hint" class="notes">
               <div>只读文件、不改运行配置、不启动引擎。<b>公共配置</b>对两条曲线同时生效：采样率由文件数据时间推算（不可改）；时长＝行数 / 采样率，结束时间＝起始 + (行数−1) / 采样率。</div>
-              <div>有效值曲线右键：「显示周波窗」→ 下方「周波窗」；「显示周波窗 2」→ 下方「周波窗 2（瞬时值）」，两者都以该时刻为中心取「周波窗周波数」个周波的原始采样瞬时值。加载周波数默认 300（6400 Hz 时 38400 点）。</div>
+              <div>有效值曲线右键：「显示周波窗」→ 下方「周波窗」显示该段的<b>逐周波有效值</b>；「显示周波窗 2」→ 下方「周波窗 2」显示该段的<b>采样瞬时值</b>；两者都以该时刻为中心取「周波窗周波数」个周波。加载周波数默认 300（6400 Hz 时 38400 点）。</div>
               <div>曲线操作与负荷辨识页一致：滚轮缩放 X、Shift+滚轮缩放 Y、放大后拖动平移、双击或「复位」恢复全图；右键菜单含复制 / 保存图片。</div>
             </div>
           </div>
@@ -1048,7 +1048,7 @@
         <canvas id="wp-rms" height="260"></canvas>
       </div>
       <div class="panel">
-        <h3 class="curvehdr"><span><span class="wp-tag wp-tag-rms">有效值曲线 · 右键</span> 周波窗<small class="hdrhint" id="wp-cyc-sub">（在有效值曲线上右键「显示周波窗」后显示：以该时刻为中心的 N 个周波原始波形）</small></span></h3>
+        <h3 class="curvehdr"><span><span class="wp-tag wp-tag-rms">有效值曲线 · 右键</span> 周波窗（逐周波有效值）<small class="hdrhint" id="wp-cyc-sub">（在有效值曲线上右键「显示周波窗」后显示：以该时刻为中心 N 个周波的逐周波有效值）</small></span></h3>
         <canvas id="wp-cyc" height="240"></canvas>
       </div>
       <div class="panel">
