@@ -33,8 +33,8 @@
       <div class="stat"><label>总时长</label><span id="st-cw-dur">—</span></div>
       <div class="stat"><label>播放起点</label><span id="st-cw-play">—</span></div>
     </div>
-    <div class="topstats" id="topstats-branch" title="分路侧设备运行状态（仅显示；查看分路侧电气量请用左侧「分路侧」分组）">
-      <div class="stat sidelbl"><label>侧别</label><span class="sidename branch">分路侧设备</span></div>
+    <div class="topstats" id="topstats-branch" title="分路侧运行状态（仅显示；查看分路侧电气量请用左侧「分路侧」分组）">
+      <div class="stat sidelbl"><label>侧别</label><span class="sidename branch">分路侧</span></div>
       <div class="stat"><label>状态</label><span id="st-br-running" class="pill">未启用</span></div>
       <div class="stat"><label>数据源</label><span id="st-br-source">—</span></div>
       <div class="stat"><label>数据时刻</label><span id="st-br-time">—</span></div>
@@ -129,7 +129,7 @@
 
     <!-- 数据源与控制 -->
     <section class="view" id="view-source">
-      <h2>数据源与控制 · 实时采集 / 离线 CSV 回放<span class="navhint">左列＝<span class="sidename bus">总线侧</span>，右列＝<span class="sidename branch">分路侧设备</span>（启用分路侧后显示）；同类配置左右同行</span></h2>
+      <h2>数据源与控制 · 实时采集 / 离线 CSV 回放<span class="navhint">左列＝<span class="sidename bus">总线侧</span>，右列＝<span class="sidename branch">分路侧</span>（启用分路侧后显示）；同类配置左右同行</span></h2>
 
       <!-- 两侧联动（跨侧设置，存总线侧 config.branch） -->
       <div class="panel" id="panel-link">
@@ -357,7 +357,7 @@
                 <select id="cfg-reactive"><option value="harmonic_sum">Σ UₕIₕsinφₕ（严格）</option><option value="quadrature">√(S²−P²)（等效）</option></select>
               </label>
             </div>
-            <button id="btn-savecfg" class="primary">保存配置（热更新）</button>
+            <button id="btn-savecfg" class="primary" title="保存总线侧口径 / 变比等配置并热更新（原「保存配置（热更新）」）">保存总线侧配置</button>
             <div id="cfg-out" class="notes"></div>
           </div>
         </div>
@@ -389,7 +389,7 @@
 
         <!-- 第 3 行：离线文件列映射 -->
         <div class="panel col-bus" id="panel-colmap">
-          <h3><span class="sidename bus">总线侧</span> 离线文件列映射 <span class="navhint">csv_file / csv_tail 取列规则，随「保存配置（热更新）」一起保存</span></h3>
+          <h3><span class="sidename bus">总线侧</span> 离线文件列映射 <span class="navhint">csv_file / csv_tail 取列规则，随「保存总线侧配置」一起保存</span></h3>
           <div class="form" id="colmap-bus">
             <label class="check"><input id="cfg-mapen" type="checkbox"> 启用列映射（不勾选＝默认列序：时间, A相电压, A相电流, B相电压, B相电流, C相电压, C相电流；有可识别表头时按表头取列）</label>
             <div class="row2" id="colmap-grid">
@@ -404,7 +404,7 @@
             <div class="row">
               <button id="btn-map-default">填入默认列序 1~7</button>
               <button id="btn-map-fromprobe" title="先在上方总线侧「探查数据」，再按表头名自动填入（按别名识别）">按探查表头填入</button>
-              <button id="btn-map-save" class="primary">保存总线侧列映射</button>
+              <button id="btn-map-save" class="primary" title="保存总线侧离线文件列映射">保存总线侧配置</button>
             </div>
             <div id="colmap-note" class="notes">启用后只播放有映射关系的列：未映射的通道按 0 处理并在数据源状态中提示；保存后对下次启动/下一块数据生效。两侧列映射互不影响。</div>
           </div>
@@ -425,7 +425,7 @@
             <div class="row">
               <button id="btn-br-map-default">填入默认列序 1~7</button>
               <button id="btn-br-map-fromprobe" title="先在上方分路侧「探查数据」，再按表头名自动填入">按探查表头填入</button>
-              <button id="btn-br-map-save" class="primary">保存分路侧列映射</button>
+              <button id="btn-br-map-save" class="primary" title="保存分路侧离线文件列映射">保存分路侧配置</button>
             </div>
           </div>
         </div>
@@ -656,7 +656,7 @@
           <label>功率振荡绝对门槛（峰峰值 W）<input type="number" step="0.5" id="ev-osc_min_w"></label>
           <label>功率振荡最少点数<input type="number" step="1" min="4" id="ev-osc_min_points"></label>
         </div>
-        <div class="row" style="margin-top:10px"><button id="btn-ev-save">保存阈值</button><span id="ev-form-note" class="mut"></span></div>
+        <div class="row" style="margin-top:10px"><button id="btn-ev-save" class="savecfg-side" title="保存本侧事件阈值到配置">保存总线侧配置</button><span id="ev-form-note" class="mut"></span></div>
         <div id="ev-notes" class="notes"></div>
       </div>
     </section>
@@ -727,7 +727,7 @@
           <label>相对最小幅值 min_delta_pct（% 窗内 |P| 中位数；0＝只用各算法绝对值）<input type="number" step="0.1" min="0" max="100" id="nilm-min_delta_pct"></label>
         </div>
         <div id="nilm-algos"></div>
-        <div class="row" style="margin-top:10px"><button id="btn-nilm-save">保存参数</button><span id="nilm-form-note" class="mut"></span></div>
+        <div class="row" style="margin-top:10px"><button id="btn-nilm-save" class="savecfg-side" title="保存本侧负荷辨识算法参数到配置">保存总线侧配置</button><span id="nilm-form-note" class="mut"></span></div>
         <div class="row nilm-tune" style="margin-top:6px" title="v0.50：把 tools/nilm_tune.py --json 的输出叠加到当前运行配置：只改 nilm.quantity / rel_tol_pct / min_delta_pct 和各算法参数，其余不动；更新后的完整配置写到 output/nilm/nilm_tuned_config_<侧>_<时间戳>.json，默认不写配置文件">
           <label>套用 nilm_tune 结果 <input type="file" id="nilm-tune-file" accept=".json,application/json"></label>
           <button id="btn-nilm-tune-apply">套用到当前配置</button>
@@ -744,7 +744,7 @@
       <p class="hint">每个电气量独立配置「计算时间段（窗长）」与「输出步长」：例如电压有效值可设 1s，也可设 5s；谐波可设 0.2s 快速刷新。FFT 类量（基波/谐波/频谱）强制整周期截断以避免频谱泄漏。</p>
       <div class="panel"><div id="w-table" class="tablewrap"></div>
         <div class="row pad">
-          <button id="btn-save-win" class="primary">保存窗口配置</button>
+          <button id="btn-save-win" class="primary savecfg-side" title="保存本侧窗口配置（窗长 / 步长 / 截断 / 窗函数）">保存总线侧配置</button>
           <button id="btn-preset-fast">预设：快速（0.2s）</button>
           <button id="btn-preset-std">预设：标准（1s）</button>
           <button id="btn-preset-slow">预设：慢速（5s）</button>
@@ -762,7 +762,7 @@
         <div class="row">
           <a class="btnlink" href="/api/export?fmt=csv" download>下载 CSV（扁平表）</a>
           <a class="btnlink" href="/api/export?fmt=json" download>下载 JSON（全量结果）</a>
-          <button id="btn-save-cfgfile">把当前配置写入 configs/default.json</button>
+          <button id="btn-save-cfgfile" class="savecfg-side" title="把本侧当前运行配置整体写入本侧配置文件（下次启动自动加载；出厂模板 configs/default.json 不改动）">保存总线侧配置</button>
         </div>
         <div id="exp-out" class="notes"></div>
       </div>
@@ -774,7 +774,7 @@
         <div class="row">
           <label class="chk"><input id="rt-enable" type="checkbox"> 启用实时落盘</label>
           <label>目录 <input id="rt-dir" placeholder="output/realtime"></label>
-          <button id="btn-rt-save">应用（写入配置，立即生效）</button>
+          <button id="btn-rt-save" class="savecfg-side" title="实时落盘开关与目录写入本侧配置，立即生效">保存总线侧配置</button>
           <button id="btn-rt-refresh">刷新状态</button>
         </div>
         <div id="rt-out" class="notes"></div>

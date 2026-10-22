@@ -856,7 +856,7 @@ async function setSide(side, opts = {}) {
   if (!opts.silent) toast('已切换到' + sideLabel(), 'ok');
 }
 
-function sideLabel() { return S.side === 'branch' ? '分路侧设备' : '总线侧'; }
+function sideLabel() { return S.side === 'branch' ? '分路侧' : '总线侧'; }
 
 function applySideUI() {
   document.body.classList.toggle('side-branch', S.side === 'branch');
@@ -991,7 +991,7 @@ function sideStatusText(x) {
 /* 顶栏模式标签：分路侧启用 → 「总线侧 ＋ 分路侧」，否则「总线侧」 */
 function renderModeTag() {
   const t = document.getElementById('side-title'); if (!t) return;
-  if (S.side === 'branch') { t.textContent = '分路侧设备'; return; }
+  if (S.side === 'branch') { t.textContent = '分路侧'; return; }
   const br = (S.state || {}).branch || {};
   t.textContent = (br.enabled || br.running) ? '总线侧 ＋ 分路侧' : '总线侧';
 }
@@ -1173,6 +1173,8 @@ function buildDualViews() {
         if (n.getAttribute && n.getAttribute('for')) n.setAttribute('for', n.getAttribute('for') + '-br');
       });
       c.querySelectorAll('.curve-save,.curvespan').forEach(n => { n.dataset.side = 'branch'; });
+      // v0.69：右列（分路侧）的配置保存按钮统一叫「保存分路侧配置」
+      c.querySelectorAll('.savecfg-side').forEach(n => { n.textContent = n.textContent.replace('总线侧', '分路侧'); if (n.title) n.title = n.title.replace('本侧', '分路侧'); });
       // 导出页的下载链接：右列指向分路侧 API
       c.querySelectorAll('a[href^="/api/"]').forEach(a => { a.setAttribute('href', a.getAttribute('href').replace(/^\/api\//, '/api/branch/')); });
       right.appendChild(c); left.appendChild(el);
@@ -2663,7 +2665,7 @@ async function startEngine(payloadExtra = {}) {
     if (r.branch && !r.branch.skipped) brMsg = r.branch.ok ? `；分路侧已同时启动（${r.branch.source_kind}${r.branch.synced_pace ? '，倍速随总线侧' : ''}）` : `；⚠ 分路侧启动失败：${r.branch.error}`;
     if (r.common_window && r.common_window.enabled === false && r.common_window.reason) brMsg += `；ℹ ${r.common_window.reason}`;
     toast(`已启动${sideLabel()}数据源：${r.config.source.kind}` + brMsg + (r.run_dir ? `；本次输出目录 ${r.run_dir}（实时数据 / 事件 / 两侧配置）` : '') +
-      (S.cfgDirty ? '（提示：口径/变比的修改请点「保存配置（热更新）」）' : '') + '（启动不写配置文件；要保留数据源设置请点「保存总线侧配置」）', r.branch && r.branch.error ? 'err' : 'ok');
+      (S.cfgDirty ? '（提示：口径/变比的修改请点「保存总线侧配置」）' : '') + '（启动不写配置文件；要保留数据源设置请点「保存总线侧配置」）', r.branch && r.branch.error ? 'err' : 'ok');
     S.cfgDirty = false;
     S.state = await api('/api/state');
     renderTop(); render();
