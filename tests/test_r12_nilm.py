@@ -786,7 +786,7 @@ def test_web_process_nilm_tune_independent_base(client):
     assert client.post("/api/process/nilm_tune", json={"path": str(p), "base": {"quantity": "zz"}}).status_code == 400
     assert client.post("/api/process/nilm_tune", json={"path": str(p), "base_mode": "nope"}).status_code == 400
     html = (ROOT / "app/static/index.html").read_text(encoding="utf-8"); js = (ROOT / "app/static/app.js").read_text(encoding="utf-8")
-    assert all(f'id="{i}"' in html for i in ("nt-base", "nt-base-fs", "nt-base-fnom", "nt-base-ptct", "nt-base-utc", "nt-base-pt", "nt-base-ct", "nt-base-q",
+    assert all(f'id="{i}"' in html for i in ("nt-base", "nt-base-fs", "nt-base-fnom", "nt-base-ptct", "nt-base-utc", "nt-base-pt", "nt-base-ct",
                                              "btn-nt-base-default", "btn-nt-base-bus", "btn-nt-base-branch", "nt-apply-side"))
     assert 'value="custom"' in html and "base_mode" in js and "/api/process/nilm_tune/base" in js
     client.put("/api/config", json={"transform": {"pt_ratio": 100}})

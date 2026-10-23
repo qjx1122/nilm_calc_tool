@@ -973,7 +973,7 @@
             </div>
             <div class="row2">
               <label title="从起始时间（或文件开头）起分析的时长；与结束时间同时填时取先到者">或 时长 (s，空＝到结束时间/文件结尾) <input id="nt-duration" type="number" min="0.02" step="0.1" placeholder="空"></label>
-              <label title="v0.72：默认「独立基准配置」——出厂配置 + 下方各项（fs / f_nom / PT·CT / 时标 UTC / 缺省检测量），与总线侧、分路侧运行配置互不关联，可单独修改（保存在浏览器本地，并随每次调参写到 output/nilm/nilm_tune_base.json 供等价命令复现）；也可改选沿用某一侧当前运行配置（旧行为）">基准配置 <select id="nt-side"><option value="custom">独立基准配置（本页，默认）</option><option value="bus">沿用总线侧运行配置</option><option value="branch">沿用分路侧运行配置</option></select></label>
+              <label title="v0.72：默认「独立基准配置」——出厂配置 + 下方各项（fs / f_nom / PT·CT / 时标 UTC），与总线侧、分路侧运行配置互不关联，可单独修改（保存在浏览器本地，并随每次调参写到 output/nilm/nilm_tune_base.json 供等价命令复现）；也可改选沿用某一侧当前运行配置（旧行为）">基准配置 <select id="nt-side"><option value="custom">独立基准配置（本页，默认）</option><option value="bus">沿用总线侧运行配置</option><option value="branch">沿用分路侧运行配置</option></select></label>
             </div>
             <div class="wp-group" id="nt-base" title="独立基准配置：只影响本页调参，不改动两侧运行配置">
               <div class="wp-group-title">独立基准配置（与两侧运行配置互不关联，可单独修改）</div>
@@ -990,7 +990,7 @@
                 <label>CT 变比 <input id="nt-base-ct" type="number" min="0.000001" step="any"></label>
               </div>
               <div class="row2">
-                <label title="上方「检测量」选「跟随配置」时采用的缺省值">缺省检测量 nilm.quantity <select id="nt-base-q"><option value="auto">auto（无电压→I）</option><option value="p">p 有功</option><option value="i">i 电流有效值</option></select></label>
+                <span class="mut" style="align-self:flex-end">检测量 / 检测对象只在下方填写一处（独立基准下「跟随配置」＝出厂缺省 auto）</span>
                 <span class="btnrow" style="align-items:flex-end">
                   <button id="btn-nt-base-default" type="button" title="恢复为出厂配置 configs/default.json 的值">恢复出厂</button>
                   <button id="btn-nt-base-bus" type="button" title="把总线侧当前运行配置的对应项填入（之后可再改，不影响总线侧）">填入总线侧值</button>
@@ -1000,7 +1000,7 @@
               <div id="nt-base-note" class="mut"></div>
             </div>
             <div class="row2">
-              <label>检测量 <select id="nt-quantity"><option value="">跟随配置 nilm.quantity</option><option value="auto">auto（无电压→I）</option><option value="p">p 有功</option><option value="i">i 电流有效值</option></select></label>
+              <label>检测量 <select id="nt-quantity"><option value="" id="nt-quantity-follow">跟随配置 nilm.quantity</option><option value="auto">auto（无电压→I）</option><option value="p">p 有功</option><option value="i">i 电流有效值</option></select></label>
               <label>检测对象 <select id="nt-channel"><option value="">默认（P→三相总，I→A 相）</option><option value="total">三相总</option><option value="A">A 相</option><option value="B">B 相</option><option value="C">C 相</option></select></label>
             </div>
             <div class="row2">

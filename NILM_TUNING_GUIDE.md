@@ -90,7 +90,7 @@ New-Item -ItemType Directory -Force output | Out-Null
 .\.venv\Scripts\python.exe tools\nilm_tune.py --file data\bus_bg.csv --config configs\default.json --min-load-w 300000 --json > output\tune.json
 ```
 
-**（v0.52）不想开命令行？** 同样的功能在 Web 界面「🧮 数据处理 → 负荷辨识调参」里：选波形文件（或手填路径）→ 可选填**起始时间 / 结束时间（或时长）**（都留空＝整个文件）→ 基准配置（v0.72 默认**独立基准配置**：出厂配置 + 本页的 fs / f_nom / PT·CT / 时标 UTC / 缺省检测量，与两侧运行配置互不关联、可单独修改，并写到 `output\nilm\nilm_tune_base.json` 供 `--config` 复现；也可改选沿用总线侧 / 分路侧运行配置，决定 PT/CT 与列映射）→ 填最小关心负荷 → 「量噪声并给出参数」。结果表与本节命令输出一一对应；勾选「保存为配置文件」才会在基准配置（独立基准配置，或所选侧原配置文件 `runtime.json` / `branch_runtime.json`）基础上只更新算法参数、其它不变，把完整配置写到 `output\nilm\`（文件名可填，默认 `tune_{时间}.json`，默认**不保存**，原配置文件不改动）；「套用到运行配置」＝ §7-2′ 的一键热生效（v0.72 由「套用目标」下拉选总线侧 / 分路侧，与基准配置无关）。详见附录 H.13。
+**（v0.52）不想开命令行？** 同样的功能在 Web 界面「🧮 数据处理 → 负荷辨识调参」里：选波形文件（或手填路径）→ 可选填**起始时间 / 结束时间（或时长）**（都留空＝整个文件）→ 基准配置（v0.72 默认**独立基准配置**：出厂配置 + 本页的 fs / f_nom / PT·CT / 时标 UTC，与两侧运行配置互不关联、可单独修改，并写到 `output\nilm\nilm_tune_base.json` 供 `--config` 复现；也可改选沿用总线侧 / 分路侧运行配置，决定 PT/CT 与列映射）→ 填最小关心负荷 → 「量噪声并给出参数」。结果表与本节命令输出一一对应；勾选「保存为配置文件」才会在基准配置（独立基准配置，或所选侧原配置文件 `runtime.json` / `branch_runtime.json`）基础上只更新算法参数、其它不变，把完整配置写到 `output\nilm\`（文件名可填，默认 `tune_{时间}.json`，默认**不保存**，原配置文件不改动）；「套用到运行配置」＝ §7-2′ 的一键热生效（v0.72 由「套用目标」下拉选总线侧 / 分路侧，与基准配置无关）。详见附录 H.13。
 
 **（v0.50）想一步到位、直接得到"套好参数的完整配置"**：加 `--apply`。脚本会在**当前运行配置**（`--config` 指定的文件；不填时取界面保存的 `configs\runtime.json`，没有则 `configs\default.json`）基础上只替换 `nilm.quantity / rel_tol_pct / min_delta_pct` 和 6 种算法的建议参数，其余（PT/CT、列映射、输出目录、各算法 `enabled`、建议里没给的键）一律保留，把更新后的**完整配置**写到输出目录 `output\nilm\nilm_tuned_config_<时间戳>.json`；**默认不改配置文件本身**：
 

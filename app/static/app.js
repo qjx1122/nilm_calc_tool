@@ -3764,7 +3764,7 @@ function ntBase() {
   const v = id => { const el = $('#' + id); return el ? (el.value || '').trim() : ''; };
   const c = id => { const el = $('#' + id); return el && el.checked ? '1' : '0'; };
   return { fs: v('nt-base-fs'), f_nom: v('nt-base-fnom'), pt_ct_enabled: c('nt-base-ptct'), pt_ratio: v('nt-base-pt'),
-           ct_ratio: v('nt-base-ct'), file_time_utc: c('nt-base-utc'), quantity: v('nt-base-q') || 'auto' };
+           ct_ratio: v('nt-base-ct'), file_time_utc: c('nt-base-utc') };   // 检测量只在「检测量」下拉填一处（v0.72.1 去重）
 }
 function ntSetBase(b) {
   if (!b || typeof b !== 'object') return;
@@ -3773,12 +3773,12 @@ function ntSetBase(b) {
   set('nt-base-fs', b.fs); set('nt-base-fnom', b.f_nom); set('nt-base-pt', b.pt_ratio); set('nt-base-ct', b.ct_ratio);
   if ($('#nt-base-ptct') && b.pt_ct_enabled !== undefined) $('#nt-base-ptct').checked = on(b.pt_ct_enabled);
   if ($('#nt-base-utc') && b.file_time_utc !== undefined) $('#nt-base-utc').checked = on(b.file_time_utc);
-  if (b.quantity && $('#nt-base-q')) $('#nt-base-q').value = b.quantity;
 }
 function ntSaveBase() { try { localStorage.setItem(NT_BASE_KEY, JSON.stringify(ntBase())); } catch (e) { /* 隐私模式 */ } }
 function ntSyncBaseUI() {
   const custom = ntBaseMode() === 'custom';
   const g = $('#nt-base'); if (g) g.style.display = custom ? '' : 'none';
+  const fo = $('#nt-quantity-follow'); if (fo) fo.textContent = custom ? '默认（出厂缺省 auto：无电压→I）' : '跟随配置 nilm.quantity';
   const n = $('#nt-base-note');
   if (n) n.textContent = custom ? '独立基准配置只用于本页调参，不改动总线侧 / 分路侧运行配置；修改自动保存在浏览器本地。'
                                 : `基准配置沿用${ntBaseMode() === 'branch' ? '分路侧' : '总线侧'}当前运行配置（PT/CT、列映射、缺省检测量）。`;
@@ -3814,7 +3814,7 @@ function ntRender(d) {
   const rng = tr.whole_file ? '整个文件' : `${tr.start || '文件开头'} → ${tr.end || (tr.duration_s ? '+' + tr.duration_s + ' s' : '文件结尾')}`;
   st.innerHTML = `<div>文件 <code>${esc(d.file)}</code> · 对象 <b>${esc(d.channel)}</b> · 周波 ${m.cycles} · 时长 ${(+d.t_span_s).toFixed(1)} s · 口径 ${d.scaled ? '一次侧(PT/CT)' : '二次侧'} · 检测量 <b>${d.quantity === 'p' ? '有功 P' : '电流有效值 I'}</b>（${esc(d.quantity_requested)}${d.quantity === 'i' && !d.voltage_present ? '，数据源无电压 → I' : ''}）</div>`
     + `<div>时间段 ${esc(rng)} · 实际 ${esc(fmtLocalInput(tr.t_first))} → ${esc(fmtLocalInput(tr.t_last))}</div>`
-    + (d.base_mode === 'custom' && d.base ? `<div>基准配置：<b>独立基准配置</b>（fs ${ntFmt(d.base.fs)} Hz · f_nom ${ntFmt(d.base.f_nom)} Hz · PT/CT ${d.base.pt_ct_enabled ? '启用 PT=' + ntFmt(d.base.pt_ratio) + ' CT=' + ntFmt(d.base.ct_ratio) : '关闭'} · 时标 ${d.base.file_time_utc ? 'UTC' : '本地'} · 缺省检测量 ${esc(d.base.quantity)}）${d.base_file ? '，已写到 <code>' + esc(d.base_file) + '</code>' : ''}；两侧运行配置未改动</div>`
+    + (d.base_mode === 'custom' && d.base ? `<div>基准配置：<b>独立基准配置</b>（fs ${ntFmt(d.base.fs)} Hz · f_nom ${ntFmt(d.base.f_nom)} Hz · PT/CT ${d.base.pt_ct_enabled ? '启用 PT=' + ntFmt(d.base.pt_ratio) + ' CT=' + ntFmt(d.base.ct_ratio) : '关闭'} · 时标 ${d.base.file_time_utc ? 'UTC' : '本地'}）${d.base_file ? '，已写到 <code>' + esc(d.base_file) + '</code>' : ''}；两侧运行配置未改动</div>`
                                         : `<div>基准配置：${d.side === 'branch' ? '分路侧' : '总线侧'}当前运行配置</div>`)
     + (d.saved_to ? `<div>已保存到 <code>${esc(d.saved_to)}</code>：以 <code>${esc(d.base_config || '')}</code> 为基准只更新算法参数（${(d.changes || []).length} 项）、其它参数不变的完整配置；原配置文件未改动</div>` : '<div class="muted">未保存配置文件（默认）</div>')
     + (d.notes || []).map(n => `<div class="muted">提示：${esc(n)}</div>`).join('')
@@ -4150,7 +4150,7 @@ function bindProcess() {
     $('#btn-nt-run').addEventListener('click', ntRun);
     // v0.72：独立基准配置
     if ($('#nt-side')) $('#nt-side').addEventListener('change', ntSyncBaseUI);
-    ['nt-base-fs', 'nt-base-fnom', 'nt-base-pt', 'nt-base-ct', 'nt-base-ptct', 'nt-base-utc', 'nt-base-q'].forEach(id => { const el = $('#' + id); if (el) el.addEventListener('change', ntSaveBase); });
+    ['nt-base-fs', 'nt-base-fnom', 'nt-base-pt', 'nt-base-ct', 'nt-base-ptct', 'nt-base-utc'].forEach(id => { const el = $('#' + id); if (el) el.addEventListener('change', ntSaveBase); });
     if ($('#btn-nt-base-default')) $('#btn-nt-base-default').addEventListener('click', async () => { try { await ntLoadBase('default'); toast('基准配置已恢复为出厂值', 'ok'); } catch (e) { toast(e.message, 'err'); } });
     if ($('#btn-nt-base-bus')) $('#btn-nt-base-bus').addEventListener('click', async () => { try { await ntLoadBase('running', 'bus'); toast('已填入总线侧运行配置的值（可再修改，不影响总线侧）', 'ok'); } catch (e) { toast(e.message, 'err'); } });
     if ($('#btn-nt-base-branch')) $('#btn-nt-base-branch').addEventListener('click', async () => { try { await ntLoadBase('running', 'branch'); toast('已填入分路侧运行配置的值（可再修改，不影响分路侧）', 'ok'); } catch (e) { toast(e.message, 'err'); } });

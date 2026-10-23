@@ -34,7 +34,8 @@ async function main() {
 
   console.log('— 独立基准配置（默认）');
   check('基准配置下拉默认＝独立基准配置', $('nt-side').value === 'custom', $('nt-side').value);
-  check('独立基准配置分组可见，含 fs / f_nom / PT·CT / UTC / PT / CT / 缺省检测量', $('nt-base').style.display !== 'none' && ['nt-base-fs', 'nt-base-fnom', 'nt-base-ptct', 'nt-base-utc', 'nt-base-pt', 'nt-base-ct', 'nt-base-q'].every((i) => !!$(i)));
+  check('独立基准配置分组可见，含 fs / f_nom / PT·CT / UTC / PT / CT（检测量不重复出现）', $('nt-base').style.display !== 'none' && ['nt-base-fs', 'nt-base-fnom', 'nt-base-ptct', 'nt-base-utc', 'nt-base-pt', 'nt-base-ct'].every((i) => !!$(i)));
+  check('独立基准分组内没有第二个检测量 / 检测对象控件（只在下方各一处）', !document.getElementById('nt-base-q') && document.querySelectorAll('#nt-form select[id^="nt-quantity"]').length === 1 && document.querySelectorAll('#nt-form select[id^="nt-channel"]').length === 1 && /出厂缺省 auto/.test($('nt-quantity-follow').textContent));
   check('初值＝出厂配置（PT=100 CT=15 fs=6400），不是总线侧运行配置的 PT=123', $('nt-base-pt').value === '100' && $('nt-base-ct').value === '15' && $('nt-base-fs').value === '6400', `${$('nt-base-pt').value}/${$('nt-base-ct').value}/${$('nt-base-fs').value}`);
   // 单独修改：PT=77，去掉 PT/CT
   $('nt-base-pt').value = '77'; change($('nt-base-pt')); $('nt-base-ptct').checked = false; change($('nt-base-ptct'));
