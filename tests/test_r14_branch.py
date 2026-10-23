@@ -372,3 +372,67 @@ def test_r15_3_auto_play_fields_never_leak(client, tmp_path):
     assert len(notes) == 2 and cfg.source.play_start_mode == "begin" and cfg.source.play_end_time == ""
     cfg.source.play_start_mode = "time"; cfg.source.play_start_value = "2026-10-15 08:00:00"
     assert srv._sanitize_leaked_play(cfg, "bus") == [] and cfg.source.play_start_mode == "time"   # 人填的时标不动
+
+
+def test_r70_start_uses_ui_branch_fields(client, tmp_path):
+    """v0.70：总线侧「启动」带上界面当前的分路侧联动参数 / 分路侧数据源字段（不写配置文件）。
+    用户实录：已保存配置 common_window=true 且两侧文件无公共时间段；界面取消勾选但未保存 → 启动报「两侧文件没有公共时间段」。"""
+    from elec_tool.selftest import build_signal, HarmSpec
+    from tests.conftest import write_csv  # noqa
+    specs = [HarmSpec(1, 57.735, 5.0, phi_deg=0.0)]
+    fs = 6400.0; T0 = 1_760_100_000.0
+    t, u, i = build_signal(specs, fs, 1.0, t0=T0); write_csv(str(tmp_path / "bus.csv"), t, u, i)
+    t2, u2, i2 = build_signal(specs, fs, 1.0, t0=T0 + 100.0); write_csv(str(tmp_path / "br.csv"), t2, u2, i2)   # 无交集
+    t3, u3, i3 = build_signal(specs, fs, 1.0, t0=T0 + 0.5); write_csv(str(tmp_path / "br2.csv"), t3, u3, i3)   # 交集 0.5 s
+    client.post("/api/engine/stop"); client.post("/api/branch/engine/stop")
+    client.put("/api/config", json={"source": {"kind": "csv_file", "path": str(tmp_path / "bus.csv")},
+                                    "branch": {"enabled": True, "common_window": True, "common_start": "", "common_end": ""}})
+    client.put("/api/branch/config", json={"source": {"kind": "csv_file", "path": str(tmp_path / "br.csv"), "custom_time": False}})
+    bus_src = {"kind": "csv_file", "path": str(tmp_path / "bus.csv"), "file_speed": 0}
+    # 旧行为：按已保存配置算公共时间段 → 400
+    r = client.post("/api/engine/start", json=bus_src)
+    assert r.status_code == 400 and "没有公共时间段" in r.json()["error"]
+    # 界面取消勾选（未保存）→ 请求带 branch.common_window=false → 正常启动，两侧各播各的；配置文件里仍是 true
+    r = client.post("/api/engine/start", json=dict(bus_src, branch={"enabled": True, "common_window": False})).json()
+    assert r["ok"] and r["branch"]["ok"] and not r.get("common_window", {}).get("enabled"), r
+    import app.server as srv
+    saved = json.loads(pathlib.Path(srv.RUNNER.persist_path).read_text(encoding="utf-8"))
+    assert saved["branch"]["common_window"] is True                      # 配置文件未被启动改写（与总线侧 source 同规则）
+    client.post("/api/engine/stop"); client.post("/api/branch/engine/stop")
+    # 界面取消「启用分路侧」（未保存）→ 不联动
+    r = client.post("/api/engine/start", json=dict(bus_src, branch={"enabled": False})).json()
+    assert r["ok"] and r["branch"].get("skipped"), r
+    client.post("/api/engine/stop")
+    # 界面改了分路侧文件（未保存）→ 公共时间段按界面文件算；common_end 只写 HH:MM:SS 也可
+    from elec_tool.timefmt import local_tod_s
+    tod = local_tod_s(T0 + 0.5) + 0.25
+    hh, mm, ss = int(tod // 3600), int(tod % 3600 // 60), tod % 60
+    r = client.post("/api/engine/start", json=dict(bus_src, branch={"enabled": True, "common_window": True, "common_end": f"{hh:02d}:{mm:02d}:{ss:06.3f}"},
+                                                   branch_source={"kind": "csv_file", "path": str(tmp_path / "br2.csv")})).json()
+    assert r["ok"] and r["common_window"]["enabled"] and abs(r["common_window"]["duration_s"] - 0.5) < 1e-3, r
+    assert r["common_window"]["play_end_source"] == "自定义播放结束时间" and abs(r["common_window"]["play_duration_s"] - 0.25) < 1e-3
+    assert r["branch"]["ok"] and r["branch"]["path"].endswith("br2.csv")
+    saved_br = json.loads(pathlib.Path(srv.RUNNERS["branch"].persist_path).read_text(encoding="utf-8"))
+    assert saved_br["source"]["path"].endswith("br.csv")                  # 分路侧配置文件未被改
+    client.post("/api/engine/stop"); client.post("/api/branch/engine/stop")
+    client.put("/api/config", json={"branch": {"enabled": False, "common_window": False, "common_end": ""}})
+
+
+def test_r70_common_window_preview_uses_payload(client, tmp_path):
+    """v0.70：POST /api/common_window/preview 按请求体（界面当前值）现算，不改配置。"""
+    from elec_tool.selftest import build_signal, HarmSpec
+    from tests.conftest import write_csv  # noqa
+    specs = [HarmSpec(1, 57.735, 5.0, phi_deg=0.0)]
+    fs = 6400.0; T0 = 1_760_200_000.0
+    t, u, i = build_signal(specs, fs, 1.0, t0=T0); write_csv(str(tmp_path / "bus.csv"), t, u, i)
+    t2, u2, i2 = build_signal(specs, fs, 1.0, t0=T0 + 0.75); write_csv(str(tmp_path / "br.csv"), t2, u2, i2)
+    client.post("/api/engine/stop"); client.post("/api/branch/engine/stop")
+    client.put("/api/config", json={"source": {"kind": "simulator"}})
+    client.put("/api/branch/config", json={"source": {"kind": "simulator"}})
+    assert client.get("/api/common_window?preview=1").json()["ok"] is False       # 已保存配置：两侧都不是文件
+    w = client.post("/api/common_window/preview", json={"kind": "csv_file", "path": str(tmp_path / "bus.csv"),
+                                                        "branch": {"common_start": "", "common_end": ""},
+                                                        "branch_source": {"kind": "csv_file", "path": str(tmp_path / "br.csv"), "custom_time": False}}).json()
+    assert w["ok"] and abs(w["duration_s"] - 0.25) < 1e-3, w
+    assert client.get("/api/config").json()["source"]["kind"] == "simulator"      # 预览不改配置
+    assert client.get("/api/branch/config").json()["source"]["kind"] == "simulator"

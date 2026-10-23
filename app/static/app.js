@@ -2075,7 +2075,11 @@ async function previewCommonWindow() {
   const out = $('#br-common-out');
   out.innerHTML = '<div class="notes">计算中…（按已保存的两侧配置；若刚改了路径/自定义时间请先保存）</div>';
   try {
-    const w = await (await fetch('/api/common_window?preview=1')).json();
+    // v0.70：按界面当前值预览（总线侧 source + 分路侧联动参数 + 分路侧数据源），与「启动」一致；不写配置
+    const body = Object.assign({}, collectSourcePayload(), {
+      branch: { enabled: $('#br-enabled').checked, common_window: $('#br-common').checked, common_start: $('#br-common-start').value.trim(), common_end: $('#br-common-end').value.trim() },
+      branch_source: collectSourceFields('br-') });
+    const w = await (await fetch('/api/common_window/preview', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })).json();
     if (!w.ok) { out.innerHTML = notes(['✗ ' + w.error]); return; }
     out.innerHTML = notes([
       `✓ 公共时间段：${ts(w.t_start)} → ${ts(w.t_end)}　总时长 ${num(w.duration_s, 3)} s`,
@@ -2657,6 +2661,14 @@ async function startEngine(payloadExtra = {}) {
     // 夹带 transform/sampling/harmonic/power 会被服务端**静默忽略**——用户改了 PT/CT 再点
     // 「启动数据源」以为生效了，其实没有。口径/变比一律走「保存配置（热更新）」。
     const payload = Object.assign(collectSourcePayload(), payloadExtra);
+    // v0.70：总线侧启动同时带上界面当前的分路侧联动参数与分路侧数据源字段（与总线侧 source 同规则：按界面当前值启动、
+    // 不写配置文件）。否则取消勾选「只播放公共时间段」但没保存时，服务端仍按旧配置算公共时间段并报错。
+    if (sideOf() === 'bus' && $('#br-enabled') && BR.loaded && payload.branch === undefined) {   // 面板已按保存值填充后才按界面值
+      payload.branch = { enabled: $('#br-enabled').checked, common_window: $('#br-common').checked,
+                         common_start: $('#br-common-start').value.trim(), common_end: $('#br-common-end').value.trim(),
+                         time_offset_s: parseFloat($('#br-toffset').value) || 0, align_tol_s: Math.max(0, parseFloat($('#br-tol').value) || 0) };
+      try { payload.branch_source = collectSourceFields('br-'); } catch (e) { /* 分路侧面板未就绪则按已保存配置 */ }
+    }
     const r = await api('/api/engine/start', {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
     });

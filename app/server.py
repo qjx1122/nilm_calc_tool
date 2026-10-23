@@ -1043,16 +1043,22 @@ def _compute_common_window(bus_cfg: AppConfig, br_cfg: AppConfig) -> Dict[str, A
     if t_end <= t_start:
         raise ConfigError(f"两侧文件没有公共时间段：总线侧 {fmt_local(rb['t0'])} → {fmt_local(rb['t1'])}，"
                           f"分路侧 {fmt_local(rr['t0'])} → {fmt_local(rr['t1'])}（可改用自定义播放时间让两侧时间轴对齐）")
+    def _in_window(txt: str) -> float:
+        # v0.70：与数据源页其它时间输入一致：完整日期时间 / epoch 秒 / 只写 HH:MM:SS（＝公共时间段起点当天的该时刻）
+        from elec_tool.config import parse_play_start as _pps
+        from elec_tool.timefmt import local_tod_s
+        kind, v = _pps("time", txt)
+        return float(v) if kind == "abs" else t_start - local_tod_s(t_start) + float(v)
     txt = str(bus_cfg.branch.common_start or "").strip()
     if txt:
-        ps = _ptt(txt)
+        ps = _in_window(txt)
         if not (t_start <= ps < t_end):
             raise ConfigError(f"自定义播放起始时间 {txt} 不在公共时间段 {fmt_local(t_start)} → {fmt_local(t_end)} 内")
         out["play_start"] = ps; out["play_start_source"] = "自定义播放起始时间"
     out["play_end"] = t_end; out["play_end_source"] = "公共时间段终点"
     txe = str(getattr(bus_cfg.branch, "common_end", "") or "").strip()
     if txe:
-        pe = _ptt(txe)
+        pe = _in_window(txe)
         if not (out["play_start"] < pe <= t_end):
             raise ConfigError(f"自定义播放结束时间 {txe} 不在 {fmt_local(out['play_start'])} → {fmt_local(t_end)} 内")
         out["play_end"] = pe; out["play_end_source"] = "自定义播放结束时间"
@@ -1089,7 +1095,7 @@ def _apply_play_window(cfg: AppConfig) -> Optional[Tuple[str, str, str]]:
     return user
 
 
-def _start_branch_if_enabled(bus_cfg: AppConfig, pace_clock=None) -> Optional[Dict[str, Any]]:
+def _start_branch_if_enabled(bus_cfg: AppConfig, pace_clock=None, br_cfg: Optional[AppConfig] = None) -> Optional[Dict[str, Any]]:
     """总线侧启动后联动分路侧（仅 enabled 时）。返回分路侧启动结果；失败只记录、不影响总线侧。
 
     v0.16：分路侧输入方式与总线侧同样有 4 种（csv_file / csv_tail / tcp / simulator），各自独立配置；
@@ -1099,7 +1105,7 @@ def _start_branch_if_enabled(bus_cfg: AppConfig, pace_clock=None) -> Optional[Di
         return {"ok": False, "skipped": True, "reason": "分路侧未启用"}
     br = RUNNERS["branch"]
     try:
-        cfg = AppConfig.from_dict(br.cfg.to_dict())
+        cfg = AppConfig.from_dict((br_cfg or br.cfg).to_dict())
         if cfg.source.kind in ("csv_file", "csv_tail") and not cfg.source.path:
             raise ConfigError(f"分路侧 {cfg.source.kind} 需要文件路径（source.path）")
         if cfg.source.kind in ("csv_file", "csv_tail") and cfg.source.path and not os.path.isabs(cfg.source.path):
@@ -1147,8 +1153,29 @@ async def get_common_window(preview: bool = False) -> Any:
     """公共时间段：preview=1 按当前两侧配置现算（不启动）；否则返回最近一次联动启动用的结果。"""
     if not preview:
         return COMMON_WINDOW
+    return _preview_common_window({})
+
+
+@app.post("/api/common_window/preview")
+async def post_common_window_preview(payload: Optional[Dict[str, Any]] = None) -> Any:
+    """v0.70：按**界面当前值**预览公共时间段（不启动、不写配置）。body 与 /api/engine/start 同形：
+    总线侧 source 字段 + ``branch``（联动参数）+ ``branch_source``（分路侧数据源字段）。"""
+    return _preview_common_window(payload or {})
+
+
+def _preview_common_window(payload: Dict[str, Any]) -> Any:
     try:
-        bus_cfg = RUNNERS["bus"].cfg; br_cfg = RUNNERS["branch"].cfg
+        d = RUNNERS["bus"].cfg.to_dict()
+        d["source"].update({k: v for k, v in payload.items() if k in _START_SRC_KEYS})
+        if isinstance(payload.get("branch"), dict):
+            d.setdefault("branch", {}).update({k: v for k, v in payload["branch"].items() if k in _START_BRANCH_KEYS})
+        bus_cfg = AppConfig.from_dict(d)
+        if bus_cfg.source.kind in ("csv_file", "csv_tail") and bus_cfg.source.path and not os.path.isabs(bus_cfg.source.path):
+            cand = os.path.join(ROOT, bus_cfg.source.path)
+            if os.path.exists(cand):
+                bus_cfg.source.path = cand
+        bso = payload.get("branch_source") if isinstance(payload.get("branch_source"), dict) else None
+        br_cfg = _branch_cfg_for_start({k: v for k, v in (bso or {}).items() if k in _START_SRC_KEYS})
         if bus_cfg.source.kind != "csv_file" or br_cfg.source.kind != "csv_file":
             return {"ok": False, "error": "两侧都必须是离线文件 csv_file"}
         if not bus_cfg.source.path or not br_cfg.source.path:
@@ -1444,20 +1471,45 @@ def _deep_update(dst: Dict[str, Any], src: Dict[str, Any]) -> None:
             dst[k] = v
 
 
+_START_SRC_KEYS = ("kind", "path", "host", "port", "frame", "block_samples",
+                   "poll_interval_s", "tail_from_end", "sim_speed", "watch_dir_newest",
+                   "struct_fmt", "struct_fields", "custom_time", "custom_time_start",
+                   "file_time_utc", "play_start_mode", "play_start_value", "file_speed",
+                   "play_window", "play_window_start", "play_window_end")
+# v0.70：总线侧启动时可随请求覆盖的分路侧联动字段（只影响本次运行，不写配置文件）
+_START_BRANCH_KEYS = ("enabled", "common_window", "common_start", "common_end", "time_offset_s", "align_tol_s")
+
+
+def _branch_cfg_for_start(src_over: Optional[Dict[str, Any]]) -> AppConfig:
+    """本次联动启动用的分路侧配置：已保存配置 + 界面当前的分路侧数据源字段（v0.70），相对路径解析到仓库根。"""
+    d = RUNNERS["branch"].cfg.to_dict()
+    if src_over:
+        d["source"].update(src_over)
+    cfg = AppConfig.from_dict(d)
+    if cfg.source.kind in ("csv_file", "csv_tail") and cfg.source.path and not os.path.isabs(cfg.source.path):
+        cand = os.path.join(ROOT, cfg.source.path)
+        if os.path.exists(cand):
+            cfg.source.path = cand
+    return cfg
+
+
 @app.post("/api/engine/start")
 async def engine_start(payload: Optional[Dict[str, Any]] = None) -> Any:
     payload = payload or {}
     try:
         cfg = RUNNER.cfg
         data = cfg.to_dict()
-        src_over = {k: v for k, v in payload.items()
-                    if k in ("kind", "path", "host", "port", "frame", "block_samples",
-                             "poll_interval_s", "tail_from_end", "sim_speed", "watch_dir_newest",
-                             "struct_fmt", "struct_fields", "custom_time", "custom_time_start",
-                             "file_time_utc", "play_start_mode", "play_start_value", "file_speed",
-                             "play_window", "play_window_start", "play_window_end")}
+        src_over = {k: v for k, v in payload.items() if k in _START_SRC_KEYS}
         if src_over:
             data["source"].update(src_over)
+        # v0.70：总线侧「启动」同时带上界面当前的分路侧联动参数（启用 / 公共时间段 / 自定义起止 / 偏移 / 容差）与
+        # 分路侧数据源字段——与总线侧 source 一样「按界面当前值启动、不写配置文件」。此前这些只从已保存配置读取：
+        # 界面取消勾选「只播放公共时间段」但没点「保存分路侧配置」→ 启动仍按旧配置算公共时间段并报错。
+        br_over_top = payload.get("branch") if isinstance(payload.get("branch"), dict) else None
+        if br_over_top and current_side() == "bus":
+            data.setdefault("branch", {}).update({k: v for k, v in br_over_top.items() if k in _START_BRANCH_KEYS})
+        br_src_over = payload.get("branch_source") if isinstance(payload.get("branch_source"), dict) else None
+        br_src_over = {k: v for k, v in (br_src_over or {}).items() if k in _START_SRC_KEYS} if current_side() == "bus" else None
         if payload.get("windows"):
             for k, v in payload["windows"].items():
                 if k in data["windows"]:
@@ -1477,8 +1529,8 @@ async def engine_start(payload: Optional[Dict[str, Any]] = None) -> Any:
         cw_note: Optional[str] = None
         if current_side() == "bus":
             COMMON_WINDOW.clear(); COMMON_WINDOW["enabled"] = False
+        br_cfg = _branch_cfg_for_start(br_src_over) if coupled else None
         if coupled and cfg.branch.common_window:
-            br_cfg = RUNNERS["branch"].cfg
             if cfg.source.kind != "csv_file" or br_cfg.source.kind != "csv_file":
                 # 公共时间段只对「两侧都是离线文件」有意义；其它组合按各自配置启动，不报错（v0.16）
                 cw_note = (f"公共时间段仅在两侧都是离线文件时生效（总线侧 {cfg.source.kind}，分路侧 {br_cfg.source.kind}），本次按各自配置播放")
@@ -1499,7 +1551,7 @@ async def engine_start(payload: Optional[Dict[str, Any]] = None) -> Any:
         elif cw_note:
             out["common_window"] = {"enabled": False, "reason": cw_note}
         if current_side() == "bus" and payload.get("with_branch", True):
-            out["branch"] = _start_branch_if_enabled(cfg, pace_clock=clock)
+            out["branch"] = _start_branch_if_enabled(cfg, pace_clock=clock, br_cfg=br_cfg)
         return out
     except ConfigError as exc:
         return JSONResponse(status_code=400, content={"ok": False, "error": str(exc)})

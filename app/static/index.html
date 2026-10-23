@@ -143,11 +143,11 @@
             <div class="notes" id="br-mode-note" style="display:none">ℹ 两侧都是<b>离线文件（csv_file）</b>时共用节拍钟（倍速一致、严格同步）并可按公共时间段播放；其它组合各自按自身配置同时启动，「公共时间段」不生效。</div>
             <div class="row2">
               <label class="chk"><input id="br-common" type="checkbox"> 只播放两侧的<b>公共时间段</b>数据（两侧都从公共起点播到公共终点；之外的数据跳过；仅两侧均为离线文件时生效）</label>
-              <label>自定义播放起始时间（公共时间段内） <input id="br-common-start" placeholder="留空＝从公共时间段起点开始；如 2026-10-14 08:00:05 / epoch 秒"></label>
+              <label>自定义播放起始时间（公共时间段内） <input id="br-common-start" placeholder="留空＝公共时间段起点；2026-10-14 08:00:05 / epoch 秒 / 08:00:05"></label>
             </div>
             <div class="row2">
-              <label>自定义播放结束时间（公共时间段内） <input id="br-common-end" placeholder="留空＝播到公共时间段终点；如 2026-10-14 08:00:09 / epoch 秒"></label>
-              <div class="notes muted">公共时间段＝两侧文件时标的交集；起始/结束都留空＝整段。</div>
+              <label>自定义播放结束时间（公共时间段内） <input id="br-common-end" placeholder="留空＝公共时间段终点；2026-10-14 08:00:09 / epoch 秒 / 08:00:09"></label>
+              <div class="notes muted">公共时间段＝两侧文件时标的交集；起始/结束都留空＝整段。总线侧「启动」与「预览公共时间段」都按<b>本面板当前值</b>（启用 / 公共时间段 / 起止 / 分路侧数据源）执行、不写配置文件；要保留请点「保存分路侧配置」。</div>
             </div>
             <div class="row2">
               <label>分路侧时标偏移 (s) <input id="br-toffset" type="number" step="0.001" value="0" title="分路侧时标 + 偏移 ≈ 总线侧时标；两份文件起点不同步时填（可在「跨侧对比」页一键按起点对齐）"></label>
