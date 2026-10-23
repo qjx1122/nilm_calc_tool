@@ -3757,12 +3757,55 @@ async function ntListFiles() {
     if (cur && files.some(f => f.name === cur)) sel.value = cur;
   } catch (e) { toast('读取文件列表失败：' + e.message, 'err'); }
 }
+/* v0.72：负荷辨识调参「独立基准配置」——出厂配置 + 本页各项，与两侧运行配置互不关联；存浏览器本地 */
+const NT_BASE_KEY = 'elec_tool.nilm_tune.base';
+function ntBaseMode() { const el = $('#nt-side'); return (el && el.value) || 'custom'; }
+function ntBase() {
+  const v = id => { const el = $('#' + id); return el ? (el.value || '').trim() : ''; };
+  const c = id => { const el = $('#' + id); return el && el.checked ? '1' : '0'; };
+  return { fs: v('nt-base-fs'), f_nom: v('nt-base-fnom'), pt_ct_enabled: c('nt-base-ptct'), pt_ratio: v('nt-base-pt'),
+           ct_ratio: v('nt-base-ct'), file_time_utc: c('nt-base-utc'), quantity: v('nt-base-q') || 'auto' };
+}
+function ntSetBase(b) {
+  if (!b || typeof b !== 'object') return;
+  const set = (id, val) => { const el = $('#' + id); if (el && val !== undefined && val !== null) el.value = String(val); };
+  const on = x => (x === true || x === '1' || x === 1 || x === 'true');
+  set('nt-base-fs', b.fs); set('nt-base-fnom', b.f_nom); set('nt-base-pt', b.pt_ratio); set('nt-base-ct', b.ct_ratio);
+  if ($('#nt-base-ptct') && b.pt_ct_enabled !== undefined) $('#nt-base-ptct').checked = on(b.pt_ct_enabled);
+  if ($('#nt-base-utc') && b.file_time_utc !== undefined) $('#nt-base-utc').checked = on(b.file_time_utc);
+  if (b.quantity && $('#nt-base-q')) $('#nt-base-q').value = b.quantity;
+}
+function ntSaveBase() { try { localStorage.setItem(NT_BASE_KEY, JSON.stringify(ntBase())); } catch (e) { /* 隐私模式 */ } }
+function ntSyncBaseUI() {
+  const custom = ntBaseMode() === 'custom';
+  const g = $('#nt-base'); if (g) g.style.display = custom ? '' : 'none';
+  const n = $('#nt-base-note');
+  if (n) n.textContent = custom ? '独立基准配置只用于本页调参，不改动总线侧 / 分路侧运行配置；修改自动保存在浏览器本地。'
+                                : `基准配置沿用${ntBaseMode() === 'branch' ? '分路侧' : '总线侧'}当前运行配置（PT/CT、列映射、缺省检测量）。`;
+}
+async function ntLoadBase(source, side) {
+  const d = await api('/api/process/nilm_tune/base?source=' + encodeURIComponent(source), undefined, side || 'bus');
+  ntSetBase(d.base); ntSaveBase();
+  return d;
+}
+async function ntInitBase() {
+  if (!$('#nt-base')) return;
+  try {
+    const d = await api('/api/process/nilm_tune/base?source=default', undefined, 'bus');
+    ntSetBase(d.base);                                         // 出厂值
+    let saved = null; try { saved = JSON.parse(localStorage.getItem(NT_BASE_KEY) || 'null'); } catch (e) { saved = null; }
+    if (saved && typeof saved === 'object') ntSetBase(saved);   // 浏览器本地保存的改动优先
+  } catch (e) { /* 服务不可用时保留 HTML 默认 */ }
+  ntSyncBaseUI();
+}
 function ntPayload() {
   const v = id => ($('#' + id).value || '').trim();
+  const mode = ntBaseMode();
   return { path: v('nt-path'), t_start: v('nt-tstart'), t_end: v('nt-tend'), duration_s: v('nt-duration') || null,
            quantity: v('nt-quantity') || null, channel: v('nt-channel') || null,
            min_load_w: v('nt-minw') || null, min_load_a: v('nt-mina') || null, min_load_auto: !!$('#nt-minauto').checked,
-           save: !!$('#nt-save').checked, name: v('nt-name') };
+           save: !!$('#nt-save').checked, name: v('nt-name'),
+           base_mode: mode === 'custom' ? 'custom' : 'running', base: mode === 'custom' ? ntBase() : undefined };
 }
 function ntFmt(x) { return (typeof x === 'number') ? (Number.isInteger(x) ? String(x) : (+x.toPrecision(4)).toString()) : String(x); }
 function ntRender(d) {
@@ -3771,7 +3814,9 @@ function ntRender(d) {
   const rng = tr.whole_file ? '整个文件' : `${tr.start || '文件开头'} → ${tr.end || (tr.duration_s ? '+' + tr.duration_s + ' s' : '文件结尾')}`;
   st.innerHTML = `<div>文件 <code>${esc(d.file)}</code> · 对象 <b>${esc(d.channel)}</b> · 周波 ${m.cycles} · 时长 ${(+d.t_span_s).toFixed(1)} s · 口径 ${d.scaled ? '一次侧(PT/CT)' : '二次侧'} · 检测量 <b>${d.quantity === 'p' ? '有功 P' : '电流有效值 I'}</b>（${esc(d.quantity_requested)}${d.quantity === 'i' && !d.voltage_present ? '，数据源无电压 → I' : ''}）</div>`
     + `<div>时间段 ${esc(rng)} · 实际 ${esc(fmtLocalInput(tr.t_first))} → ${esc(fmtLocalInput(tr.t_last))}</div>`
-    + (d.saved_to ? `<div>已保存到 <code>${esc(d.saved_to)}</code>：以原配置文件 <code>${esc(d.base_config || '')}</code> 为基准只更新算法参数（${(d.changes || []).length} 项）、其它参数不变的完整配置；原配置文件未改动</div>` : '<div class="muted">未保存配置文件（默认）</div>')
+    + (d.base_mode === 'custom' && d.base ? `<div>基准配置：<b>独立基准配置</b>（fs ${ntFmt(d.base.fs)} Hz · f_nom ${ntFmt(d.base.f_nom)} Hz · PT/CT ${d.base.pt_ct_enabled ? '启用 PT=' + ntFmt(d.base.pt_ratio) + ' CT=' + ntFmt(d.base.ct_ratio) : '关闭'} · 时标 ${d.base.file_time_utc ? 'UTC' : '本地'} · 缺省检测量 ${esc(d.base.quantity)}）${d.base_file ? '，已写到 <code>' + esc(d.base_file) + '</code>' : ''}；两侧运行配置未改动</div>`
+                                        : `<div>基准配置：${d.side === 'branch' ? '分路侧' : '总线侧'}当前运行配置</div>`)
+    + (d.saved_to ? `<div>已保存到 <code>${esc(d.saved_to)}</code>：以 <code>${esc(d.base_config || '')}</code> 为基准只更新算法参数（${(d.changes || []).length} 项）、其它参数不变的完整配置；原配置文件未改动</div>` : '<div class="muted">未保存配置文件（默认）</div>')
     + (d.notes || []).map(n => `<div class="muted">提示：${esc(n)}</div>`).join('')
 ;
   const er = $('#nt-estrow'), est = d.min_load_estimate;
@@ -3808,11 +3853,12 @@ function ntRender(d) {
 async function ntRun() {
   const p = ntPayload();
   if (!p.path) { toast('请填写波形文件路径', 'err'); return; }
-  const side = $('#nt-side').value || 'bus';
+  const mode = ntBaseMode();
+  const side = mode === 'custom' ? 'bus' : mode;               // v0.72：独立基准配置与侧别无关，请求走总线侧路由即可
   const btn = $('#btn-nt-run'); btn.disabled = true; $('#nt-status').textContent = '正在读取并统计…';
   try {
     const d = await api('/api/process/nilm_tune', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(p) }, side);
-    NT.last = d; NT.side = side; $('#btn-nt-apply').disabled = false;
+    NT.last = d; NT.side = side; NT.baseMode = mode; $('#btn-nt-apply').disabled = false;
     ntRender(d);
     toast('调参完成' + (d.saved_to ? '，结果已保存 ' + d.saved_to : ''), 'ok');
   } catch (e) { $('#nt-status').innerHTML = `<span class="err">失败：${esc(e.message)}</span>`; toast(e.message, 'err'); }
@@ -3820,7 +3866,8 @@ async function ntRun() {
 }
 async function ntApply() {
   if (!NT.last) return;
-  const side = NT.side;
+  const sel = $('#nt-apply-side');
+  const side = (sel && sel.value) || NT.side || 'bus';          // v0.72：套用目标侧由「套用目标」下拉决定，与基准配置无关
   try {
     const d = await api('/api/nilm/tune/apply', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ params: NT.last, hot: true, persist: false }) }, side);
     if (d && d.config) {
@@ -4101,6 +4148,13 @@ function bindProcess() {
   if ($('#nt-form')) {
     $('#nt-files').addEventListener('change', () => { if ($('#nt-files').value) $('#nt-path').value = $('#nt-files').value; });
     $('#btn-nt-run').addEventListener('click', ntRun);
+    // v0.72：独立基准配置
+    if ($('#nt-side')) $('#nt-side').addEventListener('change', ntSyncBaseUI);
+    ['nt-base-fs', 'nt-base-fnom', 'nt-base-pt', 'nt-base-ct', 'nt-base-ptct', 'nt-base-utc', 'nt-base-q'].forEach(id => { const el = $('#' + id); if (el) el.addEventListener('change', ntSaveBase); });
+    if ($('#btn-nt-base-default')) $('#btn-nt-base-default').addEventListener('click', async () => { try { await ntLoadBase('default'); toast('基准配置已恢复为出厂值', 'ok'); } catch (e) { toast(e.message, 'err'); } });
+    if ($('#btn-nt-base-bus')) $('#btn-nt-base-bus').addEventListener('click', async () => { try { await ntLoadBase('running', 'bus'); toast('已填入总线侧运行配置的值（可再修改，不影响总线侧）', 'ok'); } catch (e) { toast(e.message, 'err'); } });
+    if ($('#btn-nt-base-branch')) $('#btn-nt-base-branch').addEventListener('click', async () => { try { await ntLoadBase('running', 'branch'); toast('已填入分路侧运行配置的值（可再修改，不影响分路侧）', 'ok'); } catch (e) { toast(e.message, 'err'); } });
+    ntInitBase();
     $('#btn-nt-refresh').addEventListener('click', ntListFiles);
     $('#btn-nt-apply').addEventListener('click', ntApply);
     $('#btn-nt-est-fill').addEventListener('click', () => {

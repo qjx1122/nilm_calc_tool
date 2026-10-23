@@ -743,3 +743,50 @@ def test_run_tune_min_load_auto_and_endpoint(client, tmp_path):
     assert d["ok"] and "--min-load-auto" not in d["command"] and d["min_load_source"] == "none"
     html = (ROOT / "app/static/index.html").read_text(encoding="utf-8"); js = (ROOT / "app/static/app.js").read_text(encoding="utf-8")
     assert all(f'id="{i}"' in html for i in ("nt-minauto", "nt-estrow", "nt-est-text", "btn-nt-est-fill")) and "min_load_auto" in js
+
+
+# ------------------------------------------------------------------ v0.72：调参基准配置独立于两侧运行配置
+def test_web_process_nilm_tune_independent_base(client):
+    """base_mode=custom（默认当带 base）：出厂配置 + 界面项；与两侧运行配置无关、不改运行配置；
+    保存时以独立基准为底；base_mode=running 保留旧行为；/api/process/nilm_tune/base 给出出厂 / 本侧运行值。"""
+    import json as _j
+    client.post("/api/engine/stop")
+    p = _write_csv(client.dir / "bg72.csv", dur=4.0)
+    # 总线侧运行配置故意改成 PT=123（独立基准不应受影响）
+    r = client.put("/api/config", json={"transform": {"enabled": True, "pt_ratio": 123}})
+    assert r.status_code == 200, r.text
+    cfg_before = client.get("/api/config").json()
+    assert cfg_before["transform"]["pt_ratio"] == 123
+    b = client.get("/api/process/nilm_tune/base?source=default").json()
+    assert b["ok"] and b["base"]["pt_ratio"] == 100 and b["base"]["fs"] == 6400 and "quantity" in b["base"]
+    b2 = client.get("/api/process/nilm_tune/base?source=running").json()
+    assert b2["ok"] and b2["base"]["pt_ratio"] == 123 and b2["side"] == "bus"
+    assert client.get("/api/process/nilm_tune/base?source=xx").status_code == 400
+    # 独立基准：PT/CT 关闭 → 二次侧口径；PT=77 只进基准、不进运行配置
+    base = {"fs": 6400, "f_nom": 50, "pt_ct_enabled": "0", "pt_ratio": 77, "ct_ratio": 15, "file_time_utc": "0", "quantity": "p"}
+    d = client.post("/api/process/nilm_tune", json={"path": str(p), "base": base, "duration_s": 2}).json()
+    assert d["ok"] and d["base_mode"] == "custom" and d["scaled"] is False and d["base"]["pt_ratio"] == 77 and d["base"]["pt_ct_enabled"] is False
+    assert d["base_file"] and d["base_file"].endswith("nilm_tune_base.json") and "--config" in d["command"] and "nilm_tune_base.json" in d["command"]
+    bf = Path(d["base_file"]) if os.path.isabs(d["base_file"]) else ROOT / d["base_file"]
+    assert bf.is_file() and AppConfig.load(str(bf)).transform.pt_ratio == 77 and AppConfig.load(str(bf)).transform.enabled is False
+    assert client.get("/api/config").json() == cfg_before                                 # 两侧运行配置未变
+    # 同文件按运行配置（PT=123 启用）→ 一次侧口径，量级不同
+    d2 = client.post("/api/process/nilm_tune", json={"path": str(p), "base_mode": "running", "duration_s": 2}).json()
+    assert d2["ok"] and d2["base_mode"] == "running" and d2["scaled"] is True and d2["base"]["pt_ratio"] == 123
+    assert d2["measure"]["level"] > d["measure"]["level"] * 100
+    # 保存：以独立基准为底（transform 取基准值，不是运行配置的 123）
+    d3 = client.post("/api/process/nilm_tune", json={"path": str(p), "base": base, "duration_s": 2, "save": True, "name": "ind72"}).json()
+    assert d3["ok"] and d3["saved_to"] and "独立基准配置" in d3["base_config"]
+    saved = Path(d3["saved_to"]) if os.path.isabs(d3["saved_to"]) else ROOT / d3["saved_to"]
+    data = _j.loads(saved.read_text(encoding="utf-8"))
+    assert data["transform"]["pt_ratio"] == 77 and data["transform"]["enabled"] is False and data["_tuning"]["base_mode"] == "custom"
+    assert data["nilm"]["algorithms"]["threshold"]["min_delta_w"] == d3["suggest"]["algorithms"]["threshold"]["min_delta_w"]
+    # 非法基准 → 400
+    assert client.post("/api/process/nilm_tune", json={"path": str(p), "base": {"fs": "abc"}}).status_code == 400
+    assert client.post("/api/process/nilm_tune", json={"path": str(p), "base": {"quantity": "zz"}}).status_code == 400
+    assert client.post("/api/process/nilm_tune", json={"path": str(p), "base_mode": "nope"}).status_code == 400
+    html = (ROOT / "app/static/index.html").read_text(encoding="utf-8"); js = (ROOT / "app/static/app.js").read_text(encoding="utf-8")
+    assert all(f'id="{i}"' in html for i in ("nt-base", "nt-base-fs", "nt-base-fnom", "nt-base-ptct", "nt-base-utc", "nt-base-pt", "nt-base-ct", "nt-base-q",
+                                             "btn-nt-base-default", "btn-nt-base-bus", "btn-nt-base-branch", "nt-apply-side"))
+    assert 'value="custom"' in html and "base_mode" in js and "/api/process/nilm_tune/base" in js
+    client.put("/api/config", json={"transform": {"pt_ratio": 100}})

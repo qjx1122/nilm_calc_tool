@@ -40,6 +40,7 @@ from elec_tool import __version__
 from elec_tool.config import (AppConfig, ConfigError, parse_time_text, CURVE_KEYS, QUANTITY_KEYS, SourceConfig, WindowSpec,
                               load_or_default)
 from elec_tool.engine import LiveEngine
+from elec_tool.wave_preview import WaveError
 from elec_tool.nilm_tuning import TuneError, build_cli_command, export_tuned_config, run_tune, tune_result_path
 from elec_tool.pace import PaceClock
 from elec_tool.timefmt import fmt_local
@@ -2365,6 +2366,58 @@ async def process_resample_cancel() -> Dict[str, Any]:
     return RESAMPLE.cancel()
 
 
+# v0.72：负荷辨识调参的「独立基准配置」——出厂配置 configs/default.json + 界面给的几项，不关联两侧运行配置
+NT_BASE_KEYS = ("fs", "f_nom", "pt_ct_enabled", "pt_ratio", "ct_ratio", "file_time_utc")
+NT_BASE_FILE = "nilm_tune_base.json"      # 独立基准配置落盘文件名（nilm_dir 下；每次调参覆盖，供等价命令 --config 复现）
+
+
+def _nt_base_fields(cfg: AppConfig) -> Dict[str, Any]:
+    return {"fs": float(cfg.sampling.fs), "f_nom": float(cfg.sampling.f_nom), "pt_ct_enabled": bool(cfg.transform.enabled),
+            "pt_ratio": float(cfg.transform.pt_ratio), "ct_ratio": float(cfg.transform.ct_ratio),
+            "file_time_utc": bool(cfg.source.file_time_utc), "quantity": str(cfg.nilm.quantity)}
+
+
+def _nt_make_base(payload: Dict[str, Any]) -> Tuple[AppConfig, str, Optional[str]]:
+    """按 payload 决定基准配置：``base_mode``＝``custom``（默认，独立基准配置：出厂配置 + ``base{...}`` 各项）/
+    ``running``（本侧当前运行配置，旧行为）。返回 (cfg, mode, 标签)。"""
+    from elec_tool.wave_preview import make_base
+    mode = str(payload.get("base_mode") or "").strip().lower()
+    if not mode:
+        mode = "custom" if isinstance(payload.get("base"), dict) else "running"
+    if mode == "running":
+        return AppConfig.from_dict(RUNNER.cfg.to_dict()), mode, None
+    if mode != "custom":
+        raise TuneError(f"base_mode 必须是 custom / running（当前 {mode!r}）")
+    b = payload.get("base") or {}
+    if not isinstance(b, dict):
+        raise TuneError("base 必须是 {fs, f_nom, pt_ct_enabled, pt_ratio, ct_ratio, file_time_utc} 字典")
+    cfg = make_base(AppConfig.load(DEFAULT_CONFIG_PATH), **{k: b.get(k) for k in NT_BASE_KEYS})
+    q = str(b.get("quantity") or "").strip()
+    if q:
+        if q not in ("auto", "p", "i"):
+            raise TuneError(f"基准配置 quantity 必须是 auto / p / i（当前 {q!r}）")
+        cfg.nilm.quantity = q
+    cfg.validate()
+    f = _nt_base_fields(cfg)
+    label = (f"独立基准配置（出厂配置 + fs={f['fs']:g} f_nom={f['f_nom']:g} PT/CT={'启用' if f['pt_ct_enabled'] else '关闭'} "
+             f"PT={f['pt_ratio']:g} CT={f['ct_ratio']:g} UTC={'是' if f['file_time_utc'] else '否'} quantity={f['quantity']}）")
+    return cfg, mode, label
+
+
+@app.get("/api/process/nilm_tune/base")
+async def process_nilm_tune_base(source: str = "default") -> Any:
+    """v0.72：独立基准配置的取值来源：``default``＝出厂配置 configs/default.json；``running``＝本侧当前运行配置
+    （经 ``/api/branch/...`` 为分路侧）。只读，供界面「恢复出厂 / 填入总线侧 / 填入分路侧」按钮用。"""
+    src = (source or "default").strip().lower()
+    if src == "running":
+        cfg = AppConfig.from_dict(RUNNER.cfg.to_dict()); side = current_side()
+    elif src == "default":
+        cfg = AppConfig.load(DEFAULT_CONFIG_PATH); side = None
+    else:
+        return JSONResponse(status_code=400, content={"ok": False, "error": "source 必须是 default / running"})
+    return {"ok": True, "source": src, "side": side, "base": _nt_base_fields(cfg), "keys": list(NT_BASE_KEYS) + ["quantity"]}
+
+
 @app.post("/api/process/nilm_tune")
 async def process_nilm_tune(payload: Dict[str, Any]) -> Any:
     """v0.52：数据处理子界面「负荷辨识调参」——对指定波形文件（可选时间段）量噪声、给出 6 种算法参数建议
@@ -2372,7 +2425,11 @@ async def process_nilm_tune(payload: Dict[str, Any]) -> Any:
     （``/api/branch/process/nilm_tune`` 为分路侧）；不改运行配置、不启动引擎。
 
     body：{path, channel?, quantity?, min_load_w?, min_load_a?, min_load_auto?: false, max_cycles?, t_start?, t_end?, duration_s?,
-           save?: false, name?: "tune_{时间}.json"}
+           save?: false, name?: "tune_{时间}.json",
+           base_mode?: "custom"|"running", base?: {fs, f_nom, pt_ct_enabled, pt_ratio, ct_ratio, file_time_utc, quantity}}
+    * v0.72：基准配置默认**独立于两侧运行配置**（``base_mode=custom``：出厂配置 + ``base`` 各项，空项＝出厂值；
+      界面上可单独修改，并会写到 ``nilm_dir/nilm_tune_base.json`` 供等价命令 ``--config`` 复现）；``base_mode=running``
+      保留旧行为（本侧当前运行配置；``/api/branch/...`` 为分路侧）。保存（save）时以该基准配置为底只更新算法参数。
     * min_load_auto（v0.55）：未手填最小关心负荷时从文件投切台阶估计（``min_load_estimate``，仅分路侧含启停录波有效）；
     * t_start / t_end 都空且 duration_s 空＝整个文件；
     * save=true（默认 false）：以本侧**原配置文件**（runtime.json / branch_runtime.json）为基准，只更新算法参数、其它参数不变，
@@ -2397,7 +2454,7 @@ async def process_nilm_tune(payload: Dict[str, Any]) -> Any:
             raise TuneError(f"{k} 必须是数字（当前 {v!r}）")
 
     try:
-        base = AppConfig.from_dict(RUNNER.cfg.to_dict())
+        base, base_mode, base_label = _nt_make_base(payload)
         kw = dict(channel=(str(payload.get("channel") or "").strip() or None),
                   quantity=(str(payload.get("quantity") or "").strip() or None),
                   min_load_w=_num("min_load_w"), min_load_a=_num("min_load_a"),
@@ -2411,9 +2468,24 @@ async def process_nilm_tune(payload: Dict[str, Any]) -> Any:
         out["side"] = current_side()
         out["saved_to"] = None
         out["base_config"] = None
-        # v0.54：等价的 nilm_tune.py 命令（--config 取本侧原配置文件；保存时追加 --apply --out <保存路径>）
-        pp0 = RUNNER.persist_path
-        cfg_arg = _display_path(pp0) if (pp0 and os.path.isfile(pp0)) else None
+        out["base_mode"] = base_mode
+        out["base"] = _nt_base_fields(base)
+        nl_dir = os.environ.get("ELEC_TOOL_NILM_DIR") or base.nilm.nilm_dir
+        if base_mode == "custom":
+            # v0.72：独立基准配置落盘（固定文件名、每次覆盖），等价命令用 --config 指向它即可复现
+            bdir = nl_dir if os.path.isabs(nl_dir) else os.path.join(ROOT, nl_dir)
+            os.makedirs(bdir, exist_ok=True)
+            bpath = os.path.join(bdir, NT_BASE_FILE)
+            bdoc = base.to_dict(); bdoc["_note"] = "v0.72 负荷辨识调参独立基准配置（出厂配置 + 界面项），由界面每次调参覆盖写出"
+            with open(bpath, "w", encoding="utf-8") as fh:
+                json.dump(bdoc, fh, ensure_ascii=False, indent=2); fh.write("\n")
+            out["base_file"] = _display_path(bpath)
+            cfg_arg = out["base_file"]
+        else:
+            out["base_file"] = None
+            # v0.54：等价的 nilm_tune.py 命令（--config 取本侧原配置文件；保存时追加 --apply --out <保存路径>）
+            pp0 = RUNNER.persist_path
+            cfg_arg = _display_path(pp0) if (pp0 and os.path.isfile(pp0)) else None
         cmd_kw = dict(config=cfg_arg, channel=kw["channel"], quantity=kw["quantity"], min_load_w=kw["min_load_w"],
                       min_load_a=kw["min_load_a"], max_cycles=kw["max_cycles"], t_start=kw["t_start"], t_end=kw["t_end"],
                       duration_s=kw["duration_s"], min_load_auto=kw["min_load_auto"])
@@ -2423,17 +2495,19 @@ async def process_nilm_tune(payload: Dict[str, Any]) -> Any:
             # 为基准，只更新 nilm.quantity / rel_tol_pct / min_delta_pct 与各算法建议参数，其它参数原样保留；
             # 原配置文件本身不改动，写到 output/nilm/<name>（默认 tune_<时间>.json）。
             # 原配置文件尚不存在（界面从未保存过）时退回本侧当前运行配置，并在 base_config 中注明。
-            pp = RUNNER.persist_path
-            if pp and os.path.isfile(pp):
-                base_file = AppConfig.load(pp); base_label = _display_path(pp)
+            if base_mode == "custom":
+                base_file = base                                  # v0.72：独立基准配置为底（base_label 已含各项）
             else:
-                base_file = base; base_label = f"(运行配置；{_display_path(pp) if pp else '持久化文件'} 尚不存在)"
-            nl_dir = os.environ.get("ELEC_TOOL_NILM_DIR") or base.nilm.nilm_dir
+                pp = RUNNER.persist_path
+                if pp and os.path.isfile(pp):
+                    base_file = AppConfig.load(pp); base_label = _display_path(pp)
+                else:
+                    base_file = base; base_label = f"(运行配置；{_display_path(pp) if pp else '持久化文件'} 尚不存在)"
             fp = tune_result_path(base, str(payload.get("name") or ""), out_dir=nl_dir)
             if not os.path.isabs(fp):
                 fp = os.path.join(ROOT, fp)
             _cfg, fp, changes = export_tuned_config(base_file, out, out_path=fp,
-                                                    meta={"side": current_side(), "base_config": base_label,
+                                                    meta={"side": current_side(), "base_mode": base_mode, "base_config": base_label,
                                                           "measure": out["measure"], "suggest": out["suggest"],
                                                           "t_range": out["t_range"]})
             out["saved_to"] = _display_path(fp); out["base_config"] = base_label; out["changes"] = changes
@@ -2448,7 +2522,7 @@ async def process_nilm_tune(payload: Dict[str, Any]) -> Any:
             except Exception:
                 pass
         return {"ok": True, **out}
-    except (TuneError, ConfigError, ValueError) as exc:
+    except (TuneError, ConfigError, ValueError, WaveError) as exc:
         return JSONResponse(status_code=400, content={"ok": False, "error": str(exc)})
     except Exception as exc:
         return JSONResponse(status_code=400, content={"ok": False, "error": f"{type(exc).__name__}: {exc}"})

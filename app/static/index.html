@@ -973,7 +973,31 @@
             </div>
             <div class="row2">
               <label title="从起始时间（或文件开头）起分析的时长；与结束时间同时填时取先到者">或 时长 (s，空＝到结束时间/文件结尾) <input id="nt-duration" type="number" min="0.02" step="0.1" placeholder="空"></label>
-              <label title="PT/CT、列映射、缺省检测量取自该侧当前运行配置；不改动运行配置">基准配置 <select id="nt-side"><option value="bus">总线侧运行配置</option><option value="branch">分路侧运行配置</option></select></label>
+              <label title="v0.72：默认「独立基准配置」——出厂配置 + 下方各项（fs / f_nom / PT·CT / 时标 UTC / 缺省检测量），与总线侧、分路侧运行配置互不关联，可单独修改（保存在浏览器本地，并随每次调参写到 output/nilm/nilm_tune_base.json 供等价命令复现）；也可改选沿用某一侧当前运行配置（旧行为）">基准配置 <select id="nt-side"><option value="custom">独立基准配置（本页，默认）</option><option value="bus">沿用总线侧运行配置</option><option value="branch">沿用分路侧运行配置</option></select></label>
+            </div>
+            <div class="wp-group" id="nt-base" title="独立基准配置：只影响本页调参，不改动两侧运行配置">
+              <div class="wp-group-title">独立基准配置（与两侧运行配置互不关联，可单独修改）</div>
+              <div class="row2">
+                <label title="采样率：每周波点数 = fs / f_nom；文件有时标时源层仍按时标校核">采样率 fs (Hz) <input id="nt-base-fs" type="number" min="1" step="any"></label>
+                <label title="额定频率">额定频率 f_nom (Hz) <input id="nt-base-fnom" type="number" min="1" step="any"></label>
+              </div>
+              <div class="row2">
+                <label class="check" title="勾选＝数值换算为一次侧（电压 × PT、电流 × CT），最小关心负荷与结果同为一次侧口径"><input id="nt-base-ptct" type="checkbox"> 启用 PT/CT（一次侧口径）</label>
+                <label class="check" title="文件时标按 UTC 解释"><input id="nt-base-utc" type="checkbox"> 文件时标为 UTC</label>
+              </div>
+              <div class="row2">
+                <label>PT 变比 <input id="nt-base-pt" type="number" min="0.000001" step="any"></label>
+                <label>CT 变比 <input id="nt-base-ct" type="number" min="0.000001" step="any"></label>
+              </div>
+              <div class="row2">
+                <label title="上方「检测量」选「跟随配置」时采用的缺省值">缺省检测量 nilm.quantity <select id="nt-base-q"><option value="auto">auto（无电压→I）</option><option value="p">p 有功</option><option value="i">i 电流有效值</option></select></label>
+                <span class="btnrow" style="align-items:flex-end">
+                  <button id="btn-nt-base-default" type="button" title="恢复为出厂配置 configs/default.json 的值">恢复出厂</button>
+                  <button id="btn-nt-base-bus" type="button" title="把总线侧当前运行配置的对应项填入（之后可再改，不影响总线侧）">填入总线侧值</button>
+                  <button id="btn-nt-base-branch" type="button" title="把分路侧当前运行配置的对应项填入（之后可再改，不影响分路侧）">填入分路侧值</button>
+                </span>
+              </div>
+              <div id="nt-base-note" class="mut"></div>
             </div>
             <div class="row2">
               <label>检测量 <select id="nt-quantity"><option value="">跟随配置 nilm.quantity</option><option value="auto">auto（无电压→I）</option><option value="p">p 有功</option><option value="i">i 电流有效值</option></select></label>
@@ -993,7 +1017,8 @@
             <div class="btnrow">
               <button id="btn-nt-run" class="primary">量噪声并给出参数</button>
               <button id="btn-nt-refresh">刷新文件列表</button>
-              <button id="btn-nt-apply" disabled title="把上次结果套用到所选侧正在运行的配置（热生效，更新后的完整配置写 output/nilm/，不写配置文件）">套用到运行配置</button>
+              <label title="「套用到运行配置」的目标侧（与基准配置无关；基准配置独立时也可套用到任一侧）">套用目标 <select id="nt-apply-side"><option value="bus">总线侧运行配置</option><option value="branch">分路侧运行配置</option></select></label>
+              <button id="btn-nt-apply" disabled title="把上次结果套用到「套用目标」所选侧正在运行的配置（热生效，更新后的完整配置写 output/nilm/，不写配置文件）">套用到运行配置</button>
             </div>
             <div id="nt-hint" class="notes">
               <div>理想输入是<b>没有投切的稳态段</b>（几十秒即可）；段内偶有开关会由稳健统计削弱，并在结果里提示。单位口径与界面一致（启用 PT/CT 时为一次侧 W / A）。</div>

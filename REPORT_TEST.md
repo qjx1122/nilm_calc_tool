@@ -1076,6 +1076,7 @@ U10-4 B/C 相为 0：____  U10-5 列号交换：Ia≈____  U10-6 无时间戳：
 ---
 
 ## 🗒 变更记录
+- v0.72（2026-10-23）：第 93 轮沙盒侧实录——`tools/ui_r72_check.cjs`（jsdom 打 8033，`ELEC_TOOL_CONFIG_PATH=/tmp/cfg72/runtime.json`、`ELEC_TOOL_NILM_DIR=/tmp/out72/nilm`）**ALL PASS**：独立基准初值＝出厂（PT 100 / CT 15 / fs 6400）而非总线侧 PT 123；改 PT=77 + 关 PT/CT → 请求 `base_mode=custom`、结果 `scaled=false`、`--config …/nilm_tune_base.json`、两侧运行配置不变；填入总线侧 / 分路侧值、恢复出厂；沿用分路侧 → `/api/branch/process/nilm_tune`、`base.ct_ratio=5`；独立基准 + 套用目标分路侧 → 分路侧 nilm 更新、CT 仍 5。CLI `tools/nilm_tune.py --config output/nilm/nilm_tune_base.json` 与界面 level=1155001.2003 / sigma_cycle=22.3624 完全一致。全量 374 passed / 1 skipped。用户侧：浏览器手点独立基准配置 → 调参 → 套用，**🔶待回报**。
 - v0.71（2026-10-23）：第 92 轮沙盒侧实录——`tools/ui_r71_check.cjs`（jsdom 驱动真实页面打 8032 服务端，csv_file 源 `data/nilm_bus_mixed.csv`）**ALL PASS**：三视图趋势 3 条 × 11 点、右键菜单键序 `copy-image,save-image,open-image,show-window,show-window2,zoom-reset,native!`、周波窗（有效值）`/api/elec/cycles_file?n=300&t=中心` 3 条 × 300、周波窗（瞬时值）`/api/nilm/wave_file` 3（6）通道 × 38400 点、两图同段、清除 / 手动装载（空＝起点起 50 周波）、模拟器源两项灰显 + 装载禁用、分路侧右列独立装载 40 周波；pytest 新增 `test_elec_cycles_file_matches_nilm_cycles`；全量 373 passed / 1 skipped。用户侧：浏览器手点三子界面右键 → 周波窗，**🔶待回报**。
 - v0.11.1（2026-10-13）：T-010 追加 **F-40**（用户 Windows 回报：无日期时标按本地解释后为负 epoch → localtime OSError → 负荷辨识接口 500；基准改 1970-01-02 + 统一安全格式化出口 `timefmt`；全量 260 passed）。
 - v0.11（2026-10-13）：追加专题 **T-010**（第 12 轮：负荷辨识子界面·逐周波事件检测）：S1~S6 实录、F-38~F-39、U12 组执行包。
