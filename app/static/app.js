@@ -2710,6 +2710,9 @@ function collectWindowPayload(side = sideOf()) {
     else if (el.tagName === 'SELECT') out[k][f] = el.value;
     else out[k][f] = el.value === '' ? null : +el.value;
   });
+  // v0.75：表格里「步长」显示的是有效值（null ⇒ 等于窗长）；用户没改时仍按原配置的 null 回送，避免把文件里的 null 改写成数字
+  const cw = (((side === 'branch' ? BRD.state : S.state) || {}).config || {}).windows || {};
+  Object.keys(out).forEach(k => { if (cw[k] && cw[k].step_s === null && out[k].step_s === out[k].length_s) out[k].step_s = null; });
   return { windows: out };
 }
 
@@ -2945,10 +2948,12 @@ async function runSelftest() {
 async function saveCfgFile(side = sideOf()) {
   try {
     const cfg = await api('/api/config', undefined, side);
-    await api('/api/config', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(cfg) }, side);
-    const stx = side === 'branch' ? (BRD.state || {}) : (S.state || {});
-    const cp = (stx.engine || {}).config_path || (side === 'branch' ? 'configs/branch.json' : 'configs/runtime.json');
-    E(side, 'exp-out').innerHTML = notes([`✓ 当前${side === 'branch' ? '分路侧' : '总线侧'}配置已写入 ${cp}（下次启动自动加载；出厂模板 configs/default.json 未被改动）`]);
+    // v0.75：整份送回，但服务端只把与原文件不同的键写入（原文件其它内容不动）；回显实际改了哪些键
+    const d = await api('/api/config', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(cfg) }, side);
+    const cp = d.config_file || (side === 'branch' ? 'configs/branch_runtime.json' : 'configs/runtime.json');
+    const ch = d.config_file_changes || [];
+    E(side, 'exp-out').innerHTML = notes([ch.length ? `✓ ${side === 'branch' ? '分路侧' : '总线侧'}配置文件 ${cp} 在原文件基础上更新了 ${ch.length} 项：${ch.join('、')}（其它内容未动；出厂模板 configs/default.json 未被改动）`
+                                                    : `✓ ${side === 'branch' ? '分路侧' : '总线侧'}配置文件 ${cp} 与当前运行配置一致，无需改动`]);
     toast('配置已持久化', 'ok');
   } catch (e) { E(side, 'exp-out').innerHTML = notes(['✗ ' + e.message]); }
 }

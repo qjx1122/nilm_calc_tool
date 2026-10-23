@@ -179,3 +179,63 @@ def test_missing_runtime_uses_default_template(env, tmp_path):
         assert _read(tmpl) == tdoc                                          # 模板本身不改
     finally:
         runner.cfg_path, runner.persist_path = old
+
+
+def test_v75_only_changed_leaves_written_even_when_whole_config_sent(env):
+    """v0.75：保存只写与原文件不同的叶子。① 送回与文件一致的分段 → 文件字节不变、config_file_changes 空；
+    ② 外部手改文件 + 内存里有热套用值后，导出页「保存配置」整份送回 → 只有真正不同的键被写入，手改项不被覆盖；
+    ③ 返回 config_file_changes 列出实际写入的键。"""
+    c, cfg_path = env["c"], env["cfg"]
+    c.post("/api/engine/stop")
+    cur = c.get("/api/config").json()
+    # 先把文件与内存在 output 段对齐，再送回与文件完全一致的 output 段
+    raw0 = cfg_path.read_text(encoding="utf-8")
+    doc = json.loads(raw0)
+    r = c.put("/api/config", json={"output": doc["output"]})
+    assert r.status_code == 200
+    j = r.json()
+    assert j["config_file_changes"] == [] and cfg_path.read_text(encoding="utf-8") == raw0      # 一字未改
+    # 外部手改：transform.ct_ratio=9 + 自定义键；内存里 nilm.min_delta_pct 为之前热套用的 9.9（文件里 0.0）
+    doc = json.loads(cfg_path.read_text(encoding="utf-8")); doc["transform"]["ct_ratio"] = 9.0; doc["my_custom_note"] = "改过"
+    cfg_path.write_text(json.dumps(doc, ensure_ascii=False, indent=4) + "\n", encoding="utf-8")
+    r = c.post("/api/nilm/tune/apply", json={"params": {"min_delta_pct": 7.7}, "hot": True, "persist": False})   # 热套用、未保存
+    assert r.status_code == 200
+    whole = c.get("/api/config").json()
+    r = c.put("/api/config", json=whole)                                        # 导出页「保存配置」：整份送回
+    assert r.status_code == 200
+    ch = r.json()["config_file_changes"]
+    after = json.loads(cfg_path.read_text(encoding="utf-8"))
+    assert after["my_custom_note"] == "改过"                                    # 自定义键保留
+    # 整份送回＝保存"当前运行配置"：与文件不同的键（含外部手改成 9 而内存仍是 15 的 ct_ratio、热套用的 nilm 值）按内存写回，
+    # 其余一律不动
+    assert "transform.ct_ratio" in ch and after["transform"]["ct_ratio"] == 15.0
+    assert all(k.startswith(("nilm.", "transform.ct_ratio", "source.")) for k in ch), ch   # 只有真正不同的键
+    assert "nilm.min_delta_pct" in ch and after["nilm"]["min_delta_pct"] == 7.7
+    assert "output.realtime_save" not in ch and "sampling.fs" not in ch
+    assert cfg_path.read_text(encoding="utf-8").startswith('{\n    "')
+
+
+def test_v75_1_missing_keys_equal_to_builtin_default_not_added(env):
+    """v0.75.1：文件里没有的键、取值又等于程序内置默认值 ⇒ 不补写（「不改任何值直接点保存」文件一字不动）；
+    改成非默认值后该键才被补进文件，且只补这一项。"""
+    c, cfg_path = env["c"], env["cfg"]
+    c.post("/api/engine/stop")
+    doc = json.loads(cfg_path.read_text(encoding="utf-8")); doc.pop("events", None)
+    cfg_path.write_text(json.dumps(doc, ensure_ascii=False, indent=4) + "\n", encoding="utf-8")
+    raw0 = cfg_path.read_text(encoding="utf-8")
+    ev = c.get("/api/config").json()["events"]
+    ev["hysteresis"] = 0.95                                  # 内置默认值
+    r = c.put("/api/config", json={"events": ev})
+    assert r.status_code == 200
+    ch = r.json()["config_file_changes"]
+    assert "events.hysteresis" not in ch, ch                 # 等于内置默认值的缺失键不补写
+    if ch:                                                  # 允许写入的只有运行期与默认不同的键（如 events_dir 由环境变量指定）
+        assert all(k == "events.events_dir" for k in ch), ch
+    else:
+        assert cfg_path.read_text(encoding="utf-8") == raw0  # 一字不动
+    ev["u1_high_pct"] = 123.0
+    r = c.put("/api/config", json={"events": ev})
+    assert r.status_code == 200
+    assert "events.u1_high_pct" in r.json()["config_file_changes"]
+    after = json.loads(cfg_path.read_text(encoding="utf-8"))
+    assert after["events"]["u1_high_pct"] == 123.0

@@ -837,7 +837,7 @@
         <div class="row">
           <a class="btnlink" href="/api/export?fmt=csv" download>下载 CSV（扁平表）</a>
           <a class="btnlink" href="/api/export?fmt=json" download>下载 JSON（全量结果）</a>
-          <button id="btn-save-cfgfile" class="savecfg-side" title="把本侧当前运行配置整体写入本侧配置文件（下次启动自动加载；出厂模板 configs/default.json 不改动）">保存总线侧配置</button>
+          <button id="btn-save-cfgfile" class="savecfg-side" title="把本侧当前运行配置中与配置文件不同的项写入本侧配置文件（在原文件基础上只更新变化的键，其它内容不动；下次启动自动加载；出厂模板 configs/default.json 不改动）">保存总线侧配置</button>
         </div>
         <div id="exp-out" class="notes"></div>
       </div>

@@ -88,6 +88,7 @@
 - **v0.69**：所有侧别配置保存按钮统一为「保存总线侧配置 / 保存分路侧配置」（右列克隆时按 `.savecfg-side` 改字）；顶部侧别「分路侧设备」→「分路侧」。`ui_r69` 4/4、`ui_r12` 76/76、`ui_r61` 47/47、全量 370 passed / 1 skipped。
 - **v0.70**：总线侧「启动」/「预览公共时间段」随请求附带界面当前的分路侧联动参数与分路侧数据源字段（服务端白名单覆盖本次运行配置、不写文件）；修复「未勾选公共时间段仍报没有公共时间段」；公共时间段自定义起止支持 HH:MM:SS。`ui_r70` 8/8、`ui_r12` 76/76、`ui_r61` 47/47、全量 372 passed / 1 skipped。
 - **v0.71**：三相电压 / 三相电流 / P-Q-S 三子界面各加趋势图 + 周波窗（有效值）+ 周波窗（瞬时值）；新端点 `GET /api/elec/cycles_file`（`wave_preview.cycle_values`，与 NILM 逐周波口径一致）；右键菜单 / 风格与负荷辨识页同形，实时源灰显。`ui_r71` ALL PASS、`ui_r61` 47/47、`ui_r69` 4/4、`ui_r70` 8/8、全量 373 passed / 1 skipped。
+- **v0.75**：所有 17 个「保存总线侧 / 分路侧配置」按钮严格只写与原文件不同的键：`_drop_unchanged`（值相同不写、文件缺失且等于内置默认不写）、无差异不落盘；导出页整份保存改为只写差异并回显 `config_file_changes`；窗口步长 `null` 不被改写成数字。`ui_r75_check.cjs` 17 按钮 ALL PASS；pytest +2。
 - **v0.74**：保存为配置文件补齐遗漏项：`source.path`（原占位 x.csv）、`nilm.channels`＝本次检测对象、自定义时间三项、`_tuning.params`（起止 / 时长 / 最小关心负荷 / max_cycles / 基准各项）；CLI `--apply` 同机制。pytest +1、`ui_r72` ALL PASS、全量 378 passed / 1 skipped。
 - **v0.73**：调参页「启用自定义时间」（同波形预览写法 / 语义；时长＝点数 / 采样率，起止空＝整个文件；CLI `--custom-time*`）；检测量 / 检测对象移入基准配置分组，分组沿用某侧时整体只读。`ui_r72` ALL PASS、全量 377 passed / 1 skipped。
 - **v0.72.2**：调参页检测量 / 检测对象：独立基准配置下可单独改；沿用某侧运行配置时禁用并随该侧 `nilm.quantity` / `nilm.channels[0]`（服务端同规则，legacy 调用保持旧行为）。`ui_r72` ALL PASS、全量 375 passed / 1 skipped。

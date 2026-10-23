@@ -1347,13 +1347,17 @@ async def put_config(payload: Dict[str, Any]) -> Any:
         cfg = AppConfig.from_dict(data)
         RUNNER.set_cfg(cfg)
         persisted = False
+        _LAST_PERSIST_CHANGES[current_side()] = []
         if os.environ.get("ELEC_TOOL_PERSIST_CONFIG", "1") == "1":
             try:
                 _persist(cfg, payload); persisted = True
             except Exception:
                 pass
+        changed = list(_LAST_PERSIST_CHANGES.get(current_side(), []))
         return {"ok": True, "config": cfg.to_dict(), "config_file_updated": persisted,
-                "config_file": _display_path(RUNNER.persist_path)}
+                "config_file": _display_path(RUNNER.persist_path),
+                # v0.75：本次实际写入文件的键（原文件基础上只改这些；空＝文件内容未变）
+                "config_file_changes": changed}
     except ConfigError as exc:
         return JSONResponse(status_code=400, content={"ok": False, "error": str(exc)})
     except Exception as exc:
@@ -1454,6 +1458,18 @@ def _persist(cfg: AppConfig, patch: Optional[Dict[str, Any]] = None) -> None:
         if not doc:                                # 无任何基准文件：写完整当前配置（其中已含本次改动）
             doc = norm
         else:
+            # v0.75：只落盘**与原文件不同**的叶子——patch 里值未变的键不碰（文件里原有写法 / 顺序原样），
+            # 整份送回（导出页「保存配置」）时也只写真正变化的项
+            sel = _drop_unchanged(sel, doc, _BUILTIN_DEFAULTS)
+            # output.source_id 由侧别在运行期强制（0 总线 / 1 分路），文件里没写就不补写
+            o = sel.get("output") if isinstance(sel, dict) else None
+            if isinstance(o, dict) and "source_id" not in (doc.get("output") or {}) and o.get("source_id") == SIDE_SOURCE_ID.get(current_side()):
+                o.pop("source_id", None)
+                if not o:
+                    sel.pop("output", None)
+            _LAST_PERSIST_CHANGES[current_side()] = _flat_keys(sel)
+            if not sel:
+                return
             _apply_patch(doc, sel)
     AppConfig.from_dict(json.loads(json.dumps(doc))).validate()   # 合并结果必须仍是合法配置
     indent = _detect_indent(path) if os.path.isfile(path) else 2
@@ -1462,6 +1478,50 @@ def _persist(cfg: AppConfig, patch: Optional[Dict[str, Any]] = None) -> None:
     with open(tmp, "w", encoding="utf-8") as fh:
         fh.write(json.dumps(doc, ensure_ascii=False, indent=indent) + "\n")
     os.replace(tmp, path)
+
+
+_LAST_PERSIST_CHANGES: Dict[str, List[str]] = {}     # v0.75：最近一次保存实际写入文件的键（按侧），供 PUT /api/config 回显
+
+
+def _drop_unchanged(sel: Any, doc: Any, dflt: Any = None) -> Any:
+    """去掉 sel（_patch_pick 结果）里与原文件 doc 取值相同的叶子；_DEL 只在文件里确有该键时保留。
+    v0.75.1：文件里**没有**该键、而取值又等于程序内置默认值（dflt）的叶子也不写——文件原本靠默认值生效，
+    「不改任何值直接点保存」时文件一字不动；只有真正改成非默认值才把该键补进文件。"""
+    if isinstance(sel, dict) and isinstance(doc, dict):
+        out: Dict[str, Any] = {}
+        dd = dflt if isinstance(dflt, dict) else {}
+        for k, v in sel.items():
+            if v is _DEL:
+                if k in doc:
+                    out[k] = v
+            elif isinstance(v, dict) and isinstance(doc.get(k), dict):
+                d = _drop_unchanged(v, doc[k], dd.get(k))
+                if d:
+                    out[k] = d
+            elif isinstance(v, dict) and k not in doc and isinstance(dd.get(k), dict):
+                d = _drop_unchanged(v, {}, dd.get(k))
+                if d:
+                    out[k] = d
+            elif k in doc and doc[k] == v:
+                continue
+            elif k not in doc and k in dd and dd[k] == v:
+                continue
+            else:
+                out[k] = v
+        return out
+    return sel
+
+
+_BUILTIN_DEFAULTS: Dict[str, Any] = AppConfig.from_dict({}).to_dict()   # 程序内置默认值（不依赖任何文件）
+
+
+def _flat_keys(sel: Any, prefix: str = "") -> List[str]:
+    if isinstance(sel, dict):
+        out: List[str] = []
+        for k, v in sel.items():
+            out += _flat_keys(v, f"{prefix}{k}.")
+        return out
+    return [prefix[:-1] + ("(删除)" if sel is _DEL else "")]
 
 
 def _deep_update(dst: Dict[str, Any], src: Dict[str, Any]) -> None:
