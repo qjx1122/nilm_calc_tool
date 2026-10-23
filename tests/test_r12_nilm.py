@@ -810,3 +810,47 @@ def test_web_process_nilm_tune_running_mode_follows_side_quantity_channel(client
     d3 = client.post("/api/process/nilm_tune", json={"path": str(p), "base_mode": "running", "duration_s": 2}).json()
     assert d3["ok"] and d3["quantity"] == "i" and d3["channel"] == "A"
     client.put("/api/config", json={"nilm": {"quantity": "auto", "channels": ["total"]}})
+
+
+# ------------------------------------------------------------------ v0.73：调参自定义时间（同波形预览）+ 检测量/检测对象入基准配置分组
+def test_run_tune_custom_time_same_as_wave_preview(tmp_path):
+    from elec_tool.nilm_tuning import TuneError, build_cli_command, run_tune
+    p = _write_csv(tmp_path / "bg73.csv", dur=4.0)
+    base = AppConfig()
+    whole = run_tune(base, str(p), custom_time=True)
+    tr = whole["t_range"]
+    assert tr["custom_time"] and tr["whole_file"] and tr["file_rows"] == 4 * FS
+    assert tr["file_duration_s"] == pytest.approx(tr["file_rows"] / tr["fs_used"])          # 时长＝点数 / 采样率
+    assert whole["measure"]["cycles"] == 200 and whole["measure"]["level"] == pytest.approx(run_tune(base, str(p))["measure"]["level"], rel=1e-9)
+    # 自定义起始时间 + HH:MM:SS 起止（在自定义时间轴上解释）
+    d = run_tune(base, str(p), custom_time=True, custom_time_start="2026-01-01 00:00:00", t_start="00:00:01", t_end="00:00:03")
+    assert 98 <= d["measure"]["cycles"] <= 101 and abs(d["t_range"]["t_first"] - (d["t_range"]["file_t_start"] + 1.0)) < 0.03
+    assert d["t_range"]["custom_time_start"] == "2026-01-01 00:00:00"
+    # 自定义结束时间作为缺省终点
+    e = run_tune(base, str(p), custom_time=True, custom_time_start="2026-01-01 00:00:00", custom_time_end="2026-01-01 00:00:02")
+    assert 98 <= e["measure"]["cycles"] <= 101
+    with pytest.raises(TuneError):
+        run_tune(base, str(p), custom_time=True, custom_time_start="zz")
+    with pytest.raises(TuneError):
+        run_tune(base, str(p), custom_time=True, custom_time_start="2026-01-01 00:00:00", t_start="00:00:03", t_end="00:00:01")
+    c = build_cli_command("x.csv", custom_time=True, custom_time_start="2026-01-01 00:00:00", t_start="00:00:01")
+    assert "--t-start 00:00:01 --custom-time --custom-time-start '2026-01-01 00:00:00'" in c
+    assert "--custom-time" not in build_cli_command("x.csv")
+
+
+def test_web_process_nilm_tune_custom_time_and_ui_layout(client):
+    client.post("/api/engine/stop")
+    p = _write_csv(client.dir / "bg73w.csv", dur=4.0)
+    d = client.post("/api/process/nilm_tune", json={"path": str(p), "base": {}, "custom_time": True, "custom_time_start": "2026-01-01 00:00:00"}).json()
+    assert d["ok"] and d["t_range"]["custom_time"] and d["t_range"]["whole_file"] and d["t_range"]["file_duration_s"] == pytest.approx(4.0)
+    assert "--custom-time --custom-time-start" in d["command"]
+    d2 = client.post("/api/process/nilm_tune", json={"path": str(p), "base": {}, "custom_time": True, "custom_time_start": "2026-01-01 00:00:00", "t_start": "00:00:01", "duration_s": 1}).json()
+    assert d2["ok"] and 49 <= d2["measure"]["cycles"] <= 51
+    assert client.post("/api/process/nilm_tune", json={"path": str(p), "base": {}, "custom_time": True, "custom_time_start": "bad"}).status_code == 400
+    d3 = client.post("/api/process/nilm_tune", json={"path": str(p), "base": {}, "custom_time": False}).json()
+    assert d3["ok"] and not d3["t_range"]["custom_time"] and "--custom-time" not in d3["command"]
+    html = (ROOT / "app/static/index.html").read_text(encoding="utf-8")
+    assert all(f'id="{i}"' in html for i in ("nt-custom", "nt-custom-row", "nt-cstart", "nt-cend", "nt-base-title"))
+    # 检测量 / 检测对象位于独立基准配置分组 #nt-base 之内
+    i0 = html.index('id="nt-base"'); i1 = html.index('id="nt-base-note"')
+    assert i0 < html.index('id="nt-quantity"') < i1 and i0 < html.index('id="nt-channel"') < i1

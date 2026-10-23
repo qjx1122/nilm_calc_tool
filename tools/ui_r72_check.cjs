@@ -71,14 +71,33 @@ async function main() {
   check('独立基准：请求带 quantity=i channel=C，结果按之计算', b.quantity === 'i' && b.channel === 'C' && d.quantity === 'i' && d.channel === 'C', `${d.quantity}/${d.channel}`);
   console.log('— 沿用某侧运行配置（旧行为仍可选）');
   $('nt-side').value = 'branch'; change($('nt-side')); await sleep(1000);
-  check('选「沿用分路侧运行配置」后独立基准分组隐藏', $('nt-base').style.display === 'none');
-  check('检测量 / 检测对象被禁用并显示分路侧配置值（p / B）', $('nt-quantity').disabled && $('nt-channel').disabled && $('nt-quantity').value === 'p' && $('nt-channel').value === 'B', `${$('nt-quantity').value}/${$('nt-channel').value}`);
+  check('选「沿用分路侧运行配置」后分组仍显示但标题改为沿用、全部字段禁用并显示分路侧值（CT=5）、填入按钮隐藏', $('nt-base').style.display !== 'none' && /沿用分路侧/.test($('nt-base-title').textContent) && ['nt-base-fs', 'nt-base-pt', 'nt-base-ct', 'nt-base-ptct', 'nt-base-utc'].every((i) => $(i).disabled) && $('nt-base-ct').value === '5' && $('btn-nt-base-bus').style.display === 'none', $('nt-base-title').textContent + ' CT=' + $('nt-base-ct').value);
+  check('检测量 / 检测对象（在基准配置分组内）被禁用并显示分路侧配置值（p / B）', $('nt-base').contains($('nt-quantity')) && $('nt-base').contains($('nt-channel')) && $('nt-quantity').disabled && $('nt-channel').disabled && $('nt-quantity').value === 'p' && $('nt-channel').value === 'B', `${$('nt-quantity').value}/${$('nt-channel').value}`);
   click($('btn-nt-run')); await sleep(4000);
   c = lastPost(); b = JSON.parse(c.body); d = window.__NT.last;
   check('请求走 /api/branch/process/nilm_tune，base_mode=running，不上送 quantity/channel，结果 base.ct_ratio=5、按分路侧 p / B 计算', /^\/api\/branch\//.test(c.url) && b.base_mode === 'running' && !b.base && b.quantity === null && b.channel === null && d.base && d.base.ct_ratio === 5 && d.quantity === 'p' && d.channel === 'B', c.url + ' ' + d.quantity + '/' + d.channel);
   $('nt-side').value = 'custom'; change($('nt-side')); await sleep(300);
-  check('切回独立基准：检测量 / 检测对象恢复可编辑并还原用户选择（i / C）', !$('nt-quantity').disabled && $('nt-quantity').value === 'i' && $('nt-channel').value === 'C', `${$('nt-quantity').value}/${$('nt-channel').value}`);
+  check('切回独立基准：全部字段恢复可编辑并还原用户值（CT=15、i / C）', !$('nt-quantity').disabled && !$('nt-base-ct').disabled && $('nt-base-ct').value === '15' && $('nt-quantity').value === 'i' && $('nt-channel').value === 'C', `${$('nt-base-ct').value} ${$('nt-quantity').value}/${$('nt-channel').value}`);
   $('nt-quantity').value = ''; $('nt-channel').value = '';
+
+  console.log('— 自定义时间（与波形预览同一套）');
+  check('有「启用自定义时间」勾选与自定义起止输入（默认隐藏）', !!$('nt-custom') && !$('nt-custom').checked && $('nt-custom-row').style.display === 'none');
+  $('nt-custom').checked = true; change($('nt-custom'));
+  check('勾选后显示自定义起止输入，起止占位提示改为自定义时间轴写法', $('nt-custom-row').style.display !== 'none' && /自定义起始时间/.test($('nt-tstart').placeholder) && /epoch 秒 \/ 08:00:00/.test($('nt-tstart').placeholder), $('nt-tstart').placeholder);
+  $('nt-cstart').value = '2026-01-01 00:00:00'; $('nt-cend').value = ''; $('nt-tstart').value = ''; $('nt-tend').value = ''; $('nt-duration').value = '';
+  click($('btn-nt-run')); await sleep(5000);
+  c = lastPost(); b = JSON.parse(c.body); d = window.__NT.last; let tr = d.t_range;
+  check('请求带 custom_time / custom_time_start；起止与时长全空 → 整个文件：时长＝点数/采样率＝64000/6400＝10 s，时间轴从自定义起始算', b.custom_time === true && b.custom_time_start === '2026-01-01 00:00:00' && tr.custom_time && tr.whole_file && tr.file_rows === 64000 && Math.abs(tr.file_duration_s - 10) < 1e-6 && Math.abs(tr.file_t_start - new Date('2026-01-01T00:00:00+08:00').getTime() / 1000) < 1e-6, JSON.stringify({ rows: tr.file_rows, dur: tr.file_duration_s, t0: tr.file_t_start }));
+  check('结果区显示自定义时间与「点数 / 采样率 ＝ 时长」', /自定义时间/.test($('nt-status').textContent) && /64000 点 \/ 6400 Hz ＝ 时长 10\.000 s/.test($('nt-status').textContent));
+  check('等价命令含 --custom-time --custom-time-start', /--custom-time --custom-time-start/.test(d.command), d.command);
+  $('nt-tstart').value = '00:00:01'; $('nt-tend').value = '00:00:03';
+  click($('btn-nt-run')); await sleep(5000);
+  d = window.__NT.last; tr = d.t_range;
+  check('自定义时间轴上 HH:MM:SS 起止（00:00:01 → 00:00:03）＝ 2 s ≈ 100 周波', d.measure.cycles >= 99 && d.measure.cycles <= 101 && Math.abs(tr.t_first - (tr.file_t_start + 1)) < 0.03, `${d.measure.cycles} 周波`);
+  $('nt-cstart').value = 'zz';
+  click($('btn-nt-run')); await sleep(2500);
+  check('自定义起始时间写法非法 → 400 并提示', /自定义起始时间无法解析/.test($('nt-status').textContent), $('nt-status').textContent.slice(0, 60));
+  $('nt-custom').checked = false; change($('nt-custom')); $('nt-cstart').value = ''; $('nt-tstart').value = ''; $('nt-tend').value = ''; $('nt-duration').value = '2';
 
   console.log('— 套用目标独立于基准配置');
   check('有「套用目标」下拉（总线侧 / 分路侧）', !!$('nt-apply-side') && $('nt-apply-side').options.length === 2);

@@ -53,6 +53,11 @@ def main() -> int:
     ap.add_argument("--t-start", default="", help="v0.52：分析起始时间（'2026-10-13 08:00:02.5' / '08:00:02.5' / epoch 秒；空＝文件开头）")
     ap.add_argument("--t-end", default="", help="v0.52：分析结束时间（格式同上；空＝文件结尾）")
     ap.add_argument("--duration", type=float, default=None, help="v0.52：从起始时间（或文件开头）起分析的时长（秒）；与 --t-end 同时给时取先到者")
+    ap.add_argument("--custom-time", action="store_true",
+                    help="v0.73：启用自定义时间（与界面波形预览一致）：时间轴＝自定义起始时间 + 行号/fs，文件时长＝点数/采样率；"
+                         "--t-start/--t-end 按这条时间轴解释（完整日期时间 / epoch 秒 / HH:MM:SS），都空＝整个文件")
+    ap.add_argument("--custom-time-start", default="", help="自定义起始时间（空＝文件第 1 条数据时间）")
+    ap.add_argument("--custom-time-end", default="", help="自定义结束时间（空＝起始 + 点数/采样率；作为 --t-end 为空时的缺省终点）")
     ap.add_argument("--max-cycles", type=int, default=30000, help="最多分析的周波数（默认 30000 ≈ 10 min@50Hz）")
     ap.add_argument("--json", action="store_true", help="只输出 JSON")
     ap.add_argument("--apply", action="store_true",
@@ -68,6 +73,7 @@ def main() -> int:
     try:
         out = run_tune(base_cfg, a.file, channel=a.channel, quantity=a.quantity, min_load_w=a.min_load_w,
                        min_load_a=a.min_load_a, max_cycles=a.max_cycles, t_start=a.t_start, t_end=a.t_end,
+                       custom_time=a.custom_time, custom_time_start=a.custom_time_start, custom_time_end=a.custom_time_end,
                        duration_s=a.duration, min_load_auto=a.min_load_auto)
     except (TuneError, ConfigError) as exc:
         print(f"⚠ {exc}", file=sys.stderr)

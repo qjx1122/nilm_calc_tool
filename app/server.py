@@ -2427,6 +2427,7 @@ async def process_nilm_tune(payload: Dict[str, Any]) -> Any:
     （``/api/branch/process/nilm_tune`` 为分路侧）；不改运行配置、不启动引擎。
 
     body：{path, channel?, quantity?, min_load_w?, min_load_a?, min_load_auto?: false, max_cycles?, t_start?, t_end?, duration_s?,
+           custom_time?: false, custom_time_start?, custom_time_end?,
            save?: false, name?: "tune_{时间}.json",
            base_mode?: "custom"|"running", base?: {fs, f_nom, pt_ct_enabled, pt_ratio, ct_ratio, file_time_utc, quantity}}
     * v0.72.2：``base_mode=running`` 时 quantity / channel 沿用该侧运行配置（``nilm.quantity`` / ``nilm.channels[0]``），请求中的同名项忽略；
@@ -2464,7 +2465,10 @@ async def process_nilm_tune(payload: Dict[str, Any]) -> Any:
                   min_load_w=_num("min_load_w"), min_load_a=_num("min_load_a"),
                   max_cycles=int(_num("max_cycles") or 30000),
                   t_start=str(payload.get("t_start") or ""), t_end=str(payload.get("t_end") or ""),
-                  duration_s=_num("duration_s"), min_load_auto=bool(payload.get("min_load_auto", False)))
+                  duration_s=_num("duration_s"), min_load_auto=bool(payload.get("min_load_auto", False)),
+                  # v0.73：自定义时间（与波形预览同一套写法 / 语义；文件时长＝点数 / 采样率，起止都空＝整个文件）
+                  custom_time=bool(payload.get("custom_time", False)),
+                  custom_time_start=str(payload.get("custom_time_start") or ""), custom_time_end=str(payload.get("custom_time_end") or ""))
         if kw["quantity"] not in (None, "auto", "p", "i"):
             raise TuneError(f"quantity 必须是 auto / p / i（当前 {kw['quantity']!r}）")
         if base_mode == "running":
@@ -2499,7 +2503,8 @@ async def process_nilm_tune(payload: Dict[str, Any]) -> Any:
             cfg_arg = _display_path(pp0) if (pp0 and os.path.isfile(pp0)) else None
         cmd_kw = dict(config=cfg_arg, channel=kw["channel"], quantity=kw["quantity"], min_load_w=kw["min_load_w"],
                       min_load_a=kw["min_load_a"], max_cycles=kw["max_cycles"], t_start=kw["t_start"], t_end=kw["t_end"],
-                      duration_s=kw["duration_s"], min_load_auto=kw["min_load_auto"])
+                      duration_s=kw["duration_s"], min_load_auto=kw["min_load_auto"],
+                      custom_time=kw["custom_time"], custom_time_start=kw["custom_time_start"], custom_time_end=kw["custom_time_end"])
         out["command"] = build_cli_command(out["file"], **cmd_kw)
         if bool(payload.get("save", False)):
             # v0.53：保存的是**完整配置**——以本侧原配置文件（runtime.json / branch_runtime.json，即界面改动的持久化文件）

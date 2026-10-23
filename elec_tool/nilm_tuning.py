@@ -304,13 +304,17 @@ def suggest(m: dict, min_load: float | None, x: Optional[np.ndarray] = None) -> 
 def run_tune(base: AppConfig, file: str, *, channel: Optional[str] = None, quantity: Optional[str] = None,
              min_load_w: Optional[float] = None, min_load_a: Optional[float] = None, max_cycles: int = 30000,
              t_start: str = "", t_end: str = "", duration_s: Optional[float] = None,
-             min_load_auto: bool = False) -> Dict[str, Any]:
+             min_load_auto: bool = False, custom_time: bool = False, custom_time_start: str = "",
+             custom_time_end: str = "") -> Dict[str, Any]:
     """量一段背景数据的逐周波噪声并给出参数建议（``tools/nilm_tune.py`` 与 ``POST /api/process/nilm_tune`` 共用）。
 
     - ``min_load_auto``（v0.55）：未手填最小关心负荷时，从文件中的投切台阶估计（``estimate_min_load``），估计可靠才采用；
       结果里总是带 ``min_load_estimate`` 供复核；
 
     - ``base``：提供 PT/CT、fs、f_nom、列映射与缺省 ``nilm.quantity`` 的配置（不被修改）；
+    - ``custom_time``（v0.73）：与波形预览同一套自定义时间：时间轴＝自定义起始时间（空＝文件第 1 条数据时间）+ 行号 / fs，
+      文件时长＝数据点数 / 采样率；``t_start / t_end`` 在这条时间轴上解释（写法同波形预览：完整日期时间 / epoch 秒 / HH:MM:SS），
+      都空＝整个文件；``custom_time_end`` 为缺省终点。结果 ``t_range`` 附 ``custom_time / file_duration_s / file_rows / file_t_start / file_t_end``；
     - ``t_start`` / ``t_end``：分析时间段，文本格式同播放时间段（``2026-10-13 08:00:02.5`` / ``08:00:02.5`` / epoch 秒），
       都为空＝整个文件；``duration_s``：从起点（或文件开头）起的时长（秒），与 ``t_end`` 同时给时取先到者；
     - 返回与 CLI ``--json`` 相同结构的 dict，另含 ``t_range``；输入不满足抛 ``TuneError``。
@@ -318,26 +322,42 @@ def run_tune(base: AppConfig, file: str, *, channel: Optional[str] = None, quant
     from .nilm import CycleFeatures
     from .scaling import scale_block
     from .sources import create_source
-    cfg = AppConfig.from_dict(base.to_dict())
-    cfg.source.kind = "csv_file"; cfg.source.path = file
-    cfg.source.file_speed = 0.0; cfg.source.play_window = False; cfg.source.play_end_time = ""
-    cfg.source.play_start_mode = "begin"; cfg.source.play_start_value = ""
     ts_txt, te_txt = str(t_start or "").strip(), str(t_end or "").strip()
-    if ts_txt:
-        parse_play_start("time", ts_txt)                       # 非法时间文本在这里就报 ConfigError
-        cfg.source.play_start_mode = "time"; cfg.source.play_start_value = ts_txt
-    if te_txt:
-        parse_play_start("time", te_txt)
-        cfg.source.play_end_time = te_txt
     if duration_s is not None:
         duration_s = float(duration_s)
         if not (duration_s > 0):
             raise TuneError(f"时长必须 > 0 秒（当前 {duration_s}）")
-    if ts_txt and te_txt:
-        a, b = parse_play_start("time", ts_txt), parse_play_start("time", te_txt)
-        if a[0] == b[0] and b[1] <= a[1]:
-            raise TuneError(f"结束时间必须晚于开始时间（{ts_txt} → {te_txt}）")
-    cfg.validate()
+    file_meta: Dict[str, Any] = {"custom_time": bool(custom_time)}
+    if custom_time:
+        # v0.73：自定义时间——复用波形预览的基准构造与时间轴定位（_prep_cfg），保证两处写法 / 语义完全一致
+        from .wave_preview import WaveError, _prep_cfg, file_info, make_base
+        try:
+            # make_base 以 base 为模板复制（nilm / transform / sampling 等全部沿用），只置入自定义时间三项并校验写法
+            b2 = make_base(base, custom_time="1", custom_time_start=str(custom_time_start or ""), custom_time_end=str(custom_time_end or ""))
+            info = file_info(b2, file)
+            cfg = _prep_cfg(b2, file, ts_txt, te_txt, info)
+        except WaveError as exc:
+            raise TuneError(str(exc)) from None
+        file_meta.update({"file_duration_s": float(info["duration_s"]), "file_rows": int(info["rows"]),
+                          "file_t_start": float(info["t_start"]), "file_t_end": float(info["t_end"]), "fs_used": float(cfg.sampling.fs),
+                          "custom_time_start": str(custom_time_start or "").strip() or None,
+                          "custom_time_end": str(custom_time_end or "").strip() or None})
+    else:
+        cfg = AppConfig.from_dict(base.to_dict())
+        cfg.source.kind = "csv_file"; cfg.source.path = file
+        cfg.source.file_speed = 0.0; cfg.source.play_window = False; cfg.source.play_end_time = ""
+        cfg.source.play_start_mode = "begin"; cfg.source.play_start_value = ""
+        if ts_txt:
+            parse_play_start("time", ts_txt)                       # 非法时间文本在这里就报 ConfigError
+            cfg.source.play_start_mode = "time"; cfg.source.play_start_value = ts_txt
+        if te_txt:
+            parse_play_start("time", te_txt)
+            cfg.source.play_end_time = te_txt
+        if ts_txt and te_txt:
+            a, b = parse_play_start("time", ts_txt), parse_play_start("time", te_txt)
+            if a[0] == b[0] and b[1] <= a[1]:
+                raise TuneError(f"结束时间必须晚于开始时间（{ts_txt} → {te_txt}）")
+        cfg.validate()
     feat = CycleFeatures(cfg.sampling.fs, cfg.sampling.f_nom)
     ps, is_, ts = [], [], []
     u_nonzero = False
@@ -406,7 +426,7 @@ def run_tune(base: AppConfig, file: str, *, channel: Optional[str] = None, quant
             "quantity": qty, "quantity_requested": q_req, "unit": unit, "voltage_present": u_nonzero,
             "scaled": bool(cfg.transform.enabled), "t_span_s": float(t[-1] - t[0]) if len(t) > 1 else 0.0,
             "t_range": {"start": ts_txt, "end": te_txt, "duration_s": duration_s,
-                        "t_first": float(t[0]), "t_last": float(t[-1]), "whole_file": not (ts_txt or te_txt or duration_s)},
+                        "t_first": float(t[0]), "t_last": float(t[-1]), "whole_file": not (ts_txt or te_txt or duration_s), **file_meta},
             "min_load_used": (None if min_load is None else float(min_load)), "min_load_source": min_load_source,
             "min_load_estimate": est,
             "notes": notes, "measure": m, "suggest": sg}
@@ -416,7 +436,8 @@ def build_cli_command(file: str, *, config: Optional[str] = None, channel: Optio
                       quantity: Optional[str] = None, min_load_w: Optional[float] = None, min_load_a: Optional[float] = None,
                       max_cycles: Optional[int] = None, t_start: str = "", t_end: str = "", duration_s: Optional[float] = None,
                       json_out: bool = True, apply: bool = False, out: Optional[str] = None,
-                      python: str = "python", min_load_auto: bool = False) -> str:
+                      python: str = "python", min_load_auto: bool = False, custom_time: bool = False,
+                      custom_time_start: str = "", custom_time_end: str = "") -> str:
     """生成与一次调参等价的 ``tools/nilm_tune.py`` 命令行（v0.54，界面结果 JSON 的 ``command`` 字段）。
 
     只写实际给出的参数；路径/时间含空格时加引号（POSIX 写法，Windows PowerShell 把 ``python`` 换成
@@ -450,6 +471,12 @@ def build_cli_command(file: str, *, config: Optional[str] = None, channel: Optio
         parts += ["--t-end", q(str(t_end).strip())]
     if duration_s is not None:
         parts += ["--duration", num(duration_s)]
+    if custom_time:
+        parts.append("--custom-time")
+        if str(custom_time_start or "").strip():
+            parts += ["--custom-time-start", q(str(custom_time_start).strip())]
+        if str(custom_time_end or "").strip():
+            parts += ["--custom-time-end", q(str(custom_time_end).strip())]
     if max_cycles is not None and int(max_cycles) != 30000:
         parts += ["--max-cycles", str(int(max_cycles))]
     if json_out:
