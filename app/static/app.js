@@ -1560,7 +1560,7 @@ function seqTable(s, unit) {
 
 /* ------------------------------------------------------------------ v0.71：实时监测（三相电压 / 三相电流 / P·Q·S）子界面的
  * 趋势图 + 周波窗（有效值）+ 周波窗（瞬时值）——曲线功能、右键菜单与风格与负荷辨识事件页一致：
- *   趋势图：history 曲线（同总览），竖线＝负荷辨识事件起点（已加载时）；右键：复制 / 保存 / 打开图片、显示周波窗（有效值）、显示周波窗（瞬时值）、复位缩放
+ *   趋势图：history 曲线（同总览；v0.76 起不画负荷辨识事件竖线）；右键：复制 / 保存 / 打开图片、显示周波窗（有效值）、显示周波窗（瞬时值）、复位缩放
  *   周波窗（有效值）：/api/elec/cycles_file（以该时刻为中心 N 个周波的逐周波 Urms / Irms / P·Q·S，从本侧离线文件读取；也可手动装载）
  *   周波窗（瞬时值）：/api/nilm/wave_file（同一段的采样瞬时值；功率页由 u·i 算 p(t)）
  * 两个周波窗都只来自本侧配置的离线文件（csv_file）；实时源下菜单项灰显（同 v0.66 规则）。 */
@@ -1635,12 +1635,12 @@ function ewWinSourceText(st) {
 }
 function renderElecWindows(key) {
   const d0 = EW_DEF[key], side = sideOf(), st = EWs(side, key), pre = d0.pre;
-  // ① 趋势图（同总览 / 负荷辨识趋势）+ 负荷辨识事件竖线
+  // ① 趋势图（同总览 / 负荷辨识趋势；v0.76 起不画负荷辨识事件竖线）
   const cvT = $('#' + pre + '-trend');
   if (cvT) {
     const h = curHist(d0.hist); const t0 = h.length ? h[0].t : 0, tEnd = h.length ? h[h.length - 1].t : 0;
     drawLine(cvT, ewTrendSeries(key, h, t0), { ylabel: key === 'power' ? 'W/var/VA' : d0.unit, fmtX: x => tsX(x + t0, spanOf(d0.hist)), fmtTip: x => ts(x + t0), tbase: t0, height: 260,
-                                               marks: ewEventMarks(side, t0, tEnd), empty: `暂无${d0.label}趋势（需累计 ≥2 个 ${d0.hist} 窗）` });
+                                               empty: `暂无${d0.label}趋势（需累计 ≥2 个 ${d0.hist} 窗）` });   // v0.76：电气量页三曲线不再画负荷辨识事件竖线
     bindCtxMenu(cvT, ewCtxItems(cvT, side, key));
   }
   // ② 周波窗（有效值）
@@ -1653,7 +1653,7 @@ function renderElecWindows(key) {
     const c = st.cyc; const sub = $('#' + pre + '-cyc-sub');
     if (!c || !c.t || !c.t.length) {
       drawLine(cvC, [], { height: 240, empty: '在趋势图上右键「显示周波窗（有效值）」或用上方「装载周波窗」后显示（以该时刻为中心 N 个周波的逐周波有效值，从本侧离线文件读取）' });
-      if (sub) sub.textContent = '（在趋势图上右键「显示周波窗（有效值）」或下方手动装载：以该时刻为中心 N 个周波的逐周波有效值，从本侧离线文件读取）';
+      if (sub) sub.textContent = '';                                         // v0.76：标题只留数据说明，操作提示在曲线空态里
     } else {
       const t0 = c.t[0]; let ser = [], ylabel = d0.unit;
       if (key === 'power') {
@@ -1665,7 +1665,7 @@ function renderElecWindows(key) {
         ser = ['A', 'B', 'C'].filter(ph => Array.isArray((c[f] || {})[ph])).map(ph => ({ name: `${f}${ph.toLowerCase()}（逐周波有效值）`, color: COLORS[ph], data: c.t.map((x, i) => [x - t0, c[f][ph][i]]) }));
       }
       drawLine(cvC, ser, { ylabel, fmtX: x => ts(x + t0), fmtTip: x => fmtLocalInput(x + t0), tbase: t0, height: 240, legend: true,
-                           marks: ewEventMarks(side, t0, c.t[c.t.length - 1]), empty: key === 'power' ? '该文件没有电压通道，算不出 P / Q / S' : `该文件没有${d0.label}通道` });
+                           empty: key === 'power' ? '该文件没有电压通道，算不出 P / Q / S' : `该文件没有${d0.label}通道` });
       if (sub) sub.textContent = `（${c.n_cycles} 个周波 × ${ser.length} 条 · 每周波 ${c.n_cycle_samples} 点 · ${fmtLocalInput(t0)} → ${fmtLocalInput(c.t[c.t.length - 1])}` + (c.source && c.source.mode === 'center' ? `，中心 ${fmtLocalInput(c.source.t_center)}` : '') + ` · ${(c.source || {}).path || ''}）`;
       bindCtxMenu(cvC, () => canvasNativeItems(cvC).concat([{ key: 'sep', sep: true }, { key: 'zoom-reset', label: '复位缩放', onClick: () => zoomReset(cvC) }, { key: 'native', label: '浏览器原生菜单（Shift + 右键）', disabled: true }]));
     }
@@ -1676,7 +1676,7 @@ function renderElecWindows(key) {
     const d = st.wave; const sub = $('#' + pre + '-wave2-sub');
     if (!d || !d.t || !d.t.length) {
       drawLine(cvW, [], { height: 240, empty: '在趋势图上右键「显示周波窗（瞬时值）」后显示（以该时刻为中心 N 个周波的采样瞬时值，从本侧离线文件读取）' });
-      if (sub) sub.textContent = '（在趋势图上右键「显示周波窗（瞬时值）」后显示：以该时刻为中心的 N 个周波采样瞬时值，从本侧离线文件读取）';
+      if (sub) sub.textContent = '';
     } else {
       const t0 = d.t[0]; const chans = d.channels_loaded || Object.keys(d.channels || {}); let ser = [], ylabel = d0.unit;
       if (key === 'power') {
@@ -1704,6 +1704,7 @@ function bindElecWindows(side) {
     on(pre + '-win-t', 'keydown', (e) => { if (e.key === 'Enter') ewLoadCycles(side, key); });
   });
   on('p-cyc-ch', 'change', render);
+  if (side === 'bus') { const box = E(side, 'p-wave-sel'); if (box) box.addEventListener('change', render); }   // 分路侧克隆列由 buildDualViews 的委托 change → render
 }
 
 function renderVoltage() {
@@ -1743,6 +1744,31 @@ function renderCurrent() {
   renderElecWindows('current');
 }
 
+/* v0.76：「有功 / 无功 / 视在功率瞬时波形」——原「瞬时功率波形」+「分相瞬时功率波形」合并为一张图，
+   勾选框（#p-wave-sel）选 总 / A / B / C 相 × P / Q / S。p=u·i；q=u(t−T/4)·i（服务端 series.q_*）；s=√(p²+q²) */
+const PW_STYLE = { P: { unit: 'W', dash: null }, Q: { unit: 'var', dash: [6, 4] }, S: { unit: 'VA', dash: [2, 3] } };
+const PW_PHC = { total: { P: COLORS.P, Q: COLORS.Q, S: COLORS.S }, A: COLORS.A, B: COLORS.B, C: COLORS.C };
+function renderPowerWave(p) {
+  const cv = $('#p-wave'); if (!cv) return;
+  const box = $('#p-wave-sel');
+  const sel = box ? Array.from(box.querySelectorAll('.pw-sel:checked')).map(el => [el.dataset.k, el.dataset.ph]) : [['P', 'total']];
+  const sr = (p && p.series) || {};
+  const fsP = ((curState().config || {}).sampling || {}).fs || 6400, stP = sr.stride || 1;
+  const ser = [];
+  sel.forEach(([k, ph]) => {
+    const arr = ph === 'total' ? sr[k.toLowerCase() + '_total'] : ((sr[k.toLowerCase() + '_per_phase'] || {})[ph]);
+    if (!Array.isArray(arr) || !arr.length) return;
+    const color = ph === 'total' ? PW_PHC.total[k] : PW_PHC[ph];
+    ser.push({ name: `${k.toLowerCase()}(t) ${ph === 'total' ? '总' : ph + ' 相'}${k === 'P' ? '有功' : k === 'Q' ? '无功' : '视在'}（${PW_STYLE[k].unit}）`,
+               color, dash: PW_STYLE[k].dash, width: ph === 'total' ? 1.8 : 1.3, data: arr.map((v2, j) => [j * stP / fsP, v2]) });
+  });
+  const units = Array.from(new Set(sel.map(([k]) => PW_STYLE[k].unit)));
+  drawLine(cv, ser, { ylabel: units.join('/') || 'W', zero: true, fmtX: x => x.toFixed(3) + 's', height: 240, legend: true,
+                      empty: sel.length ? (sr.q_total ? '暂无瞬时功率波形（请先启动数据源）' : '暂无瞬时功率波形（无功 / 视在瞬时波形需服务端 v0.76+ 结果）') : '请在上方勾选要显示的曲线' });
+  const sub = $('#p-wave-sub');
+  if (sub) sub.textContent = ser.length ? `（${ser.length} 条 · ${(sr.p_total || []).length} 点 · 抽稀 ${stP}:1 · q(t) 电压滞后 ${sr.q_lag_samples || 0} 点＝T/4）` : '';
+}
+
 function renderPower() {
   const p = q('power');
   const cards = [];
@@ -1758,13 +1784,7 @@ function renderPower() {
     }
   }
   $('#p-cards').innerHTML = cards.join('') || card('状态', '尚无结果', '', '请先启动数据源');
-  const ser = (p && p.series && p.series.p_total) ? [{ name: 'p(t) 总瞬时功率', color: COLORS.P, data: p.series.p_total.map((v2, k) => [k * (p.series.stride || 1) / (((curState().config || {}).sampling || {}).fs || 6400), v2]) }] : [];
-  drawLine($('#p-wave'), ser, { ylabel: 'W', unit: 'W', zero: true, fmtX: x => x.toFixed(3) + 's', height: 220 });
-  // v0.28：三相分相瞬时功率波形 pA/pB/pC(t)=u_k·i_k（同一抽稀步长；图例勾选选相）
-  const pph = (p && p.series && p.series.p_per_phase) || {};
-  const fsP = ((curState().config || {}).sampling || {}).fs || 6400, stP = (p && p.series && p.series.stride) || 1;
-  const serPh = PH.filter(k => Array.isArray(pph[k]) && pph[k].length).map(k => ({ name: `p${k}(t) ${k} 相`, color: COLORS[k], data: pph[k].map((v2, j) => [j * stP / fsP, v2]) }));
-  drawLine($('#p-wave-ph'), serPh, { ylabel: 'W', unit: 'W', zero: true, fmtX: x => x.toFixed(3) + 's', height: 220, legend: true, empty: '暂无分相瞬时功率（需服务端 v0.28+ 结果）' });
+  renderPowerWave(p);
   $('#p-phase').innerHTML = p ? (() => {
     const pv = p.values, col = (o, u) => unitScale(PH.map(k => (o || {})[k]), u);
     const sP = col(pv.p_per_phase, 'W'), sQ = col(pv.q_per_phase, 'var'), sS = col(pv.s_per_phase, 'VA'), sU = col(pv.u_rms, 'V'), sI = col(pv.i_rms, 'A');

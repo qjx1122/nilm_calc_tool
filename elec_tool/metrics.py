@@ -603,9 +603,13 @@ class MetricsCalculator:
                      "displacement_vs_true_pf_diff": "-", "p_total_for_reference": "W",
                      "s_total_for_reference": "VA"}
             return values, units, {}
-        series = {"p_total": full.get("series", {}).get("p_total", []),
-                  "p_per_phase": full.get("series", {}).get("p_per_phase", {}),     # v0.28：分相瞬时功率 pA/pB/pC(t)
-                  "stride": full.get("series", {}).get("stride", 1)}
+        fs_ = full.get("series", {})
+        series = {"p_total": fs_.get("p_total", []),
+                  "p_per_phase": fs_.get("p_per_phase", {}),     # v0.28：分相瞬时功率 pA/pB/pC(t)
+                  "q_total": fs_.get("q_total", []), "q_per_phase": fs_.get("q_per_phase", {}),   # v0.76：瞬时无功 / 视在波形
+                  "s_total": fs_.get("s_total", []), "s_per_phase": fs_.get("s_per_phase", {}),
+                  "q_lag_samples": fs_.get("q_lag_samples", 0),
+                  "stride": fs_.get("stride", 1)}
         values = {k: v for k, v in full.items() if k != "series"}
         return values, units, series
 

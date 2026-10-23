@@ -131,9 +131,11 @@ def test_realtime_writer_rotates_file_with_old_header(tmp_path, monkeypatch):
 
 def test_frontend_contract():
     # v0.28：功率页不再是趋势线，而是分相瞬时功率波形 #p-wave-ph；谐波/间谐波/基波趋势含分相线（默认隐藏、图例勾选）
-    # v0.71：功率页按用户要求又补回趋势图 #p-trend（与 P/Q/S 瞬时功率波形并存），故只要求 #p-wave-ph 仍在
-    assert 'id="p-wave-ph"' in HTML and 'id="p-trend"' in HTML
-    assert "drawLine($('#p-wave-ph'), serPh" in APP_JS and "p.series.p_per_phase" in APP_JS
+    # v0.71：功率页按用户要求又补回趋势图 #p-trend（与 P/Q/S 瞬时功率波形并存）
+    # v0.76：两张瞬时功率波形合并为 #p-wave「有功 / 无功 / 视在功率瞬时波形」，勾选框 #p-wave-sel 选 总/A/B/C × P/Q/S
+    assert 'id="p-wave-ph"' not in HTML and 'id="p-wave"' in HTML and 'id="p-wave-sel"' in HTML and 'id="p-trend"' in HTML
+    assert HTML.count('class="pw-sel"') == 12 and "有功 / 无功 / 视在功率瞬时波形" in HTML
+    assert "function renderPowerWave" in APP_JS and "_per_phase'" in APP_JS and "q_lag_samples" in APP_JS
     assert "name: 'PF' + ph.toLowerCase()" in APP_JS and "defaultHidden: true, data: hp.map(x => [x.t - t0, x['PF' + ph.toLowerCase()]])" in APP_JS
     for cid in ("h-trend", "f-u1-trend", "f-i1-trend"):
         assert f'id="{cid}"' in HTML and f"drawLine($('#{cid}')" in APP_JS, cid
@@ -159,3 +161,25 @@ def test_power_series_has_per_phase(client, tmp_path, monkeypatch):
             assert abs(pp["A"][j] + pp["B"][j] + pp["C"][j] - ser["p_total"][j]) < 1e-6 * max(1.0, abs(ser["p_total"][j]))
     finally:
         client.post("/api/engine/stop")
+
+
+def test_v76_instantaneous_q_s_series():
+    """v0.76：功率分析 series 含瞬时无功 / 视在波形：q_k(t)=u_k(t−T/4)·i_k(t)、s_k=√(p²+q²)；纯正弦 φ=60° 时
+    q(t) 的均值≈U·I·sinφ、p(t) 均值≈U·I·cosφ，总 s 为三相算术和。"""
+    import numpy as np
+    from elec_tool.analysis.power import power_analysis
+    from elec_tool.config import PowerConfig
+    fs, f, n = 6400.0, 50.0, 6400
+    t = np.arange(n) / fs
+    U, I, phi = 100.0, 10.0, np.radians(60)
+    u = np.stack([np.sqrt(2) * U * np.sin(2 * np.pi * f * t - k * 2 * np.pi / 3) for k in range(3)])
+    i = np.stack([np.sqrt(2) * I * np.sin(2 * np.pi * f * t - k * 2 * np.pi / 3 - phi) for k in range(3)])
+    from elec_tool.config import HarmonicConfig
+    r = power_analysis(u, i, fs, f, PowerConfig(), HarmonicConfig(), remove_dc=False, window_fn="rect", max_series_points=100000)
+    sr = r["series"]
+    assert sr["q_lag_samples"] == 32 and len(sr["q_total"]) == n and set(sr["q_per_phase"]) == {"A", "B", "C"}
+    assert abs(np.mean(sr["p_per_phase"]["A"]) - U * I * np.cos(phi)) < 1.0
+    assert abs(np.mean(sr["q_per_phase"]["A"]) - U * I * np.sin(phi)) < 1.0
+    sa = np.asarray(sr["s_per_phase"]["A"]); pa = np.asarray(sr["p_per_phase"]["A"]); qa = np.asarray(sr["q_per_phase"]["A"])
+    assert np.allclose(sa, np.sqrt(pa ** 2 + qa ** 2))
+    assert np.allclose(np.asarray(sr["s_total"]), sum(np.asarray(sr["s_per_phase"][k]) for k in "ABC"))

@@ -168,9 +168,20 @@ def power_analysis(u: np.ndarray, i: np.ndarray, fs: float, f_used: float,
     series: Dict[str, object] = {}
     if p_series.size:
         step = max(1, int(np.ceil(p_series.size / max(max_series_points, 1))))
+        # v0.76：瞬时无功 / 视在波形——q_k(t)=u_k(t−T/4)·i_k(t)（电压滞后 1/4 基波周期，按 f_used 取整到采样点，窗内循环移位），
+        #        s_k(t)=sqrt(p_k²+q_k²)；总量 p/q 为三相之和，s 为三相算术和（与 apparent=arithmetic 口径一致）
+        lag = int(round(fs / (4.0 * f_used))) if (np.isfinite(f_used) and f_used > 0) else 0
+        p_ph = [u[k] * i[k] for k in range(3)]
+        q_ph = [np.roll(u[k], lag) * i[k] for k in range(3)]
+        s_ph = [np.sqrt(p_ph[k] ** 2 + q_ph[k] ** 2) for k in range(3)]
         series = {
             "p_total": [float(v) for v in p_series[::step]],
-            "p_per_phase": {PHASES[k]: [float(v) for v in (u[k] * i[k])[::step]] for k in range(3)},
+            "p_per_phase": {PHASES[k]: [float(v) for v in p_ph[k][::step]] for k in range(3)},
+            "q_total": [float(v) for v in sum(q_ph)[::step]],
+            "q_per_phase": {PHASES[k]: [float(v) for v in q_ph[k][::step]] for k in range(3)},
+            "s_total": [float(v) for v in sum(s_ph)[::step]],
+            "s_per_phase": {PHASES[k]: [float(v) for v in s_ph[k][::step]] for k in range(3)},
+            "q_lag_samples": lag,
             "stride": int(step),
             "n_points": int(np.ceil(p_series.size / step)),
         }

@@ -38,7 +38,12 @@ button:disabled{opacity:.5;cursor:not-allowed}
 .view{display:none}
 .view.active{display:block}
 .panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px;margin-bottom:14px}
-.grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.grid2{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:14px}
+.grid2>*{min-width:0}
+.grid2 .panel{margin-bottom:14px}
+.pwsel{margin:0 0 8px;flex-wrap:wrap;gap:4px 16px}
+.pwsel .pwgrp{display:inline-flex;gap:8px;align-items:center}
+.pwsel .pwgrp b{font-weight:600;margin-right:2px}
 @media(max-width:1100px){.grid2{grid-template-columns:1fr}#navbar{width:180px;flex-basis:180px}}
 .cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(178px,1fr));gap:10px;margin-bottom:14px}
 .card{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:10px 12px}
