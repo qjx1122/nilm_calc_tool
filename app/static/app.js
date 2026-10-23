@@ -1745,8 +1745,7 @@ function renderCurrent() {
 
 /* v0.76：「有功 / 无功 / 视在功率瞬时波形」——原「瞬时功率波形」+「分相瞬时功率波形」合并为一张图，
    图例复选框（同趋势图）选 总 / A / B / C 相 × P / Q / S。p=u·i；q=u(t−T/4)·i（服务端 series.q_*）；s=√(p²+q²) */
-const PW_STYLE = { P: { unit: 'W', dash: null }, Q: { unit: 'var', dash: [6, 4] }, S: { unit: 'VA', dash: [2, 3] } };
-const PW_PHC = { total: { P: COLORS.P, Q: COLORS.Q, S: COLORS.S }, A: COLORS.A, B: COLORS.B, C: COLORS.C };
+const PW_STYLE = { P: { unit: 'W' }, Q: { unit: 'var' }, S: { unit: 'VA' } };
 function renderPowerWave(p) {
   const cv = $('#p-wave'); if (!cv) return;
   const sr = (p && p.series) || {};
@@ -1756,8 +1755,9 @@ function renderPowerWave(p) {
   ['total', 'A', 'B', 'C'].forEach(ph => ['P', 'Q', 'S'].forEach(k => {
     const arr = ph === 'total' ? sr[k.toLowerCase() + '_total'] : ((sr[k.toLowerCase() + '_per_phase'] || {})[ph]);
     if (!Array.isArray(arr) || !arr.length) return;
-    ser.push({ name: `${k.toLowerCase()}(t) ${ph === 'total' ? '总' : ph + ' 相'}${k === 'P' ? '有功' : k === 'Q' ? '无功' : '视在'}（${PW_STYLE[k].unit}）`,
-               color: ph === 'total' ? PW_PHC.total[k] : PW_PHC[ph], dash: PW_STYLE[k].dash, width: ph === 'total' ? 1.8 : 1.3,
+    // v0.79：图例名称 / 颜色与「P / Q / S 趋势」完全一致：P Q S（总）、Pa Pb Pc Qa … Sc（分相，同色系深浅）
+    ser.push({ name: ph === 'total' ? k : k + ph.toLowerCase(), unit: PW_STYLE[k].unit,
+               color: ph === 'total' ? COLORS[k] : shadeColor(COLORS[k], PQS_PHASE_SHADE[ph]), width: ph === 'total' ? 1.8 : 1.3,
                defaultHidden: ph !== 'total', data: arr.map((v2, j) => [j * stP / fsP, v2]) });
   }));
   drawLine(cv, ser, { ylabel: 'W/var/VA', zero: true, fmtX: x => x.toFixed(3) + 's', height: 240, legend: true,
@@ -1779,6 +1779,9 @@ function renderPower() {
       cards.push(card('基波有功 P1', si(v.fundamental.p1_total, 'W'), '', `占比 ${num(v.fundamental.fundamental_share_pct, 2)} %`));
       cards.push(card('基波无功 Q1', si(v.fundamental.q1_total, 'var'), '', `DPF ${num(v.fundamental.dpf, 4)}`));
     }
+    // v0.79：分相实时数据卡片（每相一张：P 为主值，Q / S / PF 在副行）
+    PH.forEach(k => cards.push(card(`${k} 相 P / Q / S`, si((v.p_per_phase || {})[k], 'W'), '',
+      `Q ${si((v.q_per_phase || {})[k], 'var')} · S ${si((v.s_per_phase || {})[k], 'VA')} · PF ${num((v.pf_per_phase || {})[k], 3)}`)));
   }
   $('#p-cards').innerHTML = cards.join('') || card('状态', '尚无结果', '', '请先启动数据源');
   renderPowerWave(p);
