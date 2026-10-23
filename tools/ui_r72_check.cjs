@@ -94,6 +94,12 @@ async function main() {
   click($('btn-nt-run')); await sleep(5000);
   d = window.__NT.last; tr = d.t_range;
   check('自定义时间轴上 HH:MM:SS 起止（00:00:01 → 00:00:03）＝ 2 s ≈ 100 周波', d.measure.cycles >= 99 && d.measure.cycles <= 101 && Math.abs(tr.t_first - (tr.file_t_start + 1)) < 0.03, `${d.measure.cycles} 周波`);
+  // v0.74：保存为配置文件时全部配置项写入
+  $('nt-save').checked = true; $('nt-name').value = 'ui74.json'; $('nt-quantity').value = 'i'; $('nt-channel').value = 'C';
+  click($('btn-nt-run')); await sleep(5000);
+  d = window.__NT.last;
+  check('勾选保存 → 改动项含 nilm.channels=[C]、source.path、source.custom_time，结果区显示已保存', d.saved_to && d.changes.some((x) => /nilm\.channels = \['C'\]/.test(x)) && d.changes.some((x) => /^source\.path = /.test(x)) && d.changes.some((x) => /^source\.custom_time = true/.test(x)) && /已保存到/.test($('nt-status').textContent), (d.changes || []).slice(-3).join(' | '));
+  $('nt-save').checked = false; $('nt-name').value = ''; $('nt-quantity').value = ''; $('nt-channel').value = '';
   $('nt-cstart').value = 'zz';
   click($('btn-nt-run')); await sleep(2500);
   check('自定义起始时间写法非法 → 400 并提示', /自定义起始时间无法解析/.test($('nt-status').textContent), $('nt-status').textContent.slice(0, 60));
@@ -101,7 +107,7 @@ async function main() {
 
   console.log('— 套用目标独立于基准配置');
   check('有「套用目标」下拉（总线侧 / 分路侧）', !!$('nt-apply-side') && $('nt-apply-side').options.length === 2);
-  click($('btn-nt-run')); await sleep(4000);
+  click($('btn-nt-run')); await sleep(4000); d = window.__NT.last;
   $('nt-apply-side').value = 'branch';
   click($('btn-nt-apply')); await sleep(2500);
   const ap = calls.filter((x) => /nilm\/tune\/apply$/.test(x.url)).pop();

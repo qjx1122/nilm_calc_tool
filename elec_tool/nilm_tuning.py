@@ -545,21 +545,38 @@ def tuned_config_path(cfg: AppConfig, out_dir: Optional[str] = None, tag: str = 
 
 def export_tuned_config(base: AppConfig, params: Dict[str, Any], *, out_path: Optional[str] = None,
                         out_dir: Optional[str] = None, tag: str = "",
-                        meta: Optional[Dict[str, Any]] = None) -> Tuple[AppConfig, str, List[str]]:
+                        meta: Optional[Dict[str, Any]] = None, source_path: Optional[str] = None) -> Tuple[AppConfig, str, List[str]]:
     """在 ``base`` 的副本上叠加建议参数，校验后写到输出目录，返回 (新配置, 文件路径, 说明行)。
 
     ``base`` 本身不被修改；写出的 JSON 是**完整配置**（可直接作为 ``--config`` / ELEC_TOOL_CONFIG_PATH 使用），
     附带 ``_tuning`` 元信息（来源文件、对象、时间、改动项）便于追溯；``AppConfig.from_dict`` 会忽略未知键。
+
+    v0.74：除算法参数外，本次调参的其它配置项也一并写入（此前遗漏）：
+    * ``nilm.channels`` ＝ 本次检测对象（``params["channel"]``）；
+    * 自定义时间（``params["t_range"]["custom_time"]``）→ ``source.custom_time / custom_time_start / play_end_time``；
+    * ``source_path`` 给定时 ``source.kind=csv_file, source.path=source_path``（界面独立基准配置没有真实文件路径时用）。
     """
     cfg = AppConfig.from_dict(base.to_dict())
     notes = apply_nilm_params(cfg, params)
+    if isinstance(params, dict):
+        ch = params.get("channel")
+        if ch in NILM_CHANNELS and list(cfg.nilm.channels) != [ch]:
+            cfg.nilm.channels = [ch]; notes.append(f"nilm.channels = ['{ch}']")
+        tr = params.get("t_range") if isinstance(params.get("t_range"), dict) else {}
+        if tr.get("custom_time"):
+            cs = str(tr.get("custom_time_start") or ""); ce = str(tr.get("custom_time_end") or "")
+            cfg.source.custom_time = True; cfg.source.custom_time_start = cs; cfg.source.play_end_time = ce
+            notes.append(f"source.custom_time = true  custom_time_start = {cs or '(文件起始)'}  play_end_time = {ce or '(按采样率计算)'}")
+    if source_path:
+        cfg.source.kind = "csv_file"; cfg.source.path = str(source_path); notes.append(f"source.path = {source_path}")
     cfg.validate()
     path = out_path or tuned_config_path(cfg, out_dir, tag)
     os.makedirs(os.path.dirname(os.path.abspath(path)) or ".", exist_ok=True)
     data = cfg.to_dict()
     info: Dict[str, Any] = {"generated_at": time.strftime("%Y-%m-%d %H:%M:%S"), "changes": notes}
     if isinstance(params, dict):
-        for k in ("file", "channel", "quantity", "unit", "t_span_s"):
+        for k in ("file", "channel", "quantity", "quantity_requested", "unit", "t_span_s", "min_load_used", "min_load_source",
+                  "min_load_estimate", "notes", "t_range"):
             if k in params:
                 info[k] = params[k]
     if meta:

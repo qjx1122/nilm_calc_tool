@@ -2491,6 +2491,7 @@ async def process_nilm_tune(payload: Dict[str, Any]) -> Any:
             bdir = nl_dir if os.path.isabs(nl_dir) else os.path.join(ROOT, nl_dir)
             os.makedirs(bdir, exist_ok=True)
             bpath = os.path.join(bdir, NT_BASE_FILE)
+            base.source.path = out["file"]                   # v0.74：独立基准的 source.path 写本次波形文件（原为 make_base 占位 x.csv）
             bdoc = base.to_dict(); bdoc["_note"] = "v0.72 负荷辨识调参独立基准配置（出厂配置 + 界面项），由界面每次调参覆盖写出"
             with open(bpath, "w", encoding="utf-8") as fh:
                 json.dump(bdoc, fh, ensure_ascii=False, indent=2); fh.write("\n")
@@ -2522,10 +2523,19 @@ async def process_nilm_tune(payload: Dict[str, Any]) -> Any:
             fp = tune_result_path(base, str(payload.get("name") or ""), out_dir=nl_dir)
             if not os.path.isabs(fp):
                 fp = os.path.join(ROOT, fp)
+            # v0.74：把本次调参的**全部配置项**写进保存文件（此前只写算法参数，检测对象 / 自定义时间 / 文件路径 / 最小关心负荷等遗漏）：
+            #   export_tuned_config 负责 nilm.channels / source.custom_time* / source.path；其余输入项记入 _tuning.params
+            params_meta = {"quantity_requested": out["quantity_requested"], "channel": out["channel"],
+                           "t_start": kw["t_start"], "t_end": kw["t_end"], "duration_s": kw["duration_s"], "max_cycles": kw["max_cycles"],
+                           "min_load_w": kw["min_load_w"], "min_load_a": kw["min_load_a"], "min_load_auto": kw["min_load_auto"],
+                           "min_load_used": out.get("min_load_used"), "min_load_source": out.get("min_load_source"),
+                           "custom_time": kw["custom_time"], "custom_time_start": kw["custom_time_start"], "custom_time_end": kw["custom_time_end"],
+                           "base": out["base"], "base_file": out.get("base_file")}
             _cfg, fp, changes = export_tuned_config(base_file, out, out_path=fp,
+                                                    source_path=(out["file"] if base_mode == "custom" else None),
                                                     meta={"side": current_side(), "base_mode": out["base_mode"], "base_config": base_label,
                                                           "measure": out["measure"], "suggest": out["suggest"],
-                                                          "t_range": out["t_range"]})
+                                                          "t_range": out["t_range"], "params": params_meta})
             out["saved_to"] = _display_path(fp); out["base_config"] = base_label; out["changes"] = changes
             out["command"] = build_cli_command(out["file"], apply=True, out=out["saved_to"], **cmd_kw)
             # 写入文件的 _tuning 也带上命令（export 时 command 尚未定稿，这里补写）
@@ -2533,6 +2543,7 @@ async def process_nilm_tune(payload: Dict[str, Any]) -> Any:
                 with open(fp, encoding="utf-8") as fh:
                     data = json.load(fh)
                 data.setdefault("_tuning", {})["command"] = out["command"]
+                data["_tuning"]["changes"] = changes
                 with open(fp, "w", encoding="utf-8") as fh:
                     json.dump(data, fh, ensure_ascii=False, indent=2); fh.write("\n")
             except Exception:

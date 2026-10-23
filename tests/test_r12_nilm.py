@@ -854,3 +854,42 @@ def test_web_process_nilm_tune_custom_time_and_ui_layout(client):
     # 检测量 / 检测对象位于独立基准配置分组 #nt-base 之内
     i0 = html.index('id="nt-base"'); i1 = html.index('id="nt-base-note"')
     assert i0 < html.index('id="nt-quantity"') < i1 and i0 < html.index('id="nt-channel"') < i1
+
+
+# ------------------------------------------------------------------ v0.74：保存为配置文件时本次调参的全部配置项都写入
+def test_saved_tuned_config_contains_all_tune_settings(client):
+    import json as _j
+    client.post("/api/engine/stop")
+    p = _write_csv(client.dir / "bg74.csv", dur=4.0)
+    body = {"path": str(p), "base": {"fs": 6400, "f_nom": 50, "pt_ct_enabled": "0", "pt_ratio": 77, "ct_ratio": 15},
+            "quantity": "i", "channel": "C", "min_load_a": 2.5, "custom_time": True, "custom_time_start": "2026-01-01 00:00:00",
+            "t_start": "00:00:01", "t_end": "00:00:03", "save": True, "name": "all74.json"}
+    d = client.post("/api/process/nilm_tune", json=body).json()
+    assert d["ok"] and d["saved_to"]
+    saved = Path(d["saved_to"]) if os.path.isabs(d["saved_to"]) else ROOT / d["saved_to"]
+    f = _j.loads(saved.read_text(encoding="utf-8"))
+    # 检测量 / 检测对象
+    assert f["nilm"]["quantity"] == "i" and f["nilm"]["channels"] == ["C"]
+    # 基准配置各项
+    assert f["transform"]["pt_ratio"] == 77 and f["transform"]["enabled"] is False and f["sampling"]["fs"] == 6400
+    # 独立基准：波形文件路径（不再是 make_base 的占位 x.csv）
+    assert f["source"]["kind"] == "csv_file" and f["source"]["path"] == d["file"] and f["source"]["path"] != "x.csv"
+    # 自定义时间三项
+    assert f["source"]["custom_time"] is True and f["source"]["custom_time_start"] == "2026-01-01 00:00:00" and f["source"]["play_end_time"] == ""
+    # 其余输入项与结果元信息
+    pm = f["_tuning"]["params"]
+    assert pm["t_start"] == "00:00:01" and pm["t_end"] == "00:00:03" and pm["min_load_a"] == 2.5 and pm["min_load_used"] == 2.5 and pm["min_load_source"] == "manual"
+    assert pm["max_cycles"] == 30000 and pm["custom_time"] is True and pm["base"]["pt_ratio"] == 77 and pm["quantity_requested"] == "i"
+    assert f["_tuning"]["t_range"]["custom_time"] and f["_tuning"]["min_load_estimate"] is not None and "command" in f["_tuning"]
+    assert any(c.startswith("nilm.channels") for c in f["_tuning"]["changes"]) and any(c.startswith("source.custom_time") for c in f["_tuning"]["changes"])
+    assert any(c.startswith("nilm.channels") for c in d["changes"])
+    # 独立基准落盘文件的 source.path 同样为本次波形文件
+    bf = Path(d["base_file"]) if os.path.isabs(d["base_file"]) else ROOT / d["base_file"]
+    assert _j.loads(bf.read_text(encoding="utf-8"))["source"]["path"] == d["file"]
+    # 保存文件可直接加载为配置
+    cfg = AppConfig.load(str(saved))
+    assert cfg.nilm.channels == ["C"] and cfg.source.custom_time and cfg.transform.pt_ratio == 77
+    # 不启用自定义时间 / 默认对象时不写自定义时间、channels 跟随默认对象
+    d2 = client.post("/api/process/nilm_tune", json={"path": str(p), "base": {}, "save": True, "name": "plain74.json"}).json()
+    f2 = _j.loads((Path(d2["saved_to"]) if os.path.isabs(d2["saved_to"]) else ROOT / d2["saved_to"]).read_text(encoding="utf-8"))
+    assert f2["source"]["custom_time"] is False and f2["nilm"]["channels"] == [d2["channel"]]
