@@ -1076,6 +1076,7 @@ U10-4 B/C 相为 0：____  U10-5 列号交换：Ia≈____  U10-6 无时间戳：
 ---
 
 ## 🗒 变更记录
+- v0.78（2026-10-23）：`ui_r76_check.cjs` 复跑：瞬时波形图例 12 复选框（趋势图亦 12）、默认勾总 P/Q/S 画 3 条、勾 A 相 P / 去总 Q 后隐藏集合与 `output.series_hidden[p-wave]` 同步、A 相 s≥|p| 逐点、说明段 `display:block`；ALL PASS。注意：实录会把勾选状态写进配置，脚本开头已清 `series_hidden[p-wave]`。
 - v0.77（2026-10-23）：联动面板重排后回归 `ui_r70_check.cjs`（按保存值填充 / 取消勾选不保存直接启动 / 预览按界面值 / 分路侧配置不被改写）8/8 ALL PASS；pytest r14 / r17 分路相关 20 passed。
 - v0.76（2026-10-23）：电气量页实录（8035，`data/nilm_bus_mixed.csv` 播放后、内存造 1 个负荷辨识事件）：三页趋势图 3 条 × marks=0、周波窗（有效值）装载后 3 条 × marks=0、标题无「右键 / 竖线」字样、周波窗两列同 grid2 等宽；功率页 `#p-wave-ph` 已移除、12 勾选框默认总 P/Q/S 画 3 条、勾 A 相 P / 去总 Q 后 3 条且点数一致、A 相有功均值 559.6 kW < 总 1680.0 kW、A 相 s(t) ≥ |p(t)| 逐点成立、全取消空态。pytest `test_v76_instantaneous_q_s_series`（6400 Hz、φ=60°：lag=32 点，mean p≈UIcosφ、mean q≈UIsinφ 误差 <1 W/var）。
 - v0.75（2026-10-23）：「保存配置只改变化项」实录（8034 临时服务，`ELEC_TOOL_CONFIG_PATH=/tmp/cfg75/runtime.json`、`ELEC_TOOL_BRANCH_CONFIG_PATH=/tmp/cfg75/branch_runtime.json`，两文件由 default.json + `my_custom_note` 生成、4 空格缩进）：修前第一轮 18 项失败（不改值点 btn-src-save 补写 columns.mapping.*、btn-ev-save 补写全部 events.*、btn-nilm-save 补写 nilm.algorithms.*、btn-save-cfgfile 补写 branch.* / events_dir / nilm_dir 等、btn-save-win 把 step_s null→数字、btn-rt-save-br / btn-save-cfgfile-br 写 output.source_id）；修后 17 按钮 ALL PASS，最终文件只多 `transform.pt_ratio/ct_ratio`、`columns.mapping.ua`、`events.u1_high_pct`、`nilm.rel_tol_pct`、`branch.time_offset_s` 等被改项，自定义键与缩进原样。pytest `tests/test_r63_persist.py` 8 passed。

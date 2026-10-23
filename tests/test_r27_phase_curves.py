@@ -133,8 +133,9 @@ def test_frontend_contract():
     # v0.28：功率页不再是趋势线，而是分相瞬时功率波形 #p-wave-ph；谐波/间谐波/基波趋势含分相线（默认隐藏、图例勾选）
     # v0.71：功率页按用户要求又补回趋势图 #p-trend（与 P/Q/S 瞬时功率波形并存）
     # v0.76：两张瞬时功率波形合并为 #p-wave「有功 / 无功 / 视在功率瞬时波形」，勾选框 #p-wave-sel 选 总/A/B/C × P/Q/S
-    assert 'id="p-wave-ph"' not in HTML and 'id="p-wave"' in HTML and 'id="p-wave-sel"' in HTML and 'id="p-trend"' in HTML
-    assert HTML.count('class="pw-sel"') == 12 and "有功 / 无功 / 视在功率瞬时波形" in HTML
+    # v0.78：勾选改用与趋势图一致的曲线图例复选框（drawLine legend），不再有独立勾选框行
+    assert 'id="p-wave-ph"' not in HTML and 'id="p-wave"' in HTML and 'id="p-wave-sel"' not in HTML and 'id="p-trend"' in HTML
+    assert "有功 / 无功 / 视在功率瞬时波形" in HTML and "defaultHidden: ph !== 'total'" in APP_JS
     assert "function renderPowerWave" in APP_JS and "_per_phase'" in APP_JS and "q_lag_samples" in APP_JS
     assert "name: 'PF' + ph.toLowerCase()" in APP_JS and "defaultHidden: true, data: hp.map(x => [x.t - t0, x['PF' + ph.toLowerCase()]])" in APP_JS
     for cid in ("h-trend", "f-u1-trend", "f-i1-trend"):

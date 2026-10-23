@@ -1704,7 +1704,6 @@ function bindElecWindows(side) {
     on(pre + '-win-t', 'keydown', (e) => { if (e.key === 'Enter') ewLoadCycles(side, key); });
   });
   on('p-cyc-ch', 'change', render);
-  if (side === 'bus') { const box = E(side, 'p-wave-sel'); if (box) box.addEventListener('change', render); }   // 分路侧克隆列由 buildDualViews 的委托 change → render
 }
 
 function renderVoltage() {
@@ -1745,28 +1744,26 @@ function renderCurrent() {
 }
 
 /* v0.76：「有功 / 无功 / 视在功率瞬时波形」——原「瞬时功率波形」+「分相瞬时功率波形」合并为一张图，
-   勾选框（#p-wave-sel）选 总 / A / B / C 相 × P / Q / S。p=u·i；q=u(t−T/4)·i（服务端 series.q_*）；s=√(p²+q²) */
+   图例复选框（同趋势图）选 总 / A / B / C 相 × P / Q / S。p=u·i；q=u(t−T/4)·i（服务端 series.q_*）；s=√(p²+q²) */
 const PW_STYLE = { P: { unit: 'W', dash: null }, Q: { unit: 'var', dash: [6, 4] }, S: { unit: 'VA', dash: [2, 3] } };
 const PW_PHC = { total: { P: COLORS.P, Q: COLORS.Q, S: COLORS.S }, A: COLORS.A, B: COLORS.B, C: COLORS.C };
 function renderPowerWave(p) {
   const cv = $('#p-wave'); if (!cv) return;
-  const box = $('#p-wave-sel');
-  const sel = box ? Array.from(box.querySelectorAll('.pw-sel:checked')).map(el => [el.dataset.k, el.dataset.ph]) : [['P', 'total']];
   const sr = (p && p.series) || {};
   const fsP = ((curState().config || {}).sampling || {}).fs || 6400, stP = sr.stride || 1;
+  // v0.78：12 条全部交给 drawLine，用与趋势图一致的图例复选框选曲线（总 P/Q/S 默认显示，分相默认隐藏；勾选状态随 output.series_hidden 保存）
   const ser = [];
-  sel.forEach(([k, ph]) => {
+  ['total', 'A', 'B', 'C'].forEach(ph => ['P', 'Q', 'S'].forEach(k => {
     const arr = ph === 'total' ? sr[k.toLowerCase() + '_total'] : ((sr[k.toLowerCase() + '_per_phase'] || {})[ph]);
     if (!Array.isArray(arr) || !arr.length) return;
-    const color = ph === 'total' ? PW_PHC.total[k] : PW_PHC[ph];
     ser.push({ name: `${k.toLowerCase()}(t) ${ph === 'total' ? '总' : ph + ' 相'}${k === 'P' ? '有功' : k === 'Q' ? '无功' : '视在'}（${PW_STYLE[k].unit}）`,
-               color, dash: PW_STYLE[k].dash, width: ph === 'total' ? 1.8 : 1.3, data: arr.map((v2, j) => [j * stP / fsP, v2]) });
-  });
-  const units = Array.from(new Set(sel.map(([k]) => PW_STYLE[k].unit)));
-  drawLine(cv, ser, { ylabel: units.join('/') || 'W', zero: true, fmtX: x => x.toFixed(3) + 's', height: 240, legend: true,
-                      empty: sel.length ? (sr.q_total ? '暂无瞬时功率波形（请先启动数据源）' : '暂无瞬时功率波形（无功 / 视在瞬时波形需服务端 v0.76+ 结果）') : '请在上方勾选要显示的曲线' });
+               color: ph === 'total' ? PW_PHC.total[k] : PW_PHC[ph], dash: PW_STYLE[k].dash, width: ph === 'total' ? 1.8 : 1.3,
+               defaultHidden: ph !== 'total', data: arr.map((v2, j) => [j * stP / fsP, v2]) });
+  }));
+  drawLine(cv, ser, { ylabel: 'W/var/VA', zero: true, fmtX: x => x.toFixed(3) + 's', height: 240, legend: true,
+                      empty: sr.q_total ? '暂无瞬时功率波形（请先启动数据源）' : '暂无瞬时功率波形（无功 / 视在瞬时波形需服务端 v0.76+ 结果）' });
   const sub = $('#p-wave-sub');
-  if (sub) sub.textContent = ser.length ? `（${ser.length} 条 · ${(sr.p_total || []).length} 点 · 抽稀 ${stP}:1 · q(t) 电压滞后 ${sr.q_lag_samples || 0} 点＝T/4）` : '';
+  if (sub) sub.textContent = ser.length ? `（${ser.length} 条可选 · ${(sr.p_total || []).length} 点 · 抽稀 ${stP}:1 · q(t) 电压滞后 ${sr.q_lag_samples || 0} 点＝T/4）` : '';
 }
 
 function renderPower() {

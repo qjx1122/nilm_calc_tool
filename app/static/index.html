@@ -145,7 +145,7 @@
                 <span class="note">「实时监测」「事件与分析」各子界面右侧的分路侧内容整体隐藏（分路侧仍照常计算与落盘）；不勾选则在分路侧启用时显示</span></span></label>
           </div>
           <div id="br-link-fields">
-            <div class="notes" id="br-mode-note" style="display:none">ℹ 两侧都是<b>离线文件（csv_file）</b>时共用节拍钟（倍速一致、严格同步）并可按公共时间段播放；其它组合各自按自身配置同时启动，「公共时间段」不生效。</div>
+            <div class="notes p" id="br-mode-note" style="display:none">ℹ 两侧都是<b>离线文件（csv_file）</b>时共用节拍钟（倍速一致、严格同步）并可按公共时间段播放；其它组合各自按自身配置同时启动，「公共时间段」不生效。</div>
             <div class="row2 linkgrid">
               <div class="linkblk">
                 <div class="blkttl">播放范围<small>仅两侧均为离线文件时生效</small></div>
@@ -165,7 +165,7 @@
               <span class="mut">总线侧「启动」与「预览公共时间段」都按本面板<b>当前值</b>执行、不写配置文件；要保留请点右列「保存分路侧配置」</span></div>
             <div id="br-common-out"></div>
           </div>
-          <div class="notes muted">分路侧是一份<b>完全独立</b>的配置，落盘到 <code>configs/branch_runtime.json</code>；落盘 / 导出目录与总线侧相同（同一个 CSV，按 <code>source_id</code> 区分：0 总线 / 1 分路）。窗长 / 事件阈值 / 负荷辨识参数在「分路侧」分组对应子界面改。</div>
+          <div class="notes muted p">分路侧是一份<b>完全独立</b>的配置，落盘到 <code>configs/branch_runtime.json</code>；落盘 / 导出目录与总线侧相同（同一个 CSV，按 <code>source_id</code> 区分：0 总线 / 1 分路）。窗长 / 事件阈值 / 负荷辨识参数在「分路侧」分组对应子界面改。</div>
           <div class="notes" id="branch-panel-note" style="display:none"></div>
         </div>
       </div>
@@ -237,7 +237,7 @@
               <button id="btn-load-last2" title="未播放时读回上次播放落盘的数据">加载上次数据</button>
             </div>
             <div id="src-loaded-last" class="notes" style="display:none"></div>
-            <div class="notes muted">「保存总线侧配置」保存上方数据源 + 量纲口径 + 列映射到 <code>configs/runtime.json</code>（在原文件基础上只更新这些键，其它配置不变）；「启动数据源」只按当前输入播放，<b>不写配置文件</b>。</div>
+            <div class="notes muted p">「保存总线侧配置」保存上方数据源 + 量纲口径 + 列映射到 <code>configs/runtime.json</code>（在原文件基础上只更新这些键，其它配置不变）；「启动数据源」只按当前输入播放，<b>不写配置文件</b>。</div>
             <label class="chk"><input id="autoload-last" type="checkbox"> 软件启动时自动加载上次运行的数据</label>
             <div class="notes muted">勾选后（默认开启）：软件重启时自动把上次运行落盘的曲线 / 事件 / 负荷辨识事件（CSV）和最后一次电气量结果（output/last_result.json，两侧共用、按 source_id 分键）读回各子界面；最新电气量卡片、频谱等显示的是上次运行结束时的值。</div>
             <div class="notes muted">启用分路侧后，这里的「启动 / 暂停 / 停止 / 加载上次数据」同时作用于两侧。<br>「加载上次数据」：不播放时，从 output/realtime、output/events、output/nilm 的 CSV 读回最近 history_hours 内本侧（source_id）的曲线点、事件与负荷辨识事件，供各曲线 / 事件页直接查看；重新启动播放后会被新数据覆盖。</div>
@@ -530,8 +530,8 @@
       <div class="cards" id="p-cards"></div>
       <!-- v0.76：瞬时功率波形 + 分相瞬时功率波形合并为一张曲线，勾选框选相别 / 量 -->
       <div class="panel">
-        <h3 class="curvehdr nilm-hdr"><span>有功 / 无功 / 视在功率瞬时波形<small class="hdrhint" id="p-wave-sub" title="p(t)=u·i；q(t)=u(t−T/4)·i(t)（电压滞后 1/4 基波周期）；s(t)=√(p²+q²)；总 p / q 为三相之和，总 s 为三相算术和"></small></span></h3>
-        <div class="row pwsel" id="p-wave-sel" title="勾选要显示的曲线：总 / A / B / C 相的有功 P、无功 Q、视在 S 瞬时波形"><span class="pwgrp"><b>总</b><label title="瞬时有功 p(t)=u·i"><input type="checkbox" class="pw-sel" data-k="P" data-ph="total" checked> P</label><label title="瞬时无功 q(t)=u(t−T/4)·i(t)"><input type="checkbox" class="pw-sel" data-k="Q" data-ph="total" checked> Q</label><label title="瞬时视在 s(t)=√(p²+q²)"><input type="checkbox" class="pw-sel" data-k="S" data-ph="total" checked> S</label></span><span class="pwgrp"><b>A 相</b><label title="瞬时有功 p(t)=u·i"><input type="checkbox" class="pw-sel" data-k="P" data-ph="A"> P</label><label title="瞬时无功 q(t)=u(t−T/4)·i(t)"><input type="checkbox" class="pw-sel" data-k="Q" data-ph="A"> Q</label><label title="瞬时视在 s(t)=√(p²+q²)"><input type="checkbox" class="pw-sel" data-k="S" data-ph="A"> S</label></span><span class="pwgrp"><b>B 相</b><label title="瞬时有功 p(t)=u·i"><input type="checkbox" class="pw-sel" data-k="P" data-ph="B"> P</label><label title="瞬时无功 q(t)=u(t−T/4)·i(t)"><input type="checkbox" class="pw-sel" data-k="Q" data-ph="B"> Q</label><label title="瞬时视在 s(t)=√(p²+q²)"><input type="checkbox" class="pw-sel" data-k="S" data-ph="B"> S</label></span><span class="pwgrp"><b>C 相</b><label title="瞬时有功 p(t)=u·i"><input type="checkbox" class="pw-sel" data-k="P" data-ph="C"> P</label><label title="瞬时无功 q(t)=u(t−T/4)·i(t)"><input type="checkbox" class="pw-sel" data-k="Q" data-ph="C"> Q</label><label title="瞬时视在 s(t)=√(p²+q²)"><input type="checkbox" class="pw-sel" data-k="S" data-ph="C"> S</label></span></div>
+        <h3 class="curvehdr nilm-hdr"><span>有功 / 无功 / 视在功率瞬时波形<small class="hdrhint" id="p-wave-sub" title="p(t)=u·i；q(t)=u(t−T/4)·i(t)（电压滞后 1/4 基波周期）；s(t)=√(p²+q²)；总 p / q 为三相之和，总 s 为三相算术和；图例勾选选择 总 / A / B / C 相的 P / Q / S"></small></span></h3>
+        <!-- 曲线勾选：与趋势图一致，用 canvas 下方的图例复选框（总 P/Q/S 默认显示，分相默认隐藏；勾选状态随 series_hidden 保存） -->
         <canvas id="p-wave" height="240"></canvas>
       </div>
       <!-- v0.71：趋势图 / 周波窗（有效值）/ 周波窗（瞬时值）——功能、右键菜单与风格同负荷辨识事件页 -->
