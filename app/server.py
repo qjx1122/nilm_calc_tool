@@ -2374,7 +2374,8 @@ NT_BASE_FILE = "nilm_tune_base.json"      # 独立基准配置落盘文件名（
 def _nt_base_fields(cfg: AppConfig) -> Dict[str, Any]:
     return {"fs": float(cfg.sampling.fs), "f_nom": float(cfg.sampling.f_nom), "pt_ct_enabled": bool(cfg.transform.enabled),
             "pt_ratio": float(cfg.transform.pt_ratio), "ct_ratio": float(cfg.transform.ct_ratio),
-            "file_time_utc": bool(cfg.source.file_time_utc), "quantity": str(cfg.nilm.quantity)}
+            "file_time_utc": bool(cfg.source.file_time_utc), "quantity": str(cfg.nilm.quantity),
+            "channel": str((cfg.nilm.channels or ["total"])[0])}
 
 
 def _nt_make_base(payload: Dict[str, Any]) -> Tuple[AppConfig, str, Optional[str]]:
@@ -2383,8 +2384,9 @@ def _nt_make_base(payload: Dict[str, Any]) -> Tuple[AppConfig, str, Optional[str
     from elec_tool.wave_preview import make_base
     mode = str(payload.get("base_mode") or "").strip().lower()
     if not mode:
-        mode = "custom" if isinstance(payload.get("base"), dict) else "running"
-    if mode == "running":
+        # 未显式给 base_mode：带 base ⇒ custom；都不带 ⇒ legacy（本侧运行配置，但 quantity / channel 仍按请求，兼容 v0.52 调用方）
+        mode = "custom" if isinstance(payload.get("base"), dict) else "legacy"
+    if mode in ("running", "legacy"):
         return AppConfig.from_dict(RUNNER.cfg.to_dict()), mode, None
     if mode != "custom":
         raise TuneError(f"base_mode 必须是 custom / running（当前 {mode!r}）")
@@ -2427,6 +2429,8 @@ async def process_nilm_tune(payload: Dict[str, Any]) -> Any:
     body：{path, channel?, quantity?, min_load_w?, min_load_a?, min_load_auto?: false, max_cycles?, t_start?, t_end?, duration_s?,
            save?: false, name?: "tune_{时间}.json",
            base_mode?: "custom"|"running", base?: {fs, f_nom, pt_ct_enabled, pt_ratio, ct_ratio, file_time_utc, quantity}}
+    * v0.72.2：``base_mode=running`` 时 quantity / channel 沿用该侧运行配置（``nilm.quantity`` / ``nilm.channels[0]``），请求中的同名项忽略；
+      ``custom`` 时才可单独指定。
     * v0.72：基准配置默认**独立于两侧运行配置**（``base_mode=custom``：出厂配置 + ``base`` 各项，空项＝出厂值；
       界面上可单独修改，并会写到 ``nilm_dir/nilm_tune_base.json`` 供等价命令 ``--config`` 复现）；``base_mode=running``
       保留旧行为（本侧当前运行配置；``/api/branch/...`` 为分路侧）。保存（save）时以该基准配置为底只更新算法参数。
@@ -2463,12 +2467,19 @@ async def process_nilm_tune(payload: Dict[str, Any]) -> Any:
                   duration_s=_num("duration_s"), min_load_auto=bool(payload.get("min_load_auto", False)))
         if kw["quantity"] not in (None, "auto", "p", "i"):
             raise TuneError(f"quantity 必须是 auto / p / i（当前 {kw['quantity']!r}）")
+        if base_mode == "running":
+            # v0.72.2：显式沿用某侧运行配置时，检测量 / 检测对象也沿用该侧 nilm.quantity / nilm.channels[0]，不可单独指定
+            # （请求里的 quantity / channel 忽略）；I 口径不支持三相总 → 退回默认（A 相）
+            kw["quantity"] = None
+            ch0 = str((base.nilm.channels or ["total"])[0])
+            q_eff = base.nilm.quantity
+            kw["channel"] = None if (q_eff == "i" and ch0 == "total") else ch0
         out = await asyncio.to_thread(run_tune, base, src_abs, **kw)
         out["file"] = _display_path(src_abs)
         out["side"] = current_side()
         out["saved_to"] = None
         out["base_config"] = None
-        out["base_mode"] = base_mode
+        out["base_mode"] = "running" if base_mode == "legacy" else base_mode
         out["base"] = _nt_base_fields(base)
         nl_dir = os.environ.get("ELEC_TOOL_NILM_DIR") or base.nilm.nilm_dir
         if base_mode == "custom":
@@ -2507,7 +2518,7 @@ async def process_nilm_tune(payload: Dict[str, Any]) -> Any:
             if not os.path.isabs(fp):
                 fp = os.path.join(ROOT, fp)
             _cfg, fp, changes = export_tuned_config(base_file, out, out_path=fp,
-                                                    meta={"side": current_side(), "base_mode": base_mode, "base_config": base_label,
+                                                    meta={"side": current_side(), "base_mode": out["base_mode"], "base_config": base_label,
                                                           "measure": out["measure"], "suggest": out["suggest"],
                                                           "t_range": out["t_range"]})
             out["saved_to"] = _display_path(fp); out["base_config"] = base_label; out["changes"] = changes

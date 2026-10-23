@@ -10,7 +10,7 @@ async function main() {
   await J('/api/engine/stop', { method: 'POST' }); await J('/api/branch/engine/stop', { method: 'POST' });
   // 两侧运行配置故意不同：总线侧 PT=123，分路侧 PT=100 CT=5
   await put('/api/config', { transform: { enabled: true, pt_ratio: 123, ct_ratio: 15 } });
-  await put('/api/branch/config', { transform: { enabled: true, pt_ratio: 100, ct_ratio: 5 } });
+  await put('/api/branch/config', { transform: { enabled: true, pt_ratio: 100, ct_ratio: 5 }, nilm: { quantity: 'p', channels: ['B'] } });
   const html = fs.readFileSync(path.join(ROOT, 'app/static/index.html'), 'utf8'); const js = fs.readFileSync(path.join(ROOT, 'app/static/app.js'), 'utf8');
   const calls = []; const store = {};
   const dom = new JSDOM(html, { url: BASE + '/', runScripts: 'dangerously', pretendToBeVisual: true, beforeParse(window) {
@@ -63,13 +63,22 @@ async function main() {
   click($('btn-nt-base-default')); await sleep(800);
   check('「恢复出厂」→ PT=100 CT=15', $('nt-base-pt').value === '100' && $('nt-base-ct').value === '15');
 
-  console.log('— 沿用某侧运行配置（旧行为仍可选）');
-  $('nt-side').value = 'branch'; change($('nt-side'));
-  check('选「沿用分路侧运行配置」后独立基准分组隐藏', $('nt-base').style.display === 'none');
+  console.log('— 检测量 / 检测对象：独立基准可单独改，沿用某侧时随该侧且不可改');
+  check('独立基准下「检测量 / 检测对象」可编辑', !$('nt-quantity').disabled && !$('nt-channel').disabled);
+  $('nt-quantity').value = 'i'; $('nt-channel').value = 'C';
   click($('btn-nt-run')); await sleep(4000);
   c = lastPost(); b = JSON.parse(c.body); d = window.__NT.last;
-  check('请求走 /api/branch/process/nilm_tune，base_mode=running，结果 base.ct_ratio=5（分路侧）', /^\/api\/branch\//.test(c.url) && b.base_mode === 'running' && !b.base && d.base && d.base.ct_ratio === 5, c.url + ' ' + JSON.stringify(d.base));
-  $('nt-side').value = 'custom'; change($('nt-side'));
+  check('独立基准：请求带 quantity=i channel=C，结果按之计算', b.quantity === 'i' && b.channel === 'C' && d.quantity === 'i' && d.channel === 'C', `${d.quantity}/${d.channel}`);
+  console.log('— 沿用某侧运行配置（旧行为仍可选）');
+  $('nt-side').value = 'branch'; change($('nt-side')); await sleep(1000);
+  check('选「沿用分路侧运行配置」后独立基准分组隐藏', $('nt-base').style.display === 'none');
+  check('检测量 / 检测对象被禁用并显示分路侧配置值（p / B）', $('nt-quantity').disabled && $('nt-channel').disabled && $('nt-quantity').value === 'p' && $('nt-channel').value === 'B', `${$('nt-quantity').value}/${$('nt-channel').value}`);
+  click($('btn-nt-run')); await sleep(4000);
+  c = lastPost(); b = JSON.parse(c.body); d = window.__NT.last;
+  check('请求走 /api/branch/process/nilm_tune，base_mode=running，不上送 quantity/channel，结果 base.ct_ratio=5、按分路侧 p / B 计算', /^\/api\/branch\//.test(c.url) && b.base_mode === 'running' && !b.base && b.quantity === null && b.channel === null && d.base && d.base.ct_ratio === 5 && d.quantity === 'p' && d.channel === 'B', c.url + ' ' + d.quantity + '/' + d.channel);
+  $('nt-side').value = 'custom'; change($('nt-side')); await sleep(300);
+  check('切回独立基准：检测量 / 检测对象恢复可编辑并还原用户选择（i / C）', !$('nt-quantity').disabled && $('nt-quantity').value === 'i' && $('nt-channel').value === 'C', `${$('nt-quantity').value}/${$('nt-channel').value}`);
+  $('nt-quantity').value = ''; $('nt-channel').value = '';
 
   console.log('— 套用目标独立于基准配置');
   check('有「套用目标」下拉（总线侧 / 分路侧）', !!$('nt-apply-side') && $('nt-apply-side').options.length === 2);
@@ -83,7 +92,7 @@ async function main() {
 
   // 还原两侧运行配置（不留状态给其它检查脚本）
   await put('/api/config', { transform: { enabled: true, pt_ratio: 100, ct_ratio: 15 } });
-  await put('/api/branch/config', { transform: { enabled: true, pt_ratio: 100, ct_ratio: 15 } });
+  await put('/api/branch/config', { transform: { enabled: true, pt_ratio: 100, ct_ratio: 15 }, nilm: { quantity: 'auto', channels: ['total'] } });
   console.log(fail ? `FAIL ${fail}` : 'ALL PASS');
   window.close(); process.exit(fail ? 1 : 0);
 }

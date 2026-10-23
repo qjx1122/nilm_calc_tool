@@ -790,3 +790,23 @@ def test_web_process_nilm_tune_independent_base(client):
                                              "btn-nt-base-default", "btn-nt-base-bus", "btn-nt-base-branch", "nt-apply-side"))
     assert 'value="custom"' in html and "base_mode" in js and "/api/process/nilm_tune/base" in js
     client.put("/api/config", json={"transform": {"pt_ratio": 100}})
+
+
+def test_web_process_nilm_tune_running_mode_follows_side_quantity_channel(client):
+    """v0.72.2：base_mode=running 时 quantity / channel 沿用该侧 nilm.quantity / nilm.channels[0]（请求同名项忽略）；
+    custom 时可单独指定；/base?source=running 返回 channel。"""
+    client.post("/api/engine/stop")
+    p = _write_csv(client.dir / "bg722.csv", dur=4.0)
+    r = client.put("/api/config", json={"nilm": {"quantity": "p", "channels": ["B"]}})
+    assert r.status_code == 200, r.text
+    b = client.get("/api/process/nilm_tune/base?source=running").json()
+    assert b["base"]["quantity"] == "p" and b["base"]["channel"] == "B"
+    d = client.post("/api/process/nilm_tune", json={"path": str(p), "base_mode": "running", "quantity": "i", "channel": "C", "duration_s": 2}).json()
+    assert d["ok"] and d["quantity"] == "p" and d["channel"] == "B"            # 请求里的 i / C 被忽略
+    d2 = client.post("/api/process/nilm_tune", json={"path": str(p), "base": {}, "quantity": "i", "channel": "C", "duration_s": 2}).json()
+    assert d2["ok"] and d2["quantity"] == "i" and d2["channel"] == "C"          # 独立基准：可单独指定
+    # I 口径 + 三相总 的运行配置 → 退回默认 A 相而不是 400
+    client.put("/api/config", json={"nilm": {"quantity": "i", "channels": ["total"]}})
+    d3 = client.post("/api/process/nilm_tune", json={"path": str(p), "base_mode": "running", "duration_s": 2}).json()
+    assert d3["ok"] and d3["quantity"] == "i" and d3["channel"] == "A"
+    client.put("/api/config", json={"nilm": {"quantity": "auto", "channels": ["total"]}})

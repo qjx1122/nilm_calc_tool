@@ -990,7 +990,7 @@
                 <label>CT 变比 <input id="nt-base-ct" type="number" min="0.000001" step="any"></label>
               </div>
               <div class="row2">
-                <span class="mut" style="align-self:flex-end">检测量 / 检测对象只在下方填写一处（独立基准下「跟随配置」＝出厂缺省 auto）</span>
+                <span class="mut" style="align-self:flex-end">独立基准配置下，下方「检测量 / 检测对象」可单独配置；沿用某侧运行配置时则随该侧配置、不可修改</span>
                 <span class="btnrow" style="align-items:flex-end">
                   <button id="btn-nt-base-default" type="button" title="恢复为出厂配置 configs/default.json 的值">恢复出厂</button>
                   <button id="btn-nt-base-bus" type="button" title="把总线侧当前运行配置的对应项填入（之后可再改，不影响总线侧）">填入总线侧值</button>
@@ -1000,8 +1000,8 @@
               <div id="nt-base-note" class="mut"></div>
             </div>
             <div class="row2">
-              <label>检测量 <select id="nt-quantity"><option value="" id="nt-quantity-follow">跟随配置 nilm.quantity</option><option value="auto">auto（无电压→I）</option><option value="p">p 有功</option><option value="i">i 电流有效值</option></select></label>
-              <label>检测对象 <select id="nt-channel"><option value="">默认（P→三相总，I→A 相）</option><option value="total">三相总</option><option value="A">A 相</option><option value="B">B 相</option><option value="C">C 相</option></select></label>
+              <label title="独立基准配置：可单独选择；沿用总线侧 / 分路侧运行配置：随该侧 nilm.quantity，不可修改">检测量 <select id="nt-quantity"><option value="" id="nt-quantity-follow">跟随配置 nilm.quantity</option><option value="auto">auto（无电压→I）</option><option value="p">p 有功</option><option value="i">i 电流有效值</option></select></label>
+              <label title="独立基准配置：可单独选择；沿用总线侧 / 分路侧运行配置：随该侧 nilm.channels 的第一个检测对象，不可修改">检测对象 <select id="nt-channel"><option value="">默认（P→三相总，I→A 相）</option><option value="total">三相总</option><option value="A">A 相</option><option value="B">B 相</option><option value="C">C 相</option></select></label>
             </div>
             <div class="row2">
               <label>最小关心负荷 (W，P 口径) <input id="nt-minw" type="number" min="0" step="any" placeholder="空＝max(6σ, 2%×基荷)"></label>

@@ -3746,7 +3746,7 @@ function rsUseAsSource() {
 }
 
 /* v0.52：数据处理 · 负荷辨识调参（POST /api/process/nilm_tune） */
-const NT = { last: null, side: 'bus', command: '', est: null };
+const NT = { last: null, side: 'bus', command: '', est: null, userQC: null, runningQC: null };
 async function ntListFiles() {
   const sel = $('#nt-files'); if (!sel) return;
   try {
@@ -3779,9 +3779,31 @@ function ntSyncBaseUI() {
   const custom = ntBaseMode() === 'custom';
   const g = $('#nt-base'); if (g) g.style.display = custom ? '' : 'none';
   const fo = $('#nt-quantity-follow'); if (fo) fo.textContent = custom ? '默认（出厂缺省 auto：无电压→I）' : '跟随配置 nilm.quantity';
+  // v0.72.2：检测量 / 检测对象只在独立基准配置下可单独修改；沿用某侧运行配置时随该侧值并禁用
+  const q = $('#nt-quantity'), ch = $('#nt-channel');
+  if (q && ch) {
+    if (custom) {
+      q.disabled = false; ch.disabled = false;
+      if (NT.userQC) { q.value = NT.userQC.q; ch.value = NT.userQC.ch; }
+    } else {
+      if (!q.disabled) NT.userQC = { q: q.value, ch: ch.value };          // 记住用户在独立模式下的选择，切回时恢复
+      q.disabled = true; ch.disabled = true;
+      ntFillQCFromRunning(ntBaseMode());
+    }
+  }
   const n = $('#nt-base-note');
   if (n) n.textContent = custom ? '独立基准配置只用于本页调参，不改动总线侧 / 分路侧运行配置；修改自动保存在浏览器本地。'
                                 : `基准配置沿用${ntBaseMode() === 'branch' ? '分路侧' : '总线侧'}当前运行配置（PT/CT、列映射、缺省检测量）。`;
+}
+async function ntFillQCFromRunning(side) {
+  const q = $('#nt-quantity'), ch = $('#nt-channel'); if (!q || !ch) return;
+  try {
+    const d = await api('/api/process/nilm_tune/base?source=running', undefined, side);
+    if (ntBaseMode() !== side) return;                                   // 期间用户又切换了
+    q.value = d.base.quantity || 'auto'; if (q.value !== (d.base.quantity || 'auto')) q.value = '';
+    ch.value = d.base.channel || 'total'; if (ch.value !== (d.base.channel || 'total')) ch.value = '';
+    NT.runningQC = { side, q: d.base.quantity, ch: d.base.channel };
+  } catch (e) { /* 服务不可用时保留当前显示 */ }
 }
 async function ntLoadBase(source, side) {
   const d = await api('/api/process/nilm_tune/base?source=' + encodeURIComponent(source), undefined, side || 'bus');
@@ -3802,7 +3824,8 @@ function ntPayload() {
   const v = id => ($('#' + id).value || '').trim();
   const mode = ntBaseMode();
   return { path: v('nt-path'), t_start: v('nt-tstart'), t_end: v('nt-tend'), duration_s: v('nt-duration') || null,
-           quantity: v('nt-quantity') || null, channel: v('nt-channel') || null,
+           quantity: mode === 'custom' ? (v('nt-quantity') || null) : null,   // v0.72.2：沿用某侧运行配置时随该侧，不单独上送
+           channel: mode === 'custom' ? (v('nt-channel') || null) : null,
            min_load_w: v('nt-minw') || null, min_load_a: v('nt-mina') || null, min_load_auto: !!$('#nt-minauto').checked,
            save: !!$('#nt-save').checked, name: v('nt-name'),
            base_mode: mode === 'custom' ? 'custom' : 'running', base: mode === 'custom' ? ntBase() : undefined };
