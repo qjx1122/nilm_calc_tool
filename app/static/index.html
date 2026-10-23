@@ -444,9 +444,34 @@
 
     <!-- 三相电压 -->
     <section class="view" id="view-voltage">
-      <h2>三相电压 · 有效值 / 峰值 / 不平衡度 / 趋势</h2>
+      <h2>三相电压 · 有效值 / 峰值 / 不平衡度 / 趋势 / 周波窗</h2>
       <div class="cards" id="v-cards"></div>
       <div class="panel"><h3>电压波形（一次侧，抽稀显示）</h3><canvas id="v-wave" height="240"></canvas></div>
+      <!-- v0.71：趋势图 / 周波窗（有效值）/ 周波窗（瞬时值）——功能、右键菜单与风格同负荷辨识事件页 -->
+      <div class="panel">
+        <h3 class="curvehdr nilm-hdr"><span>三相电压趋势 Ua / Ub / Uc<small class="hdrhint" title="右键曲线：显示周波窗（有效值）/ 显示周波窗（瞬时值）/ 复位缩放 / 复制 · 保存图片；竖线＝负荷辨识事件起点（已加载时）">（右键曲线可「显示周波窗（有效值）」/「显示周波窗（瞬时值）」；竖线＝负荷辨识事件起点）<span class="curvespan" data-curve="voltage"></span></small></span>
+          <span class="toggle"><label class="curvesave" title="勾选＝「保存曲线数据」时包含本曲线；不勾选＝保存时跳过本曲线"><input type="checkbox" class="curve-save" data-curve="voltage"> 保存曲线</label></span></h3>
+        <canvas id="v-trend" height="260"></canvas>
+      </div>
+      <div class="grid2">
+        <div class="panel">
+          <h3 class="curvehdr nilm-hdr"><span>周波窗（有效值）· 逐周波电压有效值<small class="hdrhint" id="v-cyc-sub" title="每周波 Urms=sqrt(mean(u²))；相别用图例勾选">（在趋势图上右键「显示周波窗（有效值）」或下方手动装载：以该时刻为中心 N 个周波的逐周波有效值，从本侧离线文件读取）</small></span>
+            <span class="toggle"></span></h3>
+          <div class="row nilm-winload" title="从本侧配置的离线文件装载一段周波：时刻留空＝数据起始时刻起 N 个周波；填时刻＝以该时刻为中心的 N 个周波（也可在上方趋势图上右键）">
+            <label>装载时刻 <input type="text" id="v-win-t" placeholder="留空＝数据起点；或 2026-10-13 08:00:02.000 / 08:00:02" style="width:220px"></label>
+            <label>周波数 <input type="number" id="v-win-count" min="1" max="20000" step="1" value="300" style="width:80px"></label>
+            <button id="btn-v-win-load">装载周波窗</button>
+            <button id="btn-v-win-clear" title="清除周波窗（有效值）与周波窗（瞬时值）">清除</button>
+            <span id="v-win-src" class="mut"></span>
+          </div>
+          <canvas id="v-cyc" height="240"></canvas>
+        </div>
+        <div class="panel">
+          <h3 class="curvehdr nilm-hdr"><span>周波窗（瞬时值）· 电压采样 ua / ub / uc<small class="hdrhint" id="v-wave2-sub">（在趋势图上右键「显示周波窗（瞬时值）」后显示：以该时刻为中心的 N 个周波采样瞬时值，从本侧离线文件读取）</small></span>
+            <span class="toggle"><button id="btn-v-wave2-clear" title="清除周波窗（瞬时值）">清除</button></span></h3>
+          <canvas id="v-wave2" height="240"></canvas>
+        </div>
+      </div>
       <div class="grid2">
         <div class="panel"><h3>逐周期有效值统计</h3><div id="v-percycle" class="tablewrap"></div></div>
         <div class="panel"><h3>序分量与不平衡</h3><div id="v-seq" class="tablewrap"></div></div>
@@ -456,9 +481,34 @@
 
     <!-- 三相电流 -->
     <section class="view" id="view-current">
-      <h2>三相电流 · 有效值 / 零线电流 / 不平衡度 / 趋势</h2>
+      <h2>三相电流 · 有效值 / 零线电流 / 不平衡度 / 趋势 / 周波窗</h2>
       <div class="cards" id="i-cards"></div>
       <div class="panel"><h3>电流波形（一次侧，抽稀显示）</h3><canvas id="i-wave" height="240"></canvas></div>
+      <!-- v0.71：趋势图 / 周波窗（有效值）/ 周波窗（瞬时值）——功能、右键菜单与风格同负荷辨识事件页 -->
+      <div class="panel">
+        <h3 class="curvehdr nilm-hdr"><span>三相电流趋势 Ia / Ib / Ic<small class="hdrhint" title="右键曲线：显示周波窗（有效值）/ 显示周波窗（瞬时值）/ 复位缩放 / 复制 · 保存图片；竖线＝负荷辨识事件起点（已加载时）">（右键曲线可「显示周波窗（有效值）」/「显示周波窗（瞬时值）」；竖线＝负荷辨识事件起点）<span class="curvespan" data-curve="current"></span></small></span>
+          <span class="toggle"><label class="curvesave" title="勾选＝「保存曲线数据」时包含本曲线；不勾选＝保存时跳过本曲线"><input type="checkbox" class="curve-save" data-curve="current"> 保存曲线</label></span></h3>
+        <canvas id="i-trend" height="260"></canvas>
+      </div>
+      <div class="grid2">
+        <div class="panel">
+          <h3 class="curvehdr nilm-hdr"><span>周波窗（有效值）· 逐周波电流有效值<small class="hdrhint" id="i-cyc-sub" title="每周波 Irms=sqrt(mean(i²))；相别用图例勾选">（在趋势图上右键「显示周波窗（有效值）」或下方手动装载：以该时刻为中心 N 个周波的逐周波有效值，从本侧离线文件读取）</small></span>
+            <span class="toggle"></span></h3>
+          <div class="row nilm-winload" title="从本侧配置的离线文件装载一段周波：时刻留空＝数据起始时刻起 N 个周波；填时刻＝以该时刻为中心的 N 个周波（也可在上方趋势图上右键）">
+            <label>装载时刻 <input type="text" id="i-win-t" placeholder="留空＝数据起点；或 2026-10-13 08:00:02.000 / 08:00:02" style="width:220px"></label>
+            <label>周波数 <input type="number" id="i-win-count" min="1" max="20000" step="1" value="300" style="width:80px"></label>
+            <button id="btn-i-win-load">装载周波窗</button>
+            <button id="btn-i-win-clear" title="清除周波窗（有效值）与周波窗（瞬时值）">清除</button>
+            <span id="i-win-src" class="mut"></span>
+          </div>
+          <canvas id="i-cyc" height="240"></canvas>
+        </div>
+        <div class="panel">
+          <h3 class="curvehdr nilm-hdr"><span>周波窗（瞬时值）· 电流采样 ia / ib / ic<small class="hdrhint" id="i-wave2-sub">（在趋势图上右键「显示周波窗（瞬时值）」后显示：以该时刻为中心的 N 个周波采样瞬时值，从本侧离线文件读取）</small></span>
+            <span class="toggle"><button id="btn-i-wave2-clear" title="清除周波窗（瞬时值）">清除</button></span></h3>
+          <canvas id="i-wave2" height="240"></canvas>
+        </div>
+      </div>
       <div class="grid2">
         <div class="panel"><h3>逐周期有效值统计</h3><div id="i-percycle" class="tablewrap"></div></div>
         <div class="panel"><h3>序分量 / 波峰系数</h3><div id="i-seq" class="tablewrap"></div></div>
@@ -468,10 +518,35 @@
 
     <!-- 功率 -->
     <section class="view" id="view-power">
-      <h2>有功 / 无功 / 视在 · P / Q / S（总量与分相）</h2>
+      <h2>有功 / 无功 / 视在 · P / Q / S（总量与分相）/ 趋势 / 周波窗</h2>
       <div class="cards" id="p-cards"></div>
       <div class="panel"><h3>瞬时功率波形 p(t)=Σu·i</h3><canvas id="p-wave" height="220"></canvas></div>
       <div class="panel"><h3>分相瞬时功率波形 pA(t)=uA·iA、pB(t)=uB·iB、pC(t)=uC·iC（图例勾选选择要显示的相）</h3><canvas id="p-wave-ph" height="220"></canvas></div>
+      <!-- v0.71：趋势图 / 周波窗（有效值）/ 周波窗（瞬时值）——功能、右键菜单与风格同负荷辨识事件页 -->
+      <div class="panel">
+        <h3 class="curvehdr nilm-hdr"><span>P / Q / S 趋势（总 + 分相，图例勾选）<small class="hdrhint" title="右键曲线：显示周波窗（有效值）/ 显示周波窗（瞬时值）/ 复位缩放 / 复制 · 保存图片；竖线＝负荷辨识事件起点（已加载时）">（右键曲线可「显示周波窗（有效值）」/「显示周波窗（瞬时值）」；竖线＝负荷辨识事件起点）<span class="curvespan" data-curve="power"></span></small></span>
+          <span class="toggle"><label class="curvesave" title="勾选＝「保存曲线数据」时包含本曲线；不勾选＝保存时跳过本曲线"><input type="checkbox" class="curve-save" data-curve="power"> 保存曲线</label></span></h3>
+        <canvas id="p-trend" height="260"></canvas>
+      </div>
+      <div class="grid2">
+        <div class="panel">
+          <h3 class="curvehdr nilm-hdr"><span>周波窗（有效值）· 逐周波 P / Q / S<small class="hdrhint" id="p-cyc-sub" title="每周波 P=mean(u·i)，Q=基波 DFT 无功，S=Urms·Irms（总 S＝分相算术和）；口径同负荷辨识周波窗">（在趋势图上右键「显示周波窗（有效值）」或下方手动装载：以该时刻为中心 N 个周波的逐周波有效值，从本侧离线文件读取）</small></span>
+            <span class="toggle"><label>对象 <select id="p-cyc-ch"><option value="total">三相总</option><option value="A">A 相</option><option value="B">B 相</option><option value="C">C 相</option></select></label></span></h3>
+          <div class="row nilm-winload" title="从本侧配置的离线文件装载一段周波：时刻留空＝数据起始时刻起 N 个周波；填时刻＝以该时刻为中心的 N 个周波（也可在上方趋势图上右键）">
+            <label>装载时刻 <input type="text" id="p-win-t" placeholder="留空＝数据起点；或 2026-10-13 08:00:02.000 / 08:00:02" style="width:220px"></label>
+            <label>周波数 <input type="number" id="p-win-count" min="1" max="20000" step="1" value="300" style="width:80px"></label>
+            <button id="btn-p-win-load">装载周波窗</button>
+            <button id="btn-p-win-clear" title="清除周波窗（有效值）与周波窗（瞬时值）">清除</button>
+            <span id="p-win-src" class="mut"></span>
+          </div>
+          <canvas id="p-cyc" height="240"></canvas>
+        </div>
+        <div class="panel">
+          <h3 class="curvehdr nilm-hdr"><span>周波窗（瞬时值）· 瞬时功率 p(t)=u·i（总 + 分相，图例勾选）<small class="hdrhint" id="p-wave2-sub">（在趋势图上右键「显示周波窗（瞬时值）」后显示：以该时刻为中心的 N 个周波采样瞬时值，从本侧离线文件读取）</small></span>
+            <span class="toggle"><button id="btn-p-wave2-clear" title="清除周波窗（瞬时值）">清除</button></span></h3>
+          <canvas id="p-wave2" height="240"></canvas>
+        </div>
+      </div>
       <div class="grid2">
         <div class="panel"><h3>分相功率</h3><div id="p-phase" class="tablewrap"></div></div>
         <div class="panel"><h3>基波功率 / 口径说明</h3><div id="p-fund" class="tablewrap"></div></div>

@@ -415,3 +415,47 @@ def test_openapi_documents_all_endpoints(client):
               "/api/probe", "/api/files"):
         assert p in paths, sorted(paths)
     assert any(p.startswith("/api/history") for p in paths)
+
+
+# --------------------------------------------------------------------- v0.71 三相电压/电流/功率页「周波窗」离线文件接口
+
+def test_elec_cycles_file_matches_nilm_cycles(client, csv_factory, tmp_path):
+    """/api/elec/cycles_file（U/I/P/Q/S 逐周波）与 /api/nilm/cycles_file（负荷辨识口径）同段同值；
+    t 空＝数据起点起 n 个周波，t 给定＝居中；非 csv_file 源 400。"""
+    path = tmp_path / "ew.csv"
+    csv_factory(str(path), duration_s=1.0, header=HEADER_CN, ts_mode="epoch")
+    _run_offline(client, path)
+    r = client.get("/api/elec/cycles_file?n=10")
+    assert r.status_code == 200, r.text
+    d = r.json()
+    assert d["ok"] is True and d["n_cycles"] == 10 and d["n_cycle_samples"] == int(round(FS / F_NOM))
+    assert len(d["t"]) == 10
+    for grp, keys in (("U", "ABC"), ("I", "ABC"), ("P", "ABC"), ("Q", "ABC"), ("S", "ABC")):
+        for k in keys:
+            assert len(d[grp][k]) == 10, (grp, k)
+    assert len(d["I"]["total"]) == 10 and len(d["P"]["total"]) == 10
+    # 与负荷辨识周波窗接口对齐（同起点、同 P/Q/I）
+    n = client.get("/api/nilm/cycles_file?n=10").json()
+    assert n["ok"] is True
+    assert n["t"][0] == pytest.approx(d["t"][0], abs=1e-6)
+    ch = n["channels"]["total"] if "total" in n["channels"] else next(iter(n["channels"].values()))
+    for a, b in zip(ch["p"], d["P"]["total"]):
+        assert a == pytest.approx(b, rel=1e-9, abs=1e-6)
+    for a, b in zip(ch["q"], d["Q"]["total"]):
+        assert a == pytest.approx(b, rel=1e-9, abs=1e-6)
+    for a, b in zip(ch["i"], d["I"]["total"]):
+        assert a == pytest.approx(b, rel=1e-9, abs=1e-9)
+    # 居中装载：中心时刻落在窗内中部
+    tc = d["t"][0] + 0.5
+    c = client.get(f"/api/elec/cycles_file?n=20&t={tc}").json()
+    assert c["ok"] is True and c["n_cycles"] == 20
+    assert c["t"][0] < tc < c["t"][-1] + 1.0 / F_NOM
+    assert abs((c["t"][0] + c["t"][-1]) / 2 - tc) < 2.0 / F_NOM
+    # 非文件源：400
+    _post(client, "/api/engine/start", {"kind": "simulator"})
+    try:
+        r = client.get("/api/elec/cycles_file?n=10")
+        assert r.status_code == 400
+        assert "离线文件" in r.json()["error"]
+    finally:
+        _post(client, "/api/engine/stop", {})

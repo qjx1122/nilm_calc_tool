@@ -580,3 +580,49 @@ def make_base(default_cfg: AppConfig, **overrides: Any) -> AppConfig:
     except ConfigError as exc:
         raise WaveError(f"基准配置无效：{exc}") from None
     return cfg
+
+
+# ---------------------------------------------------------------- v0.71：一段波形 → 逐周波有效值 / 功率（实时监测三个子界面的「周波窗（有效值）」）
+def cycle_values(d: Dict[str, Any], f_nom: float) -> Dict[str, Any]:
+    """把 ``load_waveform`` 的结果切成整周波，输出每周波：U 有效值（A/B/C）、I 有效值（A/B/C + total 合成）、
+    P / Q / S（total + A/B/C）。口径与负荷辨识 ``CycleFeatures`` 一致：P=mean(u·i)，Q=基波单频 DFT 无功 0.5·Im(U1·conj(I1))，
+    S=Urms·Irms（分相）、total S=ΣS_ph（算术和）。缺相 / 缺电压时相应量省略（只有电流的文件只给 I）。
+    时间 t 为每周波首样时刻；末尾不足一个周波的样本丢弃。"""
+    fs = float(d["fs"]); n = max(4, int(round(fs / float(f_nom))))
+    t = np.asarray(d.get("t") or [], dtype=float)
+    ch = d.get("channels") or {}
+    m = int(t.size // n)
+    out: Dict[str, Any] = {"ok": True, "n_cycle_samples": n, "n_cycles": m, "fs": fs, "f_nom": float(f_nom),
+                           "t": [], "U": {}, "I": {}, "P": {}, "Q": {}, "S": {}}
+    if m <= 0:
+        return out
+    tc = t[: m * n].reshape(m, n)[:, 0]
+    out["t"] = [float(x) for x in tc]
+    k = np.arange(n); e = np.exp(-2j * np.pi * k / n)
+    def _arr(name: str) -> Optional[np.ndarray]:
+        v = ch.get(name)
+        if v is None or len(v) < m * n:
+            return None
+        a = np.asarray([x if x is not None else np.nan for x in v[: m * n]], dtype=float).reshape(m, n)
+        return a
+    fl = lambda a: [float(x) if np.isfinite(x) else None for x in a]
+    p_sum = np.zeros(m); q_sum = np.zeros(m); s_sum = np.zeros(m); i2_sum = np.zeros(m); has_p = False; has_i = False
+    for ph in ("a", "b", "c"):
+        P = ph.upper()
+        u = _arr("U" + ph); i = _arr("I" + ph)
+        if u is not None:
+            out["U"][P] = fl(np.sqrt(np.mean(u * u, axis=1)))
+        if i is not None:
+            irms = np.sqrt(np.mean(i * i, axis=1)); out["I"][P] = fl(irms); i2_sum += np.nan_to_num(irms ** 2); has_i = True
+        if u is not None and i is not None:
+            urms = np.sqrt(np.mean(u * u, axis=1))
+            p = np.mean(u * i, axis=1)
+            u1 = (u @ e) * (2.0 / n); i1 = (i @ e) * (2.0 / n)
+            q = np.imag(0.5 * u1 * np.conj(i1)); s = urms * irms
+            out["P"][P] = fl(p); out["Q"][P] = fl(q); out["S"][P] = fl(s)
+            p_sum += np.nan_to_num(p); q_sum += np.nan_to_num(q); s_sum += np.nan_to_num(s); has_p = True
+    if has_i:
+        out["I"]["total"] = fl(np.sqrt(i2_sum))          # 与 CycleFeatures 一致：三相均方根合成（仅作幅值参考）
+    if has_p:
+        out["P"]["total"] = fl(p_sum); out["Q"]["total"] = fl(q_sum); out["S"]["total"] = fl(s_sum)
+    return out

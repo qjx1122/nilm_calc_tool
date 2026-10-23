@@ -131,7 +131,8 @@ def test_realtime_writer_rotates_file_with_old_header(tmp_path, monkeypatch):
 
 def test_frontend_contract():
     # v0.28：功率页不再是趋势线，而是分相瞬时功率波形 #p-wave-ph；谐波/间谐波/基波趋势含分相线（默认隐藏、图例勾选）
-    assert 'id="p-wave-ph"' in HTML and 'id="p-trend"' not in HTML
+    # v0.71：功率页按用户要求又补回趋势图 #p-trend（与 P/Q/S 瞬时功率波形并存），故只要求 #p-wave-ph 仍在
+    assert 'id="p-wave-ph"' in HTML and 'id="p-trend"' in HTML
     assert "drawLine($('#p-wave-ph'), serPh" in APP_JS and "p.series.p_per_phase" in APP_JS
     assert "name: 'PF' + ph.toLowerCase()" in APP_JS and "defaultHidden: true, data: hp.map(x => [x.t - t0, x['PF' + ph.toLowerCase()]])" in APP_JS
     for cid in ("h-trend", "f-u1-trend", "f-i1-trend"):

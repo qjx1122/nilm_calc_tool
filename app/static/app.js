@@ -18,7 +18,8 @@ function E(side, id) {
 /* v0.24：事件 / 负荷辨识 / 实时落盘 等按侧别各自一份状态（左列总线侧、右列分路侧） */
 function _sideStore() {
   return { events: [], evSummary: null, evLoaded: false, evDirty: false, realtime: null, rtDirty: false,
-           nl: { events: [], summary: null, cycles: null, loaded: false, dirty: false, formBuilt: false, winFile: null } };
+           nl: { events: [], summary: null, cycles: null, loaded: false, dirty: false, formBuilt: false, winFile: null },
+           ew: { voltage: { cyc: null, wave: null }, current: { cyc: null, wave: null }, power: { cyc: null, wave: null } } };   // v0.71：实时监测三页的周波窗
 }
 const SD = { bus: _sideStore(), branch: _sideStore() };
 window.SD = SD;
@@ -1557,6 +1558,154 @@ function seqTable(s, unit) {
   ]);
 }
 
+/* ------------------------------------------------------------------ v0.71：实时监测（三相电压 / 三相电流 / P·Q·S）子界面的
+ * 趋势图 + 周波窗（有效值）+ 周波窗（瞬时值）——曲线功能、右键菜单与风格与负荷辨识事件页一致：
+ *   趋势图：history 曲线（同总览），竖线＝负荷辨识事件起点（已加载时）；右键：复制 / 保存 / 打开图片、显示周波窗（有效值）、显示周波窗（瞬时值）、复位缩放
+ *   周波窗（有效值）：/api/elec/cycles_file（以该时刻为中心 N 个周波的逐周波 Urms / Irms / P·Q·S，从本侧离线文件读取；也可手动装载）
+ *   周波窗（瞬时值）：/api/nilm/wave_file（同一段的采样瞬时值；功率页由 u·i 算 p(t)）
+ * 两个周波窗都只来自本侧配置的离线文件（csv_file）；实时源下菜单项灰显（同 v0.66 规则）。 */
+const EW_DEF = {
+  voltage: { pre: 'v', hist: 'voltage', chans: ['Ua', 'Ub', 'Uc'], unit: 'V', label: '三相电压' },
+  current: { pre: 'i', hist: 'current', chans: ['Ia', 'Ib', 'Ic'], unit: 'A', label: '三相电流' },
+  power:   { pre: 'p', hist: 'power',   chans: ['Ua', 'Ub', 'Uc', 'Ia', 'Ib', 'Ic'], unit: 'W', label: 'P / Q / S' },
+};
+function EWs(side, key) { return SD[side || sideOf()].ew[key]; }
+function ewIsFile(side) { const stx = (side === 'branch' ? BRD.state : S.state) || {}; return (((stx.config || {}).source || {}).kind || '') === 'csv_file'; }
+function ewSrcKind(side) { const stx = (side === 'branch' ? BRD.state : S.state) || {}; return ((stx.config || {}).source || {}).kind || ''; }
+function ewN(side, pre) { const el = E(side, pre + '-win-count'); return Math.max(1, Math.min(20000, parseInt((el && el.value) || '300', 10) || 300)); }
+function ewTrendSeries(key, h, t0) {
+  if (key === 'power') return pqsSeries(h, t0);
+  const f = key === 'voltage' ? 'U' : 'I';
+  return ['A', 'B', 'C'].map(ph => ({ name: f + ph.toLowerCase(), color: COLORS[ph], data: h.map(pt => [pt.t - t0, pt[f + ph.toLowerCase()]]) }));
+}
+function ewEventMarks(side, t0, tEnd) {
+  const evs = (NLs(side).events || []).filter(e => isNum(e.t_start) && e.t_start >= t0 && e.t_start <= tEnd);
+  return evs.map(e => ({ x: e.t_start - t0, color: NILM_COLORS[e.algorithm], row: Object.keys(NILM_ALGOS).indexOf(e.algorithm),
+                         label: `${e.direction === 'up' ? '↑' : '↓'}${si(nilmMag(e), e.unit || 'W', 3)} ${e.channel}` }));
+}
+async function ewLoadCycles(side, key, tEpoch, nCycles) {
+  const d0 = EW_DEF[key], st = EWs(side, key);
+  const tEl = E(side, d0.pre + '-win-t');
+  let tTxt = (tEpoch !== undefined && tEpoch !== null) ? String(tEpoch) : ((tEl && tEl.value) || '').trim();
+  const n = Math.max(1, Math.min(20000, parseInt(String(nCycles !== undefined && nCycles !== null ? nCycles : ewN(side, d0.pre)), 10) || 300));
+  if (tEpoch !== undefined && tEpoch !== null && tEl) tEl.value = fmtLocalInput(tEpoch);
+  try {
+    const d = await api(`/api/elec/cycles_file?n=${n}${tTxt ? '&t=' + encodeURIComponent(tTxt) : ''}`, undefined, side);
+    st.cyc = d;
+    const sname = (d.source && d.source.path) ? d.source.path.split(/[\\/]/).pop() : '';
+    toast(`${side === 'branch' ? '分路侧' : '总线侧'}${d0.label}周波窗（有效值）已装载 ${d.n_cycles} 个周波（${sname}${d.source.mode === 'center' ? '，中心 ' + fmtLocalInput(d.source.t_center) : '，数据起点起'}）`, 'ok');
+    if (S.view === key) render();
+    return true;
+  } catch (e) { toast('装载周波窗（有效值）失败：' + e.message, 'err'); return false; }
+}
+async function ewLoadWave(side, key, tEpoch, nCycles) {
+  const d0 = EW_DEF[key], st = EWs(side, key);
+  const n = Math.max(1, Math.min(20000, parseInt(String(nCycles || ewN(side, d0.pre)), 10) || 300));
+  try {
+    const d = await api(`/api/nilm/wave_file?n=${n}&channels=${d0.chans.join(',')}${isNum(tEpoch) ? '&t=' + encodeURIComponent(String(tEpoch)) : ''}`, undefined, side);
+    d.cyc_center = tEpoch; d.cyc_n = n; st.wave = d;
+    const sname = (d.source && d.source.path) ? d.source.path.split(/[\\/]/).pop() : '';
+    toast(`${side === 'branch' ? '分路侧' : '总线侧'}${d0.label}周波窗（瞬时值）已装载 ${d.n} 点 × ${(d.channels_loaded || []).length} 通道（${sname}${isNum(tEpoch) ? '，中心 ' + fmtLocalInput(tEpoch) : '，数据起点起'}，${n} 个周波）`, 'ok');
+    if (S.view === key) { render(); try { E(side, d0.pre + '-wave2').scrollIntoView({ behavior: 'smooth', block: 'nearest' }); } catch (e) { /* jsdom */ } }
+    return true;
+  } catch (e) { toast('装载周波窗（瞬时值）失败：' + e.message, 'err'); return false; }
+}
+function ewCtxItems(cv, side, key) {
+  return (xEpoch) => {
+    const d0 = EW_DEF[key]; const n = ewN(side, d0.pre); const noX = !isNum(xEpoch);
+    const isFile = ewIsFile(side), srcKind = ewSrcKind(side);
+    const why = !isFile ? `当前输入方式为 ${srcKind || '—'}：周波窗只能从离线文件（csv_file）读取，实时源不可用` : noX ? '趋势曲线有数据后，在曲线上右键' : '';
+    return canvasNativeItems(cv).concat([                   // 原生三项在前（与负荷辨识页一致），业务项追加在后
+      { key: 'sep', sep: true },
+      { key: 'show-window', label: `显示周波窗（有效值，${noX ? '暂无曲线' : fmtLocalInput(xEpoch)}）`, disabled: noX || !isFile,
+        hint: why || `以该时刻为中心从本侧离线文件读取 ${n} 个周波的逐周波有效值，显示在下方「周波窗（有效值）」`,
+        onClick: () => ewLoadCycles(side, key, xEpoch, n) },
+      { key: 'show-window2', label: `显示周波窗（瞬时值，${noX ? '暂无曲线' : fmtLocalInput(xEpoch)}）`, disabled: noX || !isFile,
+        hint: why || `以该时刻为中心从本侧离线文件读取 ${n} 个周波的采样瞬时值（${d0.chans.join('/')}），显示在下方「周波窗（瞬时值）」`,
+        onClick: () => ewLoadWave(side, key, xEpoch, n) },
+      { key: 'zoom-reset', label: '复位缩放', onClick: () => zoomReset(cv) },
+      { key: 'native', label: '浏览器原生菜单（Shift + 右键）', disabled: true },
+    ]);
+  };
+}
+function ewWinSourceText(st) {
+  if (!st.cyc) return '在趋势图上右键「显示周波窗（有效值）」，或填时刻 / 周波数手动装载（留空＝数据起点起）；数据来自本侧配置的离线文件';
+  const sr = st.cyc.source || {};
+  return `已装载：${(sr.path || '').split(/[\\/]/).pop()} · ${sr.mode === 'center' ? '中心 ' + fmtLocalInput(sr.t_center) : '数据起点起'} · ${sr.n_loaded} 个周波（${ts(sr.t_start)} ~ ${ts(sr.t_end)}）`;
+}
+function renderElecWindows(key) {
+  const d0 = EW_DEF[key], side = sideOf(), st = EWs(side, key), pre = d0.pre;
+  // ① 趋势图（同总览 / 负荷辨识趋势）+ 负荷辨识事件竖线
+  const cvT = $('#' + pre + '-trend');
+  if (cvT) {
+    const h = curHist(d0.hist); const t0 = h.length ? h[0].t : 0, tEnd = h.length ? h[h.length - 1].t : 0;
+    drawLine(cvT, ewTrendSeries(key, h, t0), { ylabel: key === 'power' ? 'W/var/VA' : d0.unit, fmtX: x => tsX(x + t0, spanOf(d0.hist)), fmtTip: x => ts(x + t0), tbase: t0, height: 260,
+                                               marks: ewEventMarks(side, t0, tEnd), empty: `暂无${d0.label}趋势（需累计 ≥2 个 ${d0.hist} 窗）` });
+    bindCtxMenu(cvT, ewCtxItems(cvT, side, key));
+  }
+  // ② 周波窗（有效值）
+  const cvC = $('#' + pre + '-cyc');
+  const isFile = ewIsFile(side);
+  [`btn-${pre}-win-load`, `${pre}-win-t`, `${pre}-win-count`].forEach(id => { const el = $('#' + id); if (el) el.disabled = !isFile; });
+  { const el = $(`#btn-${pre}-win-clear`); if (el) el.disabled = !st.cyc && !st.wave; }
+  { const el = $('#' + pre + '-win-src'); if (el) el.textContent = isFile ? ewWinSourceText(st) : `当前输入方式为 ${ewSrcKind(side) || '—'}：周波窗只能从离线文件（csv_file）读取`; }
+  if (cvC) {
+    const c = st.cyc; const sub = $('#' + pre + '-cyc-sub');
+    if (!c || !c.t || !c.t.length) {
+      drawLine(cvC, [], { height: 240, empty: '在趋势图上右键「显示周波窗（有效值）」或用上方「装载周波窗」后显示（以该时刻为中心 N 个周波的逐周波有效值，从本侧离线文件读取）' });
+      if (sub) sub.textContent = '（在趋势图上右键「显示周波窗（有效值）」或下方手动装载：以该时刻为中心 N 个周波的逐周波有效值，从本侧离线文件读取）';
+    } else {
+      const t0 = c.t[0]; let ser = [], ylabel = d0.unit;
+      if (key === 'power') {
+        const chSel = $('#p-cyc-ch'); const ch = (chSel && chSel.value) || 'total'; const lab = ch === 'total' ? '三相总' : ch + ' 相';
+        ser = ['P', 'Q', 'S'].filter(k => Array.isArray((c[k] || {})[ch])).map(k => ({ name: `${k}（${lab}，逐周波）`, color: COLORS[k], data: c.t.map((x, i) => [x - t0, c[k][ch][i]]) }));
+        ylabel = 'W/var/VA';
+      } else {
+        const f = key === 'voltage' ? 'U' : 'I';
+        ser = ['A', 'B', 'C'].filter(ph => Array.isArray((c[f] || {})[ph])).map(ph => ({ name: `${f}${ph.toLowerCase()}（逐周波有效值）`, color: COLORS[ph], data: c.t.map((x, i) => [x - t0, c[f][ph][i]]) }));
+      }
+      drawLine(cvC, ser, { ylabel, fmtX: x => ts(x + t0), fmtTip: x => fmtLocalInput(x + t0), tbase: t0, height: 240, legend: true,
+                           marks: ewEventMarks(side, t0, c.t[c.t.length - 1]), empty: key === 'power' ? '该文件没有电压通道，算不出 P / Q / S' : `该文件没有${d0.label}通道` });
+      if (sub) sub.textContent = `（${c.n_cycles} 个周波 × ${ser.length} 条 · 每周波 ${c.n_cycle_samples} 点 · ${fmtLocalInput(t0)} → ${fmtLocalInput(c.t[c.t.length - 1])}` + (c.source && c.source.mode === 'center' ? `，中心 ${fmtLocalInput(c.source.t_center)}` : '') + ` · ${(c.source || {}).path || ''}）`;
+      bindCtxMenu(cvC, () => canvasNativeItems(cvC).concat([{ key: 'sep', sep: true }, { key: 'zoom-reset', label: '复位缩放', onClick: () => zoomReset(cvC) }, { key: 'native', label: '浏览器原生菜单（Shift + 右键）', disabled: true }]));
+    }
+  }
+  // ③ 周波窗（瞬时值）
+  const cvW = $('#' + pre + '-wave2');
+  if (cvW) {
+    const d = st.wave; const sub = $('#' + pre + '-wave2-sub');
+    if (!d || !d.t || !d.t.length) {
+      drawLine(cvW, [], { height: 240, empty: '在趋势图上右键「显示周波窗（瞬时值）」后显示（以该时刻为中心 N 个周波的采样瞬时值，从本侧离线文件读取）' });
+      if (sub) sub.textContent = '（在趋势图上右键「显示周波窗（瞬时值）」后显示：以该时刻为中心的 N 个周波采样瞬时值，从本侧离线文件读取）';
+    } else {
+      const t0 = d.t[0]; const chans = d.channels_loaded || Object.keys(d.channels || {}); let ser = [], ylabel = d0.unit;
+      if (key === 'power') {
+        const ph = ['a', 'b', 'c'].filter(k => d.channels['U' + k] && d.channels['I' + k]);
+        const pph = ph.map(k => d.channels['U' + k].map((u, i) => (u === null || d.channels['I' + k][i] === null) ? null : u * d.channels['I' + k][i]));
+        if (pph.length) ser.push({ name: 'p(t) 总瞬时功率', color: COLORS.P, data: d.t.map((x, i) => [x - t0, pph.reduce((a, arr) => a + (arr[i] === null ? 0 : arr[i]), 0)]) });
+        ph.forEach((k, j) => ser.push({ name: `p${k.toUpperCase()}(t) ${k.toUpperCase()} 相`, color: COLORS[k.toUpperCase()], width: 1.3, defaultHidden: true, data: d.t.map((x, i) => [x - t0, pph[j][i]]) }));
+      } else {
+        ser = chans.map(ch => ({ name: `${ch} (${(d.units || {})[ch] || ''})`, color: WP_COLORS[ch] || COLORS[ch.slice(-1).toUpperCase()] || '#4ea1ff', data: d.t.map((x, i) => [x - t0, d.channels[ch][i]]) }));
+      }
+      drawLine(cvW, ser, { ylabel, fmtX: x => ts(x + t0), fmtTip: x => fmtLocalInput(x + t0), tbase: t0, height: 240, zero: true, legend: key === 'power',
+                           empty: key === 'power' ? '该文件没有电压 + 电流通道，算不出 p(t)' : `该文件没有${d0.label}通道` });
+      if (sub) sub.textContent = `（${d.n} 点 × ${chans.length} 通道 · ${d.fs} Hz · ${fmtLocalInput(t0)} → ${fmtLocalInput(d.t[d.t.length - 1])}` + (isNum(d.cyc_center) ? `，中心 ${fmtLocalInput(d.cyc_center)}` : '') + `，${d.cyc_n} 个周波 · 采样瞬时值 · ${(d.source || {}).path || ''}）`;
+      bindCtxMenu(cvW, () => canvasNativeItems(cvW).concat([{ key: 'sep', sep: true }, { key: 'zoom-reset', label: '复位缩放', onClick: () => zoomReset(cvW) }, { key: 'native', label: '浏览器原生菜单（Shift + 右键）', disabled: true }]));
+    }
+  }
+}
+function bindElecWindows(side) {
+  const on = (id, ev, fn) => { const el = E(side, id); if (el) el.addEventListener(ev, fn); };
+  Object.keys(EW_DEF).forEach(key => {
+    const pre = EW_DEF[key].pre;
+    on('btn-' + pre + '-win-load', 'click', () => ewLoadCycles(side, key));
+    on('btn-' + pre + '-win-clear', 'click', () => { const st = EWs(side, key); st.cyc = null; st.wave = null; render(); });
+    on('btn-' + pre + '-wave2-clear', 'click', () => { EWs(side, key).wave = null; render(); });
+    on(pre + '-win-t', 'keydown', (e) => { if (e.key === 'Enter') ewLoadCycles(side, key); });
+  });
+  on('p-cyc-ch', 'change', render);
+}
+
 function renderVoltage() {
   const v = q('voltage');
   const cards = [];
@@ -1573,6 +1722,7 @@ function renderVoltage() {
   $('#v-percycle').innerHTML = v ? perCycleTable(v.values.per_cycle, 'V') : '';
   $('#v-seq').innerHTML = v ? seqTable(v.values.sequence, 'V') + (() => { const sc = unitScale(PH.map(k => v.values.fundamental_rms[k]), 'V'); return table(['相', sc.hdr('基波有效值')], PH.map(k => [k, sc.f(v.values.fundamental_rms[k])])); })() : '';
   $('#v-win').innerHTML = winNotes('voltage');
+  renderElecWindows('voltage');
 }
 
 function renderCurrent() {
@@ -1590,6 +1740,7 @@ function renderCurrent() {
   $('#i-seq').innerHTML = i ? seqTable(i.values.sequence, 'A') + (() => { const sc = unitScale(PH.map(k => i.values.fundamental_rms[k]), 'A'); return table(['相', sc.hdr('基波有效值'), '波峰系数'],
     PH.map(k => [k, sc.f(i.values.fundamental_rms[k]), num(i.values.crest_factor[k], 3)])); })() : '';
   $('#i-win').innerHTML = winNotes('current');
+  renderElecWindows('current');
 }
 
 function renderPower() {
@@ -1635,6 +1786,7 @@ function renderPower() {
     ]) + notes(p.values.notes);
   })() : '';
   $('#p-win').innerHTML = winNotes('power');
+  renderElecWindows('power');
 }
 
 function renderPF() {
@@ -2804,6 +2956,7 @@ async function saveCfgFile(side = sideOf()) {
 /* v0.24：事件 / 负荷辨识 / 窗口配置 / 导出页的按钮与过滤器——左右两列各绑一份（side 固定在闭包里） */
 function bindSideViews(side) {
   const on = (id, ev, fn) => { const el = E(side, id); if (el) el.addEventListener(ev, fn); };
+  bindElecWindows(side);                        // v0.71：三相电压 / 电流 / 功率页的周波窗按钮
   // 窗口配置
   on('btn-save-win', 'click', () => saveWindows(side));
   on('btn-preset-fast', 'click', () => applyPreset(0.2, side));

@@ -1702,44 +1702,84 @@ async def get_nilm_cycles_file(t: Optional[str] = None, n: int = 300):
         return JSONResponse(status_code=400, content={"ok": False, "error": f"{type(exc).__name__}: {exc}"})
 
 
-@app.get("/api/nilm/wave_file")
-async def get_nilm_wave_file(t: Optional[str] = None, n: int = 300, channels: str = ""):
-    """v0.65：「周波窗 2（瞬时值）」——从当前侧配置的离线文件读取以 t 为中心的 n 个周波**原始采样瞬时值**
-    （Ua/Ub/Uc/Ia/Ib/Ic，按本侧运行配置的 fs / f_nom / PT·CT / 时标 UTC / 自定义时间解释；口径同本侧计算）。
-    t 为空＝数据起点起 n 个周波。只读文件、不改运行配置；引擎运行与否都可用（读的是文件，不是实时缓冲）。"""
+def _wave_window_from_file(cfg: AppConfig, tc: Optional[float], n: int, channels: Optional[List[str]] = None) -> Dict[str, Any]:
+    """v0.65/v0.71：从本侧配置的离线文件读取以 tc 为中心（None＝数据起点起）n 个周波的原始采样瞬时值（同步函数，放线程里跑）。
+    按本侧运行配置的 fs / f_nom / PT·CT / 时标 UTC / 自定义时间解释；靠近文件两端时整体平移仍取 n 个周波。"""
+    from elec_tool.wave_preview import file_info, load_waveform, relax_harmonic_limits
+    p = _abs_path(cfg.source.path)
+    cfg.source.play_window = False; cfg.source.play_end_time = ""
+    cfg.source.play_start_mode = "begin"; cfg.source.play_start_value = ""
+    relax_harmonic_limits(cfg)
+    info = file_info(cfg, p)
+    fnom = float(info["f_nom"]); dur = n / fnom
+    t0f, t1f = float(info["t_start"]), float(info["t_end"])
+    if tc is None:
+        a = t0f; mode = "begin"
+    else:
+        a = tc - dur / 2.0; mode = "center"
+        if a < t0f:
+            a = t0f
+        if a + dur > t1f:                       # 靠近文件末尾：整体左移，仍取 n 个周波
+            a = max(t0f, t1f - dur)
+    d = load_waveform(cfg, p, t_start=repr(a), n_cycles=n, channels=channels or None)
+    d["source"] = {"path": _display_path(p), "mode": mode, "t_center": tc, "n_cycles": n, "t_start": d.get("t_first"), "t_end": d.get("t_last"),
+                   "custom_time": bool(cfg.source.custom_time), "side": current_side(), "n_loaded": d.get("n")}
+    return d
+
+
+def _file_window_args(t: Optional[str], n: int) -> Tuple[Optional[AppConfig], Optional[float], int, Optional[JSONResponse]]:
+    """周波窗（瞬时值 / 有效值）端点共用的参数校验：本侧须为离线文件源；t 可为空 / epoch / 'YYYY-MM-DD HH:MM:SS[.fff]'。"""
     from elec_tool.config import ConfigError, parse_time_text
-    from elec_tool.wave_preview import WaveError, file_info, load_waveform, relax_harmonic_limits
     cfg = AppConfig.from_dict(RUNNER.cfg.to_dict())
     if cfg.source.kind != "csv_file" or not str(cfg.source.path or "").strip():
-        return JSONResponse(status_code=400, content={"ok": False, "error": f"当前侧数据源不是离线文件（{cfg.source.kind}）或未配置文件路径；周波窗 2 只能从离线文件读取瞬时值"})
+        return None, None, 0, JSONResponse(status_code=400, content={"ok": False, "error": f"当前侧数据源不是离线文件（{cfg.source.kind}）或未配置文件路径；周波窗只能从离线文件读取"})
     tc: Optional[float] = None
     if t is not None and str(t).strip():
         try:
             tc = float(parse_time_text(str(t).strip()))
         except ConfigError as exc:
-            return JSONResponse(status_code=400, content={"ok": False, "error": str(exc)})
-    n = max(1, min(int(n), 20000))
+            return None, None, 0, JSONResponse(status_code=400, content={"ok": False, "error": str(exc)})
+    return cfg, tc, max(1, min(int(n), 20000)), None
+
+
+@app.get("/api/nilm/wave_file")
+async def get_nilm_wave_file(t: Optional[str] = None, n: int = 300, channels: str = ""):
+    """v0.65：「周波窗 2（瞬时值）」——从当前侧配置的离线文件读取以 t 为中心的 n 个周波**原始采样瞬时值**
+    （Ua/Ub/Uc/Ia/Ib/Ic，按本侧运行配置的 fs / f_nom / PT·CT / 时标 UTC / 自定义时间解释；口径同本侧计算）。
+    t 为空＝数据起点起 n 个周波。只读文件、不改运行配置；引擎运行与否都可用（读的是文件，不是实时缓冲）。"""
+    from elec_tool.config import ConfigError
+    from elec_tool.wave_preview import WaveError
+    cfg, tc, n, err = _file_window_args(t, n)
+    if err is not None:
+        return err
     try:
-        p = _abs_path(cfg.source.path)
-        cfg.source.play_window = False; cfg.source.play_end_time = ""
-        cfg.source.play_start_mode = "begin"; cfg.source.play_start_value = ""
-        relax_harmonic_limits(cfg)
+        chans = [c for c in channels.split(",") if c.strip()] or None
+        return await asyncio.to_thread(_wave_window_from_file, cfg, tc, n, chans)
+    except (WaveError, ValueError, ConfigError) as exc:
+        return JSONResponse(status_code=400, content={"ok": False, "error": str(exc)})
+    except Exception as exc:
+        return JSONResponse(status_code=400, content={"ok": False, "error": f"{type(exc).__name__}: {exc}"})
+
+
+@app.get("/api/elec/cycles_file")
+async def get_elec_cycles_file(t: Optional[str] = None, n: int = 300):
+    """v0.71：实时监测（三相电压 / 三相电流 / 有功无功视在）子界面的「周波窗（有效值）」——从当前侧配置的离线文件读取
+    以 t 为中心（空＝数据起点起）的 n 个周波，输出每周波的 U 有效值（A/B/C）、I 有效值（A/B/C/total）、P/Q/S（total/A/B/C）。
+    口径同负荷辨识周波窗（P=mean(u·i)，Q=基波 DFT 无功，S=Urms·Irms）；只读文件、不改运行配置、运行与否都可用。"""
+    from elec_tool.config import ConfigError
+    from elec_tool.wave_preview import WaveError, cycle_values
+    cfg, tc, n, err = _file_window_args(t, n)
+    if err is not None:
+        return err
+    try:
         def _work() -> Dict[str, Any]:
-            info = file_info(cfg, p)
-            fnom = float(info["f_nom"]); dur = n / fnom
-            t0f, t1f = float(info["t_start"]), float(info["t_end"])
-            if tc is None:
-                a = t0f; mode = "begin"
-            else:
-                a = tc - dur / 2.0; mode = "center"
-                if a < t0f:
-                    a = t0f
-                if a + dur > t1f:                       # 靠近文件末尾：整体左移，仍取 n 个周波
-                    a = max(t0f, t1f - dur)
-            d = load_waveform(cfg, p, t_start=repr(a), n_cycles=n, channels=[c for c in channels.split(",") if c.strip()] or None)
-            d["source"] = {"path": _display_path(p), "mode": mode, "t_center": tc, "n_cycles": n, "t_start": d.get("t_first"), "t_end": d.get("t_last"),
-                           "custom_time": bool(cfg.source.custom_time), "side": current_side(), "n_loaded": d.get("n")}
-            return d
+            d = _wave_window_from_file(cfg, tc, n, None)
+            out = cycle_values(d, float(cfg.sampling.f_nom))
+            out["source"] = d["source"]; out["channels_loaded"] = d.get("channels_loaded"); out["path"] = d.get("path")
+            out["source"]["n_loaded"] = out["n_cycles"]
+            if out["t"]:
+                out["source"]["t_start"] = out["t"][0]; out["source"]["t_end"] = out["t"][-1]
+            return out
         return await asyncio.to_thread(_work)
     except (WaveError, ValueError, ConfigError) as exc:
         return JSONResponse(status_code=400, content={"ok": False, "error": str(exc)})
