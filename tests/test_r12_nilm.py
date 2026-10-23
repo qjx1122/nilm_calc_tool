@@ -893,3 +893,56 @@ def test_saved_tuned_config_contains_all_tune_settings(client):
     d2 = client.post("/api/process/nilm_tune", json={"path": str(p), "base": {}, "save": True, "name": "plain74.json"}).json()
     f2 = _j.loads((Path(d2["saved_to"]) if os.path.isabs(d2["saved_to"]) else ROOT / d2["saved_to"]).read_text(encoding="utf-8"))
     assert f2["source"]["custom_time"] is False and f2["nilm"]["channels"] == [d2["channel"]]
+
+
+# ------------------------------------------------------------------ v0.80：投切幅值分簇 / 模板拼接检测（第 103 轮现场数据复盘）
+def test_estimate_min_load_splits_primary_and_secondary_steps():
+    """现场：Ia 7.5 ↔ 26.5 A 主负荷启停（19 A）之外还有 0.6 A 的二级波动；旧实现候选=0.6 A 且标"可靠"，
+    min_delta_a 取 0.3 A 后所有二级波动都被报成事件。现在分两簇：reliable=False、primary_step≈19、candidate 仍=最小投切。"""
+    from elec_tool.nilm_tuning import detect_repetition, estimate_min_load
+    rng = np.random.default_rng(7)
+    x = np.full(20000, 7.5); x[3000:3300] = 8.1; x[5000:12000] = 26.5; x[8000:8200] = 25.9; x[15000:15200] = 6.9
+    x += rng.normal(0, 0.02, x.size)
+    e = estimate_min_load(x, 0.02, "A")
+    assert e["split"] and not e["reliable"], e
+    assert abs(e["primary_step"] - 19.0) < 0.1 and abs(e["secondary_step"] - 0.6) < 0.05 and abs(e["candidate"] - 0.6) < 0.05
+    assert e["n_primary"] == 2 and e["n_secondary"] >= 4 and e["step_ratio"] > 10 and abs(e["max_step"] - 19.0) < 0.1
+    assert "主负荷" in e["note"] and "二级波动" in e["note"] and "19" in e["note"]
+    # 只有主负荷（无二级波动）→ 不分簇、仍可靠
+    y = np.full(6000, 7.5); y[2000:4000] = 26.5; y += rng.normal(0, 0.02, y.size)
+    e2 = estimate_min_load(y, 0.02, "A")
+    assert e2["reliable"] and not e2["split"] and e2["primary_step"] is None and abs(e2["candidate"] - 19.0) < 0.1
+    # 三档设备（300k / 450k，比值 1.5）不分簇（兼容 v0.55 规则）
+    lv = [1.5e6, 1.8e6, 2.25e6, 1.8e6, 1.5e6]
+    z = np.concatenate([l + rng.normal(0, 20.0, 60) for l in lv])
+    assert not estimate_min_load(z, 20.0, "W")["split"]
+    # 模板拼接：60 s 模板复制 5 次 → suspected、period 60；真实噪声序列 → 不告警
+    tpl = x[:3000]
+    rep = detect_repetition(np.tile(tpl, 5), 50)
+    assert rep["suspected"] and rep["period_s"] == 60.0 and rep["match_pct"] == 100.0
+    assert not detect_repetition(x, 50)["suspected"]
+    assert not detect_repetition(x[:100], 50)["suspected"]       # 太短：不检查、不告警
+
+
+def test_run_tune_reports_repetition_and_estimate_fields(tmp_path):
+    from elec_tool.nilm_tuning import run_tune
+    p = _write_csv(tmp_path / "bg.csv", dur=6.0)
+    d = run_tune(AppConfig(), str(p))
+    rep = d["repetition"]
+    assert set(rep) >= {"suspected", "period_s", "match_pct", "checked"} and not rep["suspected"]
+    est = d["min_load_estimate"]
+    assert "split" in est or est["candidate"] is None
+    # 拼接文件：把 2 s 的样本波形复制 3 次 → 6 s，每 2 s 逐位重复
+    t, u, i = _wave(2.0)
+    import csv as _csv
+    q = tmp_path / "stitched.csv"
+    with open(q, "w", newline="", encoding="utf-8") as fh:
+        wr = _csv.writer(fh)
+        wr.writerow(["时间戳", "A相电压", "A相电流", "B相电压", "B相电流", "C相电压", "C相电流"])
+        n = t.size
+        for r in range(3):
+            for k in range(n):
+                wr.writerow([f"{t[0] + (r * n + k) / 6400.0:.6f}", f"{u[0,k]:.5f}", f"{i[0,k]:.5f}", f"{u[1,k]:.5f}", f"{i[1,k]:.5f}", f"{u[2,k]:.5f}", f"{i[2,k]:.5f}"])
+    d2 = run_tune(AppConfig(), str(q))
+    assert d2["repetition"]["suspected"] and d2["repetition"]["period_s"] == 2.0, d2["repetition"]
+    assert any("模板拼接" in n for n in d2["notes"])

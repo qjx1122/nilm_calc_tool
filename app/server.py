@@ -2496,6 +2496,8 @@ async def process_nilm_tune(payload: Dict[str, Any]) -> Any:
       界面上可单独修改，并会写到 ``nilm_dir/nilm_tune_base.json`` 供等价命令 ``--config`` 复现）；``base_mode=running``
       保留旧行为（本侧当前运行配置；``/api/branch/...`` 为分路侧）。保存（save）时以该基准配置为底只更新算法参数。
     * min_load_auto（v0.55）：未手填最小关心负荷时从文件投切台阶估计（``min_load_estimate``，仅分路侧含启停录波有效）；
+      v0.80：投切幅值分两簇（主负荷 + 二级波动，相差 >10 倍）时 ``split=True``、``reliable=False``、附 ``primary_step``，
+      不自动采用，由界面「取值方式」三选一；另附 ``repetition``（模板拼接文件检测，疑似时 notes 告警）；
     * t_start / t_end 都空且 duration_s 空＝整个文件；
     * save=true（默认 false）：以本侧**原配置文件**（runtime.json / branch_runtime.json）为基准，只更新算法参数、其它参数不变，
       把更新后的**完整配置**写到 ``nilm.nilm_dir``（默认 output/nilm）下的 name（空＝``tune_<YYYYmmdd_HHMMSS>.json``；

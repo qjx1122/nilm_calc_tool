@@ -376,3 +376,4 @@
 - **[2026-10-23] v0.77**（用户：优化数据源与控制子界面中分路侧设备联动部分内容布局）。重排为四块（开关卡片 / 播放范围 / 时标对齐 / 操作行），长句说明改小字、按填写顺序排列，元素 id 不变；`ui_r70_check.cjs` ALL PASS，pytest 通过。
 - **[2026-10-23] v0.78**（用户：① 优化数据源页「分路侧是一份完全独立的配置…」说明布局；② 功率页瞬时波形勾选框与趋势图风格一致）。根因 `.notes` flex-column 拆行 → `.notes.p` 块级；瞬时波形改用 drawLine 图例复选框（总默认显示 / 分相默认隐藏，`series_hidden` 持久化）。`ui_r76_check.cjs` ALL PASS，381 passed / 1 skipped。
 - **[2026-10-23] v0.79**（用户：功率页顶部卡片增加分相实时数据；瞬时波形勾选框标题与 P/Q/S 趋势一致、要简洁）。卡片 +3（A/B/C 相 P/Q/S + PF）；图例名改 P Q S / Pa Pb Pc Qa Qb Qc Sa Sb Sc，颜色同趋势图。沙箱重置后按纪要恢复环境（venv / data / jsdom）。`ui_r76_check.cjs` ALL PASS，381 passed / 1 skipped。
+- **[2026-10-23] 第 103–104 轮 v0.80**（用户贴按秒电流与 94 条事件表问调参后误报多 → 结论：非算法误报，`min_load_auto` 取到 0.6 A 二级波动并标可靠；用户要求把工具侧可改进项直接实施）。实施：`estimate_min_load` 分簇（`split/primary_step/secondary_step/max_step/step_ratio`，分簇 ⇒ reliable=False）；界面估计行显示台阶/最小/最大跳变 + 「取值方式」三选一；`detect_repetition` 模板拼接告警（`repetition` 字段 + notes / CLI）。测试 +2、`ui_r80_check.cjs` ALL PASS、383 passed。

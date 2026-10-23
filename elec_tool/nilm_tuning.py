@@ -109,6 +109,10 @@ def _moving_mask(x: np.ndarray, sigma: float, *, W: int = 25, k: float = 4.0, fl
     return moving
 
 
+SPLIT_RATIO = 10.0   # v0.80：最大/最小投切幅值比超过此值才考虑分簇
+GAP_RATIO = 5.0      # v0.80：排序后相邻投切幅值比超过此值处为簇间隙
+
+
 def _anchors(x: np.ndarray, moving: np.ndarray, min_steady_cycles: int) -> List[Tuple[int, int, float]]:
     """连续"不动" ≥ min_steady_cycles 的区间 → (起, 止, 均值)。"""
     out: List[Tuple[int, int, float]] = []
@@ -171,14 +175,58 @@ def estimate_min_load(x: np.ndarray, sigma: float, unit: str = "W", *, min_stead
     out["candidate_from"] = "step" if out["min_step"] <= out["min_level_gap"] else "level_gap"
     top = max(abs(v) for v in levels) or 1.0
     reliable = cand >= 20.0 * sigma and cand >= 0.01 * top
+    # v0.80：投切幅值分簇——文件里既有主负荷启停（如 19 A）又有二级小波动（如 0.6 A）时，最小投切是二级波动，
+    # 按它定 min_delta 会把所有二级波动当事件报出（第 103 轮现场数据）。把投切幅值按对数间隙切成两簇：
+    # 最大/最小 > SPLIT_RATIO 且相邻（排序后）幅值比 > GAP_RATIO 处分簇，上簇最小值＝主负荷候选 primary_step。
+    # 分簇成立时 reliable=False（强制人工决定），candidate 仍＝最小投切（兼容），另给 primary_step 供"按主负荷"选择。
+    out["max_step"] = float(max(steps))
+    out["step_ratio"] = float(out["max_step"] / cand) if cand > 0 else None
+    out["primary_step"] = None; out["secondary_step"] = None; out["split"] = False
+    sorted_steps = sorted(steps)
+    if out["step_ratio"] is not None and out["step_ratio"] > SPLIT_RATIO and len(sorted_steps) >= 2:
+        ratios = [sorted_steps[i + 1] / sorted_steps[i] if sorted_steps[i] > 0 else float("inf") for i in range(len(sorted_steps) - 1)]
+        gi = int(np.argmax(ratios))
+        if ratios[gi] > GAP_RATIO:
+            out["split"] = True
+            out["primary_step"] = float(sorted_steps[gi + 1]); out["secondary_step"] = float(sorted_steps[0])
+            out["n_primary"] = int(len(sorted_steps) - gi - 1); out["n_secondary"] = int(gi + 1)
+            reliable = False
     out["reliable"] = bool(reliable)
     n_tr = int(np.sum(np.diff(moving.astype(np.int8)) == 1) + (1 if moving[0] else 0))
     out["n_transients"] = n_tr
     out["note"] = (f"由 {len(segs)} 个稳态段（不动 ≥{min_steady_cycles} 周波）/ {len(levels)} 个台阶估计：最小跳变 {out['min_step']:.4g} {unit}，"
-                   f"最小台阶间距 {out['min_level_gap']:.4g} {unit} → 候选 {cand:.4g} {unit}"
+                   f"最大跳变 {out['max_step']:.4g} {unit}，最小台阶间距 {out['min_level_gap']:.4g} {unit} → 候选 {cand:.4g} {unit}"
                    + ("" if out["candidate_from"] == "step" else "（来自两个不相邻状态之差，文件里没直接看到这么小的一次投切）")
-                   + ("" if reliable else f"（⚠ 候选过小：< 20σ={20 * sigma:.3g} 或 < 1% 最大台阶，可能是漂移/碎段，建议手填）")
+                   + (f"（⚠ 投切幅值分两簇：主负荷 ≈{out['primary_step']:.4g} {unit}（{out['n_primary']} 次）+ 二级波动 ≈{out['secondary_step']:.4g} {unit}"
+                      f"（{out['n_secondary']} 次），相差 {out['step_ratio']:.0f} 倍；按最小投切定门槛会把二级波动全部报成事件，"
+                      f"请人工决定：只关心主负荷填 {out['primary_step']:.4g}，也要二级波动填 {cand:.4g}，或另行手填）" if out["split"]
+                      else ("" if reliable else f"（⚠ 候选过小：< 20σ={20 * sigma:.3g} 或 < 1% 最大台阶，可能是漂移/碎段，建议手填）"))
                    + "。仅对分路侧单设备录波有效；若现场不关心二级负荷，请手工改大")
+    return out
+
+
+def detect_repetition(x: np.ndarray, cycles_per_s: float, *, periods_s: Tuple[float, ...] = (1, 2, 5, 10, 15, 20, 30, 60, 120, 300),
+                      rtol: float = 1e-9, min_pct: float = 80.0) -> Dict[str, Any]:
+    """v0.80：检测逐周波序列是否为**模板拼接文件**（同一段录波按固定周期逐位复制）。
+
+    真实录波的噪声不会逐位重复；若 ``x[i+k] == x[i]``（相对误差 ≤ ``rtol``）的比例 ≥ ``min_pct`` %，判定为按 ``k`` 周波
+    （= period_s × cycles_per_s）周期重复。拼接文件会把同一次投切复制成多次，调参 / 误报统计都会被放大，故只做告警不改参数。
+    返回 ``{"suspected", "period_s", "match_pct", "checked"}``；序列不足 2 个周期的周期不检查。
+    """
+    x = np.asarray(x, dtype=np.float64)
+    out: Dict[str, Any] = {"suspected": False, "period_s": None, "match_pct": 0.0, "checked": []}
+    best = (0.0, None)
+    for ps in periods_s:
+        k = int(round(float(ps) * float(cycles_per_s)))
+        if k <= 0 or x.size < 2 * k:
+            continue
+        a, b = x[k:], x[:-k]
+        pct = float(100.0 * np.mean(np.isclose(a, b, rtol=rtol, atol=0.0)))
+        out["checked"].append({"period_s": float(ps), "match_pct": round(pct, 2)})
+        if pct > best[0]:
+            best = (pct, float(ps))
+    out["match_pct"] = round(best[0], 2); out["period_s"] = best[1]
+    out["suspected"] = bool(best[1] is not None and best[0] >= min_pct)
     return out
 
 
@@ -420,6 +468,10 @@ def run_tune(base: AppConfig, file: str, *, channel: Optional[str] = None, quant
     elif min_load_auto and min_load is not None:
         notes.append(f"已手填最小关心负荷 {min_load:g} {unit}，文件估计（{est['candidate']}）仅供参考")
     sg = suggest(m, min_load, p)
+    rep = detect_repetition(p, float(cfg.sampling.f_nom))
+    if rep["suspected"]:
+        notes.append(f"⚠ 文件疑似模板拼接：逐周波 {unit} 序列每 {rep['period_s']:g} s 逐位重复（{rep['match_pct']:.1f}% 周波与前一周期完全相等）；"
+                     "同一次投切被复制成多次，噪声统计与事件计数不代表真实现场，建议用连续真实录波调参")
     if qty == "i" and min_load_w is not None and min_load_a is None:
         notes.append("I 口径请用 min_load_a（A）；min_load_w 已忽略")
     return {"file": file, "channel": ch, "fs": cfg.sampling.fs, "f_nom": cfg.sampling.f_nom,
@@ -428,7 +480,7 @@ def run_tune(base: AppConfig, file: str, *, channel: Optional[str] = None, quant
             "t_range": {"start": ts_txt, "end": te_txt, "duration_s": duration_s,
                         "t_first": float(t[0]), "t_last": float(t[-1]), "whole_file": not (ts_txt or te_txt or duration_s), **file_meta},
             "min_load_used": (None if min_load is None else float(min_load)), "min_load_source": min_load_source,
-            "min_load_estimate": est,
+            "min_load_estimate": est, "repetition": rep,
             "notes": notes, "measure": m, "suggest": sg}
 
 

@@ -123,6 +123,12 @@ def main() -> int:
         print(f"  候选 {est['candidate']:.4g} {unit}  （最小跳变 {est['min_step']:.4g}，最小台阶间距 {est['min_level_gap']:.4g}，"
               f"稳态段 {est['n_steady']}，台阶 {est['levels']}）  {'✓ 可靠' if est['reliable'] else '⚠ 不可靠'}"
               + ("" if out["min_load_source"] != "estimated" else "  → 本次已采用（--min-load-auto）"))
+        print(f"  最大跳变 {est['max_step']:.4g} {unit}（最大/最小 {est['step_ratio']:.1f} 倍）"
+              + (f"   ⚠ 分两簇：主负荷 ≈{est['primary_step']:.4g}（{est['n_primary']} 次）+ 二级波动 ≈{est['secondary_step']:.4g}（{est['n_secondary']} 次）"
+                 f"；只关心主负荷请 --min-load-{'a' if unit == 'A' else 'w'} {est['primary_step']:.4g}" if est.get("split") else ""))
+    rep = out.get("repetition") or {}
+    if rep.get("suspected"):
+        print(f"  ⚠ 文件疑似模板拼接：每 {rep['period_s']:g} s 逐位重复（{rep['match_pct']:.1f}%），统计与事件计数不代表真实现场")
     print("—— 建议参数（起点，按 NILM_TUNING_GUIDE.md 复核）——")
     print(f"  {sg['note']}")
     print(f"  nilm.quantity = {qty}   nilm.rel_tol_pct = {sg['rel_tol_pct']}   nilm.min_delta_pct = {sg['min_delta_pct']}"

@@ -3885,10 +3885,20 @@ function ntRender(d) {
     if (est) {
       er.style.display = '';
       const src = d.min_load_source === 'estimated' ? '（本次已采用）' : (d.min_load_source === 'manual' ? `（本次按手填 ${ntFmt(d.min_load_used)} ${u} 计算，估计仅供参考）` : '（本次未采用：按 max(6σ, 2%×基荷)）');
+      // v0.80：显示台阶列表 / 最小 / 最大跳变；分簇时标出主负荷 + 二级波动，并由「取值方式」三选一决定填入值
+      const lv = (est.levels || []).map(ntFmt).join(', ');
+      const facts = est.candidate === null ? '' : `<br>台阶 [${esc(lv)}] ${u} · 最小跳变 <b>${ntFmt(est.min_step)}</b> · 最大跳变 <b>${ntFmt(est.max_step)}</b> · 最小台阶间距 ${ntFmt(est.min_level_gap)}`
+        + (est.split ? ` · <b class="err">⚠ 分两簇：主负荷 ≈${ntFmt(est.primary_step)} ${u}（${est.n_primary} 次）+ 二级波动 ≈${ntFmt(est.secondary_step)} ${u}（${est.n_secondary} 次，相差 ${Math.round(est.step_ratio)} 倍）</b>，请在下方选择取值方式` : '');
       $('#nt-est-text').innerHTML = est.candidate === null ? `无法估计：${esc(est.note)}`
-        : `候选 <b>${ntFmt(est.candidate)} ${u}</b> ${est.reliable ? '✓ 可靠' : '⚠ 不可靠'} ${esc(src)}<br><span class="muted">${esc(est.note)}</span>`;
+        : `候选 <b>${ntFmt(est.candidate)} ${u}</b> ${est.reliable ? '✓ 可靠' : '⚠ 不可靠'} ${esc(src)}${facts}<br><span class="muted">${esc(est.note)}</span>`;
       $('#btn-nt-est-fill').disabled = est.candidate === null;
-      NT.est = { value: est.candidate, unit: u };
+      const pick = $('#nt-est-pick');
+      if (pick) {
+        pick.options[0].textContent = `按最大台阶（主负荷${est.max_step != null ? ' ' + ntFmt(est.split ? est.primary_step : est.max_step) + ' ' + u : ''}）`;
+        pick.options[1].textContent = `按最小台阶（候选${est.candidate != null ? ' ' + ntFmt(est.candidate) + ' ' + u : ''}）`;
+        pick.value = est.split ? 'primary' : 'min';
+      }
+      NT.est = { value: est.candidate, unit: u, primary: est.split ? est.primary_step : est.max_step };
     } else { er.style.display = 'none'; NT.est = null; }
   }
   const cr = $('#nt-cmdrow');
@@ -4221,7 +4231,10 @@ function bindProcess() {
     $('#btn-nt-apply').addEventListener('click', ntApply);
     $('#btn-nt-est-fill').addEventListener('click', () => {
       if (!NT.est || NT.est.value === null) return;
-      const v = +(+NT.est.value).toPrecision(4);
+      const pk = $('#nt-est-pick') ? $('#nt-est-pick').value : 'min';
+      if (pk === 'manual') { (NT.est.unit === 'A' ? $('#nt-mina') : $('#nt-minw')).focus(); toast('请在「最小关心负荷」输入框手填', 'ok'); return; }
+      const raw = pk === 'primary' && NT.est.primary != null ? NT.est.primary : NT.est.value;
+      const v = +(+raw).toPrecision(4);
       if (NT.est.unit === 'A') { $('#nt-mina').value = v; $('#nt-minw').value = ''; } else { $('#nt-minw').value = v; $('#nt-mina').value = ''; }
       $('#nt-minauto').checked = false;
       toast(`已填入最小关心负荷 ${v} ${NT.est.unit}，再点「量噪声并给出参数」按此值计算`, 'ok');

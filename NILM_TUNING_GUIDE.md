@@ -772,6 +772,8 @@ Invoke-RestMethod -Method Put -Uri http://localhost:8000/api/branch/config -Cont
 
 不加 `--min-load-auto` 时这一段也会打印（仅供参考，不采用）；手填了 `--min-load-w/-a` 时手填优先。JSON 里对应 `min_load_estimate{candidate, min_step, min_level_gap, levels, n_steady, n_events, reliable, note}`、`min_load_used`、`min_load_source = manual | estimated | none`。
 
+**v0.80 分簇与拼接检测**：文件里同时有主负荷启停（如 19 A）和二级小波动（如 0.6 A）时，最小投切是二级波动，按它定门槛会把每个二级波动都报成事件。估计器把投切幅值按对数间隙分两簇（最大/最小 > 10 倍、排序后相邻比 > 5 处切开）：JSON 多出 `max_step, step_ratio, split, primary_step, secondary_step, n_primary, n_secondary`，分簇时 `reliable=False`（`--min-load-auto` 不自动采用），由你决定：只关心主负荷 → `--min-load-a <primary_step>`（界面「取值方式＝按最大台阶」）；二级波动也要报 → 候选值（「按最小台阶」）；或手填。另有 `repetition{suspected, period_s, match_pct}`：逐周波序列按固定周期逐位重复 ≥ 80 % 即告警「文件疑似模板拼接」——同一次投切被复制成多次，噪声统计与事件计数不代表真实现场，请换连续真实录波。
+
 > 它给的是**上界候选**：样例里设备有 1.5 / 1.8 / 2.25 MW 三档，候选 300 kW 能覆盖它所有状态变化；若现场只关心主负荷（750 kW 启停）、不关心二级档位切换，请手工改大。界面上对应「从文件投切台阶估计最小关心负荷」勾选和结果区的「填入输入框」按钮（H.13）。
 
 ### H.4‴ 用法 3‴：慢启动 / 软启斜坡——`steady_state` 的暂态上限自动放大（v0.56）
