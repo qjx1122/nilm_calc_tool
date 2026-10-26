@@ -41,23 +41,68 @@ def _ceil_sig(x: float, sig: int = 2) -> float:
     return math.ceil(x / 10 ** e) * 10 ** e
 
 
-def measure(p: np.ndarray, unit: str = "W") -> dict:
-    """逐周波序列（有功 W 或电流有效值 A）的噪声统计。键名不带单位，``unit`` 字段标明。"""
+def _collapse_runs(p: np.ndarray, level: float, *, rtol: float = 1e-7) -> Tuple[np.ndarray, np.ndarray, float]:
+    """v0.83：把**逐位相同（或只差数值舍入）的相邻周波**压成一个值。返回 ``(collapsed, run_lengths, repeat_frac)``：
+    ``repeat_frac`` = 相邻周波相等的比例。真实录波相邻周波几乎不可能逐位相等；每秒一个模板复制 50 周波的合成文件
+    repeat_frac≈0.98、run_lengths≈50。"""
+    if p.size < 2:
+        return p.copy(), np.ones(p.size, dtype=np.int64), 0.0
+    tol = rtol * max(float(level), float(np.max(np.abs(p))), 1e-12)
+    same = np.abs(np.diff(p)) <= tol
+    starts = np.concatenate(([0], np.flatnonzero(~same) + 1))
+    runs = np.diff(np.concatenate((starts, [p.size])))
+    return p[starts], runs, float(np.mean(same))
+
+
+def measure(p: np.ndarray, unit: str = "W", *, repeat_frac_limit: float = 0.2) -> dict:
+    """逐周波序列（有功 W 或电流有效值 A）的噪声统计。键名不带单位，``unit`` 字段标明。
+
+    v0.83：**周波复制保护**。差分 MAD 以「相邻周波之差」为样本；若文件是每秒一个模板复制 N 个周波（相邻 49/50 对完全相等），
+    中位数落在 0 上，σ 会被量成 1e-7 量级，由它推出的 settle_tol / tol / noise 在真实秒间抖动（1e-2 量级）面前永远满足不了，
+    负荷辨识配不出任何事件。处理：相邻相等比例 ``repeat_frac`` ≥ ``repeat_frac_limit``（默认 20%）时，先把相同周波段压成
+    一个值（``_collapse_runs``），所有统计（σ / 极差 / 均值差）改在压缩序列上做，极差窗长按复制倍数折算；结果附
+    ``repeat_frac / repeat_run_cycles / repeated_cycles / sigma_method (diff_mad | run_collapsed) / sigma_raw``，供界面与 CLI 告警。
+    """
     p = np.asarray(p, dtype=np.float64)
+    level = float(np.median(np.abs(p))) if p.size else 0.0
     d = np.diff(p)
-    mad_d = float(np.median(np.abs(d - np.median(d)))) * 1.4826          # 差分的稳健 σ_d
-    sigma = mad_d / math.sqrt(2.0)                                       # 单周波噪声 σ（差分方差 = 2σ²）
-    level = float(np.median(np.abs(p)))
+
+    def robust_sigma(x: np.ndarray) -> float:
+        dd = np.diff(x)
+        if dd.size == 0:
+            return 0.0
+        return float(np.median(np.abs(dd - np.median(dd)))) * 1.4826 / math.sqrt(2.0)   # 差分方差 = 2σ²
+
+    sigma_raw = robust_sigma(p)
+    coll, runs, repeat_frac = _collapse_runs(p, level)
+    run_med = float(np.median(runs)) if runs.size else 1.0
+    repeated = bool(repeat_frac >= repeat_frac_limit and coll.size >= 3)
+    if repeated:
+        x = coll                              # 统计序列：压缩后的「真实变化」序列
+        scale = max(1.0, run_med)             # 1 个压缩样本 ≈ scale 个原周波
+        sigma = robust_sigma(coll)
+        method = "run_collapsed"
+    else:
+        x, scale, sigma, method = p, 1.0, sigma_raw, "diff_mad"
+
     # 5 周波 / 10 周波滚动极差的 95 分位（稳态容差直接看这个）
     # 稳健口径：取 min(95 分位, 2×中位数)，段内偶有事件时不被少数含事件的窗拉高
+    # 周波复制时：原 n 周波窗最多跨 ceil(n/scale)+1 个压缩样本，极差按该窗长在压缩序列上算
     def rng(n: int) -> float:
         if len(p) < n:
             return float("nan")
-        w = np.lib.stride_tricks.sliding_window_view(p, n)
+        n_eff = n if scale <= 1.0 else int(math.ceil(n / scale)) + 1
+        if len(x) < n_eff:
+            return float(np.max(x) - np.min(x))
+        w = np.lib.stride_tricks.sliding_window_view(x, n_eff)
         r = w.max(axis=1) - w.min(axis=1)
         return float(min(np.percentile(r, 95), 2.0 * np.median(r)))
     # 相邻两个 10 周波均值之差的稳健 σ（双滑窗 / GLR 的噪声尺度；高斯噪声下 ≈ σ×sqrt(2/10)）
-    if len(p) >= 30:
+    # 周波复制时两个 10 周波均值窗最多隔一个模板边界，均值差 = 一次模板跳变（保守取压缩序列差分 σ）
+    if repeated:
+        dm = np.diff(coll)
+        sig_m10 = float(np.median(np.abs(dm - np.median(dm)))) * 1.4826 if dm.size else float("nan")
+    elif len(p) >= 30:
         m10 = np.convolve(p, np.ones(10) / 10, mode="valid")
         dm = m10[10:] - m10[:-10]
         sig_m10 = float(np.median(np.abs(dm - np.median(dm)))) * 1.4826
@@ -66,8 +111,10 @@ def measure(p: np.ndarray, unit: str = "W") -> dict:
     return {
         "cycles": int(len(p)), "unit": unit, "level": level,
         "sigma_cycle": sigma, "sigma_cycle_pct": (100.0 * sigma / level if level else float("nan")),
+        "sigma_raw": sigma_raw, "sigma_method": method,
+        "repeat_frac": repeat_frac, "repeat_run_cycles": run_med, "repeated_cycles": repeated,
         "max_abs_diff": float(np.max(np.abs(d))) if d.size else 0.0,
-        "has_events_hint": bool(d.size and np.max(np.abs(d)) > 10 * sigma),
+        "has_events_hint": bool(d.size and sigma > 0 and np.max(np.abs(d)) > 10 * sigma),
         "range5_p95": rng(5), "range10_p95": rng(10),
         "sigma_mean10": sig_m10,
         "min": float(p.min()), "max": float(p.max()),
@@ -109,6 +156,15 @@ def _moving_mask(x: np.ndarray, sigma: float, *, W: int = 25, k: float = 4.0, fl
     return moving
 
 
+def _run_adjust(sigma: float, run_cycles: float, W: int = 25) -> Tuple[int, float]:
+    """v0.83：周波复制文件的滑窗 / 噪声尺度折算：W → max(W, 4×run)，σ → σ×√run（W 周波均值里只有 W/run 个独立样本，
+    k·σ_eff·√(2/W) = k·σ·√(2/(W/run))）。run ≤ 1 原样返回。"""
+    r = float(run_cycles or 1.0)
+    if r <= 1.0:
+        return int(W), float(sigma)
+    return int(max(W, math.ceil(4 * r))), float(sigma) * math.sqrt(r)
+
+
 SPLIT_RATIO = 10.0   # v0.80：最大/最小投切幅值比超过此值才考虑分簇
 GAP_RATIO = 5.0      # v0.80：排序后相邻投切幅值比超过此值处为簇间隙
 
@@ -132,7 +188,7 @@ def _anchors(x: np.ndarray, moving: np.ndarray, min_steady_cycles: int) -> List[
 
 
 def estimate_min_load(x: np.ndarray, sigma: float, unit: str = "W", *, min_steady_cycles: int = 25,
-                      jump_k: float = 8.0, merge_k: float = 6.0) -> Dict[str, Any]:
+                      jump_k: float = 8.0, merge_k: float = 6.0, run_cycles: float = 1.0) -> Dict[str, Any]:
     """v0.55：从**含投切的分路侧录波**估计"最小关心负荷"的候选值（逐周波 P 或 I 序列）。
 
     v0.57 改为与 ``longest_transient`` 同一套"是否在动"判据（``_moving_mask``）切稳态：原来按相邻周波 |Δ| > 8σ 切段，
@@ -143,14 +199,18 @@ def estimate_min_load(x: np.ndarray, sigma: float, unit: str = "W", *, min_stead
     ``level_gap``＝来自两个不相邻状态之差（没直接看到这么小的投切，只是两种状态差这么多，更可能是上界候选）。
     ``reliable``：至少 2 个台阶、候选 ≥ 20σ（远离噪声底）且 ≥ 1 % 最大台阶。``jump_k`` 保留仅为兼容（不再使用）。
     总线侧多设备混合文件量出的是"所有设备里最小的一次"，不代表目标设备——调用方应只对分路侧文件使用。
+    v0.83：``run_cycles`` > 1（周波复制文件，每 run_cycles 个周波同值）时，滑窗加长到 4×run、稳态门槛抬到 ≥ 2×run、
+    噪声尺度按 √run 折算（均值窗内只有 W/run 个独立样本），否则每段同值周波都会被当成一个稳态台阶。
     """
     x = np.asarray(x, dtype=np.float64)
+    W, sig_eff = _run_adjust(sigma, run_cycles)
+    min_steady_cycles = int(max(min_steady_cycles, 2 * run_cycles)) if run_cycles > 1 else min_steady_cycles
     out: Dict[str, Any] = {"unit": unit, "candidate": None, "candidate_from": None, "min_step": None, "min_level_gap": None,
                            "levels": [], "n_steady": 0, "n_events": 0, "reliable": False, "note": ""}
     if x.size < 2 * min_steady_cycles or not (sigma > 0) or not math.isfinite(sigma):
         out["note"] = "数据太短或噪声尺度无效，无法估计"
         return out
-    moving = _moving_mask(x, sigma)
+    moving = _moving_mask(x, sig_eff, W=W)
     segs = _anchors(x, moving, min_steady_cycles)
     out["n_steady"] = len(segs)
     steps_all = [abs(segs[i + 1][2] - segs[i][2]) for i in range(len(segs) - 1)]
@@ -231,7 +291,8 @@ def detect_repetition(x: np.ndarray, cycles_per_s: float, *, periods_s: Tuple[fl
 
 
 def longest_transient(x: np.ndarray, sigma: float, min_delta: float, *, min_steady_cycles: int = 10,
-                      smooth_cycles: int = 25, k: float = 4.0, tol: Optional[float] = None) -> Dict[str, Any]:
+                      smooth_cycles: int = 25, k: float = 4.0, tol: Optional[float] = None,
+                      run_cycles: float = 1.0) -> Dict[str, Any]:
     """v0.56：量文件中**最长的一次暂态**（两个真正稳态之间的周波数），用来给 ``steady_state.max_transient_cycles`` 定尺度。
 
     Hart 分段看不出软启斜坡（斜坡被切成一串"极差刚好不超 tol"的伪稳态段，相邻段差又 < min_delta）。这里改用
@@ -244,7 +305,12 @@ def longest_transient(x: np.ndarray, sigma: float, min_delta: float, *, min_stea
     必须大于它，稳态分段才不会把斜坡当成一串小台阶而配不出事件。
     """
     x = np.asarray(x, dtype=np.float64)
-    out: Dict[str, Any] = {"longest": 0, "n_transients": 0, "n_steady": 0, "transients": [], "smooth_cycles": int(smooth_cycles)}
+    # v0.83：周波复制文件（run_cycles>1）——滑窗 ≥ 4×run、稳态 ≥ 2×run、σ×√run，否则斜坡上每段同值周波都成"稳态锚点"，暂态被切碎
+    smooth_cycles, sigma = _run_adjust(sigma, run_cycles, int(smooth_cycles))
+    if run_cycles > 1:
+        min_steady_cycles = int(max(min_steady_cycles, 2 * run_cycles))
+    out: Dict[str, Any] = {"longest": 0, "n_transients": 0, "n_steady": 0, "transients": [], "smooth_cycles": int(smooth_cycles),
+                           "run_cycles": float(run_cycles), "min_steady_cycles_used": int(min_steady_cycles)}
     L = int(x.size)
     W = max(2, int(smooth_cycles))
     if L < 2 * W + 2 * min_steady_cycles or not (sigma > 0) or not math.isfinite(sigma):
@@ -312,7 +378,8 @@ def suggest(m: dict, min_load: float | None, x: Optional[np.ndarray] = None) -> 
     tr: Optional[Dict[str, Any]] = None
     extra: Dict[str, Any] = {}
     if x is not None:
-        tr = longest_transient(x, s, min_d, tol=tol10)
+        run = float(m.get("repeat_run_cycles") or 1.0) if m.get("repeated_cycles") else 1.0
+        tr = longest_transient(x, s, min_d, tol=tol10, run_cycles=run)
         if tr["longest"] > 100:
             max_tr = int(_ceil_sig(1.5 * tr["longest"]))
             # 斜坡上会被 Hart 切出的伪稳态平台：min_steady_cycles 要压过它（×1.5 余量），否则斜坡被当成一串 < min_delta 的小台阶
@@ -457,7 +524,7 @@ def run_tune(base: AppConfig, file: str, *, channel: Optional[str] = None, quant
     m = measure(p, unit)
     min_load = min_load_w if qty == "p" else min_load_a
     notes: List[str] = []
-    est = estimate_min_load(p, m["sigma_cycle"], unit)
+    est = estimate_min_load(p, m["sigma_cycle"], unit, run_cycles=(float(m["repeat_run_cycles"]) if m.get("repeated_cycles") else 1.0))
     min_load_source = "manual" if min_load is not None else "none"
     if min_load_auto and min_load is None:
         if est["reliable"]:
@@ -468,6 +535,10 @@ def run_tune(base: AppConfig, file: str, *, channel: Optional[str] = None, quant
     elif min_load_auto and min_load is not None:
         notes.append(f"已手填最小关心负荷 {min_load:g} {unit}，文件估计（{est['candidate']}）仅供参考")
     sg = suggest(m, min_load, p)
+    if m.get("repeated_cycles"):
+        notes.append(f"⚠ 文件疑似周波复制：{100.0 * m['repeat_frac']:.1f}% 相邻周波逐位相等（每段约 {m['repeat_run_cycles']:.0f} 周波同值），"
+                     f"相邻差分 MAD 会把 σ 量成 {m['sigma_raw']:.3g} {unit}（失真）；本次已把同值周波段压缩后重量：σ = {m['sigma_cycle']:.3g} {unit}，"
+                     "极差 / 均值差统计同样按压缩序列折算。该文件的「噪声」实为段间跳变，建议用连续真实录波复核")
     rep = detect_repetition(p, float(cfg.sampling.f_nom))
     if rep["suspected"]:
         notes.append(f"⚠ 文件疑似模板拼接：逐周波 {unit} 序列每 {rep['period_s']:g} s 逐位重复（{rep['match_pct']:.1f}% 周波与前一周期完全相等）；"
