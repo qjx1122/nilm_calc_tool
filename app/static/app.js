@@ -2880,6 +2880,37 @@ async function saveConfig() {
   } catch (e) { toast('保存失败：' + e.message, 'err'); }
 }
 
+// v0.81：「从文件加载本侧配置」——POST /api(/branch)/config/load_file {path, persist}；path 空＝本侧现有配置文件
+async function loadCfgFromFile(side) {
+  const pre = side === 'branch' ? 'br-' : 'src-';
+  const inp = $('#' + pre + 'cfgload-path'), chk = $('#' + pre + 'cfgload-persist');
+  const btn = side === 'branch' ? $('#btn-br-cfgload') : $('#btn-src-cfgload');
+  const path = (inp && inp.value || '').trim(), persist = !!(chk && chk.checked);
+  const name = side === 'branch' ? '分路侧' : '总线侧';
+  if (btn) btn.disabled = true;
+  try {
+    const r = await api('/api/config/load_file', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path, persist }) }, side);
+    if (side === 'branch') { BR.dirty = false; BR.loaded = false; BR.fileSpeedChosen = undefined; }
+    else { S.formDirty = false; S.cfgDirty = false; S.srcDirty = false; }
+    const where = r.config_file_updated ? `，并已写入 ${r.config_file}（${(r.config_file_changes || []).length} 项变化）`
+      : (persist ? '（配置文件内容无变化或服务端未启用回写）' : '（只加载到运行配置，未写配置文件）');
+    toast(`已从 ${r.loaded_from} 加载${name}配置并热更新${where}` + (r.warning ? '；⚠ ' + r.warning : ''), r.warning ? 'err' : 'ok');
+    S.state = await api('/api/state'); renderTop(); render();
+    if (side === 'branch') { await loadBranchForm(true); refreshBranchState(true); }
+    else if (S.state && S.state.config) { try { fillSourceForm(S.state.config); syncSourceForm(); } catch (e2) { /* 不在数据源页时忽略 */ } }
+  } catch (e) { toast(`从文件加载${name}配置失败：` + e.message, 'err'); }
+  finally { if (btn) btn.disabled = false; }
+}
+async function initCfgLoadRows() {
+  // 占位符填本侧现有配置文件路径（GET /api(/branch)/config/file）；输入框本身留空＝按现有路径加载
+  for (const side of ['bus', 'branch']) {
+    const inp = $('#' + (side === 'branch' ? 'br-' : 'src-') + 'cfgload-path');
+    if (!inp) continue;
+    try { const r = await api('/api/config/file', undefined, side); if (r && r.path) inp.placeholder = `空＝现有路径（${r.path}${r.exists ? '' : '，尚不存在'}）`; }
+    catch (e) { /* 保留 HTML 占位符 */ }
+  }
+}
+
 // v0.63：总线侧「保存总线侧配置」——数据源 + 量纲口径 + 列映射一起写入 configs/runtime.json（服务端只更新这些键）
 function collectBusSavePayload() {
   const { payload, skipped } = collectConfigPayload();
@@ -3040,6 +3071,9 @@ function bind() {
     finally { S.autoloadDirty = false; }
   });
   $('#btn-load-last2').addEventListener('click', loadLastData);
+  if ($('#btn-src-cfgload')) $('#btn-src-cfgload').addEventListener('click', () => loadCfgFromFile('bus'));
+  if ($('#btn-br-cfgload')) $('#btn-br-cfgload').addEventListener('click', () => loadCfgFromFile('branch'));
+  initCfgLoadRows();
 
   $('#btn-br-save').addEventListener('click', saveBranchSource);
   $('#btn-br-savecfg').addEventListener('click', saveBranchSource);

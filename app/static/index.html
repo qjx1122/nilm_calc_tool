@@ -237,7 +237,12 @@
               <button id="btn-load-last2" title="未播放时读回上次播放落盘的数据">加载上次数据</button>
             </div>
             <div id="src-loaded-last" class="notes" style="display:none"></div>
-            <div class="notes muted p">「保存总线侧配置」保存上方数据源 + 量纲口径 + 列映射到 <code>configs/runtime.json</code>（在原文件基础上只更新这些键，其它配置不变）；「启动数据源」只按当前输入播放，<b>不写配置文件</b>。</div>
+            <div class="row" title="v0.81：从指定路径的 JSON 配置文件加载总线侧配置并热更新（数据源 / 量纲口径 / 列映射 / 事件阈值 / 负荷辨识等全部项）；路径留空＝总线侧现有配置文件（configs/runtime.json，不存在时为启动加载的文件）；相对路径相对仓库根。默认只加载到运行配置、不写配置文件，勾选「同时写入」才以现有配置文件为基准只写差异项">
+              <label style="flex:1 1 260px">总线侧配置文件路径 <input id="src-cfgload-path" type="text" placeholder="空＝现有路径（configs/runtime.json）"></label>
+              <button id="btn-src-cfgload" title="从左侧路径加载总线侧配置（空＝现有路径）">从文件加载总线侧配置</button>
+              <label class="chk" title="加载后以总线侧现有配置文件为基准只写入与其不同的项"><input id="src-cfgload-persist" type="checkbox"> 同时写入总线侧配置文件</label>
+            </div>
+            <div class="notes muted p">「保存总线侧配置」保存上方数据源 + 量纲口径 + 列映射到 <code>configs/runtime.json</code>（在原文件基础上只更新这些键，其它配置不变）；「启动数据源」只按当前输入播放，<b>不写配置文件</b>；「从文件加载总线侧配置」把指定 JSON 整份加载为总线侧运行配置（路径空＝现有配置文件），默认不写配置文件。</div>
             <label class="chk"><input id="autoload-last" type="checkbox"> 软件启动时自动加载上次运行的数据</label>
             <div class="notes muted">勾选后（默认开启）：软件重启时自动把上次运行落盘的曲线 / 事件 / 负荷辨识事件（CSV）和最后一次电气量结果（output/last_result.json，两侧共用、按 source_id 分键）读回各子界面；最新电气量卡片、频谱等显示的是上次运行结束时的值。</div>
             <div class="notes muted">启用分路侧后，这里的「启动 / 暂停 / 停止 / 加载上次数据」同时作用于两侧。<br>「加载上次数据」：不播放时，从 output/realtime、output/events、output/nilm 的 CSV 读回最近 history_hours 内本侧（source_id）的曲线点、事件与负荷辨识事件，供各曲线 / 事件页直接查看；重新启动播放后会被新数据覆盖。</div>
@@ -305,7 +310,12 @@
               <button id="btn-br-pause" title="仅离线文件源">暂停播放</button>
               <button id="btn-br-stop" class="danger">停止分路侧</button>
             </div>
-            <div class="notes muted">「保存分路侧配置」同时保存右列的数据源 / 量纲口径 / 列映射与上方联动参数；总线侧「启动数据源」会带起分路侧，这里的「单独启动」只启动分路侧。</div>
+            <div class="row" title="v0.81：从指定路径的 JSON 配置文件加载分路侧配置并热更新；路径留空＝分路侧现有配置文件（configs/branch_runtime.json，不存在时为启动加载的文件）；相对路径相对仓库根。默认只加载到运行配置、不写配置文件，勾选「同时写入」才以现有配置文件为基准只写差异项">
+              <label style="flex:1 1 260px">分路侧配置文件路径 <input id="br-cfgload-path" type="text" placeholder="空＝现有路径（configs/branch_runtime.json）"></label>
+              <button id="btn-br-cfgload" title="从左侧路径加载分路侧配置（空＝现有路径）">从文件加载分路侧配置</button>
+              <label class="chk" title="加载后以分路侧现有配置文件为基准只写入与其不同的项"><input id="br-cfgload-persist" type="checkbox"> 同时写入分路侧配置文件</label>
+            </div>
+            <div class="notes muted">「保存分路侧配置」同时保存右列的数据源 / 量纲口径 / 列映射与上方联动参数；总线侧「启动数据源」会带起分路侧，这里的「单独启动」只启动分路侧；「从文件加载分路侧配置」把指定 JSON 整份加载为分路侧运行配置（路径空＝现有配置文件），默认不写配置文件。</div>
           </div>
         </div>
 

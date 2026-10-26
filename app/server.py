@@ -1364,6 +1364,65 @@ async def put_config(payload: Dict[str, Any]) -> Any:
         return JSONResponse(status_code=400, content={"ok": False, "error": f"{type(exc).__name__}: {exc}"})
 
 
+def _side_default_cfg_file() -> Optional[str]:
+    """本侧「现有路径」的配置文件：持久化文件（runtime.json / branch_runtime.json）存在则取它，否则取启动时加载的文件。"""
+    for pth in (RUNNER.persist_path, RUNNER.cfg_path):
+        if pth and os.path.isfile(pth):
+            return pth
+    return RUNNER.persist_path or RUNNER.cfg_path or None
+
+
+@app.get("/api/config/file")
+async def get_config_file() -> Dict[str, Any]:
+    """v0.81：本侧配置文件路径（界面「从文件加载配置」输入框的默认值）。分路侧经 ``/api/branch/config/file``。"""
+    d = _side_default_cfg_file()
+    return {"ok": True, "side": current_side(), "path": _display_path(d) if d else "", "exists": bool(d and os.path.isfile(d)),
+            "persist_path": _display_path(RUNNER.persist_path) if RUNNER.persist_path else "",
+            "load_path": _display_path(RUNNER.cfg_path) if RUNNER.cfg_path else ""}
+
+
+@app.post("/api/config/load_file")
+async def load_config_file(payload: Optional[Dict[str, Any]] = None) -> Any:
+    """v0.81：从指定路径的 JSON 配置文件加载**本侧**配置并热更新到运行中的引擎（分路侧经 ``/api/branch/config/load_file``）。
+
+    body：``{path?: str, persist?: bool}``。``path`` 空＝本侧现有路径（持久化文件存在则取它，否则取启动时加载的文件）；
+    相对路径相对仓库根解释。文件须是合法的 AppConfig JSON（``AppConfig.from_dict`` 规范化 + ``validate``；
+    侧别强制项 output.source_id 与共享输出目录由 ``set_cfg`` 统一处理）。默认**只加载到运行配置、不写配置文件**；
+    ``persist=true`` 时再以本侧配置文件为基准只写入与其不同的项（同「保存本侧配置」规则）。"""
+    payload = payload or {}
+    raw = str(payload.get("path") or "").strip()
+    path = os.path.abspath(raw if os.path.isabs(raw) else os.path.join(ROOT, raw)) if raw else _side_default_cfg_file()
+    if not path:
+        return JSONResponse(status_code=400, content={"ok": False, "error": "未指定配置文件路径，且本侧没有现有配置文件"})
+    if not os.path.isfile(path):
+        return JSONResponse(status_code=400, content={"ok": False, "error": f"配置文件不存在：{_display_path(path)}"})
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            doc = json.load(fh)
+        if not isinstance(doc, dict):
+            raise ConfigError("配置文件顶层必须是 JSON 对象")
+        cfg = AppConfig.from_dict(doc)
+        RUNNER.set_cfg(cfg)
+    except json.JSONDecodeError as exc:
+        return JSONResponse(status_code=400, content={"ok": False, "error": f"配置文件不是合法 JSON：{exc}"})
+    except ConfigError as exc:
+        return JSONResponse(status_code=400, content={"ok": False, "error": str(exc)})
+    except Exception as exc:
+        return JSONResponse(status_code=400, content={"ok": False, "error": f"{type(exc).__name__}: {exc}"})
+    persisted = False
+    warning = ""
+    _LAST_PERSIST_CHANGES[current_side()] = []
+    if bool(payload.get("persist")) and os.environ.get("ELEC_TOOL_PERSIST_CONFIG", "1") == "1":
+        try:
+            _persist(RUNNER.cfg, RUNNER.cfg.to_dict()); persisted = True
+        except Exception as exc:
+            warning = f"已加载到运行配置，但写入配置文件失败：{exc}"
+    return {"ok": True, "config": RUNNER.cfg.to_dict(), "loaded_from": _display_path(path), "side": current_side(),
+            "same_as_config_file": os.path.abspath(path) == os.path.abspath(RUNNER.persist_path or ""),
+            "config_file_updated": persisted, "config_file": _display_path(RUNNER.persist_path),
+            "config_file_changes": list(_LAST_PERSIST_CHANGES.get(current_side(), [])), "warning": warning}
+
+
 def _persist_base_doc() -> Dict[str, Any]:
     """「保存配置」的落盘基准：本侧持久化文件（runtime.json / branch_runtime.json）的**原始 JSON 文本**；
     文件尚不存在时退回本侧启动时的加载文件（出厂 default.json / 分路模板），再不存在才是空字典（写出完整默认配置）。"""
