@@ -1118,8 +1118,11 @@ def _start_branch_if_enabled(bus_cfg: AppConfig, pace_clock=None, br_cfg: Option
                 cfg.source.path = cand
         both_file = bus_cfg.source.kind == "csv_file" and cfg.source.kind == "csv_file"
         clock = None
-        if both_file:
-            # 播放速率与总线侧保持一致（需求：两侧倍速一致），共用节拍钟
+        follow = bool(both_file and cfg.source.file_speed_follow)
+        own_speed = float(cfg.source.file_speed or 0.0)
+        if follow:
+            # v0.85：默认随总线侧倍速——共用节拍钟（倍速一致、严格同步）；source.file_speed_follow=false 时
+            # 按分路侧自己的 file_speed 独立限速（Runner.start 自建节拍钟，不与总线侧互锁）
             cfg.source.file_speed = float(bus_cfg.source.file_speed or 0.0)
             clock = pace_clock
         cw = COMMON_WINDOW if (both_file and COMMON_WINDOW.get("enabled")) else None
@@ -1131,8 +1134,13 @@ def _start_branch_if_enabled(bus_cfg: AppConfig, pace_clock=None, br_cfg: Option
         else:
             play_user = _apply_play_window(cfg)          # 分路侧自己的指定时间段（未按公共时间段联动时）
         sr = br.start(cfg, pace_clock=clock, play_user=play_user)
+        eff_speed = float(cfg.source.file_speed or 0.0)
+        if follow:
+            # 源对象已按总线侧倍速建好；运行配置里仍保留分路侧自己的 file_speed（随总线侧只是本次生效，不改分路侧配置）
+            cfg.source.file_speed = own_speed
         br.error = None
-        return {"ok": True, "source_kind": cfg.source.kind, "path": cfg.source.path, "synced_pace": both_file, "run_dir": sr.get("run_dir")}
+        return {"ok": True, "source_kind": cfg.source.kind, "path": cfg.source.path, "synced_pace": follow,
+                "file_speed": eff_speed, "run_dir": sr.get("run_dir")}
     except Exception as exc:
         msg = f"{type(exc).__name__}: {exc}"
         br.error = f"分路侧启动失败：{msg}"
@@ -1597,7 +1605,7 @@ def _deep_update(dst: Dict[str, Any], src: Dict[str, Any]) -> None:
 _START_SRC_KEYS = ("kind", "path", "host", "port", "frame", "block_samples",
                    "poll_interval_s", "tail_from_end", "sim_speed", "watch_dir_newest",
                    "struct_fmt", "struct_fields", "custom_time", "custom_time_start",
-                   "file_time_utc", "play_start_mode", "play_start_value", "file_speed",
+                   "file_time_utc", "play_start_mode", "play_start_value", "file_speed", "file_speed_follow",
                    "play_window", "play_window_start", "play_window_end")
 # v0.70：总线侧启动时可随请求覆盖的分路侧联动字段（只影响本次运行，不写配置文件）
 _START_BRANCH_KEYS = ("enabled", "common_window", "common_start", "common_end", "time_offset_s", "align_tol_s")

@@ -259,13 +259,15 @@ def test_r15_common_window(client, tmp_path):
     assert pv["ok"] and abs(pv["duration_s"] - 2.0) < 1e-3 and abs(pv["t_start"] - (T0 + 1.0)) < 1e-6
     r = client.post("/api/engine/start", json={"kind": "csv_file", "path": str(tmp_path / "bus.csv"), "file_speed": 0}).json()
     assert r["ok"] and r["common_window"]["enabled"] and r["branch"]["ok"], r
+    # v0.85：倍速随总线侧只在本次运行生效（synced_pace / 有效倍速 file_speed=0），分路侧配置里的 file_speed=5 不被改写
+    assert r["branch"]["synced_pace"] is True and r["branch"]["file_speed"] == 0
     for _ in range(60):
         time.sleep(0.2)
         a = client.get("/api/state").json(); b = client.get("/api/branch/state").json()
         if not a["running"] and not b["running"]:
             break
     assert abs(a["engine"]["samples_in"] - 2 * fs) <= 640 and abs(b["engine"]["samples_in"] - 2 * fs) <= 640, (a["engine"]["samples_in"], b["engine"]["samples_in"])
-    assert b["config"]["source"]["file_speed"] == 0 and a["common_window"]["duration_s"] > 1.9      # 倍速同步 + state 带公共时间段
+    assert b["config"]["source"]["file_speed"] == 5 and a["common_window"]["duration_s"] > 1.9      # 分路侧配置不被改写 + state 带公共时间段
     # 自定义起始时间：公共起点 + 1 s → 两侧各播 1 s
     client.put("/api/config", json={"branch": {"common_start": repr(T0 + 2.0)}})
     r = client.post("/api/engine/start", json={"kind": "csv_file", "path": str(tmp_path / "bus.csv"), "file_speed": 0}).json()

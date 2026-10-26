@@ -489,6 +489,9 @@ class SourceConfig:
     # 离线文件播放倍速（csv_file 专用，v0.12.2）：1.0＝按数据真实时间速率播放（1 s 数据用 1 s 墙钟），2.0＝两倍速，
     # 0＝不限速（能算多快播多快，CLI/批处理/测试默认）。按「相邻两块的间隔」限速：暂停后恢复不会突发追赶。
     file_speed: float = 0.0
+    # v0.85：分路侧专用——两侧都是离线文件联动启动时，分路侧倍速是否随总线侧（共用节拍钟、严格同步）。
+    # True（默认）＝随总线侧，本侧 file_speed 忽略；False＝按本侧 file_speed 独立限速（各自节拍钟，不再互锁）。总线侧忽略此项。
+    file_speed_follow: bool = True
     play_start_value: str = ""
     # 离线文件播放终点（csv_file，v0.15 公共时间段用）：epoch 秒文本；块起点 ≥ 该时刻即停止（空＝播到文件尾）
     play_end_time: str = ""
@@ -518,6 +521,7 @@ class SourceConfig:
                 raise ValueError
         except (TypeError, ValueError):
             raise ConfigError(f"source.file_speed 必须 ≥ 0（0＝不限速；当前 {self.file_speed!r}）")
+        self.file_speed_follow = bool(self.file_speed_follow)
         if self.play_start_mode not in PLAY_START_MODES:
             raise ConfigError(f"source.play_start_mode 必须是 {PLAY_START_MODES}（当前 {self.play_start_mode}）")
         if self.play_start_mode != "begin":

@@ -1980,6 +1980,7 @@ function fillSourceFields(pre, src) {
   const chosen = pre === 'src-' ? S.fileSpeedChosen : BR.fileSpeedChosen;
   set('file-speed', String(src.file_speed !== undefined && src.file_speed > 0 ? src.file_speed : (chosen === 0 ? 0 : 1)));
   chk('tailend', src.tail_from_end);
+  chk('file-speed-follow', src.file_speed_follow !== false);
   chk('newest', src.watch_dir_newest);
   chk('customtime', src.custom_time);
   chk('utc', src.file_time_utc);
@@ -2030,6 +2031,7 @@ function syncSourceFields(pre) {
   const bin = kind === 'tcp' && frame === 'binary';
   const ct = !!(srcEl(pre, 'customtime') || {}).checked;
   const bothFile = pre === 'br-' && kind === 'csv_file' && ($('#src-kind') || {}).value === 'csv_file';
+  const followBus = bothFile && !!($('#br-file-speed-follow') || {}).checked;   // v0.85：默认随总线侧，可取消单独设置
   const on = {
     'path': kind === 'csv_file' || kind === 'csv_tail',
     'host': kind === 'tcp',
@@ -2048,7 +2050,8 @@ function syncSourceFields(pre) {
     'window': kind === 'csv_file',
     'winstart': kind === 'csv_file' && !!(srcEl(pre, 'window') || {}).checked,
     'winend': kind === 'csv_file' && !!(srcEl(pre, 'window') || {}).checked,
-    'file-speed': kind === 'csv_file' && !bothFile,
+    'file-speed': kind === 'csv_file' && !followBus,
+    'file-speed-follow': bothFile,
     'block': true,
   };
   Object.keys(on).forEach((n) => {
@@ -2062,7 +2065,7 @@ function syncSourceFields(pre) {
   if (hint) hint.textContent = SRC_HINT[kind] || '';
   const pv = srcEl(pre, 'playvalue');
   if (pv) pv.placeholder = PLAY_PLACEHOLDER[(srcEl(pre, 'playmode') || {}).value] || '';
-  if (pre === 'br-') { const n = $('#br-file-speed-note'); if (n) n.style.display = bothFile ? '' : 'none'; }
+  if (pre === 'br-') { const n = $('#br-file-speed-note'); if (n) n.style.display = followBus ? '' : 'none'; }
 }
 
 function syncSourceForm() {
@@ -2593,6 +2596,7 @@ function collectSourceFields(pre) {
     p.play_start_mode = (srcEl(pre, 'playmode') || {}).value || 'begin';
     if (p.play_start_mode !== 'begin') p.play_start_value = txt('playvalue');
     p.file_speed = parseFloat((srcEl(pre, 'file-speed') || {}).value) || 0;
+    if (pre === 'br-') p.file_speed_follow = chk('file-speed-follow');   // v0.85：分路侧倍速是否随总线侧
     // 指定时间段播放（v0.17）：布尔必送；起止文本空串也送（空＝数据起点/终点是有效语义）
     p.play_window = chk('window');
     p.play_window_start = txt('winstart');
@@ -2849,7 +2853,7 @@ async function startEngine(payloadExtra = {}) {
     });
     S.formDirty = false; S.srcDirty = false;
     let brMsg = '';
-    if (r.branch && !r.branch.skipped) brMsg = r.branch.ok ? `；分路侧已同时启动（${r.branch.source_kind}${r.branch.synced_pace ? '，倍速随总线侧' : ''}）` : `；⚠ 分路侧启动失败：${r.branch.error}`;
+    if (r.branch && !r.branch.skipped) brMsg = r.branch.ok ? `；分路侧已同时启动（${r.branch.source_kind}${r.branch.synced_pace ? '，倍速随总线侧' : (r.branch.file_speed !== undefined ? `，分路侧倍速 ${r.branch.file_speed > 0 ? r.branch.file_speed + '×' : '不限速'}` : '')}）` : `；⚠ 分路侧启动失败：${r.branch.error}`;
     if (r.common_window && r.common_window.enabled === false && r.common_window.reason) brMsg += `；ℹ ${r.common_window.reason}`;
     toast(`已启动${sideLabel()}数据源：${r.config.source.kind}` + brMsg + (r.run_dir ? `；本次输出目录 ${r.run_dir}（实时数据 / 事件 / 两侧配置）` : '') +
       (S.cfgDirty ? '（提示：口径/变比的修改请点「保存总线侧配置」）' : '') + '（启动不写配置文件；要保留数据源设置请点「保存总线侧配置」）', r.branch && r.branch.error ? 'err' : 'ok');
@@ -3113,6 +3117,7 @@ function bind() {
   $('#src-window').addEventListener('change', () => { S.srcDirty = true; S.formDirty = true; syncSourceForm(); });
   $('#br-kind').addEventListener('change', syncBranchColumns);
   $('#br-file-speed').addEventListener('change', () => { BR.fileSpeedChosen = parseFloat($('#br-file-speed').value) || 0; });
+  $('#br-file-speed-follow').addEventListener('change', () => { BR.dirty = true; syncSourceForm(); });
   $('#br-enabled').addEventListener('change', () => { syncBranchColumns(); if ($('#br-enabled').checked) { loadBranchForm(false); refreshBranchState(true); } });
   // v0.33：「隐藏分路侧数据」即时生效并持久化（只存总线侧 config.branch.hide_ui）
   const hu = $('#br-hide-ui'); if (hu) hu.addEventListener('change', async () => {

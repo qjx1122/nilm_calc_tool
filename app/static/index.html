@@ -298,12 +298,14 @@
               csv_tail：路径给目录时自动跟最新 CSV</label>
             <label>每块样本数 <input id="br-block" type="number" value="640"></label>
             <label>模拟器速率倍数 <input id="br-speed" type="number" step="0.1" value="1"></label>
-            <label title="两侧都是离线文件时，分路侧倍速随总线侧（共用节拍钟）；分路侧单独启动或总线侧不是离线文件时按此处设置">
+            <label class="chk" title="两侧都是离线文件联动启动时：勾选＝分路侧倍速随总线侧（共用节拍钟、严格同步）；取消＝按下方分路侧自己的倍速独立播放"><input id="br-file-speed-follow" type="checkbox" checked>
+              离线文件播放倍速随总线侧（默认）</label>
+            <label title="分路侧自己的离线文件播放倍速：取消「随总线侧」、分路侧单独启动、或总线侧不是离线文件时生效">
               离线文件播放倍速 <select id="br-file-speed">
                 <option value="1">1×（真实速率）</option><option value="2">2×</option><option value="5">5×</option>
                 <option value="10">10×</option><option value="0.5">0.5×</option><option value="0">不限速（最快）</option>
               </select></label>
-            <div class="notes muted" id="br-file-speed-note" style="display:none">ℹ 两侧都是离线文件：联动启动时分路侧倍速随总线侧。</div>
+            <div class="notes muted" id="br-file-speed-note" style="display:none">ℹ 两侧都是离线文件：联动启动时分路侧倍速随总线侧（取消上方勾选可单独设置）。</div>
             <div class="row">
               <button id="btn-br-save" class="primary">保存分路侧配置</button>
               <button id="btn-br-start">单独启动分路侧</button>

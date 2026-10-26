@@ -91,6 +91,7 @@
 - **v0.79**：功率页卡片 + A/B/C 相 P/Q/S；瞬时波形图例名 / 色与趋势图一致（P Q S / Pa…Sc）。`ui_r76` ALL PASS。
 - **v0.80**：调参估计器投切幅值分簇（主负荷 / 二级波动，分簇即不可靠、不自动采用）；界面「取值方式」按最大台阶 / 最小台阶 / 手填；`detect_repetition` 模板拼接文件告警。`ui_r80` ALL PASS，383 passed。
 - **v0.81**：数据源页两侧各加「从文件加载本侧配置」（路径空＝现有配置文件；默认不写文件，可勾选只写差异）。`POST /api(/branch)/config/load_file`、`GET /api(/branch)/config/file`。`ui_r81` ALL PASS，389 passed。
+- **v0.85**：分路侧离线倍速可单独设置（`source.file_speed_follow`，默认随总线侧；界面勾选、启动按界面值、随总线侧不改写分路侧配置）。401 passed；ui_r85 ALL PASS。
 - **v0.84**：总线侧「列出 data 目录」改为与分路侧同构（只列 CSV、可点击填入路径、dirty 标记）。ui_r84 ALL PASS。
 - **v0.83.2**：暂态锚点须含 ≥min_steady 的 tol 内子段（与 Hart 分段一致），斜坡中途平台不再切断暂态；用户文件建议 max_transient 2000→4200、window 2500→4700，可检出起停。399 passed。
 - **v0.83.1**：量噪声改多滞后 σ（σ_1…σ_100，σ_max/σ_1≥4 判分段恒定、段长取饱和滞后），覆盖秒内带微小舍入抖动的模板文件；398 passed。
