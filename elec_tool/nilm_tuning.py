@@ -54,40 +54,62 @@ def _collapse_runs(p: np.ndarray, level: float, *, rtol: float = 1e-7) -> Tuple[
     return p[starts], runs, float(np.mean(same))
 
 
-def measure(p: np.ndarray, unit: str = "W", *, repeat_frac_limit: float = 0.2) -> dict:
+_SIGMA_LAGS = (1, 2, 3, 5, 10, 20, 25, 50, 100)
+
+
+def _robust_sigma_lag(p: np.ndarray, k: int) -> float:
+    """滞后 k 周波差分的稳健 σ（MAD×1.4826/√2）。白噪声下与 k 无关；分段恒定（每段 N 周波同一模板 + 微小舍入）
+    的序列 k<N 时趋近 0、k≥N 时等于段间跳变 σ。"""
+    if p.size <= k:
+        return float("nan")
+    dd = p[k:] - p[:-k]
+    return float(np.median(np.abs(dd - np.median(dd)))) * 1.4826 / math.sqrt(2.0)
+
+
+def measure(p: np.ndarray, unit: str = "W", *, repeat_frac_limit: float = 0.2, block_ratio: float = 4.0) -> dict:
     """逐周波序列（有功 W 或电流有效值 A）的噪声统计。键名不带单位，``unit`` 字段标明。
 
-    v0.83：**周波复制保护**。差分 MAD 以「相邻周波之差」为样本；若文件是每秒一个模板复制 N 个周波（相邻 49/50 对完全相等），
-    中位数落在 0 上，σ 会被量成 1e-7 量级，由它推出的 settle_tol / tol / noise 在真实秒间抖动（1e-2 量级）面前永远满足不了，
-    负荷辨识配不出任何事件。处理：相邻相等比例 ``repeat_frac`` ≥ ``repeat_frac_limit``（默认 20%）时，先把相同周波段压成
-    一个值（``_collapse_runs``），所有统计（σ / 极差 / 均值差）改在压缩序列上做，极差窗长按复制倍数折算；结果附
-    ``repeat_frac / repeat_run_cycles / repeated_cycles / sigma_method (diff_mad | run_collapsed) / sigma_raw``，供界面与 CLI 告警。
+    v0.83：**分段恒定 / 周波复制保护**。差分 MAD 以「相邻周波之差」为样本；若文件每秒由同一模板生成 N 个周波
+    （相邻周波逐位相等，或只差 1e-6 量级的舍入），中位数落在 ~0 上，σ 会被量成 1e-7 量级，由它推出的 settle_tol / tol / noise
+    在真实秒间抖动（1e-2 量级）面前永远满足不了，负荷辨识配不出任何事件。处理：
+    * 在多个滞后 ``_SIGMA_LAGS`` 上量 σ_k（``sigma_lags``）；σ_max/σ_1 ≥ ``block_ratio`` 判为分段恒定（``repeated_cycles``），
+      段长 ``repeat_run_cycles`` = σ_k 首次达到 0.9·σ_max 的滞后（相邻周波逐位相等比例 ``repeat_frac`` ≥ ``repeat_frac_limit``
+      且同值段中位长 > 1 时直接用同值段长）；σ 取 σ_max（= 段间跳变尺度，``sigma_method = block``）；
+    * 极差 / 均值差统计改在**段中位数序列**上做（``run`` 周波一段），极差窗长按段长折算；
+    * 结果附 ``sigma_raw``（相邻差分口径）、``sigma_lags``、``repeat_frac / repeat_run_cycles / repeated_cycles / sigma_method``，
+      供界面与 CLI 告警。真实录波（各滞后 σ 一致）结果与旧口径完全相同（``sigma_method = diff_mad``）。
     """
     p = np.asarray(p, dtype=np.float64)
     level = float(np.median(np.abs(p))) if p.size else 0.0
     d = np.diff(p)
-
-    def robust_sigma(x: np.ndarray) -> float:
-        dd = np.diff(x)
-        if dd.size == 0:
-            return 0.0
-        return float(np.median(np.abs(dd - np.median(dd)))) * 1.4826 / math.sqrt(2.0)   # 差分方差 = 2σ²
-
-    sigma_raw = robust_sigma(p)
-    coll, runs, repeat_frac = _collapse_runs(p, level)
-    run_med = float(np.median(runs)) if runs.size else 1.0
-    repeated = bool(repeat_frac >= repeat_frac_limit and coll.size >= 3)
-    if repeated:
-        x = coll                              # 统计序列：压缩后的「真实变化」序列
-        scale = max(1.0, run_med)             # 1 个压缩样本 ≈ scale 个原周波
-        sigma = robust_sigma(coll)
-        method = "run_collapsed"
+    sigma_raw = _robust_sigma_lag(p, 1) if p.size > 1 else 0.0
+    lags = [k for k in _SIGMA_LAGS if p.size >= 4 * k]
+    sig_lags = {int(k): _robust_sigma_lag(p, k) for k in lags}
+    finite = [(k, v) for k, v in sig_lags.items() if math.isfinite(v)]
+    s_max = max((v for _, v in finite), default=sigma_raw)
+    # 逐位相等的同值段（纯复制文件）：作为段长的直接证据
+    _, runs, repeat_frac = _collapse_runs(p, level)
+    run_eq = float(np.median(runs)) if runs.size else 1.0
+    blocky = bool(finite and s_max > 0 and (sigma_raw <= 0 or s_max / sigma_raw >= block_ratio))
+    run = 1.0
+    if blocky:
+        if repeat_frac >= repeat_frac_limit and run_eq > 1:
+            run = run_eq
+        else:
+            run = float(next((k for k, v in finite if v >= 0.9 * s_max), finite[-1][0]))
+        if run <= 1.0:                      # σ 在 lag=1 就饱和：不是分段恒定，只是普通噪声
+            blocky = False
+    if blocky:
+        sigma, method = s_max, "block"
+        nb = int(p.size // int(run))
+        x = np.median(p[: nb * int(run)].reshape(nb, int(run)), axis=1) if nb >= 3 else p
+        scale = run if nb >= 3 else 1.0
     else:
-        x, scale, sigma, method = p, 1.0, sigma_raw, "diff_mad"
+        sigma, method, x, scale = sigma_raw, "diff_mad", p, 1.0
 
     # 5 周波 / 10 周波滚动极差的 95 分位（稳态容差直接看这个）
     # 稳健口径：取 min(95 分位, 2×中位数)，段内偶有事件时不被少数含事件的窗拉高
-    # 周波复制时：原 n 周波窗最多跨 ceil(n/scale)+1 个压缩样本，极差按该窗长在压缩序列上算
+    # 分段恒定时：原 n 周波窗最多跨 ceil(n/scale)+1 个段，极差按该窗长在段中位数序列上算
     def rng(n: int) -> float:
         if len(p) < n:
             return float("nan")
@@ -98,9 +120,9 @@ def measure(p: np.ndarray, unit: str = "W", *, repeat_frac_limit: float = 0.2) -
         r = w.max(axis=1) - w.min(axis=1)
         return float(min(np.percentile(r, 95), 2.0 * np.median(r)))
     # 相邻两个 10 周波均值之差的稳健 σ（双滑窗 / GLR 的噪声尺度；高斯噪声下 ≈ σ×sqrt(2/10)）
-    # 周波复制时两个 10 周波均值窗最多隔一个模板边界，均值差 = 一次模板跳变（保守取压缩序列差分 σ）
-    if repeated:
-        dm = np.diff(coll)
+    # 分段恒定时两个 10 周波均值窗最多隔一个段边界，均值差 = 一次段间跳变（保守取段序列差分 σ）
+    if blocky:
+        dm = np.diff(x)
         sig_m10 = float(np.median(np.abs(dm - np.median(dm)))) * 1.4826 if dm.size else float("nan")
     elif len(p) >= 30:
         m10 = np.convolve(p, np.ones(10) / 10, mode="valid")
@@ -111,8 +133,8 @@ def measure(p: np.ndarray, unit: str = "W", *, repeat_frac_limit: float = 0.2) -
     return {
         "cycles": int(len(p)), "unit": unit, "level": level,
         "sigma_cycle": sigma, "sigma_cycle_pct": (100.0 * sigma / level if level else float("nan")),
-        "sigma_raw": sigma_raw, "sigma_method": method,
-        "repeat_frac": repeat_frac, "repeat_run_cycles": run_med, "repeated_cycles": repeated,
+        "sigma_raw": sigma_raw, "sigma_method": method, "sigma_lags": sig_lags,
+        "repeat_frac": repeat_frac, "repeat_run_cycles": run, "repeated_cycles": blocky,
         "max_abs_diff": float(np.max(np.abs(d))) if d.size else 0.0,
         "has_events_hint": bool(d.size and sigma > 0 and np.max(np.abs(d)) > 10 * sigma),
         "range5_p95": rng(5), "range10_p95": rng(10),
@@ -536,9 +558,11 @@ def run_tune(base: AppConfig, file: str, *, channel: Optional[str] = None, quant
         notes.append(f"已手填最小关心负荷 {min_load:g} {unit}，文件估计（{est['candidate']}）仅供参考")
     sg = suggest(m, min_load, p)
     if m.get("repeated_cycles"):
-        notes.append(f"⚠ 文件疑似周波复制：{100.0 * m['repeat_frac']:.1f}% 相邻周波逐位相等（每段约 {m['repeat_run_cycles']:.0f} 周波同值），"
-                     f"相邻差分 MAD 会把 σ 量成 {m['sigma_raw']:.3g} {unit}（失真）；本次已把同值周波段压缩后重量：σ = {m['sigma_cycle']:.3g} {unit}，"
-                     "极差 / 均值差统计同样按压缩序列折算。该文件的「噪声」实为段间跳变，建议用连续真实录波复核")
+        notes.append(f"⚠ 文件疑似分段恒定 / 周波复制：约每 {m['repeat_run_cycles']:.0f} 周波一段，段内周波几乎相同（相邻周波逐位相等 {100.0 * m['repeat_frac']:.1f}%，"
+                     f"相邻差分 σ={m['sigma_raw']:.3g} {unit}），段间跳变 σ={m['sigma_cycle']:.3g} {unit}（滞后 {m['repeat_run_cycles']:.0f} 周波差分）。"
+                     f"相邻差分口径的 σ 失真 {m['sigma_cycle'] / m['sigma_raw']:.0f} 倍" if m['sigma_raw'] > 0 else
+                     f"⚠ 文件疑似分段恒定 / 周波复制：约每 {m['repeat_run_cycles']:.0f} 周波一段，段内周波逐位相同，段间跳变 σ={m['sigma_cycle']:.3g} {unit}")
+        notes[-1] += "；本次 σ / 极差 / 均值差 / 暂态 / 最小负荷估计均按段间跳变尺度重量。该文件的「噪声」实为段间跳变，建议用连续真实录波复核"
     rep = detect_repetition(p, float(cfg.sampling.f_nom))
     if rep["suspected"]:
         notes.append(f"⚠ 文件疑似模板拼接：逐周波 {unit} 序列每 {rep['period_s']:g} s 逐位重复（{rep['match_pct']:.1f}% 周波与前一周期完全相等）；"

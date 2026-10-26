@@ -110,10 +110,11 @@ def main() -> int:
     print(f"—— 噪声统计（{unit}）——")
     print(f"  基荷 |{'P' if qty == 'p' else 'I'}| 中位数        level      = {m['level']:.4g}")
     print(f"  单周波噪声 σ(稳健)     sigma      = {m['sigma_cycle']:.4g}  ({m['sigma_cycle_pct']:.3f} % 基荷)"
-          + ("   （同值周波段压缩后重量）" if m.get("sigma_method") == "run_collapsed" else ""))
+          + ("   （段间跳变尺度）" if m.get("sigma_method") == "block" else ""))
     if m.get("repeated_cycles"):
-        print(f"  ⚠ 周波复制：{100 * m['repeat_frac']:.1f}% 相邻周波逐位相等（每段约 {m['repeat_run_cycles']:.0f} 周波同值）；"
-              f"相邻差分 MAD 会把 σ 量成 {m['sigma_raw']:.3g}（失真，不可用），统计已按压缩序列重量")
+        print(f"  ⚠ 分段恒定 / 周波复制：每段 ≈{m['repeat_run_cycles']:.0f} 周波，段内周波几乎相同（相邻逐位相等 {100 * m['repeat_frac']:.1f}%，"
+              f"相邻差分 σ={m['sigma_raw']:.3g} 失真）；统计已按段间跳变尺度重量；各滞后 σ："
+              + " ".join(f"{k}→{v:.3g}" for k, v in m.get("sigma_lags", {}).items()))
     print(f"  相邻周波最大 |Δ|       max|diff|  = {m['max_abs_diff']:.4g}" + ("   ⚠ >10σ：段内含事件/尖峰，统计已用稳健口径" if m["has_events_hint"] else ""))
     print(f"  5 周波极差 95 分位     range5     = {m['range5_p95']:.4g}   → settle_tol{sx} 的依据")
     print(f"  10 周波极差 95 分位    range10    = {m['range10_p95']:.4g}   → steady_state.tol{sx} 的依据")

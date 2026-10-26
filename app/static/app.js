@@ -3939,8 +3939,8 @@ function ntRender(d) {
   if (cr) { cr.style.display = d.command ? '' : 'none'; $('#nt-cmd').textContent = d.command || ''; NT.command = d.command || ''; }
   let h = `<table><thead><tr><th colspan="3">噪声统计（${u}）</th></tr></thead><tbody>`
     + `<tr><td>基荷 |${d.quantity === 'p' ? 'P' : 'I'}| 中位数 level</td><td>${ntFmt(m.level)}</td><td></td></tr>`
-    + `<tr><td>单周波噪声 σ sigma</td><td>${ntFmt(m.sigma_cycle)}</td><td>${(+m.sigma_cycle_pct).toFixed(3)} % 基荷${m.sigma_method === 'run_collapsed' ? '（同值周波段压缩后重量）' : ''}</td></tr>`
-    + (m.repeated_cycles ? `<tr><td>⚠ 周波复制</td><td>${(100 * +m.repeat_frac).toFixed(1)} %</td><td>相邻周波逐位相等（每段约 ${Math.round(+m.repeat_run_cycles)} 周波同值）：相邻差分 MAD 会把 σ 量成 ${ntFmt(m.sigma_raw)}（失真，不可用）；σ / 极差 / 均值差已按压缩序列重量，暂态与最小负荷估计按 ${Math.round(+m.repeat_run_cycles)} 周波同值折算</td></tr>` : '')
+    + `<tr><td>单周波噪声 σ sigma</td><td>${ntFmt(m.sigma_cycle)}</td><td>${(+m.sigma_cycle_pct).toFixed(3)} % 基荷${m.sigma_method === 'block' ? '（段间跳变尺度）' : ''}</td></tr>`
+    + (m.repeated_cycles ? `<tr><td>⚠ 分段恒定 / 周波复制</td><td>每段 ≈${Math.round(+m.repeat_run_cycles)} 周波</td><td>段内周波几乎相同（相邻逐位相等 ${(100 * +m.repeat_frac).toFixed(1)} %，相邻差分 σ=${ntFmt(m.sigma_raw)}），段间跳变 σ=${ntFmt(m.sigma_cycle)}：相邻差分口径失真，σ / 极差 / 均值差 / 暂态 / 最小负荷估计已按段间跳变尺度重量${m.sigma_lags ? '；各滞后 σ：' + Object.entries(m.sigma_lags).map(([k, v]) => k + '→' + ntFmt(v)).join(' ') : ''}</td></tr>` : '')
     + `<tr><td>相邻周波最大 |Δ|</td><td>${ntFmt(m.max_abs_diff)}</td><td>${m.has_events_hint ? '⚠ >10σ：段内含事件/尖峰，统计已用稳健口径' : ''}</td></tr>`
     + `<tr><td>5 周波极差 95 分位 range5</td><td>${ntFmt(m.range5_p95)}</td><td>→ settle_tol 的依据</td></tr>`
     + `<tr><td>10 周波极差 95 分位 range10</td><td>${ntFmt(m.range10_p95)}</td><td>→ steady_state.tol 的依据</td></tr>`

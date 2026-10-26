@@ -30,7 +30,7 @@ def x_rep() -> np.ndarray:
 def test_measure_detects_repeated_cycles_and_rescales_sigma(x_rep):
     m = measure(x_rep, "A")
     assert m["repeated_cycles"] is True
-    assert m["sigma_method"] == "run_collapsed"
+    assert m["sigma_method"] == "block"
     assert m["repeat_frac"] > 0.95
     assert m["repeat_run_cycles"] == 50
     assert m["sigma_raw"] < 1e-6                       # 老口径：差分 MAD 落在 0
@@ -76,3 +76,28 @@ def test_estimate_min_load_uses_run_cycles(x_rep):
     est = estimate_min_load(x_rep, m["sigma_cycle"], "A", run_cycles=m["repeat_run_cycles"])
     assert est["n_steady"] <= 12                          # 不是每秒一个"台阶"
     assert est["max_step"] == pytest.approx(1.4, abs=0.15)
+
+
+def test_measure_blocky_with_in_second_jitter(x_rep):
+    """v0.83.1：用户实测形态——秒内周波不是逐位相同，而是带 1e-6 量级舍入抖动（只有 35% 逐位相等）。
+    同值段压缩法失效（run=1），改用多滞后 σ：σ_1≈4e-7 而 σ_50≈7e-3 ⇒ 判分段恒定、段长 50、σ 取段间跳变尺度。"""
+    rng = np.random.default_rng(11)
+    j = rng.normal(0, 6e-7, x_rep.size)
+    j[rng.random(x_rep.size) < 0.35] = 0.0
+    xb = x_rep + j
+    m = measure(xb, "A")
+    assert m["repeat_frac"] < 0.5                       # 逐位相等比例不足以触发压缩法
+    assert m["repeated_cycles"] is True and m["sigma_method"] == "block"
+    assert m["repeat_run_cycles"] == 50
+    assert m["sigma_raw"] < 2e-6 and 0.003 < m["sigma_cycle"] < 0.02
+    assert m["sigma_lags"][1] < 2e-6 and m["sigma_lags"][50] > 0.003
+    sg = suggest(m, 1.4, xb)
+    ss = sg["algorithms"]["steady_state"]
+    assert ss["max_transient_cycles"] >= 2500 and ss["tol_a"] >= 0.02
+    lvl = float(np.median(np.abs(xb)))
+    full = dict(NILM_ALGO_DEFAULTS["steady_state"]); full.update(ss)
+    prm = effective_params(params_for_current(full), lvl, sg["rel_tol_pct"], sg["min_delta_pct"])
+    deltas = [round(s[3] - s[2], 1) for s in detect_steps("steady_state", xb, prm)]
+    assert any(d >= 1.2 for d in deltas) and any(d <= -1.2 for d in deltas)
+    est = estimate_min_load(xb, m["sigma_cycle"], "A", run_cycles=m["repeat_run_cycles"])
+    assert est["n_steady"] <= 12
