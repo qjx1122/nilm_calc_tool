@@ -2965,13 +2965,21 @@ async function probe() {
 }
 
 async function listFiles() {
+  // v0.84：与分路侧「列出 data 目录」（pickBranchFile）一致：只列 CSV，每项可点击填入本侧「CSV 路径 / 目录」
+  const out = $('#files-out');
   try {
-    const r = await api('/api/files?sub=data');
-    if (!r.ok) { $('#files-out').innerHTML = notes(['✗ ' + r.error]); return; }
-    $('#files-out').innerHTML = r.files.length
-      ? notes([`data 目录文件：`, ...r.files.map(f => `· ${f.name}${f.dir ? '' : ` (${f.size_mb} MB)`}`)])
-      : notes(['data 目录暂无 CSV（可用 cli.py gen-sample 生成样例，或把真实数据放入 data/）']);
-  } catch (e) { $('#files-out').innerHTML = notes(['✗ ' + e.message]); }
+    const r = await (await fetch('/api/files?sub=data')).json();
+    if (r.ok === false) { out.innerHTML = notes(['✗ ' + r.error]); return; }
+    const files = (r.files || []).filter(f => /\.csv$/i.test(f.name || f));
+    if (!files.length) { out.innerHTML = notes(['data/ 下没有 CSV 文件']); return; }
+    out.innerHTML = '<div class="notes">' + files.map(f => {
+      const pth = f.path || f.name || f;
+      return `<div><a href="#" data-srcfile="${esc(pth)}">${esc(pth)}</a>${isNum(f.size_mb) ? `　${f.size_mb} MB` : ''}</div>`;
+    }).join('') + '</div>';
+    out.querySelectorAll('a[data-srcfile]').forEach(a => a.addEventListener('click', (ev) => {
+      ev.preventDefault(); $('#src-path').value = a.dataset.srcfile; S.srcDirty = true; S.formDirty = true;
+    }));
+  } catch (e) { out.innerHTML = notes(['✗ 读取 data/ 失败：' + e.message]); }
 }
 
 async function runSelftest() {
