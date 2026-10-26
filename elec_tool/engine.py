@@ -214,6 +214,7 @@ class LiveEngine:
                 break
             if max_ticks is not None and ticks >= max_ticks:
                 break
+            n_before = self.state.samples_in
             res = self.poll_once()
             ticks += 1
             if res is not None:
@@ -227,7 +228,9 @@ class LiveEngine:
                     if final is not None:
                         yield final
                     break
-                if idle > 0 and interval > 0 and not self.source.exhausted:
+                # v0.82：只有「本轮没读到数据」（实时源空转）才睡 poll_interval；离线文件读到块但没有量到期时立即继续——
+                # 否则每块都睡 0.05 s，CLI / 库回放的吞吐被压到约 2 倍实时（服务端 Runner 早已这样处理，这里补齐）
+                if idle > 0 and interval > 0 and not self.source.exhausted and self.state.samples_in == n_before:
                     time.sleep(min(interval, 0.5))
         self.stop()
 

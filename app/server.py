@@ -302,8 +302,9 @@ class EngineRunner:
                 data["_note"] = "两侧共用：键 0＝总线侧、1＝分路侧（source_id）；由软件自动维护，重启时读回各子界面的最新电气量"
                 os.makedirs(os.path.dirname(path), exist_ok=True)
                 tmp = path + ".tmp"
+                text = json.dumps(data, ensure_ascii=False)       # v0.82：dumps 走 C 编码器；json.dump 逐块 iterencode 慢约 5 倍
                 with open(tmp, "w", encoding="utf-8") as fh:
-                    json.dump(data, fh, ensure_ascii=False)
+                    fh.write(text)
                 os.replace(tmp, path)
             self._last_persist_at = time.time()
             return True
@@ -624,6 +625,8 @@ class EngineRunner:
     def broadcast(self, payload: Dict[str, Any]) -> None:
         loop = self.loop
         if loop is None or loop.is_closed():
+            return
+        if not self.clients:                      # v0.82：没有 WebSocket 客户端时不做 json.dumps（省事件循环线程 CPU / GIL）
             return
         try:
             asyncio.run_coroutine_threadsafe(self._broadcast_async(payload), loop)

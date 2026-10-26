@@ -193,15 +193,13 @@ def spectrum_analysis(x: np.ndarray, fs: float, f_used: float, window_fn: str = 
         nb = int(max_points)
         n_in = int(a_k.size)
         edges = np.linspace(0, n_in, nb + 1).astype(np.int64)
-        f_out, a_out = [], []
-        for s, e in zip(edges[:-1], edges[1:]):
-            if e <= s:
-                continue
-            seg = a_k[s:e]
-            j = int(np.argmax(seg))
-            f_out.append(float(f_k[s + j]))
-            a_out.append(float(seg[j]))
-        f_k, a_k = np.asarray(f_out), np.asarray(a_out)
+        # v0.82 向量化：桶号 = 每个 bin 所属的桶；按 (桶号, -幅值) 稳定排序后每桶第一个即桶内首个最大值
+        # （与逐桶 np.argmax 取首个最大值的结果完全一致，空桶自然跳过），省掉 1600 次 Python 级 argmax
+        bucket = np.searchsorted(edges, np.arange(n_in), side="right") - 1
+        order = np.lexsort((-a_k, bucket))
+        _, first = np.unique(bucket[order], return_index=True)
+        pick = order[first]
+        f_k, a_k = f_k[pick], a_k[pick]
         notes.append(f"频谱点数 {n_in} > {max_points}，已按桶内取最大抽稀"
                      "（幅值保峰、频率取峰所在 bin；抽稀后频率轴非严格等间隔，能量不守恒，仅供显示）")
     ref = max(float(np.nanmax(a_k)), 1e-12) if a_k.size else 1e-12
@@ -212,9 +210,9 @@ def spectrum_analysis(x: np.ndarray, fs: float, f_used: float, window_fn: str = 
         peak = {"freq_hz": float(f_k[k_peak]), "amp_rms": float(a_k[k_peak]),
                 "order_approx": float(f_k[k_peak] / f_used) if f_used else None}
     return {
-        "freqs": [float(v) for v in f_k],
-        "amp_rms": [float(v) for v in a_k],
-        "amp_db": [float(v) for v in a_db],
+        "freqs": np.asarray(f_k, dtype=np.float64).tolist(),
+        "amp_rms": np.asarray(a_k, dtype=np.float64).tolist(),
+        "amp_db": np.asarray(a_db, dtype=np.float64).tolist(),
         "n_bins": int(freqs.size),
         "n_points_out": int(a_k.size),
         "decimated": bool(a_k.size < int(keep.sum())),
@@ -262,29 +260,35 @@ def interharmonic_analysis(x: np.ndarray, fs: float, f_used: float, order_max: i
     nyq_bin = amp.size - 1
     groups: List[Dict[str, object]] = []
     sq_sum = 0.0
-    for h in range(0, int(order_max)):
-        ka, kb = h * nc, (h + 1) * nc
-        if kb > nyq_bin:
-            break
-        lo, hi = ka + 1, kb                       # [lo, hi) 不含两端谐波 bin
-        if hi <= lo:
+    n_groups = min(int(order_max), nyq_bin // nc) if nc > 0 else 0       # kb = (h+1)·nc ≤ nyq_bin
+    u1_ok = bool(np.isfinite(u1) and u1 > 0)
+    if n_groups > 0 and nc >= 2:
+        # v0.82 向量化：各组 bin 等长（nc−1 个），整块 reshape 一次算完组有效值 / 子组有效值 / 主导 bin，
+        # 省掉 order_max×通道数 次 Python 级 np.sum / np.argmax（原来占 compute 近 1/3 时间）；数值与逐组计算一致
+        M = amp[1:n_groups * nc + 1].reshape(n_groups, nc)[:, :nc - 1]
+        g_all = np.sqrt(np.sum(M * M, axis=1))
+        sg_all = np.sqrt(np.sum(M[:, 1:-1] * M[:, 1:-1], axis=1)) if nc - 1 > 2 else np.zeros(n_groups)
+        j_all = np.argmax(M, axis=1)
+        kd_all = np.arange(n_groups) * nc + 1 + j_all
+        ang_all = np.degrees(np.angle(phasor[kd_all]))
+        pct_all = (100.0 * g_all / u1) if u1_ok else np.full(n_groups, np.nan)
+        gl, sgl, kdl = g_all.tolist(), sg_all.tolist(), kd_all.tolist()
+        angl, pctl = ang_all.tolist(), pct_all.tolist()
+        fl, al = freqs.tolist(), amp.tolist()
+        for h in range(n_groups):
+            groups.append({
+                "h": h, "f_lo": float(h * nc * delta_f), "f_hi": float((h + 1) * nc * delta_f),
+                "rms": float(gl[h]), "subgroup_rms": float(sgl[h]), "pct": float(pctl[h]),
+                "dom_freq_hz": float(fl[kdl[h]]), "dom_rms": float(al[kdl[h]]),
+                "dom_angle_deg": float(angl[h]), "n_bins": int(nc - 1),
+            })
+        sq_sum = float(np.sum(g_all * g_all))
+    else:
+        for h in range(n_groups):
+            ka, kb = h * nc, (h + 1) * nc
             groups.append({"h": h, "f_lo": float(ka * delta_f), "f_hi": float(kb * delta_f), "rms": 0.0,
                            "subgroup_rms": 0.0, "pct": 0.0, "dom_freq_hz": None, "dom_rms": 0.0,
                            "dom_angle_deg": None, "n_bins": 0})
-            continue
-        seg = amp[lo:hi]
-        g = float(np.sqrt(np.sum(seg ** 2)))
-        sg = float(np.sqrt(np.sum(amp[lo + 1:hi - 1] ** 2))) if hi - 1 > lo + 1 else 0.0
-        j = int(np.argmax(seg))
-        kd = lo + j
-        groups.append({
-            "h": h, "f_lo": float(ka * delta_f), "f_hi": float(kb * delta_f),
-            "rms": g, "subgroup_rms": sg,
-            "pct": float(100.0 * g / u1) if (np.isfinite(u1) and u1 > 0) else float("nan"),
-            "dom_freq_hz": float(freqs[kd]), "dom_rms": float(amp[kd]),
-            "dom_angle_deg": float(np.degrees(np.angle(phasor[kd]))), "n_bins": int(hi - lo),
-        })
-        sq_sum += g * g
     tihd = float(100.0 * np.sqrt(sq_sum) / u1) if (np.isfinite(u1) and u1 > 0) else float("nan")
     max_group = max(groups, key=lambda d: d["rms"]) if groups else None
     top = sorted(groups, key=lambda d: d["rms"], reverse=True)[:top_n]

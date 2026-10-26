@@ -32,8 +32,43 @@ from .analysis.window import estimate_frequency, is_fft_quantity, plan_window, s
 PHASES = ("A", "B", "C")
 
 
+_isfinite = math.isfinite
+
+
 def _jsonable(obj: Any) -> Any:
-    """递归转 JSON 安全类型（numpy → python；nan/inf → None，避免 JSON 输出非法字面量）。"""
+    """递归转 JSON 安全类型（numpy → python；nan/inf → None，避免 JSON 输出非法字面量）。
+
+    v0.82：按出现频率排查类型，并给「纯 float 列表 / 浮点 ndarray」（频谱、逐周波序列等几千点的 series）走整体快路径——
+    此前每个点都递归一次 isinstance 链，to_dict 比电气量计算本身还慢（服务端实测占引擎线程近一半时间）。输出完全一致。
+    """
+    t = type(obj)
+    if t is float:
+        return obj if _isfinite(obj) else None
+    if t is str or obj is None or t is bool or t is int:
+        return obj
+    if t is dict:
+        return {str(k): _jsonable(v) for k, v in obj.items()}
+    if t is list or t is tuple:
+        if obj and type(obj[0]) is float:
+            # 数值序列：一次转 ndarray 判有限性（C 级），全有限直接 tolist；混入 None / 嵌套 / 字符串时转换失败 → 通用路径
+            try:
+                arr = np.asarray(obj, dtype=np.float64)
+            except (TypeError, ValueError):
+                arr = None
+            if arr is not None and arr.ndim == 1:
+                if bool(np.isfinite(arr).all()):
+                    return arr.tolist()
+                return [v if _isfinite(v) else None for v in arr.tolist()]
+        return [_jsonable(v) for v in obj]
+    if t is np.ndarray:
+        if obj.dtype.kind == "f":
+            lst = obj.tolist()
+            if obj.ndim == 1:
+                return lst if bool(np.isfinite(obj).all()) else [v if _isfinite(v) else None for v in lst]
+            return _jsonable(lst)
+        if obj.dtype.kind in "iub":
+            return obj.tolist()
+        return [_jsonable(v) for v in obj.tolist()]
     if isinstance(obj, dict):
         return {str(k): _jsonable(v) for k, v in obj.items()}
     if isinstance(obj, (list, tuple)):

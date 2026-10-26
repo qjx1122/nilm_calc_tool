@@ -52,13 +52,22 @@ def rms_per_cycle(x: np.ndarray, fs: float, f: float, remove_dc: bool = True) ->
     edges = np.round(np.arange(n_cycles + 1, dtype=np.float64) * spc).astype(np.int64)
     edges[-1] = min(int(edges[-1]), x.size)
     vals: List[float] = []
-    for k in range(n_cycles):
-        seg = x[edges[k]:edges[k + 1]]
-        if seg.size == 0:
-            continue
+    lens = np.diff(edges)
+    if n_cycles > 1 and lens.size and lens.min() == lens.max() and lens[0] > 0:
+        # v0.82：fs/f 为整数（如 6400/50=128）时各周期等长 → reshape 一次算完（与逐周期循环同一公式，省 Python 级循环）
+        m = int(lens[0])
+        seg2 = x[int(edges[0]):int(edges[0]) + n_cycles * m].reshape(n_cycles, m)
         if remove_dc:
-            seg = seg - seg.mean()
-        vals.append(float(np.sqrt(np.mean(seg * seg))))
+            seg2 = seg2 - seg2.mean(axis=1, keepdims=True)
+        vals = np.sqrt(np.mean(seg2 * seg2, axis=1)).tolist()
+    else:
+        for k in range(n_cycles):
+            seg = x[edges[k]:edges[k + 1]]
+            if seg.size == 0:
+                continue
+            if remove_dc:
+                seg = seg - seg.mean()
+            vals.append(float(np.sqrt(np.mean(seg * seg))))
     if not vals:
         out["n_dropped"] = float(x.size)
         return out

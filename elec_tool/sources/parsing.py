@@ -89,6 +89,38 @@ def _parse_slash_clock(s: str, tz_offset_h: float) -> Optional[Tuple[float, bool
     return base + tod - tz_offset_h * 3600.0, False
 
 
+def _parse_slash_clock_block(vals: Sequence[str], tz_offset_h: float) -> Optional[Tuple[List[float], int, str]]:
+    """v0.82：整块 ``Y/M/D HH:MM:SS[.ffff]`` 的快速解析。返回 (epoch 秒列表, 无日期个数, 格式名) 或 None（有任一值不符合骨架）。
+
+    与逐值 ``_parse_slash_clock`` 完全等价：整秒前缀（``Y/M/D HH:MM:SS``）走原函数并缓存，小数部分按
+    ``float("0." + frac)`` 相加——带日期写法结果与逐值解析逐位相同，无日期写法只差浮点加法顺序（≤ 1 ulp，≈1e-11 s）。
+    """
+    s0 = str(vals[0]).strip()
+    if not _RE_SLASH_CLOCK.match(s0):
+        return None
+    cache: Dict[str, Tuple[float, bool]] = {}
+    out: List[float] = []
+    no_date = 0
+    for v in vals:
+        s = str(v).strip()
+        head, dot, frac = s.rpartition(".")
+        if not dot:
+            head, frac = s, ""
+        hit = cache.get(head)
+        if hit is None:
+            r = _parse_slash_clock(head, tz_offset_h)
+            if r is None or (frac and not frac.isdigit()):
+                return None
+            hit = cache[head] = r
+        elif frac and not frac.isdigit():
+            return None
+        base, nd = hit
+        out.append(base + (float("0." + frac) if frac else 0.0))
+        no_date += int(nd)
+    fmt = "Y/M/D HH:MM:SS.f(无日期=0/00/00)" if no_date else "Y/M/D HH:MM:SS.f"
+    return out, no_date, fmt
+
+
 def detect_encoding(path: str, sample_bytes: int = 65536) -> str:
     """按候选编码尝试解码文件头，返回第一个成功的编码。"""
     with open(path, "rb") as fh:
@@ -156,7 +188,7 @@ def parse_timestamps(values: Sequence[str], unit: str = "auto",
     numeric: Optional[np.ndarray] = None
     if unit in ("auto", "s", "ms", "us", "ns"):
         try:
-            numeric = np.array([float(str(v).strip()) for v in vals], dtype=np.float64)
+            numeric = np.array(vals, dtype=np.float64)            # v0.82：整列交给 numpy 解析（C 级），失败再按字符串时间处理
         except (TypeError, ValueError):
             numeric = None
     if numeric is not None and unit != "datetime":
@@ -202,6 +234,12 @@ def parse_timestamps(values: Sequence[str], unit: str = "auto",
     used_fmt: Optional[str] = None
     offset = tz_offset_h * 3600.0
     no_date = 0
+    # v0.82 快路径：``Y/M/D HH:MM:SS.ffff``（现场主流写法）——同一秒内的几千行只有小数部分不同，
+    # 按 "整秒前缀" 缓存一次正则解析结果，再加上小数秒；任一值不符合骨架即整体退回逐值慢路径（结果逐位一致，见测试）
+    fast = _parse_slash_clock_block(vals, tz_offset_h)
+    if fast is not None:
+        parsed, no_date, used_fmt = fast
+        vals = []
     for v in vals:
         s = str(v).strip()
         got = None
@@ -282,7 +320,12 @@ def _infer_fs(t: np.ndarray) -> float:
     segs = np.split(np.arange(t.size), breaks + 1)
     seg = max(segs, key=len) if segs else np.arange(t.size)
     if seg.size >= 3:
-        slope = float(np.polyfit(seg.astype(np.float64), t[seg], 1)[0])
+        # v0.82：一元线性回归闭式解（与 polyfit 一次拟合同一最小二乘解，省 polyfit 的 Vandermonde/SVD 开销）
+        xs = seg.astype(np.float64); ys = t[seg]
+        xm = xs.mean(); ym = ys.mean()
+        dx = xs - xm
+        den = float(np.dot(dx, dx))
+        slope = float(np.dot(dx, ys - ym) / den) if den > 0 else 0.0
         if slope > 0:
             return float(1.0 / slope)
     return float(1.0 / med)
@@ -691,7 +734,8 @@ def iter_csv_blocks(path: str, colmap: ColumnMap, sampling: SamplingConfig,
             if max_blocks and produced >= max_blocks:
                 return
         for row in reader:
-            if not row or all(not str(c).strip() for c in row):
+            # v0.82：首格非空白即正常数据行（绝大多数），只有首格为空时才逐格判断整行是否为空行（省每行一次 Python 级 all()）
+            if not row or ((not row[0] or row[0].isspace()) and all(not str(c).strip() for c in row)):
                 continue
             buf.append(row)
             if len(buf) >= block_samples:
@@ -725,19 +769,31 @@ def _rows_to_block(rows: List[List[str]], colmap: ColumnMap, sampling: SamplingC
     ts_c = idx_map.get("timestamp")
     chan = [(new_c, idx_map[key]) for new_c, key in enumerate(ColumnMap.FIELDS)
             if key != "timestamp" and idx_map.get(key) is not None]
-    for r, row in enumerate(rows):
-        if ts_c is not None:
-            ts_raw.append(str(row[ts_c]).strip() if ts_c < len(row) else "")
-        for new_c, c in chan:
-            if c >= len(row):
-                continue
-            cell = str(row[c]).strip()
-            if cell == "" or cell.lower() in ("nan", "null", "none", "-"):
-                continue
-            try:
-                std[r, new_c] = float(cell)
-            except ValueError:
-                bad.append((r, c, cell))
+    if ts_c is not None:
+        ts_raw = [str(row[ts_c]).strip() if ts_c < len(row) else "" for row in rows]
+    # v0.82 快路径：整块按列一次性交给 numpy 解析（C 级 str→float，比逐单元 strip/lower/float 快约 10 倍）。
+    # 任一单元为空 / 非数值（含 null / none / -）→ numpy 抛 ValueError → 退回逐单元慢路径，保证空值策略与坏单元报告与原来完全一致。
+    need = max((c for _, c in chan), default=-1)
+    fast_ok = bool(chan) and rows and min(len(r) for r in rows) > need
+    if fast_ok:
+        try:
+            for new_c, c in chan:
+                std[:, new_c] = np.array([row[c] for row in rows], dtype=np.float64)
+        except (ValueError, TypeError):
+            fast_ok = False
+            std[:] = np.nan
+    if not fast_ok:
+        for r, row in enumerate(rows):
+            for new_c, c in chan:
+                if c >= len(row):
+                    continue
+                cell = str(row[c]).strip()
+                if cell == "" or cell.lower() in ("nan", "null", "none", "-"):
+                    continue
+                try:
+                    std[r, new_c] = float(cell)
+                except ValueError:
+                    bad.append((r, c, cell))
     blk, info = _assemble(std, ts_raw, colmap, sampling, source, seq, bad, tz_offset_h, unmapped, idx_map)
     if ts_c is None and row_offset and blk.n:
         blk = SampleBlock(t=(row_offset + np.arange(blk.n, dtype=np.float64)) / sampling.fs, u=blk.u, i=blk.i,
