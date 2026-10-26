@@ -312,9 +312,27 @@ def detect_repetition(x: np.ndarray, cycles_per_s: float, *, periods_s: Tuple[fl
     return out
 
 
+def _longest_tol_run(seg: np.ndarray, tol: float) -> int:
+    """序列中"极差 ≤ tol"的最长连续子段长度（Hart 稳态分段会切出的最长一段）。"""
+    seg = np.asarray(seg, dtype=np.float64)
+    best = 0
+    a = 0
+    lo = hi = seg[0] if seg.size else 0.0
+    for i in range(1, int(seg.size) + 1):
+        if i < seg.size:
+            lo2, hi2 = min(lo, seg[i]), max(hi, seg[i])
+            if hi2 - lo2 <= tol:
+                lo, hi = lo2, hi2
+                continue
+        best = max(best, i - a)
+        if i < seg.size:
+            a, lo, hi = i, seg[i], seg[i]
+    return int(best)
+
+
 def longest_transient(x: np.ndarray, sigma: float, min_delta: float, *, min_steady_cycles: int = 10,
                       smooth_cycles: int = 25, k: float = 4.0, tol: Optional[float] = None,
-                      run_cycles: float = 1.0) -> Dict[str, Any]:
+                      run_cycles: float = 1.0, hart_min_steady: Optional[int] = None) -> Dict[str, Any]:
     """v0.56：量文件中**最长的一次暂态**（两个真正稳态之间的周波数），用来给 ``steady_state.max_transient_cycles`` 定尺度。
 
     Hart 分段看不出软启斜坡（斜坡被切成一串"极差刚好不超 tol"的伪稳态段，相邻段差又 < min_delta）。这里改用
@@ -339,6 +357,12 @@ def longest_transient(x: np.ndarray, sigma: float, min_delta: float, *, min_stea
         return out
     moving = _moving_mask(x, sigma, W=W, k=k, floor=0.05 * float(min_delta))
     anchors = _anchors(x, moving, min_steady_cycles)
+    # v0.83.2：锚点必须是 steady_state（Hart 分段）也认的稳态——段内要有一段 ≥ hart_min_steady 周波、极差 ≤ tol 的子段；
+    # 否则软启斜坡中途的回落平台（如 0.31→0.39 来回跳的 6 s）会被"不动"判据当成稳态，把一次 46 s 的暂态切成两半，
+    # max_transient_cycles / window_cycles 都按半截给，steady_state 在真实斜坡上配不出事件
+    if tol is not None and tol > 0 and hart_min_steady and hart_min_steady > 0:
+        anchors = [a for a in anchors if _longest_tol_run(x[a[0]:a[1]], float(tol)) >= int(hart_min_steady)]
+        out["hart_min_steady"] = int(hart_min_steady)
     out["n_steady"] = len(anchors)
     trs: List[Dict[str, Any]] = []
     for (a0, b0, l0), (a1, b1, l1) in zip(anchors, anchors[1:]):
@@ -402,6 +426,15 @@ def suggest(m: dict, min_load: float | None, x: Optional[np.ndarray] = None) -> 
     if x is not None:
         run = float(m.get("repeat_run_cycles") or 1.0) if m.get("repeated_cycles") else 1.0
         tr = longest_transient(x, s, min_d, tol=tol10, run_cycles=run)
+        # v0.83.2：min_steady 由斜坡上最长伪平台推出后，再用它复核锚点（锚点里要有 ≥ min_steady 的 Hart 稳态子段），
+        # 不满足的锚点剔除、暂态合并，迭代到稳定（最多 3 轮）
+        for _ in range(3):
+            pseudo0 = int(tr.get("max_pseudo_steady") or 0)
+            ms0 = int(max(10, min(_ceil_sig(1.5 * pseudo0 + 1), 250))) if tr["longest"] > 100 else 10
+            tr2 = longest_transient(x, s, min_d, tol=tol10, run_cycles=run, hart_min_steady=ms0)
+            if tr2["longest"] == tr["longest"] and tr2["n_steady"] == tr["n_steady"]:
+                break
+            tr = tr2
         if tr["longest"] > 100:
             max_tr = int(_ceil_sig(1.5 * tr["longest"]))
             # 斜坡上会被 Hart 切出的伪稳态平台：min_steady_cycles 要压过它（×1.5 余量），否则斜坡被当成一串 < min_delta 的小台阶

@@ -91,6 +91,7 @@
 - **v0.79**：功率页卡片 + A/B/C 相 P/Q/S；瞬时波形图例名 / 色与趋势图一致（P Q S / Pa…Sc）。`ui_r76` ALL PASS。
 - **v0.80**：调参估计器投切幅值分簇（主负荷 / 二级波动，分簇即不可靠、不自动采用）；界面「取值方式」按最大台阶 / 最小台阶 / 手填；`detect_repetition` 模板拼接文件告警。`ui_r80` ALL PASS，383 passed。
 - **v0.81**：数据源页两侧各加「从文件加载本侧配置」（路径空＝现有配置文件；默认不写文件，可勾选只写差异）。`POST /api(/branch)/config/load_file`、`GET /api(/branch)/config/file`。`ui_r81` ALL PASS，389 passed。
+- **v0.83.2**：暂态锚点须含 ≥min_steady 的 tol 内子段（与 Hart 分段一致），斜坡中途平台不再切断暂态；用户文件建议 max_transient 2000→4200、window 2500→4700，可检出起停。399 passed。
 - **v0.83.1**：量噪声改多滞后 σ（σ_1…σ_100，σ_max/σ_1≥4 判分段恒定、段长取饱和滞后），覆盖秒内带微小舍入抖动的模板文件；398 passed。
 - **v0.83**：调参「量噪声」周波复制保护（`measure` 同值周波段压缩重量 σ / 极差；`longest_transient` / `estimate_min_load` 按 run_cycles 折算；界面 / CLI 告警）。用户大水泵文件 σ 3e-7→0.005 A、暂态 785→2228 周波，建议参数可检出启停。397 passed。
 - **v0.82**：离线 CSV 播放提速（解析按列 numpy / 时标前缀缓存 / to_dict 快路径 / 间谐波·频谱·逐周波 RMS 向量化 / engine.run 不再每块空睡 / 无客户端不广播）。库路径 1.8×→12× 实时，服务端 5.7×→9.1×，两侧 1.5×→3.8×。392 passed。

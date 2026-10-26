@@ -101,3 +101,31 @@ def test_measure_blocky_with_in_second_jitter(x_rep):
     assert any(d >= 1.2 for d in deltas) and any(d <= -1.2 for d in deltas)
     est = estimate_min_load(xb, m["sigma_cycle"], "A", run_cycles=m["repeat_run_cycles"])
     assert est["n_steady"] <= 12
+
+
+def test_ramp_plateau_not_taken_as_steady_anchor():
+    """v0.83.2：用户复测——σ 已正确（0.0086 A）但仍 0 事件。软启斜坡中途 6 s 的回落平台（0.31↔0.40 来回跳）被
+    "不动"判据当成稳态锚点，46 s 暂态被切成 26 s，max_transient=2000 / window=2500 装不下真实斜坡；而 Hart 分段
+    （tol 0.043）不认这个平台（极差 0.09）。锚点须含 ≥ min_steady 的 tol 内子段，否则剔除并合并暂态。"""
+    rng = np.random.default_rng(7)
+    idle = 0.0025 + rng.normal(0, 4e-4, 100)
+    up = np.concatenate([np.linspace(0.024, 0.39, 24), [0.39049, 0.30633, 0.33258, 0.36876, 0.39091, 0.39561], np.linspace(0.456, 1.57, 16)])
+    after = [1.5577, 1.5222, 1.4982, 1.4487, 1.4773, 1.4400, 1.4106, 1.3918, 1.3615, 1.3992, 1.3950, 1.3810, 1.3662, 1.3680,
+             1.3732, 1.3782, 1.3449, 1.3395, 1.3398, 1.3273, 1.3547, 1.3585]
+    st = 1.40 + rng.normal(0, 0.0086, 400)
+    down = np.linspace(1.41, 0.005, 45)
+    sec = np.concatenate([idle, up, after, st, down, 0.0025 + rng.normal(0, 4e-4, 60)])
+    x = np.repeat(sec, 50) + rng.normal(0, 4e-7, sec.size * 50)
+    m = measure(x, "A")
+    sg = suggest(m, 0.7, x)
+    ss = sg["algorithms"]["steady_state"]
+    assert sg["transient"]["longest"] >= 2300                      # 整条斜坡，而不是半截
+    assert ss["max_transient_cycles"] >= 3400 and sg["window_cycles"] >= ss["max_transient_cycles"] + 2 * ss["min_steady_cycles"]
+    lvl = float(np.median(np.abs(x)))
+    full = dict(NILM_ALGO_DEFAULTS["steady_state"]); full.update(ss)
+    prm = effective_params(params_for_current(full), lvl, sg["rel_tol_pct"], sg["min_delta_pct"])
+    deltas = [round(s[3] - s[2], 1) for s in detect_steps("steady_state", x, prm)]
+    assert any(d >= 1.2 for d in deltas) and any(d <= -1.2 for d in deltas)
+    # 用户第 108 轮套用的那组（max_transient 2000 / window 2500）在同一序列上确实配不出事件
+    old = dict(NILM_ALGO_DEFAULTS["steady_state"]); old.update({"tol_a": 0.043, "min_steady_cycles": 230, "min_delta_a": 0.35, "max_transient_cycles": 2000})
+    assert detect_steps("steady_state", x, effective_params(params_for_current(old), lvl, 2.48, 24.8)) == []
