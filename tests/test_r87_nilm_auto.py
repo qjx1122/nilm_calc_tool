@@ -73,7 +73,7 @@ def _run(cfg, t, u, i):
     return det, out
 
 
-def test_detector_auto_params_bus_only(tmp_path, monkeypatch):
+def test_detector_auto_params_both_sides(tmp_path, monkeypatch):
     monkeypatch.setenv("ELEC_TOOL_NILM_DIR", str(tmp_path / "nilm"))
     t, u, i = _wave()
     cfg = AppConfig(); cfg.nilm.auto_params = True; cfg.nilm.channels = ["total"]
@@ -96,11 +96,12 @@ def test_detector_auto_params_bus_only(tmp_path, monkeypatch):
     cfg2 = AppConfig.from_dict(cfg.to_dict()); cfg2.nilm.auto_params = False; cfg2.validate()
     _, ev2 = _run(cfg2, t, u, i)
     assert ev2 == []
-    # 分路侧（source_id=1）忽略自适应：按配置参数 → 同样没有事件，summary 有说明
+    # v0.88：分路侧（source_id=1）同样生效 → 与总线侧一样 6 算法全部检出，summary 说明标注分路侧
     cfg3 = AppConfig.from_dict(cfg.to_dict()); cfg3.output.source_id = 1; cfg3.validate()
     det3, ev3 = _run(cfg3, t, u, i)
     sm3 = det3.summary()
-    assert ev3 == [] and sm3["auto_params"] is True and sm3["auto_params_effective"] is False and any("只对总线侧生效" in n for n in sm3["notes"])
+    assert sm3["auto_params"] is True and sm3["auto_params_effective"] is True and any("自适应算法参数已启用（分路侧）" in n for n in sm3["notes"])
+    assert {e["algorithm"] for e in ev3} == {e["algorithm"] for e in ev} and len(ev3) == len(ev)
     # 算法启停仍按配置
     cfg4 = AppConfig.from_dict(cfg.to_dict()); cfg4.nilm.algorithms["cusum"]["enabled"] = False; cfg4.validate()
     det4, ev4 = _run(cfg4, t, u, i)
@@ -148,12 +149,14 @@ def test_api_config_and_summary(client):
     r = client.put("/api/branch/config", json={"nilm": {"auto_params": True}}).json()
     assert r["config"]["nilm"]["auto_params"] is True
     sm = client.get("/api/branch/nilm/events").json()["summary"]
-    assert sm["auto_params_effective"] is False
+    assert sm["auto_params"] is True and sm["auto_params_effective"] is True     # v0.88：分路侧也生效
     client.put("/api/config", json={"nilm": {"auto_params": False}})
+    client.put("/api/branch/config", json={"nilm": {"auto_params": False}})
 
 
 def test_frontend_wiring():
     html = (ROOT / "app/static/index.html").read_text(encoding="utf-8")
     js = (ROOT / "app/static/app.js").read_text(encoding="utf-8")
     assert 'id="nilm-auto_params"' in html and 'id="nilm-auto-out"' in html and 'id="nilm-auto_params-lbl"' in html
-    assert "'auto_params'" in js and "function nilmDimAuto" in js and "p.auto_params = false" in js and "auto_params_effective" in js
+    assert "'auto_params'" in js and "function nilmDimAuto" in js and "auto_params_effective" in js
+    assert "p.auto_params = false" not in js and "nilm-auto_params-lbl'); if (l) l.style.display = 'none'" not in js   # v0.88：分路侧不再隐藏/强制 false

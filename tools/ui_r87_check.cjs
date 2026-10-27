@@ -12,7 +12,7 @@ const {JSDOM}=require(process.env.JSDOM_DIR+'/node_modules/jsdom');
  try { w.location.hash='#nilm'; w.__render(); } catch(e) {}
  await new Promise(r=>setTimeout(r,800));
  ok.push(['总线侧有勾选且默认不勾', !!$('#nilm-auto_params') && $('#nilm-auto_params').checked===false]);
- ok.push(['分路侧克隆存在但隐藏', !!E('branch','nilm-auto_params') && E('branch','nilm-auto_params-lbl').style.display==='none']);
+ ok.push(['分路侧克隆存在且可见（v0.88）', !!E('branch','nilm-auto_params') && E('branch','nilm-auto_params-lbl').style.display!=='none']);
  ok.push(['默认无灰显、推导面板隐藏', !$('#nilm-algos').querySelector('.nilm-auto-off') && $('#nilm-auto-out').style.display==='none']);
  ok.push(['总线侧载荷含 auto_params=false', w.__collect('bus').auto_params===false]);
  $('#nilm-auto_params').checked=true; $('#nilm-auto_params').dispatchEvent(new w.Event('change'));
@@ -22,7 +22,8 @@ const {JSDOM}=require(process.env.JSDOM_DIR+'/node_modules/jsdom');
  ok.push(['推导面板显示等待文案', $('#nilm-auto-out').style.display==='' && /等待周波窗数据/.test($('#nilm-auto-out').textContent)]);
  ok.push(['总线侧载荷 auto_params=true', w.__collect('bus').auto_params===true]);
  E('branch','nilm-auto_params').checked=true;
- ok.push(['分路侧载荷强制 false', w.__collect('branch').auto_params===false]);
+ ok.push(['分路侧载荷 auto_params=true（v0.88）', w.__collect('branch').auto_params===true]);
+ E('branch','nilm-auto_params').checked=false; ok.push(['分路侧取消勾选 → false', w.__collect('branch').auto_params===false]);
  // 模拟 summary.auto_last → 渲染推导参数表
  w.__NLs('bus').summary={auto_params:true,auto_params_effective:true,algorithm_names:{steady_state:'稳态分段(Hart)'},auto_last:{total:{quantity:'p',unit:'W',stats:{sigma:83.4,hold:1,settle:5,min_steady:10,transient:20,k:5.53,min_delta:333.8,n:1200},algorithms:{steady_state:{tol_w:603.4,min_steady_cycles:10,min_delta_w:333.8,max_transient_cycles:20}}}}};
  w.__dim('bus');

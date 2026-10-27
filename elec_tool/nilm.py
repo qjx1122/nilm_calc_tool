@@ -457,8 +457,8 @@ class NilmDetector:
 
     @property
     def auto_params_effective(self) -> bool:
-        """自适应参数是否实际生效：配置开启 **且** 本侧是总线侧（source_id=0）。"""
-        return bool(getattr(self.ncfg, "auto_params", False)) and int(getattr(self.cfg.output, "source_id", 0) or 0) == 0
+        """自适应参数是否实际生效：配置开启即生效（v0.88 起总线侧 / 分路侧都支持；v0.87 曾限定总线侧 source_id=0）。"""
+        return bool(getattr(self.ncfg, "auto_params", False))
 
     @property
     def voltage_missing(self) -> bool:
@@ -657,10 +657,9 @@ class NilmDetector:
             enabled_algos = [a for a in NILM_ALGO_DEFAULTS if self.ncfg.params(a).get("enabled", True)]
             auto_cfg = bool(getattr(self.ncfg, "auto_params", False))
             auto_eff = self.auto_params_effective
-            if auto_cfg and not auto_eff:
-                notes.append("nilm.auto_params=true 只对总线侧生效（只有总线数据、无分路标签的场景）；本侧为分路侧，仍按配置中的算法参数检测")
-            elif auto_eff:
-                notes.append(f"自适应算法参数已启用：各算法全部数值参数由当前周波窗数据推导（噪声 σ=差分 MAD、稳定周波=3τ+2、最短稳态=Allan 拐点、"
+            if auto_eff:
+                side_txt = "分路侧" if int(getattr(self.cfg.output, "source_id", 0) or 0) != 0 else "总线侧"
+                notes.append(f"自适应算法参数已启用（{side_txt}）：各算法全部数值参数由当前周波窗数据推导（噪声 σ=差分 MAD、稳定周波=3τ+2、最短稳态=Allan 拐点、"
                              f"暂态时长=超限游程 95% 分位、显著性倍数 k=√(2·ln ARL0)（ARL0=一天周波数）、最小幅值=max(1.5kσ√(2/最短稳态), 4σ)）；"
                              f"配置中的各算法数值与 rel_tol_pct / min_delta_pct 不参与；窗内不足 {AUTO_MIN_CYCLES} 周波时暂不评估")
             return {"enabled": bool(self.ncfg.enabled), "total": total, "auto_params": auto_cfg, "auto_params_effective": auto_eff,

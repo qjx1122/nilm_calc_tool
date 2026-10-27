@@ -3230,8 +3230,7 @@ function bindNilmForm(side) {
   }));
   const q = E(side, 'nilm-quantity'); if (q) q.addEventListener('change', () => nilmDimUnits(side));
   const ap = E(side, 'nilm-auto_params'); if (ap) ap.addEventListener('change', () => nilmDimUnits(side));
-  // v0.87：自适应参数只对总线侧生效——分路侧不显示该勾选
-  if (side === 'branch') { const l = E(side, 'nilm-auto_params-lbl'); if (l) l.style.display = 'none'; }
+  // v0.88：自适应参数两侧均可启用（v0.87 曾隐藏分路侧勾选）
 }
 
 /* v0.87：自适应模式下灰显会被自动推导覆盖的数值项（算法启停勾选保持可用），并显示最近一次推导出的参数 */
@@ -3293,7 +3292,6 @@ function collectNilmPayload(side = sideOf()) {
   const p = { algorithms: {} };
   NILM_FIELDS.forEach(f => { const el = E(side, `nilm-${f}`); if (!el) return; p[f] = el.type === 'checkbox' ? el.checked : (el.tagName === 'SELECT' ? el.value : +el.value); });
   p.channels = NILM_CH.filter(c => { const el = E(side, `nilm-ch-${c}`); return el && el.checked; });
-  if (side === 'branch') p.auto_params = false;                       // v0.87：自适应参数只有总线侧
   Object.keys(NILM_ALGOS).forEach(a => {
     const prm = { enabled: !!E(side, `nilm-${a}-enabled`).checked };
     Object.keys(NILM_ALGOS[a].params).forEach(k => { const v = parseFloat(E(side, `nilm-${a}-${k}`).value); if (Number.isFinite(v)) prm[k] = v; });

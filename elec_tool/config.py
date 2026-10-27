@@ -782,9 +782,9 @@ class NilmConfig:
     #   auto＝数据源电压全为 0/未映射时自动用 i，否则用 p。i 口径下各算法用 ``*_a``（A）这套绝对阈值，
     #   W 套不参与；rel_tol_pct / min_delta_pct 同样按窗内 |I| 中位数折算后与 A 套取较大者（v0.37）。
     quantity: str = "auto"
-    # v0.87：自适应算法参数（只有总线数据、无分路标签的场景）。true＝运行时按当前周波窗数据自动推导各算法全部数值参数
+    # v0.87：自适应算法参数（v0.88 起总线侧、分路侧均可启用）。true＝运行时按当前周波窗数据自动推导各算法全部数值参数
     #   （噪声 σ / 稳定周波 / 最短稳态 / 暂态时长 / 最小幅值 / 各门限，见 nilm_auto.py），下方各算法数值与 rel_tol_pct /
-    #   min_delta_pct 不再参与（算法 enabled 仍由配置决定）；只对总线侧（source_id=0）生效，分路侧忽略。
+    #   min_delta_pct 不再参与（算法 enabled 仍由配置决定）；两侧各自独立配置、各自按本侧数据推导（v0.88）。
     auto_params: bool = False
     algorithms: Dict[str, Dict[str, Any]] = field(default_factory=lambda: {k: dict(v) for k, v in NILM_ALGO_DEFAULTS.items()})
 
