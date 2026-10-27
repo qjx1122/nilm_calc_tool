@@ -1763,9 +1763,11 @@ async def clear_events() -> Dict[str, Any]:
 @app.get("/api/nilm/events")
 async def get_nilm_events(limit: int = 500, algos: Optional[str] = None, channel: Optional[str] = None,
                           since_id: int = 0) -> Dict[str, Any]:
-    """负荷辨识事件列表：algos=逗号分隔算法键；channel=total/A/B/C；since_id 增量拉取。"""
+    """负荷辨识事件列表：algos=逗号分隔算法键；channel=total/A/B/C；since_id 增量拉取；limit=0 ＝ 全部（v0.89）。"""
     al = [a.strip() for a in algos.split(",") if a.strip()] if algos else None
-    return RUNNER.nilm_events(limit=max(1, min(int(limit), 5000)), algos=al, channel=(channel or None), since_id=int(since_id))
+    lim = int(limit)
+    lim = 10 ** 9 if lim <= 0 else max(1, min(lim, 5000))          # v0.89：limit=0 ＝ 全部（内存保留上限 nilm.max_log）
+    return RUNNER.nilm_events(limit=lim, algos=al, channel=(channel or None), since_id=int(since_id))
 
 
 @app.post("/api/nilm/tune/apply")

@@ -3353,7 +3353,7 @@ async function applyNilmTune(side = sideOf()) {
 function onNilmPush(list, side = 'bus') {
   const nl = NLs(side);
   list.forEach(e => { if (!nl.events.some(x => x.id === e.id)) nl.events.unshift(e); });
-  if (nl.events.length > 5000) nl.events.length = 5000;
+  if (!nilmMarkAll(side) && nl.events.length > 5000) nl.events.length = 5000;   // v0.89：标注全部事件时不截断
   setNilmBadge(nl.summary ? (nl.summary.total || 0) + list.length : nl.events.length, side);
   if (S.view === 'nilm') render();
 }
@@ -3369,7 +3369,7 @@ async function refreshNilm(side = sideOf()) {
     // v0.48：事件始终全量拉取；事件列表的「算法 / 对象」筛选只在渲染表格时做（nl.events 同时供趋势图与周波窗画事件竖线，
     // 以前按筛选条件拉取会让列表筛选连带改变另外两个面板的竖线）
     const [d, c] = await Promise.all([
-      api('/api/nilm/events?limit=1000', undefined, side),
+      api(`/api/nilm/events?limit=${nilmMarkAll(side) ? 0 : NILM_MARK_LIMIT}`, undefined, side),   // v0.89：标注全部事件时拉取全部
       api('/api/nilm/cycles?n=2000', undefined, side),
     ]);
     nl.events = d.events || []; nl.summary = d.summary || null; nl.cycles = c; nl.loaded = true;
@@ -3548,6 +3548,10 @@ function nilmPqsKind(nl) {
 function nilmCurrentSeries(hi, t0) {
   return ['A', 'B', 'C'].map(ph => ({ name: 'I' + ph.toLowerCase(), color: COLORS[ph], data: hi.map(p => [p.t - t0, p['I' + ph.toLowerCase()]]) }));
 }
+/* v0.89：曲线上标注的事件条数限制——默认只标注最近 NILM_MARK_LIMIT 条；勾选「标注全部事件」则全部标注 */
+const NILM_MARK_LIMIT = 1000;
+function nilmMarkAll(side = sideOf()) { const el = E(side, 'nilm-mark-all'); return !!(el && el.checked); }
+function nilmMarkPool(nl, side = sideOf()) { const evs = nl.events || []; return nilmMarkAll(side) || evs.length <= NILM_MARK_LIMIT ? evs : evs.slice(0, NILM_MARK_LIMIT); }   // 事件按 id 倒序＝最近在前
 function renderNilmPqs(nl) {
   const cv = $('#nilm-pqs'); if (!cv) return;
   const kind = nilmPqsKind(nl); const isI = kind === 'i';
@@ -3558,10 +3562,11 @@ function renderNilmPqs(nl) {
   const chosen = box ? Array.from(box.querySelectorAll('.nilm-pqs-algo')).filter(c => c.checked).map(c => c.dataset.algo) : Object.keys(NILM_ALGOS);
   const chSel = $('#nilm-pqs-ch'); const ch = chSel ? chSel.value : '';
   const tEnd = hp.length ? hp[hp.length - 1].t : 0;
-  const evs = nl.events.filter(e => chosen.includes(e.algorithm) && (!ch || e.channel === ch) && isNum(e.t_start) && e.t_start >= t0 && e.t_start <= tEnd);
+  const evs = nilmMarkPool(nl).filter(e => chosen.includes(e.algorithm) && (!ch || e.channel === ch) && isNum(e.t_start) && e.t_start >= t0 && e.t_start <= tEnd);
   const marks = evs.map(e => ({ x: e.t_start - t0, color: NILM_COLORS[e.algorithm], row: Object.keys(NILM_ALGOS).indexOf(e.algorithm),
                                 label: `${e.direction === 'up' ? '↑' : '↓'}${si(nilmMag(e), e.unit || 'W', 3)}${ch ? '' : ' ' + e.channel}` }));
   const nEl = $('#nilm-pqs-n'); if (nEl) nEl.textContent = String(marks.length);
+  const pEl = $('#nilm-pqs-pool'); if (pEl) pEl.textContent = nilmMarkAll() ? `全部 ${(nl.events || []).length} 条` : `最近 ${NILM_MARK_LIMIT} 条`;
   drawLine(cv, isI ? nilmCurrentSeries(hp, t0) : pqsSeries(hp, t0),
            { ylabel: isI ? 'A' : 'W/var/VA', fmtX: x => tsX(x + t0, spanOf(isI ? 'current' : 'power')), fmtTip: x => ts(x + t0), tbase: t0, height: 260, marks,
              empty: isI ? '暂无电流趋势（需累计 ≥2 个 current 窗）' : '暂无 P/Q/S 趋势（需累计 ≥2 个 power 窗）' });
@@ -3614,7 +3619,7 @@ function renderNilm() {
   const tt = c.t || []; const t0 = tt.length ? tt[0] : 0;
   $('#nilm-win-n').textContent = String(tt.length);
   const unit = qty === 'p' ? 'W' : qty === 'q' ? 'var' : 'A';
-  const marks = NL.events.filter(e => e.channel === chn && (!mk || e.algorithm === mk) && e.t_start >= t0 && tt.length && e.t_start <= tt[tt.length - 1])
+  const marks = nilmMarkPool(NL).filter(e => e.channel === chn && (!mk || e.algorithm === mk) && e.t_start >= t0 && tt.length && e.t_start <= tt[tt.length - 1])
     .map((e, i) => ({ x: e.t_start - t0, color: NILM_COLORS[e.algorithm], row: Object.keys(NILM_ALGOS).indexOf(e.algorithm),
                      label: `${e.direction === 'up' ? '↑' : '↓'}${si(nilmMag(e), e.unit || 'W', 3)}` }));
   drawLine($('#nilm-chart'), [{ name: `${chn === 'total' ? '三相总' : chn + ' 相'} ${qty.toUpperCase()}（逐周波${useFile ? '，离线装载' : ''}）`, color: useFile ? '#f2b84b' : '#4ea1ff', data: tt.map((x, i) => [x - t0, chd[i]]) }],
@@ -3655,6 +3660,7 @@ function bindNilm(side) {
   on('nilm-chfilter', 'change', render);
   ['nilm-ch', 'nilm-qty', 'nilm-mark', 'nilm-pqs-ch', 'nilm-pqs-kind'].forEach(id => on(id, 'change', render));
   const pa = E(side, 'nilm-pqs-algos'); if (pa) pa.addEventListener('change', render);
+  on('nilm-mark-all', 'change', () => refreshNilm(side));          // v0.89：切换后按新限制重新拉取并重画
   if (side === 'branch') bindNilmForm('branch');   // 克隆列的表单输入 → 分路侧脏标记
 }
 

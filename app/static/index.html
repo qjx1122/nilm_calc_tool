@@ -765,11 +765,12 @@
       <h2>负荷辨识事件 · 设备启停检测（逐周波 P/Q/I 突变：阈值差分 / 双滑窗 / CUSUM / GLR / 稳态分段 / 中值滤波差分）</h2>
       <div class="cards" id="nilm-cards"></div>
       <div class="panel">
-        <h3 class="curvehdr nilm-hdr"><span><span id="nilm-pqs-title">P / Q / S 趋势</span><small class="hdrhint" title="竖线＝各算法检测到的负荷事件起点，颜色＝算法">（竖线＝各算法检测到的负荷事件起点，颜色＝算法，图内 <span id="nilm-pqs-n">0</span> 条）<span class="curvespan" data-curve="power"></span></small></span>
+        <h3 class="curvehdr nilm-hdr"><span><span id="nilm-pqs-title">P / Q / S 趋势</span><small class="hdrhint" title="竖线＝各算法检测到的负荷事件起点，颜色＝算法">（竖线＝各算法检测到的负荷事件起点，颜色＝算法，图内 <span id="nilm-pqs-n">0</span> 条，标注范围：<span id="nilm-pqs-pool">最近 1000 条</span>）<span class="curvespan" data-curve="power"></span></small></span>
           <span class="toggle">
             <label title="v0.39：趋势曲线——auto：按当前检测量（P 口径画 P/Q/S，I 口径画三相电流）；显示哪几相用曲线下方的图例勾选">曲线 <select id="nilm-pqs-kind"><option value="auto">自动</option><option value="pqs">P / Q / S</option><option value="i">电流 I</option></select></label>
             <label>对象 <select id="nilm-pqs-ch"><option value="">全部</option><option value="total">三相总</option><option value="A">A 相</option><option value="B">B 相</option><option value="C">C 相</option></select></label>
             <span class="toggle" id="nilm-pqs-algos" title="只标注勾选算法检测到的事件（默认全部）"></span>
+            <label class="check" id="nilm-mark-all-lbl" title="v0.89：曲线（趋势图与周波窗）上标注的事件条数限制：默认不勾选＝只标注最近 1000 条事件；勾选＝标注全部事件（拉取本侧内存中的全部事件，上限为 nilm.max_log）。事件列表与累计计数不受影响"><input type="checkbox" id="nilm-mark-all"> 标注全部事件</label>
           </span></h3>
         <canvas id="nilm-pqs" height="260"></canvas>
       </div>
