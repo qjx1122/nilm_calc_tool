@@ -4365,7 +4365,7 @@ function splitLabelText(raw) {
 }
 function normalizeConfigForms(root = document) {
   root.querySelectorAll('.form label, .row2 label').forEach((lab) => {
-    if (lab.dataset.norm || lab.closest('.toggle') || lab.closest('.curvehdr') || lab.closest('.stat')) return;
+    if (lab.dataset.norm || lab.closest('.toggle') || lab.closest('.curvehdr') || lab.closest('.stat') || lab.closest('.colmap-blk')) return;   // v0.86.1：列映射块自带布局，不做规范化拆分
     const nodes = [...lab.childNodes];
     const ctrl = nodes.find(n => n.nodeType === 1 && /^(INPUT|SELECT|TEXTAREA)$/.test(n.tagName));
     if (!ctrl) return;
