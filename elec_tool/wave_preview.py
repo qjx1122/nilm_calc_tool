@@ -10,6 +10,8 @@
 """
 from __future__ import annotations
 
+import json
+
 import csv as _csv
 import math
 import os
@@ -525,10 +527,49 @@ def base_defaults(cfg: AppConfig) -> Dict[str, Any]:
             "custom_time": False, "custom_time_start": "", "custom_time_end": "", "max_points": MAX_POINTS_DEFAULT}
 
 
+COLMAP_FIELDS = ("timestamp", "ua", "ia", "ub", "ib", "uc", "ic")
+
+
+def apply_col_map(cfg: AppConfig, enabled: Any, col_map: Any, *, err=None) -> None:
+    """v0.86：数据处理页三个功能共用的「离线文件列映射」。``enabled`` 假值（默认）＝不启用：各列依次为
+    时间, A相电压, A相电流, B相电压, B相电流, C相电压, C相电流（表头可识别时按表头，否则按列序）；真值＝只按 ``col_map``
+    （字段 → 列号，从 1 起；空＝不映射）取列。``col_map`` 可为 dict 或 JSON 字符串；缺的字段按默认列序 1..7。
+    直接改 ``cfg.columns``（不校验，由调用方 validate）。``err``：异常类型（默认 ConfigError）。"""
+    err = err or ConfigError
+    on = enabled if isinstance(enabled, bool) else str(enabled if enabled is not None else "").strip().lower() in ("1", "true", "on", "yes")
+    cfg.columns.mapping_enabled = bool(on)
+    if not on:
+        return
+    m = col_map
+    if isinstance(m, str):
+        m = m.strip()
+        if m:
+            try:
+                m = json.loads(m)
+            except ValueError:
+                raise err(f"列映射不是合法 JSON：{col_map!r}") from None
+        else:
+            m = {}
+    if m is None:
+        m = {}
+    if not isinstance(m, dict):
+        raise err("列映射必须是 {timestamp, ua, ia, ub, ib, uc, ic → 列号} 字典")
+    mapping: Dict[str, str] = {}
+    for i, k in enumerate(COLMAP_FIELDS, 1):
+        v = m.get(k, str(i))
+        v = "" if v is None else str(v).strip()
+        if v and not v.isdigit():
+            raise err(f"列映射 {k} 必须是列号（从 1 起）或空（不映射），当前 {v!r}")
+        mapping[k] = v
+    cfg.columns.mapping = mapping
+
+
 def make_base(default_cfg: AppConfig, **overrides: Any) -> AppConfig:
     """出厂配置副本 + 界面给的几项（采样率 / 额定频率 / PT·CT 启用与变比 / 时标 UTC）→ 预览用基准配置。
-    None / 空串＝沿用出厂值；非法值抛 WaveError。"""
+    None / 空串＝沿用出厂值；非法值抛 WaveError。v0.86：``col_map_enabled`` / ``col_map``（离线文件列映射，默认不启用）。"""
     cfg = AppConfig.from_dict(default_cfg.to_dict())
+    if "col_map_enabled" in overrides or "col_map" in overrides:
+        apply_col_map(cfg, overrides.get("col_map_enabled"), overrides.get("col_map"), err=WaveError)
     cfg.source.kind = "csv_file"; cfg.source.custom_time = False; cfg.source.play_window = False
     def _f(name: str, lo: float) -> Optional[float]:
         v = overrides.get(name)

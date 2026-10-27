@@ -3702,6 +3702,30 @@ async function rsProbe() {
   } catch (e) { $('#rs-status').innerHTML = notes(['✗ ' + e.message]); }
 }
 
+/* v0.86：数据处理页三功能（重采样 / 负荷辨识调参 / 波形预览）共用的「离线文件列映射」：
+   默认不启用＝各列依次为 时间, A相电压, A相电流, B相电压, B相电流, C相电压, C相电流；启用后按 7 个列号取列 */
+const CM_FIELDS = [['ts', 'timestamp'], ['ua', 'ua'], ['ia', 'ia'], ['ub', 'ub'], ['ib', 'ib'], ['uc', 'uc'], ['ic', 'ic']];
+function cmEnabled(pre) { const el = $('#' + pre + '-on'); return !!(el && el.checked); }
+function cmMap(pre) { const m = {}; CM_FIELDS.forEach(([sfx, key]) => { const el = $('#' + pre + '-' + sfx); m[key] = el ? String(el.value || '').trim() : ''; }); return m; }
+function cmPayload(pre) { return cmEnabled(pre) ? { col_map_enabled: true, col_map: cmMap(pre) } : { col_map_enabled: false }; }
+function cmQuery(pre) { return cmEnabled(pre) ? { col_map_enabled: '1', col_map: JSON.stringify(cmMap(pre)) } : { col_map_enabled: '0' }; }
+function cmSync(pre) { const row = $('#' + pre + '-row'); if (row) row.style.display = cmEnabled(pre) ? '' : 'none'; }
+function cmSet(pre, enabled, map) {
+  const on = $('#' + pre + '-on'); if (on) on.checked = !!enabled;
+  if (map && typeof map === 'object') CM_FIELDS.forEach(([sfx, key]) => { const el = $('#' + pre + '-' + sfx); if (el && map[key] !== undefined) el.value = String(map[key] ?? ''); });
+  cmSync(pre);
+}
+function cmBind(pre, onChange) {
+  const on = $('#' + pre + '-on'); if (on) on.addEventListener('change', () => { cmSync(pre); if (onChange) onChange(); });
+  CM_FIELDS.forEach(([sfx]) => { const el = $('#' + pre + '-' + sfx); if (el && onChange) el.addEventListener('change', onChange); });
+  cmSync(pre);
+}
+function cmText(enabled, map) {
+  if (!enabled) return '不启用（各列依次为 时间, A相电压, A相电流, B相电压, B相电流, C相电压, C相电流）';
+  const names = { timestamp: '时间', ua: 'A相电压', ia: 'A相电流', ub: 'B相电压', ib: 'B相电流', uc: 'C相电压', ic: 'C相电流' };
+  return '启用：' + CM_FIELDS.map(([, k]) => `${names[k]}=${(map || {})[k] || '—'}`).join(' ');
+}
+
 function rsPayload() {
   const p = { path: $('#rs-path').value.trim(), fs_new: +$('#rs-fs').value, method: $('#rs-method').value,
               overwrite: $('#rs-overwrite').checked };
@@ -3710,6 +3734,7 @@ function rsPayload() {
   p.err_report = $('#rs-err').checked;              // v0.34：相对误差统计
   const ew = $('#rs-errwin').value.trim();
   if (p.err_report && ew) p.err_window_s = +ew;
+  Object.assign(p, cmPayload('rs-cm'));            // v0.86：离线文件列映射
   return p;
 }
 
@@ -3836,7 +3861,8 @@ function ntBase() {
   const v = id => { const el = $('#' + id); return el ? (el.value || '').trim() : ''; };
   const c = id => { const el = $('#' + id); return el && el.checked ? '1' : '0'; };
   return { fs: v('nt-base-fs'), f_nom: v('nt-base-fnom'), pt_ct_enabled: c('nt-base-ptct'), pt_ratio: v('nt-base-pt'),
-           ct_ratio: v('nt-base-ct'), file_time_utc: c('nt-base-utc') };   // 检测量只在「检测量」下拉填一处（v0.72.1 去重）
+           ct_ratio: v('nt-base-ct'), file_time_utc: c('nt-base-utc'),   // 检测量只在「检测量」下拉填一处（v0.72.1 去重）
+           col_map_enabled: cmEnabled('nt-cm'), col_map: cmMap('nt-cm') };   // v0.86：列映射随基准配置存浏览器本地（服务端按顶层 col_map* 读取）
 }
 function ntSetBase(b) {
   if (!b || typeof b !== 'object') return;
@@ -3845,6 +3871,7 @@ function ntSetBase(b) {
   set('nt-base-fs', b.fs); set('nt-base-fnom', b.f_nom); set('nt-base-pt', b.pt_ratio); set('nt-base-ct', b.ct_ratio);
   if ($('#nt-base-ptct') && b.pt_ct_enabled !== undefined) $('#nt-base-ptct').checked = on(b.pt_ct_enabled);
   if ($('#nt-base-utc') && b.file_time_utc !== undefined) $('#nt-base-utc').checked = on(b.file_time_utc);
+  if (b.col_map_enabled !== undefined) cmSet('nt-cm', on(b.col_map_enabled), b.col_map);
 }
 function ntSaveBase() { if (ntBaseMode() !== 'custom') return; try { localStorage.setItem(NT_BASE_KEY, JSON.stringify(ntBase())); } catch (e) { /* 隐私模式 */ } }
 function ntSyncCustomTime() {
@@ -3913,7 +3940,8 @@ function ntPayload() {
            custom_time: !!($('#nt-custom') && $('#nt-custom').checked),            // v0.73：自定义时间（同波形预览）
            custom_time_start: ($('#nt-custom') && $('#nt-custom').checked) ? v('nt-cstart') : '',
            custom_time_end: ($('#nt-custom') && $('#nt-custom').checked) ? v('nt-cend') : '',
-           base_mode: mode === 'custom' ? 'custom' : 'running', base: mode === 'custom' ? ntBase() : undefined };
+           base_mode: mode === 'custom' ? 'custom' : 'running', base: mode === 'custom' ? ntBase() : undefined,
+           ...cmPayload('nt-cm') };                                                   // v0.86：离线文件列映射
 }
 function ntFmt(x) { return (typeof x === 'number') ? (Number.isInteger(x) ? String(x) : (+x.toPrecision(4)).toString()) : String(x); }
 function ntRender(d) {
@@ -3950,6 +3978,7 @@ function ntRender(d) {
   }
   const cr = $('#nt-cmdrow');
   if (cr) { cr.style.display = d.command ? '' : 'none'; $('#nt-cmd').textContent = d.command || ''; NT.command = d.command || ''; }
+  { const cmEl = $('#nt-cm-blk'); if (cmEl && d.col_map_enabled !== undefined) cmEl.title = '本次：' + cmText(d.col_map_enabled, d.col_map); }
   let h = `<table><thead><tr><th colspan="3">噪声统计（${u}）</th></tr></thead><tbody>`
     + `<tr><td>基荷 |${d.quantity === 'p' ? 'P' : 'I'}| 中位数 level</td><td>${ntFmt(m.level)}</td><td></td></tr>`
     + `<tr><td>单周波噪声 σ sigma</td><td>${ntFmt(m.sigma_cycle)}</td><td>${(+m.sigma_cycle_pct).toFixed(3)} % 基荷${m.sigma_method === 'block' ? '（段间跳变尺度）' : ''}</td></tr>`
@@ -4012,7 +4041,8 @@ function wpBase() {
   return { f_nom: wpVal('wp-base-fnom'), pt_ct_enabled: chk('wp-base-ptct'),
            pt_ratio: wpVal('wp-base-pt'), ct_ratio: wpVal('wp-base-ct'), file_time_utc: chk('wp-base-utc'),
            // v0.64：自定义时间（启用时：时间轴＝自定义起始(空＝文件数据起始) + 行号/fs；结束空＝按采样率计算）
-           custom_time: custom, custom_time_start: custom === '1' ? wpVal('wp-base-cstart') : '', custom_time_end: custom === '1' ? wpVal('wp-base-cend') : '' };
+           custom_time: custom, custom_time_start: custom === '1' ? wpVal('wp-base-cstart') : '', custom_time_end: custom === '1' ? wpVal('wp-base-cend') : '',
+           ...cmQuery('wp-cm') };                                                     // v0.86：离线文件列映射
 }
 function wpMaxPoints() { const v = parseInt(wpVal('wp-maxpts'), 10); return Number.isFinite(v) && v > 0 ? v : ((WP.defaults || {}).max_points_default || 20000000); }
 function wpSyncCustom() {
@@ -4035,6 +4065,7 @@ function wpSetBase(b) {
   if ($('#wp-base-custom') && b.custom_time !== undefined) $('#wp-base-custom').checked = !!(b.custom_time === true || b.custom_time === '1' || b.custom_time === 1);
   set('wp-base-cstart', b.custom_time_start); set('wp-base-cend', b.custom_time_end);
   if (b.max_points !== undefined && b.max_points !== null && b.max_points !== '') set('wp-maxpts', b.max_points);
+  if (b.col_map_enabled !== undefined) { let m = b.col_map; if (typeof m === 'string') { try { m = JSON.parse(m); } catch (e) { m = null; } } cmSet('wp-cm', b.col_map_enabled === '1' || b.col_map_enabled === true, m); }
   wpSyncCustom();
 }
 function wpSaveBase() { try { localStorage.setItem(WP_BASE_KEY, JSON.stringify(Object.assign(wpBase(), { custom_time_start: wpVal('wp-base-cstart'), custom_time_end: wpVal('wp-base-cend'), max_points: wpVal('wp-maxpts') }))); } catch (e) { /* 隐私模式 */ } }
@@ -4249,6 +4280,7 @@ function bindWavePreview() {
   ['wp-base-fnom', 'wp-base-pt', 'wp-base-ct', 'wp-base-ptct', 'wp-base-utc', 'wp-base-custom', 'wp-base-cstart', 'wp-base-cend'].forEach(id => $('#' + id).addEventListener('change', () => { WP.info = null; wpSaveBase(); wpSyncCustom(); }));
   $('#btn-wp-cyc2-clear') && $('#btn-wp-cyc2-clear').addEventListener('click', () => { WP.cyc2 = null; renderWavePreview(); });
   $('#wp-maxpts').addEventListener('change', wpSaveBase);
+  cmBind('wp-cm', () => { WP.info = null; wpSaveBase(); });   // v0.86：离线文件列映射（波形预览公共配置）
   $('#btn-wp-info').addEventListener('click', () => wpInfo(false));
   $('#btn-wp-load').addEventListener('click', wpLoad);
   $('#btn-wp-rms').addEventListener('click', wpRms);
@@ -4270,6 +4302,7 @@ function bindProcess() {
     // v0.72：独立基准配置
     if ($('#nt-side')) $('#nt-side').addEventListener('change', ntSyncBaseUI);
     if ($('#nt-custom')) { $('#nt-custom').addEventListener('change', ntSyncCustomTime); ntSyncCustomTime(); }
+    cmBind('nt-cm', ntSaveBase);                     // v0.86：离线文件列映射（调参，随基准配置存浏览器本地）
     ['nt-base-fs', 'nt-base-fnom', 'nt-base-pt', 'nt-base-ct', 'nt-base-ptct', 'nt-base-utc'].forEach(id => { const el = $('#' + id); if (el) el.addEventListener('change', ntSaveBase); });
     if ($('#btn-nt-base-default')) $('#btn-nt-base-default').addEventListener('click', async () => { try { await ntLoadBase('default'); toast('基准配置已恢复为出厂值', 'ok'); } catch (e) { toast(e.message, 'err'); } });
     if ($('#btn-nt-base-bus')) $('#btn-nt-base-bus').addEventListener('click', async () => { try { await ntLoadBase('running', 'bus'); toast('已填入总线侧运行配置的值（可再修改，不影响总线侧）', 'ok'); } catch (e) { toast(e.message, 'err'); } });
@@ -4303,6 +4336,7 @@ function bindProcess() {
   $('#btn-rs-use').addEventListener('click', rsUseAsSource);
   $('#rs-errwin').addEventListener('change', rsSaveErrCfg);
   $('#rs-err').addEventListener('change', rsSaveErrCfg);
+  cmBind('rs-cm');                                   // v0.86：离线文件列映射（重采样）
 }
 
 

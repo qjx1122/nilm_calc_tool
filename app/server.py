@@ -2381,7 +2381,7 @@ class _ResampleJobs:
     def running(self) -> bool:
         return bool(self.thread and self.thread.is_alive())
 
-    def start(self, params: Dict[str, Any]) -> Dict[str, Any]:
+    def start(self, params: Dict[str, Any], cfg: Optional[AppConfig] = None) -> Dict[str, Any]:
         with self.lock:
             if self.running():
                 return {"ok": False, "error": "已有重采样任务在运行，请等待完成或先取消"}
@@ -2394,7 +2394,7 @@ class _ResampleJobs:
             def run() -> None:
                 try:
                     res = resample_csv(params["path"], params["fs_new"], params.get("out_dir") or "data",
-                                       cfg=RUNNER.cfg, fs_src=params.get("fs_src") or None,
+                                       cfg=cfg or RUNNER.cfg, fs_src=params.get("fs_src") or None,
                                        method=params.get("method") or "linear",
                                        overwrite=bool(params.get("overwrite")), job=job, root=ROOT,
                                        error_window_s=params.get("err_window_s"))
@@ -2479,9 +2479,19 @@ async def process_resample(payload: Optional[Dict[str, Any]] = None) -> Dict[str
             return {"ok": False, "error": "误差统计时间窗必须是数字（秒）"}
         if not (err_window_s > 0) or err_window_s > 3600:
             return {"ok": False, "error": "误差统计时间窗必须在 (0, 3600] 秒之间"}
+    # v0.86：离线文件列映射（默认不启用＝各列依次为 时间,A相电压,A相电流,B相电压,B相电流,C相电压,C相电流）
+    rs_cfg = AppConfig.from_dict(RUNNER.cfg.to_dict())
+    try:
+        from elec_tool.wave_preview import apply_col_map
+        apply_col_map(rs_cfg, payload.get("col_map_enabled", False), payload.get("col_map"))
+        rs_cfg.columns.validate()
+    except ConfigError as exc:
+        return {"ok": False, "error": f"列映射无效：{exc}"}
     return RESAMPLE.start({"path": path, "fs_new": fs_new, "fs_src": fs_src, "method": method,
                            "overwrite": bool(payload.get("overwrite")), "out_dir": out_dir,
-                           "err_report": err_report, "err_window_s": err_window_s})
+                           "err_report": err_report, "err_window_s": err_window_s,
+                           "col_map_enabled": bool(rs_cfg.columns.mapping_enabled), "col_map": dict(rs_cfg.columns.mapping)},
+                          cfg=rs_cfg)
 
 
 @app.get("/api/process/resample")
@@ -2592,6 +2602,13 @@ async def process_nilm_tune(payload: Dict[str, Any]) -> Any:
 
     try:
         base, base_mode, base_label = _nt_make_base(payload)
+        # v0.86：离线文件列映射（两种基准模式都按本次请求：默认不启用＝各列依次为 时间,Ua,Ia,Ub,Ib,Uc,Ic）
+        from elec_tool.wave_preview import apply_col_map
+        apply_col_map(base, payload.get("col_map_enabled", False), payload.get("col_map"), err=TuneError)
+        try:
+            base.columns.validate()
+        except ConfigError as exc:
+            raise TuneError(f"列映射无效：{exc}")
         kw = dict(channel=(str(payload.get("channel") or "").strip() or None),
                   quantity=(str(payload.get("quantity") or "").strip() or None),
                   min_load_w=_num("min_load_w"), min_load_a=_num("min_load_a"),
@@ -2617,6 +2634,8 @@ async def process_nilm_tune(payload: Dict[str, Any]) -> Any:
         out["base_config"] = None
         out["base_mode"] = "running" if base_mode == "legacy" else base_mode
         out["base"] = _nt_base_fields(base)
+        out["col_map_enabled"] = bool(base.columns.mapping_enabled)          # v0.86
+        out["col_map"] = dict(base.columns.mapping) if base.columns.mapping_enabled else None
         nl_dir = os.environ.get("ELEC_TOOL_NILM_DIR") or base.nilm.nilm_dir
         if base_mode == "custom":
             # v0.72：独立基准配置落盘（固定文件名、每次覆盖），等价命令用 --config 指向它即可复现
@@ -2662,7 +2681,8 @@ async def process_nilm_tune(payload: Dict[str, Any]) -> Any:
                            "min_load_w": kw["min_load_w"], "min_load_a": kw["min_load_a"], "min_load_auto": kw["min_load_auto"],
                            "min_load_used": out.get("min_load_used"), "min_load_source": out.get("min_load_source"),
                            "custom_time": kw["custom_time"], "custom_time_start": kw["custom_time_start"], "custom_time_end": kw["custom_time_end"],
-                           "base": out["base"], "base_file": out.get("base_file")}
+                           "base": out["base"], "base_file": out.get("base_file"),
+                           "col_map_enabled": bool(base.columns.mapping_enabled), "col_map": dict(base.columns.mapping)}
             _cfg, fp, changes = export_tuned_config(base_file, out, out_path=fp,
                                                     source_path=(out["file"] if base_mode == "custom" else None),
                                                     meta={"side": current_side(), "base_mode": out["base_mode"], "base_config": base_label,
@@ -2701,14 +2721,16 @@ async def process_resample_preview(path: str, fs_new: float) -> Dict[str, Any]:
 def _wave_base_cfg(fs: Optional[str] = None, f_nom: Optional[str] = None, pt_ct_enabled: Optional[str] = None,
                    pt_ratio: Optional[str] = None, ct_ratio: Optional[str] = None, file_time_utc: Optional[str] = None,
                    custom_time: Optional[str] = None, custom_time_start: Optional[str] = None,
-                   custom_time_end: Optional[str] = None) -> AppConfig:
+                   custom_time_end: Optional[str] = None, col_map_enabled: Optional[str] = None,
+                   col_map: Optional[str] = None) -> AppConfig:
     """v0.62：预览用基准配置**独立**于总线 / 分路侧运行配置：出厂配置 configs/default.json 副本 + 界面给的几项
     （采样率 / 额定频率 / PT·CT 启用与变比 / 时标 UTC；v0.64 + 自定义时间 开关 / 起始 / 结束）。不读、不改任何运行配置。
     v0.64：谐波次数限制按 fs 自动放宽（预览不算谐波）。"""
     from elec_tool.wave_preview import make_base
     return make_base(AppConfig.load(DEFAULT_CONFIG_PATH), fs=fs, f_nom=f_nom, pt_ct_enabled=pt_ct_enabled,
                      pt_ratio=pt_ratio, ct_ratio=ct_ratio, file_time_utc=file_time_utc,
-                     custom_time=custom_time, custom_time_start=custom_time_start, custom_time_end=custom_time_end)
+                     custom_time=custom_time, custom_time_start=custom_time_start, custom_time_end=custom_time_end,
+                     col_map_enabled=col_map_enabled, col_map=col_map)   # v0.86：离线文件列映射（默认不启用）
 
 
 WAVE_MAX_POINTS_CAP = 100_000_000      # v0.64：界面可配的「最多加载点数」硬上限（默认 20_000_000）
@@ -2739,12 +2761,13 @@ async def process_wave_defaults() -> Any:
 @app.get("/api/process/wave/info")
 async def process_wave_info(path: str, fs: Optional[str] = None, f_nom: Optional[str] = None, pt_ct_enabled: Optional[str] = None,
                             pt_ratio: Optional[str] = None, ct_ratio: Optional[str] = None, file_time_utc: Optional[str] = None,
-                            custom_time: Optional[str] = None, custom_time_start: Optional[str] = None, custom_time_end: Optional[str] = None) -> Any:
+                            custom_time: Optional[str] = None, custom_time_start: Optional[str] = None, custom_time_end: Optional[str] = None,
+                            col_map_enabled: Optional[str] = None, col_map: Optional[str] = None) -> Any:
     """波形文件信息：通道数 / 通道 / 采样率（时标推算，<0.5% 偏差按基准配置值）/ 行数 / 时长（＝行数 / 采样率）/ 起止时间
     （结束＝起始 + (行数−1)/采样率）。基准配置项（fs/f_nom/pt_ct_enabled/pt_ratio/ct_ratio/file_time_utc）独立于运行配置。"""
     from elec_tool.wave_preview import file_info
     try:
-        cfg = _wave_base_cfg(fs, f_nom, pt_ct_enabled, pt_ratio, ct_ratio, file_time_utc, custom_time, custom_time_start, custom_time_end); p = _wave_path(path)
+        cfg = _wave_base_cfg(fs, f_nom, pt_ct_enabled, pt_ratio, ct_ratio, file_time_utc, custom_time, custom_time_start, custom_time_end, col_map_enabled, col_map); p = _wave_path(path)
         d = await asyncio.to_thread(file_info, cfg, p)
         d["path_display"] = _display_path(p)
         d["t_start_local"] = fmt_local(d["t_start"]) if d.get("t_start") is not None else None
@@ -2760,12 +2783,13 @@ async def process_wave_load(path: str, t_start: str = "", t_end: str = "", n: Op
                             fs_out: Optional[float] = None, method: str = "linear", channels: str = "", max_points: Optional[str] = None,
                             fs: Optional[str] = None, f_nom: Optional[str] = None, pt_ct_enabled: Optional[str] = None,
                             pt_ratio: Optional[str] = None, ct_ratio: Optional[str] = None, file_time_utc: Optional[str] = None,
-                            custom_time: Optional[str] = None, custom_time_start: Optional[str] = None, custom_time_end: Optional[str] = None) -> Any:
+                            custom_time: Optional[str] = None, custom_time_start: Optional[str] = None, custom_time_end: Optional[str] = None,
+                            col_map_enabled: Optional[str] = None, col_map: Optional[str] = None) -> Any:
     """按 起止时刻、点数 n 或周波数 n_cycles（都空＝整段；v0.62 界面默认 300 周波）、重采样率 fs_out + 方式 method
     （linear/nearest/fft）、通道 加载一段原始波形（一次侧口径）。fs_out 空＝原采样率；channels 空＝全部。"""
     from elec_tool.wave_preview import load_waveform
     try:
-        cfg = _wave_base_cfg(fs, f_nom, pt_ct_enabled, pt_ratio, ct_ratio, file_time_utc, custom_time, custom_time_start, custom_time_end); p = _wave_path(path)
+        cfg = _wave_base_cfg(fs, f_nom, pt_ct_enabled, pt_ratio, ct_ratio, file_time_utc, custom_time, custom_time_start, custom_time_end, col_map_enabled, col_map); p = _wave_path(path)
         n_pts: Optional[int] = None; n_cyc: Optional[int] = None
         if n is not None and str(n).strip() != "":
             n_pts = int(float(str(n).strip()))
@@ -2792,11 +2816,12 @@ async def process_wave_rms(path: str, t_start: str = "", t_end: str = "", durati
                            agg_cycles: int = 1, max_points: int = 200_000,
                            fs: Optional[str] = None, f_nom: Optional[str] = None, pt_ct_enabled: Optional[str] = None,
                            pt_ratio: Optional[str] = None, ct_ratio: Optional[str] = None, file_time_utc: Optional[str] = None,
-                            custom_time: Optional[str] = None, custom_time_start: Optional[str] = None, custom_time_end: Optional[str] = None) -> Any:
+                            custom_time: Optional[str] = None, custom_time_start: Optional[str] = None, custom_time_end: Optional[str] = None,
+                            col_map_enabled: Optional[str] = None, col_map: Optional[str] = None) -> Any:
     """指定时间段的逐周波有效值曲线（Ua/Ub/Uc/Ia/Ib/Ic）；点数过多时自动合并相邻周波。"""
     from elec_tool.wave_preview import rms_curve
     try:
-        cfg = _wave_base_cfg(fs, f_nom, pt_ct_enabled, pt_ratio, ct_ratio, file_time_utc, custom_time, custom_time_start, custom_time_end); p = _wave_path(path)
+        cfg = _wave_base_cfg(fs, f_nom, pt_ct_enabled, pt_ratio, ct_ratio, file_time_utc, custom_time, custom_time_start, custom_time_end, col_map_enabled, col_map); p = _wave_path(path)
         chans = [c for c in str(channels or "").split(",") if c.strip()] or None
         d = await asyncio.to_thread(rms_curve, cfg, p, t_start=t_start, t_end=t_end, duration_s=duration_s, channels=chans,
                                     agg_cycles=max(1, int(agg_cycles or 1)), max_points=max(10, min(int(max_points), 2_000_000)))
