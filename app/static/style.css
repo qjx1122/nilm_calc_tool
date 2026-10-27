@@ -288,3 +288,9 @@ label.chk>.lbl>.note{color:var(--mut);opacity:.85;font-size:11.5px;line-height:1
 .colmap-row>label>input{width:100%;min-width:0;box-sizing:border-box}
 @media(max-width:1100px){.colmap-row{grid-template-columns:repeat(4,minmax(0,1fr))}}
 @media(max-width:700px){.colmap-row{grid-template-columns:repeat(2,minmax(0,1fr))}}
+
+/* v0.87：自适应算法参数启用时灰显被自动推导覆盖的数值项 */
+.nilm-algo label.nilm-auto-off,#nilm-form label.nilm-auto-off,#nilm-form-br label.nilm-auto-off{opacity:.4}
+.nilm-algo label.nilm-auto-off input,#nilm-form label.nilm-auto-off input,#nilm-form-br label.nilm-auto-off input{background:#141b2d}
+#nilm-auto-out table,#nilm-auto-out-br table{font-size:11.5px}
+#nilm-auto-out td,#nilm-auto-out-br td{padding:1px 8px 1px 0;vertical-align:top;color:var(--mut)}

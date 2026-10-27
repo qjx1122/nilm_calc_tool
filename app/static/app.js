@@ -3197,7 +3197,7 @@ const NILM_ALGOS = {
                   params: { median_cycles: '中值窗 (周波)', min_delta_w: '最小幅值 (W · P口径)', min_delta_a: '最小幅值 (A · I口径)', settle_cycles: '稳定周波数', settle_tol_w: '稳定容差 (W · P口径)', settle_tol_a: '稳定容差 (A · I口径)', max_rise_cycles: '最长暂态 (周波)' } },
 };
 const NILM_COLORS = { threshold: '#ff6b6b', two_window: '#ffa94d', cusum: '#ffd43b', glr: '#69db7c', steady_state: '#4dabf7', median_diff: '#da77f2' };
-const NILM_FIELDS = ['enabled', 'save', 'quantity', 'window_cycles', 'min_gap_cycles', 'rel_tol_pct', 'min_delta_pct'];
+const NILM_FIELDS = ['enabled', 'save', 'quantity', 'window_cycles', 'min_gap_cycles', 'rel_tol_pct', 'min_delta_pct', 'auto_params'];   // v0.87：auto_params
 const NILM_CH = ['total', 'A', 'B', 'C'];
 
 function buildNilmForm(side = sideOf()) {
@@ -3229,6 +3229,36 @@ function bindNilmForm(side) {
     const mark = () => { NLs(side).dirty = true; }; el.addEventListener('input', mark); el.addEventListener('change', mark);
   }));
   const q = E(side, 'nilm-quantity'); if (q) q.addEventListener('change', () => nilmDimUnits(side));
+  const ap = E(side, 'nilm-auto_params'); if (ap) ap.addEventListener('change', () => nilmDimUnits(side));
+  // v0.87：自适应参数只对总线侧生效——分路侧不显示该勾选
+  if (side === 'branch') { const l = E(side, 'nilm-auto_params-lbl'); if (l) l.style.display = 'none'; }
+}
+
+/* v0.87：自适应模式下灰显会被自动推导覆盖的数值项（算法启停勾选保持可用），并显示最近一次推导出的参数 */
+function nilmDimAuto(side = sideOf()) {
+  const ap = E(side, 'nilm-auto_params'); const host = E(side, 'nilm-algos'); if (!host) return;
+  const on = !!(ap && ap.checked) && side !== 'branch';
+  host.querySelectorAll('label').forEach(l => { if (!l.querySelector('input[type=checkbox]')) l.classList.toggle('nilm-auto-off', on); });
+  ['nilm-rel_tol_pct', 'nilm-min_delta_pct'].forEach(id => { const el = E(side, id); const l = el && el.closest('label'); if (l) l.classList.toggle('nilm-auto-off', on); });
+  const out = E(side, 'nilm-auto-out'); if (!out) return;
+  const sm = NLs(side).summary || {};
+  const al = sm.auto_last || {};
+  if (!on || !Object.keys(al).length) { out.style.display = on ? '' : 'none'; out.innerHTML = on ? '自适应算法参数已启用：等待周波窗数据（窗内不足 60 个有效周波时暂不评估；逐位重复数据需 ≥ 60×保持长度）' : ''; return; }
+  const names = sm.algorithm_names || {};
+  const f = v => (typeof v === 'number' ? (Math.abs(v) >= 100 ? v.toFixed(0) : Math.abs(v) >= 1 ? v.toFixed(2) : v.toPrecision(3)) : v);
+  const SHOW = { threshold: ['min_delta_w', 'settle_cycles', 'settle_tol_w', 'max_rise_cycles'], two_window: ['pre_cycles', 'post_cycles', 'min_delta_w', 'k_sigma'],
+                 cusum: ['drift_w', 'threshold_w', 'min_delta_w', 'settle_cycles'], glr: ['window_cycles', 'threshold', 'min_delta_w', 'noise_w', 'settle_cycles'],
+                 steady_state: ['tol_w', 'min_steady_cycles', 'min_delta_w', 'max_transient_cycles'], median_diff: ['median_cycles', 'min_delta_w', 'settle_cycles', 'settle_tol_w', 'max_rise_cycles'] };
+  let h = '<b>自适应算法参数（最近一次评估，由当前周波窗数据推导）</b>';
+  Object.keys(al).forEach(ch => {
+    const a = al[ch] || {}; const st = a.stats || {}; const u = a.unit || 'W';
+    h += `<div style="margin-top:4px"><b>${ch === 'total' ? '三相总' : ch + ' 相'}</b>（${a.quantity === 'i' ? 'I' : 'P'}，${u}）：σ=${f(st.sigma)} ${u} · 保持长度=${st.hold || 1} · 稳定周波=${st.settle} · 最短稳态=${st.min_steady} · 最长暂态=${st.transient} · k=${f(st.k)} · 最小幅值=${f(st.min_delta)} ${u} · 窗=${st.n} 周波</div>`;
+    h += '<table style="margin-top:2px"><tbody>' + Object.keys(a.algorithms || {}).map(al2 => {
+      const prm = a.algorithms[al2] || {};
+      return `<tr><td>${names[al2] || al2}</td><td>${(SHOW[al2] || Object.keys(prm)).filter(k => prm[k] !== undefined).map(k => `${k.replace(/_w$/, '')}=${f(prm[k])}`).join('  ')}</td></tr>`;
+    }).join('') + '</tbody></table>';
+  });
+  out.style.display = ''; out.innerHTML = h;
 }
 
 /* v0.37：按检测量灰显不参与的那套阈值（auto 时按服务端 summary.quantity_effective；未知时两套都亮） */
@@ -3240,6 +3270,7 @@ function nilmDimUnits(side = sideOf(), effective) {
   host.querySelectorAll('.nilm-unit-a').forEach(el => el.classList.toggle('nilm-inactive', q === 'p'));
   // v0.39：I 口径没有跨相合并，只能单相检测——「三相总」灰显（仍可勾选保存，检测器忽略）
   const tl = E(side, 'nilm-ch-total-lbl'); if (tl) tl.classList.toggle('nilm-inactive', q === 'i');
+  nilmDimAuto(side);
 }
 
 function fillNilmForm(nc, side = sideOf()) {
@@ -3262,6 +3293,7 @@ function collectNilmPayload(side = sideOf()) {
   const p = { algorithms: {} };
   NILM_FIELDS.forEach(f => { const el = E(side, `nilm-${f}`); if (!el) return; p[f] = el.type === 'checkbox' ? el.checked : (el.tagName === 'SELECT' ? el.value : +el.value); });
   p.channels = NILM_CH.filter(c => { const el = E(side, `nilm-ch-${c}`); return el && el.checked; });
+  if (side === 'branch') p.auto_params = false;                       // v0.87：自适应参数只有总线侧
   Object.keys(NILM_ALGOS).forEach(a => {
     const prm = { enabled: !!E(side, `nilm-${a}-enabled`).checked };
     Object.keys(NILM_ALGOS[a].params).forEach(k => { const v = parseFloat(E(side, `nilm-${a}-${k}`).value); if (Number.isFinite(v)) prm[k] = v; });
@@ -3561,7 +3593,7 @@ function renderNilm() {
   const sm = NL.summary || {};
   const counts = sm.counts || {};
   const names = sm.algorithm_names || {};
-  const cards = [card('负荷辨识', sm.enabled === false ? '已禁用' : '启用', '', `累计 ${sm.total || 0} 条 · ↑${(sm.by_direction || {}).up || 0} / ↓${(sm.by_direction || {}).down || 0}`)];
+  const cards = [card('负荷辨识', sm.enabled === false ? '已禁用' : (sm.auto_params_effective ? '启用 · 自适应参数' : '启用'), '', `累计 ${sm.total || 0} 条 · ↑${(sm.by_direction || {}).up || 0} / ↓${(sm.by_direction || {}).down || 0}`)];
   Object.keys(NILM_ALGOS).forEach(a => cards.push(card(names[a] || NILM_ALGOS[a].name, String(counts[a] || 0), '次',
     (sm.algorithms_enabled || []).includes(a) ? '启用' : '<span class="bad">已停用</span>')));
   cards.push(card('周波窗', `${sm.window_fill || 0} / ${sm.window_cycles || 0}`, '周波', `每周波 ${sm.n_cycle_samples || 0} 点 · 累计 ${sm.cycles_total || 0} 周波 · 对象 ${(sm.channels_effective || sm.channels || []).join('/')}`));

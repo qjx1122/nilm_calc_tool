@@ -602,7 +602,15 @@ def run_tune(base: AppConfig, file: str, *, channel: Optional[str] = None, quant
                      "同一次投切被复制成多次，噪声统计与事件计数不代表真实现场，建议用连续真实录波调参")
     if qty == "i" and min_load_w is not None and min_load_a is None:
         notes.append("I 口径请用 min_load_a（A）；min_load_w 已忽略")
-    return {"file": file, "channel": ch, "fs": cfg.sampling.fs, "f_nom": cfg.sampling.f_nom,
+    # v0.87：对照——若启用 nilm.auto_params，运行时对这段序列（整段当作一个窗）会推导出的参数
+    try:
+        from .nilm_auto import auto_params as _auto
+        auto = _auto(p, float(cfg.sampling.f_nom), cfg.nilm.algorithms)
+    except Exception as exc:                                  # pragma: no cover
+        auto = None; notes.append(f"自适应参数推导失败：{exc}")
+    if auto is None:
+        notes.append("自适应参数对照：序列太短（不足 60 个有效周波）无法推导")
+    return {"file": file, "channel": ch, "auto_params": auto, "fs": cfg.sampling.fs, "f_nom": cfg.sampling.f_nom,
             "quantity": qty, "quantity_requested": q_req, "unit": unit, "voltage_present": u_nonzero,
             "scaled": bool(cfg.transform.enabled), "t_span_s": float(t[-1] - t[0]) if len(t) > 1 else 0.0,
             "t_range": {"start": ts_txt, "end": te_txt, "duration_s": duration_s,

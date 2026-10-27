@@ -822,9 +822,11 @@
             </select></label>
           <label>周波窗长（周波数，≥30）<input type="number" step="1" min="30" id="nilm-window_cycles"></label>
           <label>同算法同对象最小事件间隔（周波）<input type="number" step="1" min="0" id="nilm-min_gap_cycles"></label>
+          <label class="check" id="nilm-auto_params-lbl" title="v0.87：只有总线数据、无分路标签的场景。勾选后各算法全部数值参数在运行时由当前周波窗数据自动推导（噪声 σ=差分 MAD、稳定周波=3τ+2、最短稳态=Allan 拐点、暂态时长=超限游程最长、显著性倍数 k=√(2·ln 一天周波数)、最小幅值=max(1.5kσ√(2/最短稳态), 4σ)；逐位重复数据自动识别保持长度），无需用调参工具计算后手填；下方各算法数值与相对门槛不参与，算法启停仍按勾选；只对总线侧生效"><input type="checkbox" id="nilm-auto_params"> 启用自适应算法参数（只有总线数据场景：运行时按周波窗数据自动计算各算法参数，无需手动填写）</label>
           <label>相对容差 rel_tol_pct（% 窗内 |P| 中位数；作用于容差/漂移/噪声类参数）<input type="number" step="0.1" min="0" max="50" id="nilm-rel_tol_pct"></label>
           <label>相对最小幅值 min_delta_pct（% 窗内 |P| 中位数；0＝只用各算法绝对值）<input type="number" step="0.1" min="0" max="100" id="nilm-min_delta_pct"></label>
         </div>
+        <div id="nilm-auto-out" class="notes" style="display:none"></div>
         <div id="nilm-algos"></div>
         <div class="row" style="margin-top:10px"><button id="btn-nilm-save" class="savecfg-side" title="保存本侧负荷辨识算法参数到配置">保存总线侧配置</button><span id="nilm-form-note" class="mut"></span></div>
         <div class="row nilm-tune" style="margin-top:6px" title="v0.50：把 tools/nilm_tune.py --json 的输出叠加到当前运行配置：只改 nilm.quantity / rel_tol_pct / min_delta_pct 和各算法参数，其余不动；更新后的完整配置写到 output/nilm/nilm_tuned_config_<侧>_<时间戳>.json，默认不写配置文件">

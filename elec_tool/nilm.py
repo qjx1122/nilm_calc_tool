@@ -36,6 +36,7 @@ import numpy as np
 from .blocks import SampleBlock
 from .timefmt import fmt_local, wall_day
 from .config import AppConfig, NILM_ALGO_DEFAULTS, NILM_ALGO_NAMES, NILM_CHANNELS, NILM_W_TO_A, NilmConfig
+from .nilm_auto import AUTO_MIN_CYCLES, auto_algo_params, window_stats
 
 __all__ = ["NilmEvent", "NilmDetector", "CycleFeatures", "detect_steps", "NILM_ALGO_NAMES"]
 
@@ -451,6 +452,13 @@ class NilmDetector:
         # v0.36：电压存在性（数据源只有电流时 u 全 0）；quantity=auto 据此选检测量
         self._u_blocks = 0
         self._u_nonzero_blocks = 0
+        # v0.87：自适应参数——最近一次评估每个对象推导出的公共统计量与各算法参数（供界面 / 等价命令查看）
+        self.auto_last: Dict[str, Dict[str, Any]] = {}
+
+    @property
+    def auto_params_effective(self) -> bool:
+        """自适应参数是否实际生效：配置开启 **且** 本侧是总线侧（source_id=0）。"""
+        return bool(getattr(self.ncfg, "auto_params", False)) and int(getattr(self.cfg.output, "source_id", 0) or 0) == 0
 
     @property
     def voltage_missing(self) -> bool:
@@ -532,17 +540,28 @@ class NilmDetector:
             return out
         rel_tol = float(self.ncfg.rel_tol_pct)
         min_pct = float(self.ncfg.min_delta_pct)
+        auto = self.auto_params_effective
         for ch in self.channels_effective:
             ci = NILM_CHANNELS.index(ch)
             p = self._p[ci] if qty == "p" else self._i[ci]
             level = float(np.median(np.abs(p))) if p.size else 0.0
+            st = None
+            if auto:
+                st = window_stats(p, self.feat.f_nom)
+                if st is None:
+                    continue                                   # 窗内数据不足 AUTO_MIN_CYCLES：等更多数据
+                self.auto_last[ch] = {"stats": st, "algorithms": {}, "quantity": qty, "unit": "W" if qty == "p" else "A"}
             for algo in NILM_ALGO_DEFAULTS:
                 prm = self.ncfg.params(algo)
                 if not prm.get("enabled", True):
                     continue
-                if qty == "i":
-                    prm = params_for_current(prm)              # v0.37：I 口径用 *_a（A）这套绝对阈值
-                prm = effective_params(prm, level, rel_tol, min_pct)
+                if auto and st is not None:
+                    prm = auto_algo_params(algo, st, prm)      # v0.87：全部数值参数由窗内数据推导，相对门槛不叠加
+                    self.auto_last[ch]["algorithms"][algo] = {k: (round(float(v), 6) if isinstance(v, (int, float)) and not isinstance(v, bool) else v) for k, v in prm.items()}
+                else:
+                    if qty == "i":
+                        prm = params_for_current(prm)              # v0.37：I 口径用 *_a（A）这套绝对阈值
+                    prm = effective_params(prm, level, rel_tol, min_pct)
                 try:
                     steps = detect_steps(algo, p, prm)
                 except Exception as exc:
@@ -636,7 +655,16 @@ class NilmDetector:
                                  + ("实际对象 " + "/".join(self.channels_effective)
                                     + ("（配置只有三相总 → 按 A/B/C 三相各自单独检测）" if self.channels_effective == ["A", "B", "C"] and self.ncfg.channels == ["total"] else "")))
             enabled_algos = [a for a in NILM_ALGO_DEFAULTS if self.ncfg.params(a).get("enabled", True)]
-            return {"enabled": bool(self.ncfg.enabled), "total": total, "counts": counts, "by_channel": by_ch,
+            auto_cfg = bool(getattr(self.ncfg, "auto_params", False))
+            auto_eff = self.auto_params_effective
+            if auto_cfg and not auto_eff:
+                notes.append("nilm.auto_params=true 只对总线侧生效（只有总线数据、无分路标签的场景）；本侧为分路侧，仍按配置中的算法参数检测")
+            elif auto_eff:
+                notes.append(f"自适应算法参数已启用：各算法全部数值参数由当前周波窗数据推导（噪声 σ=差分 MAD、稳定周波=3τ+2、最短稳态=Allan 拐点、"
+                             f"暂态时长=超限游程 95% 分位、显著性倍数 k=√(2·ln ARL0)（ARL0=一天周波数）、最小幅值=max(1.5kσ√(2/最短稳态), 4σ)）；"
+                             f"配置中的各算法数值与 rel_tol_pct / min_delta_pct 不参与；窗内不足 {AUTO_MIN_CYCLES} 周波时暂不评估")
+            return {"enabled": bool(self.ncfg.enabled), "total": total, "auto_params": auto_cfg, "auto_params_effective": auto_eff,
+                    "auto_last": {ch: dict(v) for ch, v in self.auto_last.items()}, "counts": counts, "by_channel": by_ch,
                     "by_direction": by_dir, "cycles_total": self.cycles_total, "window_fill": int(self._t.shape[0]),
                     "window_cycles": int(self.ncfg.window_cycles), "n_cycle_samples": self.feat.n_cycle,
                     "channels": list(self.ncfg.channels), "channels_effective": self.channels_effective, "algorithms_enabled": enabled_algos,
