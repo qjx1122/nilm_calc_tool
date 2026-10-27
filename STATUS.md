@@ -93,6 +93,7 @@
 - **v0.81**：数据源页两侧各加「从文件加载本侧配置」（路径空＝现有配置文件；默认不写文件，可勾选只写差异）。`POST /api(/branch)/config/load_file`、`GET /api(/branch)/config/file`。`ui_r81` ALL PASS，389 passed。
 - **v0.87**：负荷辨识 `nilm.auto_params`（只有总线数据场景）：各算法全部数值参数由周波窗数据推导（hold/σ/τ/Allan/暂态游程/k=√(2 ln ARL0)/min_delta），分路侧忽略；界面勾选 + 灰显 + 推导参数面板；调参报告含对照。411 passed；ui_r87 11 项 ALL PASS。
 - **v0.88**：`nilm.auto_params` 扩展到分路侧（`auto_params_effective` 只看开关；分路侧勾选可见、载荷不再强制 false；notes 标注侧别）。411 passed；ui_r87 12 项 ALL PASS。
+- **v0.88.1**：分路侧启用自适应时与总线侧一致灰显 + disabled 全部算法数值参数（修 `nilmDimAuto` 残留排除）；ui_r87 17 项 ALL PASS。
 - **v0.86**：数据处理页重采样 / 调参 / 波形预览各加「启用离线文件列映射」（默认不启用＝固定列序；启用后 7 列号；只本次请求生效、不写运行配置；调参两种基准模式都生效）。405 passed；ui_r86 18 项 ALL PASS。
 - **v0.85**：分路侧离线倍速可单独设置（`source.file_speed_follow`，默认随总线侧；界面勾选、启动按界面值、随总线侧不改写分路侧配置）。401 passed；ui_r85 ALL PASS。
 - **v0.84**：总线侧「列出 data 目录」改为与分路侧同构（只列 CSV、可点击填入路径、dirty 标记）。ui_r84 ALL PASS。

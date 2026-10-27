@@ -3236,9 +3236,11 @@ function bindNilmForm(side) {
 /* v0.87：自适应模式下灰显会被自动推导覆盖的数值项（算法启停勾选保持可用），并显示最近一次推导出的参数 */
 function nilmDimAuto(side = sideOf()) {
   const ap = E(side, 'nilm-auto_params'); const host = E(side, 'nilm-algos'); if (!host) return;
-  const on = !!(ap && ap.checked) && side !== 'branch';
-  host.querySelectorAll('label').forEach(l => { if (!l.querySelector('input[type=checkbox]')) l.classList.toggle('nilm-auto-off', on); });
-  ['nilm-rel_tol_pct', 'nilm-min_delta_pct'].forEach(id => { const el = E(side, id); const l = el && el.closest('label'); if (l) l.classList.toggle('nilm-auto-off', on); });
+  const on = !!(ap && ap.checked);                                      // v0.88.1：两侧一致（v0.87 曾排除分路侧）
+  // 被自适应覆盖的数值项：灰显 + disabled（不可手动设置；值仍随表单保存，仅检测时不参与）
+  const dim = l => { l.classList.toggle('nilm-auto-off', on); l.querySelectorAll('input, select').forEach(el => { el.disabled = on; }); };
+  host.querySelectorAll('label').forEach(l => { if (!l.querySelector('input[type=checkbox]')) dim(l); });
+  ['nilm-rel_tol_pct', 'nilm-min_delta_pct'].forEach(id => { const el = E(side, id); const l = el && el.closest('label'); if (l) dim(l); });
   const out = E(side, 'nilm-auto-out'); if (!out) return;
   const sm = NLs(side).summary || {};
   const al = sm.auto_last || {};

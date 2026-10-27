@@ -21,9 +21,16 @@ const {JSDOM}=require(process.env.JSDOM_DIR+'/node_modules/jsdom');
  ok.push(['相对门槛灰显', $('#nilm-rel_tol_pct').closest('label').classList.contains('nilm-auto-off')]);
  ok.push(['推导面板显示等待文案', $('#nilm-auto-out').style.display==='' && /等待周波窗数据/.test($('#nilm-auto-out').textContent)]);
  ok.push(['总线侧载荷 auto_params=true', w.__collect('bus').auto_params===true]);
- E('branch','nilm-auto_params').checked=true;
+ ok.push(['总线侧数值项 disabled（v0.88.1）', $('#nilm-algos').querySelectorAll('label.nilm-auto-off input:not([disabled]), label.nilm-auto-off select:not([disabled])').length===0 && $('#nilm-algos').querySelectorAll('label.nilm-auto-off input[disabled]').length>20 && $('#nilm-rel_tol_pct').disabled && $('#nilm-min_delta_pct').disabled]);
+ ok.push(['总线侧算法启停勾选仍可用', [...$('#nilm-algos').querySelectorAll('input[type=checkbox]')].every(c=>!c.disabled)]);
+ E('branch','nilm-auto_params').checked=true; E('branch','nilm-auto_params').dispatchEvent(new w.Event('change'));
  ok.push(['分路侧载荷 auto_params=true（v0.88）', w.__collect('branch').auto_params===true]);
- E('branch','nilm-auto_params').checked=false; ok.push(['分路侧取消勾选 → false', w.__collect('branch').auto_params===false]);
+ const bh=E('branch','nilm-algos');
+ ok.push(['分路侧勾选后数值项灰显 + disabled、与总线侧数量一致', bh.querySelectorAll('label.nilm-auto-off').length===offs && bh.querySelectorAll('label.nilm-auto-off input:not([disabled]), label.nilm-auto-off select:not([disabled])').length===0 && E('branch','nilm-rel_tol_pct').disabled && E('branch','nilm-min_delta_pct').disabled]);
+ ok.push(['分路侧算法启停勾选仍可用', [...bh.querySelectorAll('input[type=checkbox]')].every(c=>!c.disabled)]);
+ ok.push(['分路侧推导面板显示等待文案', E('branch','nilm-auto-out').style.display==='' && /等待周波窗数据/.test(E('branch','nilm-auto-out').textContent)]);
+ E('branch','nilm-auto_params').checked=false; E('branch','nilm-auto_params').dispatchEvent(new w.Event('change'));
+ ok.push(['分路侧取消勾选 → false 且数值项恢复可编辑', w.__collect('branch').auto_params===false && bh.querySelectorAll('label.nilm-auto-off').length===0 && bh.querySelectorAll('input[disabled], select[disabled]').length===0]);
  // 模拟 summary.auto_last → 渲染推导参数表
  w.__NLs('bus').summary={auto_params:true,auto_params_effective:true,algorithm_names:{steady_state:'稳态分段(Hart)'},auto_last:{total:{quantity:'p',unit:'W',stats:{sigma:83.4,hold:1,settle:5,min_steady:10,transient:20,k:5.53,min_delta:333.8,n:1200},algorithms:{steady_state:{tol_w:603.4,min_steady_cycles:10,min_delta_w:333.8,max_transient_cycles:20}}}}};
  w.__dim('bus');
