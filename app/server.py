@@ -2709,6 +2709,96 @@ async def process_nilm_tune(payload: Dict[str, Any]) -> Any:
         return JSONResponse(status_code=400, content={"ok": False, "error": f"{type(exc).__name__}: {exc}"})
 
 
+@app.post("/api/process/nilm_profile")
+async def process_nilm_profile(payload: Dict[str, Any]) -> Any:
+    """v0.90：数据处理子界面「设备画像提取」——对设备侧（分路侧）含启停过程的波形文件构建设备画像 JSON
+    （与 ``tools/nilm_profile.py`` 同一实现），写到 ``nilm.nilm_dir``；总线侧把路径填入 nilm.profile_path 并勾选「设备画像匹配」后即可使用。
+
+    body：{path, device_id?, labels?: "时间,动作\n…", label_tol_s?: 2, pre_cycles?: 10, post_cycles?: 50, quantity?, max_cycles?,
+           t_start?, t_end?, custom_time?, custom_time_start?, custom_time_end?, name?: "profile_<设备>_{时间}.json",
+           base_mode?/base?/col_map_enabled?/col_map? 同 /api/process/nilm_tune}
+    labels 空＝自动定位（稳态分段 + 自适应参数；幅值为正＝启动、为负＝停止）。返回 {ok, saved_to, profile(summary), events, notes, command}。
+    """
+    from elec_tool.nilm_profile import ProfileError, build_profile, profile_summary, save_profile
+    from tools.nilm_profile import build_cli_command as _profile_cmd
+    path = str(payload.get("path") or "").strip()
+    if not path:
+        return JSONResponse(status_code=400, content={"ok": False, "error": "请填写设备侧波形文件路径"})
+    src_abs = _abs_path(path)
+    if not os.path.isfile(src_abs):
+        return JSONResponse(status_code=400, content={"ok": False, "error": f"文件不存在：{path}"})
+
+    def _num(k: str, default: float) -> float:
+        v = payload.get(k)
+        if v in (None, ""):
+            return default
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            raise ProfileError(f"{k} 必须是数字（当前 {v!r}）")
+
+    try:
+        base, base_mode, base_label = _nt_make_base(payload)
+        from elec_tool.wave_preview import apply_col_map
+        apply_col_map(base, payload.get("col_map_enabled", False), payload.get("col_map"), err=ProfileError)
+        try:
+            base.columns.validate()
+        except ConfigError as exc:
+            raise ProfileError(f"列映射无效：{exc}")
+        device_id = str(payload.get("device_id") or "").strip() or "device"
+        labels = str(payload.get("labels") or "").strip() or None
+        quantity = (str(payload.get("quantity") or "").strip() or None)
+        if quantity not in (None, "auto", "p", "i"):
+            raise ProfileError(f"quantity 必须是 auto / p / i（当前 {quantity!r}）")
+        if base_mode == "running":
+            quantity = None
+        kw = dict(device_id=device_id, labels=labels, label_tol_s=_num("label_tol_s", 2.0), pre_cycles=int(_num("pre_cycles", 10)),
+                  post_cycles=int(_num("post_cycles", 50)), max_cycles=int(_num("max_cycles", 400000)), quantity=quantity,
+                  t_start=str(payload.get("t_start") or ""), t_end=str(payload.get("t_end") or ""),
+                  custom_time=bool(payload.get("custom_time", False)),
+                  custom_time_start=str(payload.get("custom_time_start") or ""), custom_time_end=str(payload.get("custom_time_end") or ""))
+        doc = await asyncio.to_thread(build_profile, base, src_abs, **kw)
+        nl_dir = os.environ.get("ELEC_TOOL_NILM_DIR") or base.nilm.nilm_dir
+        d_abs = nl_dir if os.path.isabs(nl_dir) else os.path.join(ROOT, nl_dir)
+        os.makedirs(d_abs, exist_ok=True)
+        stamp = time.strftime("%Y%m%d_%H%M%S")
+        safe_dev = re.sub(r"[^\w\-.]+", "_", device_id) or "device"
+        name = os.path.basename(str(payload.get("name") or "").strip()) or f"profile_{safe_dev}_{stamp}.json"
+        name = name.replace("{时间}", stamp).replace("{time}", stamp).replace("{设备}", safe_dev).replace("{device}", safe_dev)
+        if not name.lower().endswith(".json"):
+            name += ".json"
+        fp = os.path.join(d_abs, name)
+        cfg_arg = None
+        if base_mode == "custom":
+            bpath = os.path.join(d_abs, NT_BASE_FILE)
+            base.source.path = _display_path(src_abs)
+            bdoc = base.to_dict(); bdoc["_note"] = "v0.72 负荷辨识调参 / v0.90 设备画像提取 独立基准配置（出厂配置 + 界面项），由界面每次覆盖写出"
+            with open(bpath, "w", encoding="utf-8") as fh:
+                json.dump(bdoc, fh, ensure_ascii=False, indent=2); fh.write("\n")
+            cfg_arg = _display_path(bpath)
+        else:
+            pp0 = RUNNER.persist_path
+            cfg_arg = _display_path(pp0) if (pp0 and os.path.isfile(pp0)) else None
+        doc["side"] = current_side(); doc["base_mode"] = "running" if base_mode == "legacy" else base_mode
+        doc["base"] = _nt_base_fields(base); doc["base_config"] = base_label
+        doc["col_map_enabled"] = bool(base.columns.mapping_enabled)
+        doc["col_map"] = dict(base.columns.mapping) if base.columns.mapping_enabled else None
+        doc["command"] = _profile_cmd(_display_path(src_abs), device=device_id, config=cfg_arg, labels=("<标签文本>" if labels else None),
+                                      label_tol=kw["label_tol_s"], pre=kw["pre_cycles"], post=kw["post_cycles"], quantity=quantity,
+                                      t_start=kw["t_start"], t_end=kw["t_end"], custom_time=kw["custom_time"],
+                                      custom_time_start=kw["custom_time_start"], custom_time_end=kw["custom_time_end"], out=_display_path(fp))
+        save_profile(doc, fp)
+        summ = profile_summary(doc); summ["path"] = _display_path(fp)
+        events = [e for g in ("startup", "shutdown") if doc.get(g) for e in doc[g]["events"]]
+        return {"ok": True, "saved_to": _display_path(fp), "profile": summ, "events": events, "notes": doc.get("notes", []),
+                "command": doc["command"], "file": _display_path(src_abs), "side": doc["side"], "base_config": base_label,
+                "startup": doc.get("startup"), "shutdown": doc.get("shutdown"), "features": doc.get("features")}
+    except (ProfileError, ConfigError, ValueError, WaveError, TuneError) as exc:
+        return JSONResponse(status_code=400, content={"ok": False, "error": str(exc)})
+    except Exception as exc:
+        return JSONResponse(status_code=400, content={"ok": False, "error": f"{type(exc).__name__}: {exc}"})
+
+
 @app.get("/api/process/resample/preview")
 async def process_resample_preview(path: str, fs_new: float) -> Dict[str, Any]:
     """只算输出文件名与是否已存在（界面即时提示用），不读数据。"""

@@ -301,11 +301,12 @@ def test_event_writers_rotate_old_header_and_write_run_id(tmp_path, monkeypatch)
     cfg = AppConfig.from_dict({"nilm": {"nilm_dir": str(tmp_path / "nl")}, "events": {"events_dir": str(tmp_path / "ev")}})
     t = 1791878400.0; day = wall_day()                           # v0.58：文件名按墙钟日期
     (tmp_path / "nl").mkdir(); old = tmp_path / "nl" / f"nilm_events_{day}.csv"
-    old.write_text(",".join(nm._CSV_FIELDS[:-1]) + "\n0,1,cusum,C,total,1,x,1,x,0,0,up,1,1,0,0,0,1,1\n", encoding="utf-8-sig")
+    old.write_text(",".join(nm._CSV_FIELDS[:nm._CSV_FIELDS.index("run_id")]) + "\n0,1,cusum,C,total,1,x,1,x,0,0,up,1,1,0,0,0,1,1\n", encoding="utf-8-sig")
     w = nm.NilmWriter(cfg.nilm, source_id=0, run_id=4242)
     e = nm.NilmEvent(id=1, algorithm="cusum", channel="total", t_start=t, t_end=t, direction="up", magnitude_w=1.0, delta_p_w=1.0, delta_q_var=0.0, delta_i_a=0.0, pre_p_w=0.0, post_p_w=1.0, cycles=0, score=1.0)
     w.write(e); w.close()
     assert (tmp_path / "nl" / f"nilm_events_{day}.pre-v032.csv").exists()
     rows = list(csv.reader(open(old, encoding="utf-8-sig")))
-    assert rows[0][-1] == "run_id" and rows[1][-1] == "4242" and len(rows) == 2
+    ir = rows[0].index("run_id")                                 # v0.90：run_id 之后还有画像匹配附加列
+    assert rows[1][ir] == "4242" and len(rows) == 2
     assert ev._CSV_FIELDS_V32[-1] == "run_id"

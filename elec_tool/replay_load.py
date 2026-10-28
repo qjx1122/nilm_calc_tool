@@ -196,6 +196,9 @@ def load_nilm_events(dir_: str, source_id: int, t_from: Optional[float] = None, 
                 "pre_p_w": _num(g(row, "pre_p_w")) or 0.0, "post_p_w": _num(g(row, "post_p_w")) or 0.0,
                 "cycles": int(_num(g(row, "cycles")) or 0), "score": _num(g(row, "score")) or 0.0,
                 "quantity": g(row, "quantity") or "p", "magnitude": _num(g(row, "magnitude")), "unit": g(row, "unit") or "W",
+                # v0.90：画像匹配附加列（旧文件没有这些列 → 空）
+                "device_id": g(row, "device_id") or "", "confidence": _num(g(row, "confidence")) or 0.0, "d2": _num(g(row, "d2")) or 0.0,
+                "profile_direction": g(row, "profile_direction") or "", "status": g(row, "status") or "", "quality_flags": g(row, "quality_flags") or "",
             })
         if len(out) >= limit:
             break

@@ -52,7 +52,7 @@ canvas{width:100%;background:#0d1220;border-radius:8px;border:1px solid #1e2740}
 .form{display:flex;flex-direction:column;gap:9px}
 .form label{display:flex;flex-direction:column;gap:4px;color:var(--mut);font-size:12px;flex:1}
 .form label.check{flex-direction:row;align-items:center;gap:6px;color:var(--fg)}
-input,select{background:#0e1424;border:1px solid var(--line);color:var(--fg);padding:6px 8px;border-radius:6px;font-size:13px;width:100%}
+input,select,textarea{background:#0e1424;font-family:inherit;border:1px solid var(--line);color:var(--fg);padding:6px 8px;border-radius:6px;font-size:13px;width:100%}
 input[type=checkbox]{width:auto}
 .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
 .row.pad{padding:0 0 12px}

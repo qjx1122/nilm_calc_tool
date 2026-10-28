@@ -1119,3 +1119,11 @@ U10-4 B/C 相为 0：____  U10-5 列号交换：Ia≈____  U10-6 无时间戳：
   - 回放结果：steps / bus_mixed 两文件 6 算法 ×3 套参数事件起点与幅值全部一致（2 / 5 个事件，无虚警，含 1 周波尖峰被 two_window 三套都报）；整段推导 A 与运行时末窗 R 的参数在 steps 完全相同、bus_mixed 仅 min_steady 32 vs 16（窗长不同、Allan 拐点不同）且事件一致。softstart（半数周波是斜坡）三者都把 σ 量成斜坡斜率（9391 W），属已知局限：MAD 在事件占比 ≥50% 时失效，调参侧 steady_state 靠 `longest_transient` 仍给出 max_transient=650 / min_steady=33，自适应侧 transient 只到 80（超限游程口径，斜坡每周波增量 9390≈σ 不算超限）→ 自适应 steady_state 漏报斜坡事件，仅 two_window/GLR 报 3 个；这是自适应相对调参工具的真实短板（慢斜坡）。
   - 发现并修复的缺陷：① `_corr_time` 台阶下 τ 恒 20（settle/min_steady/transient 顶满，修复前 v0.87 全部推导表受影响）；② 长斜坡 / 密集台阶被判采样保持或分段恒定（自适应整段 None、调参 σ=1.57e6 W）。
   - 验证：`tests/test_r87_nilm_auto.py` 9 项、`tests/test_r83_repeated_cycles.py`、`tests/test_nilm_tune_tool.py` 通过；全量 416 passed / 1 skipped。
+- v0.90（2026-10-28）：**设备画像匹配算法（基础版）** `tests/test_r90_nilm_profile.py` 14 项。合成数据（fs 6400、PT/CT 关、pf 0.9、电流噪声 2 mA）：设备侧基荷 100 W + 500 W 设备三次启停（启动 0.3 s 内 +300 W 冲击）；总线侧基荷 3000 W + 该设备 3.0→9.0 s + 他设备 1500 W 5.0→12.0 s + 120 W 6.5 s 起。
+  - 画像：标签方式 μ(ΔP)=500.0、μ(ΔQ)=242.2、μ(ΔIa/b/c)=3.207 A、峰值比 1.60、启动持续 15.7 周波、停止 1 周波；3 个启动起点与标签时刻偏差 ≤1 周波（修复前「长后窗中位数」定位把起点提前 2–11 周波）；无标签自动定位同样 3/3。
+  - 总线侧检测：START@3.00 s（D²=0.01，置信 0.999）、STOP@9.00 s（D²≈0，置信 1.0），他设备 −1500 W 候选 D²/d=103.8（ΔI 三维各贡献 162、ΔP 178）→ `rejected[d2_exceeds, state_mismatch]`，+1500 / +120 W 候选同样被拒；`nilm_replay` 同一文件 6 标量算法各报 5–6 事件（120～1500 W），profile 恰 2 事件 500 W。
+  - 状态机：ON 状态下第二次「启动」→ `state_mismatch`、非 confirmed；`state_check=0` → 两次均 confirmed。画像缺失 → `summary.profile.error`＋notes；路径空＋勾选 → notes 提示。
+  - 落盘 / 读回：`nilm_events_*.csv` 末 6 列 `device_id,confidence,d2,profile_direction,status,quality_flags`；旧表头（含 unit/run_id 无 device_id）改名 `.pre-v090.csv`；`load_nilm_events` 读回并 `load_events` 装回 device_id。
+  - API：`POST /api/process/nilm_profile`（总线 / 分路路由、标签文本 / 自动两种、坏标签 400、文件不存在 400）；CLI `tools/nilm_profile.py` 写出含 `command` 的画像。UI：`tools/ui_r90_check.cjs` 13/13（jsdom 打 8033 实服务）。
+  - 回归：r12 / r18 / r87 中「全部算法」断言改 `NILM_SCALAR_ALGOS`；CSV 列断言改按列名定位。全量 **444 passed / 1 skipped**（约 128 s）。
+  - 未覆盖：真实设备录波（无样本）；同幅值同 pf 的孪生设备（方法局限，必然高置信误配）；I 口径画像端到端（仅单元层路径）；DTW / 幅值校准未实现。

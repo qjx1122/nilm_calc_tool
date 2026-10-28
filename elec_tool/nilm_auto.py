@@ -31,7 +31,7 @@ from typing import Any, Dict, Optional
 
 import numpy as np
 
-from .config import NILM_ALGO_DEFAULTS
+from .config import NILM_ALGO_DEFAULTS, NILM_SCALAR_ALGOS
 
 __all__ = ["window_stats", "auto_algo_params", "auto_params", "AUTO_MIN_CYCLES"]
 
@@ -196,6 +196,8 @@ def _hold_length(p: np.ndarray):
 def auto_algo_params(algo: str, st: Dict[str, Any], base: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """把公共统计量映射成某个算法的参数字典（覆盖 base 中的数值键，保留 enabled）。"""
     prm = dict(base or NILM_ALGO_DEFAULTS[algo])
+    if algo not in NILM_SCALAR_ALGOS:
+        return prm                                              # v0.90：画像匹配不是标量算法，参数不由窗统计推导
     s, k, settle, ms, tr, md = st["sigma"], st["k"], st["settle"], st["min_steady"], st["transient"], st["min_delta"]
     if algo == "threshold":
         prm.update(min_delta_w=md, settle_cycles=settle, settle_tol_w=_range_tol(s, settle), max_rise_cycles=tr)
@@ -227,7 +229,7 @@ def auto_params(p: np.ndarray, f_nom: float = 50.0, algorithms: Optional[Dict[st
     if st is None:
         return None
     algs = {}
-    for a in NILM_ALGO_DEFAULTS:
+    for a in NILM_SCALAR_ALGOS:
         base = dict(NILM_ALGO_DEFAULTS[a])
         if algorithms and a in algorithms:
             base.update({kk: vv for kk, vv in algorithms[a].items() if kk in base})

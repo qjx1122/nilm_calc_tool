@@ -37,12 +37,15 @@ from .blocks import SampleBlock
 from .timefmt import fmt_local, wall_day
 from .config import AppConfig, NILM_ALGO_DEFAULTS, NILM_ALGO_NAMES, NILM_CHANNELS, NILM_W_TO_A, NilmConfig
 from .nilm_auto import AUTO_MIN_CYCLES, auto_algo_params, window_stats
+from .config import NILM_SCALAR_ALGOS
+from .nilm_profile import ProfileError, detect_profile, load_profile, profile_summary
 
 __all__ = ["NilmEvent", "NilmDetector", "CycleFeatures", "detect_steps", "NILM_ALGO_NAMES"]
 
 _CSV_FIELDS = ["source_id", "id", "algorithm", "algorithm_name", "channel", "t_start", "t_start_local", "t_end", "t_end_local",
                "duration_s", "cycles", "direction", "magnitude_w", "delta_p_w", "delta_q_var", "delta_i_a",
-               "pre_p_w", "post_p_w", "score", "quantity", "magnitude", "unit", "run_id"]
+               "pre_p_w", "post_p_w", "score", "quantity", "magnitude", "unit", "run_id",
+               "device_id", "confidence", "d2", "profile_direction", "status", "quality_flags"]   # v0.90：画像匹配事件附加列
 # v0.32：run_id（本次运行标识）；v0.36：quantity（p/i 检测量）、magnitude（检测量口径的 |Δ|）、unit（W/A）
 
 
@@ -74,6 +77,13 @@ class NilmEvent:
     quantity: str = "p"       # v0.36：检测量 p（有功）/ i（电流有效值）
     magnitude: float = 0.0    # 检测量口径的 |Δ|（p 时 = magnitude_w，i 时 = |ΔI|）
     unit: str = "W"
+    # v0.90：设备画像匹配事件（algorithm="profile"）附加字段；其它算法为空 / 0
+    device_id: str = ""
+    confidence: float = 0.0           # 0~1
+    d2: float = 0.0                   # 对角马氏距离 D²
+    profile_direction: str = ""       # START / STOP
+    status: str = ""                  # confirmed / low_confidence
+    quality_flags: str = ""           # 逗号分隔：state_mismatch / ambiguous_direction / trajectory_deviates
 
     def to_dict(self) -> Dict[str, Any]:
         d = asdict(self)
@@ -81,6 +91,9 @@ class NilmEvent:
         d["duration_s"] = float(self.t_end - self.t_start)
         d["t_start_local"] = _ts(self.t_start)
         d["t_end_local"] = _ts(self.t_end)
+        if self.algorithm == "profile":
+            d["observed_delta_p"] = self.delta_p_w
+            d["estimated_device_delta_p"] = None          # 无同步校准数据：不估计设备贡献幅值（方案 §7）
         return d
 
 
@@ -403,7 +416,9 @@ class NilmWriter:
                    f"{d['duration_s']:.4f}", d["cycles"], d["direction"],
                    f"{d['magnitude_w']:.3f}", f"{d['delta_p_w']:.3f}", f"{d['delta_q_var']:.3f}", f"{d['delta_i_a']:.4f}",
                    f"{d['pre_p_w']:.3f}", f"{d['post_p_w']:.3f}", f"{d['score']:.4g}",
-                   d.get("quantity", "p"), f"{d.get('magnitude', d['magnitude_w']):.4f}", d.get("unit", "W"), self.run_id]
+                   d.get("quantity", "p"), f"{d.get('magnitude', d['magnitude_w']):.4f}", d.get("unit", "W"), self.run_id,
+                   d.get("device_id", ""), f"{d.get('confidence', 0.0):.4f}", f"{d.get('d2', 0.0):.4g}", d.get("profile_direction", ""),
+                   d.get("status", ""), d.get("quality_flags", "")]
             with SHARED_FILE_LOCK:
                 csv.writer(self._fh).writerow(row)
                 self._fh.flush()
@@ -454,6 +469,32 @@ class NilmDetector:
         self._u_nonzero_blocks = 0
         # v0.87：自适应参数——最近一次评估每个对象推导出的公共统计量与各算法参数（供界面 / 等价命令查看）
         self.auto_last: Dict[str, Dict[str, Any]] = {}
+        # v0.90：设备画像（algorithm=profile）
+        self._profile: Optional[Dict[str, Any]] = None
+        self._profile_err: str = ""
+        self._profile_key: Tuple[str, float] = ("", 0.0)
+        self.device_state: str = "unknown"                  # 画像状态机：unknown / on / off
+        self.profile_last: List[Dict[str, Any]] = []        # 最近一次评估的候选（含被拒的，供界面诊断）
+        self._load_profile()
+
+    def _load_profile(self) -> None:
+        """按 nilm.profile_path 加载画像（路径或文件 mtime 变化才重读）。失败不抛，记录到 _profile_err。"""
+        path = str(getattr(self.ncfg, "profile_path", "") or "").strip()
+        if not path:
+            self._profile = None; self._profile_err = ""; self._profile_key = ("", 0.0); return
+        root = self._root or os.getcwd()
+        ap = path if os.path.isabs(path) else os.path.join(root, path)
+        try:
+            mt = os.path.getmtime(ap)
+        except OSError:
+            mt = 0.0
+        if self._profile is not None and self._profile_key == (ap, mt):
+            return
+        try:
+            self._profile = load_profile(ap); self._profile_err = ""
+        except (ProfileError, ValueError, OSError) as exc:
+            self._profile = None; self._profile_err = f"画像加载失败：{exc}"
+        self._profile_key = (ap, mt)
 
     @property
     def auto_params_effective(self) -> bool:
@@ -483,6 +524,7 @@ class NilmDetector:
                 self._g0 += 0
             self.writer.close()
             self.writer = NilmWriter(self.ncfg, root=self._root, source_id=int(getattr(self.cfg.output, "source_id", 0) or 0), run_id=self.run_id, dir_override=self.run_dir)
+            self._load_profile()
 
     # ---- 主入口
     def ingest(self, block: SampleBlock) -> List[Dict[str, Any]]:
@@ -551,7 +593,7 @@ class NilmDetector:
                 if st is None:
                     continue                                   # 窗内数据不足 AUTO_MIN_CYCLES：等更多数据
                 self.auto_last[ch] = {"stats": st, "algorithms": {}, "quantity": qty, "unit": "W" if qty == "p" else "A"}
-            for algo in NILM_ALGO_DEFAULTS:
+            for algo in NILM_SCALAR_ALGOS:
                 prm = self.ncfg.params(algo)
                 if not prm.get("enabled", True):
                     continue
@@ -599,7 +641,67 @@ class NilmDetector:
                     out.append(ev)
                     last_end = g_end
                 self._last_end[key] = last_end
+        out += self._evaluate_profile(qty, gap, g_last)
         out.sort(key=lambda e: (e.t_start, e.algorithm))
+        return out
+
+    def _evaluate_profile(self, qty: str, gap: int, g_last: int) -> List[NilmEvent]:
+        """v0.90：设备画像匹配（多特征，对象固定为三相合成 total；P 口径用总有功做候选，I 口径用三相电流合成量）。"""
+        prm = self.ncfg.params("profile")
+        if not prm.get("enabled", False):
+            return []
+        if self._profile is None:
+            return []
+        prof = self._profile
+        use_p = (qty == "p")
+        if prof.get("quantity") != ("p" if use_p else "i"):
+            msg = f"画像按 {prof.get('unit')} 口径构建，本侧检测量为 {'P' if use_p else 'I'}：ΔP/ΔI 特征不可比，画像匹配未运行（请统一 nilm.quantity）"
+            if msg not in self.errors:
+                self.errors.append(msg)
+            return []
+        try:
+            res = detect_profile(self._p, self._q, self._i, prof, prm, use_p, self.device_state)
+        except Exception as exc:
+            msg = f"profile 检测异常：{type(exc).__name__}: {exc}"
+            if msg not in self.errors:
+                self.errors.append(msg)
+            return []
+        post_n = int(prof.get("post_cycles", 50))
+        key = ("profile", "total")
+        last_end = self._last_end.get(key, -1)
+        out: List[NilmEvent] = []
+        diag: List[Dict[str, Any]] = []
+        for r in res:
+            onset, end = r["onset"], r["end"]
+            g_on, g_end = self._g0 + onset, self._g0 + end
+            if g_end + post_n > g_last:                      # 事件后窗数据不够：等下一块
+                continue
+            m = r["match"]; f = r["feat"]
+            diag.append({"t_start": float(self._t[onset]), "t_start_local": _ts(float(self._t[onset])), "direction": m["direction"],
+                         "d2": round(m["d2"], 3), "d2_per_dim": round(m["d2_per_dim"], 3), "confidence": round(r["confidence"], 4),
+                         "margin": (round(m["margin"], 2) if math.isfinite(m["margin"]) else None), "status": r["status"],
+                         "flags": list(r["flags"]), "contrib": {k: round(v, 2) for k, v in m["contrib"].items()},
+                         "vec": {k: round(float(v), 4) for k, v in f["vec"].items()}, "seen": g_on <= last_end + gap})
+            if g_on <= last_end + gap:
+                continue
+            if not r["accepted"]:
+                continue
+            self.device_state = "on" if m["direction"] == "START" else "off"
+            v = f["vec"]; dp = float(v["d_p"]); d_main = dp if use_p else f["d_it"]
+            ev = NilmEvent(id=self._next_id, algorithm="profile", channel="total",
+                           t_start=float(self._t[onset]), t_end=float(self._t[end]),
+                           direction="up" if m["direction"] == "START" else "down", magnitude_w=abs(dp), delta_p_w=dp,
+                           delta_q_var=float(v["d_q"]), delta_i_a=float(f["d_it"]),
+                           pre_p_w=float(f["pre"]["p"]), post_p_w=float(f["post"]["p"]), cycles=int(end - onset),
+                           score=float(r["confidence"]), g_start=g_on, g_end=g_end, quantity=qty, magnitude=abs(float(d_main)),
+                           unit="W" if use_p else "A", device_id=str(prof.get("device_id", "")), confidence=float(r["confidence"]),
+                           d2=float(m["d2"]), profile_direction=m["direction"], status=r["status"], quality_flags=",".join(r["flags"]))
+            self._next_id += 1
+            out.append(ev)
+            last_end = g_end
+        self._last_end[key] = last_end
+        if diag:
+            self.profile_last = diag[-20:]
         return out
 
     @staticmethod
@@ -655,6 +757,20 @@ class NilmDetector:
                                  + ("实际对象 " + "/".join(self.channels_effective)
                                     + ("（配置只有三相总 → 按 A/B/C 三相各自单独检测）" if self.channels_effective == ["A", "B", "C"] and self.ncfg.channels == ["total"] else "")))
             enabled_algos = [a for a in NILM_ALGO_DEFAULTS if self.ncfg.params(a).get("enabled", True)]
+            # v0.90：画像匹配状态
+            prof_on = bool(self.ncfg.params("profile").get("enabled", False))
+            prof_info: Dict[str, Any] = {"enabled": prof_on, "path": str(getattr(self.ncfg, "profile_path", "") or ""), "loaded": self._profile is not None,
+                                         "error": self._profile_err, "device_state": self.device_state,
+                                         "summary": (profile_summary(self._profile) if self._profile else None), "last": list(self.profile_last)}
+            if prof_on and not getattr(self.ncfg, "profile_path", ""):
+                notes.append("设备画像匹配已勾选但 nilm.profile_path 为空：请先在数据处理页「设备画像提取」生成画像并填入路径")
+            elif prof_on and self._profile_err:
+                notes.append(self._profile_err)
+            elif prof_on and self._profile is not None:
+                pf = self._profile
+                notes.append(f"设备画像匹配：设备 {pf.get('device_id')}（{pf.get('unit')} 口径，启动样本 {pf['startup']['n'] if pf.get('startup') else 0} / 停止样本 "
+                             f"{pf['shutdown']['n'] if pf.get('shutdown') else 0}，前后窗 {pf.get('pre_cycles')}/{pf.get('post_cycles')} 周波）；"
+                             f"对象固定为三相合成，输出观测幅值与置信度，不估计设备贡献幅值；当前设备状态 {self.device_state}")
             auto_cfg = bool(getattr(self.ncfg, "auto_params", False))
             auto_eff = self.auto_params_effective
             if auto_eff:
@@ -669,7 +785,7 @@ class NilmDetector:
                     "channels": list(self.ncfg.channels), "channels_effective": self.channels_effective, "algorithms_enabled": enabled_algos,
                     "quantity": str(self.ncfg.quantity), "quantity_effective": qty, "voltage_missing": self.voltage_missing,
                     "algorithm_names": NILM_ALGO_NAMES, "writer": self.writer.info(), "errors": list(self.errors),
-                    "notes": notes}
+                    "profile": prof_info, "notes": notes}
 
     def load_events(self, rows: List[Dict[str, Any]], replace: bool = True) -> int:
         """v0.18：把 nilm_events CSV 读回的事件（字典，见 replay_load.load_nilm_events）装入日志。"""
@@ -690,7 +806,10 @@ class NilmDetector:
                                post_p_w=float(d.get("post_p_w") or 0.0), cycles=int(d.get("cycles") or 0),
                                score=float(d.get("score") or 0.0), quantity=str(d.get("quantity") or "p"),
                                magnitude=float(d.get("magnitude") if d.get("magnitude") not in (None, "") else (d.get("magnitude_w") or 0.0)),
-                               unit=str(d.get("unit") or "W"))
+                               unit=str(d.get("unit") or "W"), device_id=str(d.get("device_id") or ""),
+                               confidence=float(d.get("confidence") or 0.0), d2=float(d.get("d2") or 0.0),
+                               profile_direction=str(d.get("profile_direction") or ""), status=str(d.get("status") or ""),
+                               quality_flags=str(d.get("quality_flags") or ""))
                 self._next_id += 1
                 self._log.append(ev)
                 self.counts[algo] = self.counts.get(algo, 0) + 1

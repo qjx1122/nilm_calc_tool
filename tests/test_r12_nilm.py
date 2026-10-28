@@ -15,7 +15,7 @@ import numpy as np
 import pytest
 
 from elec_tool.blocks import SampleBlock
-from elec_tool.config import AppConfig, ConfigError, NILM_ALGO_DEFAULTS, NilmConfig
+from elec_tool.config import AppConfig, ConfigError, NILM_ALGO_DEFAULTS, NILM_SCALAR_ALGOS, NilmConfig
 from elec_tool.engine import LiveEngine
 from elec_tool.nilm import CycleFeatures, NilmDetector, detect_steps, effective_params
 
@@ -51,7 +51,8 @@ def _write_csv(path, dur=6.0):
 def test_all_algorithms_find_both_steps_and_ignore_spike():
     rng = np.random.default_rng(0)
     p = np.full(300, 1000.0); p[100:] += 500; p[220:] -= 300; p += rng.normal(0, 2, 300); p[150] += 400
-    for a, prm in NILM_ALGO_DEFAULTS.items():
+    for a in NILM_SCALAR_ALGOS:
+        prm = NILM_ALGO_DEFAULTS[a]
         steps = detect_steps(a, p, prm)
         real = [s for s in steps if abs(s[3] - s[2]) >= 200]
         assert len(real) == 2, (a, steps)
@@ -98,7 +99,7 @@ def test_engine_detects_direction_magnitude_time_and_writes_csv(tmp_path, monkey
     by_algo = {}
     for e in evs:
         by_algo.setdefault(e["algorithm"], []).append(e)
-    for a in NILM_ALGO_DEFAULTS:
+    for a in NILM_SCALAR_ALGOS:
         big = sorted([e for e in by_algo.get(a, []) if e["magnitude_w"] > 3e5], key=lambda e: e["t_start"])
         assert len(big) == 2, (a, by_algo.get(a))
         up, down = big
@@ -215,7 +216,7 @@ def test_web_nilm_endpoints_config_and_playback(client):
     d = client.get("/api/nilm/events?limit=100").json()
     assert d["summary"]["total"] >= 12 and st["engine"]["nilm_events_total"] == d["summary"]["total"] and st["engine"]["nilm_cycles"] == 300
     algos = {e["algorithm"] for e in d["events"]}
-    assert algos == set(NILM_ALGO_DEFAULTS)                                  # min_delta_pct=5% 后双滑窗的尖峰小事件被滤掉
+    assert algos == set(NILM_SCALAR_ALGOS)                                  # min_delta_pct=5% 后双滑窗的尖峰小事件被滤掉
     assert all(e["magnitude_w"] > 3e5 for e in d["events"])
     f = client.get("/api/nilm/events?algos=glr,cusum&channel=total").json()["events"]
     assert f and {e["algorithm"] for e in f} <= {"glr", "cusum"}
@@ -234,7 +235,7 @@ def test_frontend_wiring():
     assert 'data-view="nilm"' in html and 'id="view-nilm"' in html
     for i in ("nilm-cards", "nilm-chart", "nilm-table", "nilm-filter", "nilm-algos", "btn-nilm-save", "btn-nilm-clear", "nilm-enabled", "nilm-rel_tol_pct"):
         assert f'id="{i}"' in html, i
-    for a in NILM_ALGO_DEFAULTS:
+    for a in NILM_SCALAR_ALGOS:
         assert f"{a}:" in js.split("const NILM_ALGOS")[1].split("};")[0], a
         for k in NILM_ALGO_DEFAULTS[a]:
             if k != "enabled":
@@ -280,7 +281,7 @@ def test_current_only_detection_all_algorithms(tmp_path, monkeypatch):
     key = {}
     for e in evs:
         key.setdefault((e["algorithm"], e["channel"], e["direction"]), []).append(e)
-    for a in NILM_ALGO_DEFAULTS:
+    for a in NILM_SCALAR_ALGOS:
         for ch in ("A",):
             ups, downs = key.get((a, ch, "up"), []), key.get((a, ch, "down"), [])
             assert ups and downs, (a, ch)
@@ -294,7 +295,9 @@ def test_current_only_detection_all_algorithms(tmp_path, monkeypatch):
     # 落盘：新增 quantity / magnitude / unit 列
     f = [p for p in (tmp_path / "nilm").iterdir() if p.suffix == ".csv"][0]
     rows = list(csv.reader(open(f, encoding="utf-8-sig")))
-    assert rows[0][-4:] == ["quantity", "magnitude", "unit", "run_id"] and rows[1][-4] == "i" and rows[1][-2] == "A"
+    iq = rows[0].index("quantity")
+    assert rows[0][iq:iq + 4] == ["quantity", "magnitude", "unit", "run_id"] and rows[1][iq] == "i" and rows[1][iq + 2] == "A"
+    assert rows[0][-6:] == ["device_id", "confidence", "d2", "profile_direction", "status", "quality_flags"]   # v0.90
 
 
 def test_quantity_p_without_voltage_reports_error_and_i_with_voltage_works(tmp_path, monkeypatch):
@@ -345,7 +348,7 @@ def test_current_only_csv_header_and_web_playback(client):
     d = client.get("/api/nilm/events?limit=200").json()
     sm = d["summary"]
     assert sm["voltage_missing"] is True and sm["quantity_effective"] == "i" and sm["total"] >= 12, sm
-    assert {e["algorithm"] for e in d["events"]} == set(NILM_ALGO_DEFAULTS)
+    assert {e["algorithm"] for e in d["events"]} == set(NILM_SCALAR_ALGOS)
     assert all(e["unit"] == "A" and e["quantity"] == "i" and e["delta_p_w"] == 0 for e in d["events"])
     # 一次侧（CT=15）：A 相 ΔI ≈ 3.207×15 ≈ 48.1 A
     a_up = max((e for e in d["events"] if e["channel"] == "A" and e["direction"] == "up"), key=lambda e: e["magnitude"])
@@ -396,31 +399,31 @@ def test_current_mode_uses_a_thresholds_not_w(tmp_path, monkeypatch):
     u0 = np.zeros_like(u)
     # ΔI_A ≈ 3.2 A（投入）、≈1.9 A（切除）：min_delta_a=2.5 → 只剩投入事件
     cfg = AppConfig(); cfg.nilm.channels = ["A"]
-    for a in NILM_ALGO_DEFAULTS:
+    for a in NILM_SCALAR_ALGOS:
         cfg.nilm.algorithms[a]["min_delta_a"] = 2.5
         cfg.nilm.algorithms[a]["min_delta_w"] = 1e9                     # W 套应被忽略
     cfg.validate()
     evs = _feed(NilmDetector(cfg), t, u0, i)
-    assert evs and all(e["direction"] == "up" for e in evs) and {e["algorithm"] for e in evs} == set(NILM_ALGO_DEFAULTS)
+    assert evs and all(e["direction"] == "up" for e in evs) and {e["algorithm"] for e in evs} == set(NILM_SCALAR_ALGOS)
     assert all(e["unit"] == "A" and e["magnitude"] > 2.5 for e in evs)
     # 全部 A 套抬到 10 A → 0 事件
-    for a in NILM_ALGO_DEFAULTS:
+    for a in NILM_SCALAR_ALGOS:
         cfg.nilm.algorithms[a]["min_delta_a"] = 10.0
     cfg.validate()
     assert _feed(NilmDetector(cfg), t, u0, i) == []
     # P 口径不受 A 套影响：A 套 10 A、W 套恢复默认 → 事件照常
     cfg2 = AppConfig(); cfg2.nilm.quantity = "p"; cfg2.nilm.channels = ["A"]
-    for a in NILM_ALGO_DEFAULTS:
+    for a in NILM_SCALAR_ALGOS:
         cfg2.nilm.algorithms[a]["min_delta_a"] = 10.0
     cfg2.validate()
     evs2 = _feed(NilmDetector(cfg2), t, u, i)
-    assert {e["algorithm"] for e in evs2} == set(NILM_ALGO_DEFAULTS) and all(e["unit"] == "W" for e in evs2)
+    assert {e["algorithm"] for e in evs2} == set(NILM_SCALAR_ALGOS) and all(e["unit"] == "W" for e in evs2)
 
 
 def test_frontend_a_params_wiring():
     js = (ROOT / "app/static/app.js").read_text(encoding="utf-8")
     block = js.split("const NILM_ALGOS")[1].split("};")[0]
-    for a in NILM_ALGO_DEFAULTS:
+    for a in NILM_SCALAR_ALGOS:
         for k in NILM_ALGO_DEFAULTS[a]:
             if k.endswith("_a"):
                 assert f"{k}:" in block and "A · I口径" in block, (a, k)

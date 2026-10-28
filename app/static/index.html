@@ -1081,6 +1081,42 @@
           <details><summary>原始结果 JSON</summary><pre id="nt-json" class="pre"></pre></details>
         </div>
       </div>
+      <!-- v0.90：设备画像提取 -->
+      <h2 style="margin-top:18px">数据处理 · 设备画像提取（设备侧启停录波 → 设备画像 JSON → 总线侧「设备画像匹配」）</h2>
+      <div class="grid2">
+        <div class="panel">
+          <h3>画像参数（与 <code>tools/nilm_profile.py</code> 同一实现）<span class="navhint">文件 / 时间段 / 自定义时间 / 基准配置 / 列映射沿用上方「负荷辨识调参」的公共配置</span></h3>
+          <div class="form" id="np-form">
+            <div class="notes" id="np-common-note">波形文件、起止时间、自定义时间、基准配置（fs / f_nom / PT·CT / 时标 / 检测量）与列映射<b>沿用上方负荷辨识调参区的当前填写值</b>；请先在上方选好设备侧（分路侧）含启停过程的文件。</div>
+            <div class="row2">
+              <label title="写进画像与事件表的设备标识">设备 ID <input id="np-device" placeholder="pumpA"></label>
+              <label title="标签时刻与真实变化点的容差（秒）：在标签 ± 容差范围内找双滑窗差最大的周波为事件起点">标签时刻容差 (s) <input id="np-tol" type="number" min="0.02" step="0.1" value="2"></label>
+            </div>
+            <label title="每行「时间,动作」；时间写法同真值表：2026-10-13 08:00:02.5 / 08:00:02.5（与文件时标当天比较）/ epoch 秒；动作：开/关、启动/停止、on/off、start/stop、投入/切除。留空＝自动定位（稳态分段 + 自适应参数，幅值为正＝启动、为负＝停止）">启停标签（每行「时间,动作」；留空＝自动定位启停）<textarea id="np-labels" rows="5" placeholder="08:00:02,开&#10;08:00:32,关&#10;08:01:10,on&#10;08:01:40,off"></textarea></label>
+            <div class="row2">
+              <label title="事件前窗周波数（取稳态前值）">前窗 (周波) <input id="np-pre" type="number" min="3" step="1" value="10"></label>
+              <label title="事件后窗周波数：应 ≥ 设备启动过程（冲击 / 爬升）时长；总线侧确认事件也要等这么多周波">后窗 (周波) <input id="np-post" type="number" min="3" step="1" value="50"></label>
+            </div>
+            <label>画像文件名（写到 output/nilm/；留空＝profile_{设备}_{时间}.json） <input id="np-name" placeholder="profile_{设备}_{时间}.json"></label>
+            <div class="btnrow">
+              <button id="btn-np-run" class="primary">提取设备画像</button>
+              <button id="btn-np-fill-bus" disabled title="把本次画像路径填入总线侧负荷辨识表单的「画像文件路径」（需到负荷辨识页勾选「设备画像匹配」并保存总线侧配置）">填入总线侧画像路径</button>
+              <button id="btn-np-fill-branch" disabled title="把本次画像路径填入分路侧负荷辨识表单的「画像文件路径」">填入分路侧画像路径</button>
+            </div>
+            <div class="notes">
+              <div>画像＝多次启停事件的前后差分特征（ΔIa/ΔIb/ΔIc/ΔP/ΔQ、峰值比、持续周波）均值 μ 与标准差 σ，以及归一化启停轨迹模板；总线侧用对角马氏距离匹配并给出置信度。</div>
+              <div>设备侧电流 ≠ 总线侧增量；本版不做同步校准，总线侧事件只给<b>观测幅值 + 置信度</b>，不估计设备贡献幅值。画像与总线侧检测量口径（P / I）须一致。</div>
+            </div>
+          </div>
+        </div>
+        <div class="panel">
+          <h3>结果</h3>
+          <div id="np-status" class="notes"></div>
+          <div id="np-cmdrow" class="notes" style="display:none">等价命令 <code id="np-cmd"></code> <button id="btn-np-copy" type="button" style="padding:1px 8px;font-size:12px">复制</button></div>
+          <div id="np-result" class="tablewrap"></div>
+          <details><summary>原始画像 JSON</summary><pre id="np-json" class="pre"></pre></details>
+        </div>
+      </div>
       <!-- v0.61：波形预览 -->
       <h2 style="margin-top:18px">数据处理 · 波形预览（离线波形 CSV：文件信息 / 原始波形 / 逐周波有效值）</h2>
       <div class="grid2">

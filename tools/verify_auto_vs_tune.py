@@ -103,6 +103,8 @@ def compare(file: str, window: int, quantity: str, channel: str, min_load_auto: 
     print(f"    自适应统计（整段）：{ {k: (round(v, 4) if isinstance(v, float) else v) for k, v in stA.items()} }")
     print(f"    自适应统计（运行时末窗 {window} 周波）：{ {k: (round(v, 4) if isinstance(v, float) else v) for k, v in stR.items()} }")
     for algo in NILM_ALGO_DEFAULTS:
+        if algo not in SHOW:
+            continue
         t, a, r = _strip(T.get(algo, {})), _strip(A.get(algo, {})), _strip(R.get(algo, {}))
         rows = []
         for k in SHOW[algo]:

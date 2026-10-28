@@ -3195,9 +3195,12 @@ const NILM_ALGOS = {
                   params: { tol_w: '稳态容差 (W · P口径)', tol_a: '稳态容差 (A · I口径)', min_steady_cycles: '最少稳态周波', min_delta_w: '最小幅值 (W · P口径)', min_delta_a: '最小幅值 (A · I口径)', max_transient_cycles: '最长暂态 (周波)' } },
   median_diff:  { name: '中值滤波差分', desc: '先 N 点中值滤波去尖峰，再做阈值差分（对单周波尖峰/缺口不敏感）',
                   params: { median_cycles: '中值窗 (周波)', min_delta_w: '最小幅值 (W · P口径)', min_delta_a: '最小幅值 (A · I口径)', settle_cycles: '稳定周波数', settle_tol_w: '稳定容差 (W · P口径)', settle_tol_a: '稳定容差 (A · I口径)', max_rise_cycles: '最长暂态 (周波)' } },
+  // v0.90：设备画像匹配（多特征；对象固定为三相合成；画像文件由数据处理页「设备画像提取」生成）
+  profile:      { name: '设备画像匹配', desc: '稳健双滑窗找候选 → 事件前后 ΔIa/ΔIb/ΔIc/ΔP/ΔQ/峰值比/持续周波 与启动/停止画像的对角马氏距离 D² → 置信度 exp(−D²/2d)，低于门槛拒识；设备状态机（OFF→启动 / ON→停止）；输出设备 ID、方向、观测幅值、置信度，不估计设备贡献幅值',
+                  params: { d2_max: 'D² 上限 (每维均值)', min_confidence: '最低置信度 (0~1)', k_sigma: '候选门槛 k×σ', margin: '最优/次优 D² 比下限', lambda_rel: '协方差收缩系数', state_check: '状态机 (1 启用 / 0 关闭)' } },
 };
-const NILM_COLORS = { threshold: '#ff6b6b', two_window: '#ffa94d', cusum: '#ffd43b', glr: '#69db7c', steady_state: '#4dabf7', median_diff: '#da77f2' };
-const NILM_FIELDS = ['enabled', 'save', 'quantity', 'window_cycles', 'min_gap_cycles', 'rel_tol_pct', 'min_delta_pct', 'auto_params'];   // v0.87：auto_params
+const NILM_COLORS = { threshold: '#ff6b6b', two_window: '#ffa94d', cusum: '#ffd43b', glr: '#69db7c', steady_state: '#4dabf7', median_diff: '#da77f2', profile: '#63e6be' };
+const NILM_FIELDS = ['enabled', 'save', 'quantity', 'window_cycles', 'min_gap_cycles', 'rel_tol_pct', 'min_delta_pct', 'auto_params', 'profile_path'];   // v0.87：auto_params；v0.90：profile_path（文本）
 const NILM_CH = ['total', 'A', 'B', 'C'];
 
 function buildNilmForm(side = sideOf()) {
@@ -3209,10 +3212,12 @@ function buildNilmForm(side = sideOf()) {
     const sp = NILM_ALGOS[a];
     const inputs = Object.keys(sp.params).map(k =>
       `<label class="${k.endsWith('_w') ? 'nilm-unit-w' : (k.endsWith('_a') ? 'nilm-unit-a' : '')}">${sp.params[k]}<input type="number" step="any" min="0" id="nilm-${a}-${k}"></label>`).join('');
+    // v0.90：画像匹配额外有画像文件路径（文本，nilm.profile_path）与加载状态
+    const extra = a === 'profile' ? `<div class="row2"><label style="grid-column:1/-1">画像文件路径（nilm.profile_path；相对仓库根；数据处理页「设备画像提取」生成）<input type="text" id="nilm-profile_path" placeholder="output/nilm/profile_<设备>_<时间>.json"></label></div><div id="nilm-profile-state" class="mut" style="font-size:12px"></div>` : '';
     // v0.26.1：标题行＝色块 + 勾选框 + 算法名（紧挨），算法说明单独一行
-    return `<div class="panel nilm-algo" style="margin-top:8px"><h3 class="algohdr"><label class="check"><input type="checkbox" id="nilm-${a}-enabled"><span class="sw" style="color:${NILM_COLORS[a]}">■</span>${sp.name}</label></h3>
+    return `<div class="panel nilm-algo" data-algo="${a}" style="margin-top:8px"><h3 class="algohdr"><label class="check"><input type="checkbox" id="nilm-${a}-enabled"><span class="sw" style="color:${NILM_COLORS[a]}">■</span>${sp.name}</label></h3>
       <div class="algodesc mut">${sp.desc}</div>
-      <div class="row2">${inputs}</div></div>`;
+      ${extra}<div class="row2">${inputs}</div></div>`;
   }).join('');
   normalizeConfigForms(host);
   const opts = Object.keys(NILM_ALGOS).map(a => `<option value="${a}">${NILM_ALGOS[a].name}</option>`).join('');
@@ -3239,7 +3244,7 @@ function nilmDimAuto(side = sideOf()) {
   const on = !!(ap && ap.checked);                                      // v0.88.1：两侧一致（v0.87 曾排除分路侧）
   // 被自适应覆盖的数值项：灰显 + disabled（不可手动设置；值仍随表单保存，仅检测时不参与）
   const dim = l => { l.classList.toggle('nilm-auto-off', on); l.querySelectorAll('input, select').forEach(el => { el.disabled = on; }); };
-  host.querySelectorAll('label').forEach(l => { if (!l.querySelector('input[type=checkbox]')) dim(l); });
+  host.querySelectorAll('label').forEach(l => { const pa = l.closest('.nilm-algo'); if (!l.querySelector('input[type=checkbox]') && !(pa && pa.dataset.algo === 'profile')) dim(l); });   // v0.90：画像匹配参数不由自适应推导
   ['nilm-rel_tol_pct', 'nilm-min_delta_pct'].forEach(id => { const el = E(side, id); const l = el && el.closest('label'); if (l) dim(l); });
   const out = E(side, 'nilm-auto-out'); if (!out) return;
   const sm = NLs(side).summary || {};
@@ -3288,11 +3293,25 @@ function fillNilmForm(nc, side = sideOf()) {
     Object.keys(NILM_ALGOS[a].params).forEach(k => { const el = E(side, `nilm-${a}-${k}`); if (el && prm[k] !== undefined) el.value = prm[k]; });
   });
   nilmDimUnits(side);
+  nilmProfileState(side);
+}
+
+/* v0.90：画像匹配面板下的加载状态行（来自 summary.profile） */
+function nilmProfileState(side = sideOf()) {
+  const el = E(side, 'nilm-profile-state'); if (!el) return;
+  const pf = (NLs(side).summary || {}).profile;
+  if (!pf) { el.textContent = ''; return; }
+  if (!pf.path) { el.textContent = '未设置画像文件路径。'; return; }
+  if (pf.error) { el.innerHTML = `<span class="bad">${esc(pf.error)}</span>`; return; }
+  if (!pf.loaded) { el.textContent = `画像未加载（${esc(pf.path)}）`; return; }
+  const s = pf.summary || {}; const g = k => (s[k] ? `${s[k].n} 次` : '无');
+  el.innerHTML = `已加载：设备 <b>${esc(s.device_id || '')}</b>（${esc(s.unit || '')} 口径，启动样本 ${g('startup')} / 停止样本 ${g('shutdown')}，前后窗 ${s.pre_cycles}/${s.post_cycles} 周波，${esc(s.created || '')}）· 设备状态 ${esc(pf.device_state || 'unknown')}`
+    + ((pf.last || []).length ? `<br>最近候选：${pf.last.slice(-5).map(c => `${esc(c.t_start_local || '')} ${c.direction} D²/d=${c.d2_per_dim} 置信 ${(c.confidence * 100).toFixed(0)}% ${c.status}${c.flags && c.flags.length ? '[' + c.flags.join(',') + ']' : ''}`).join('；')}` : '');
 }
 
 function collectNilmPayload(side = sideOf()) {
   const p = { algorithms: {} };
-  NILM_FIELDS.forEach(f => { const el = E(side, `nilm-${f}`); if (!el) return; p[f] = el.type === 'checkbox' ? el.checked : (el.tagName === 'SELECT' ? el.value : +el.value); });
+  NILM_FIELDS.forEach(f => { const el = E(side, `nilm-${f}`); if (!el) return; p[f] = el.type === 'checkbox' ? el.checked : ((el.tagName === 'SELECT' || el.type === 'text') ? el.value : +el.value); });
   p.channels = NILM_CH.filter(c => { const el = E(side, `nilm-ch-${c}`); return el && el.checked; });
   Object.keys(NILM_ALGOS).forEach(a => {
     const prm = { enabled: !!E(side, `nilm-${a}-enabled`).checked };
@@ -3398,7 +3417,14 @@ function nilmRow(e, sc) {
   const dir = e.direction === 'up' ? '<span class="badge bad">↑ 投入</span>' : '<span class="badge">↓ 切除</span>';
   return [e.id, `<span style="color:${NILM_COLORS[e.algorithm] || '#fff'}">■</span> ${esc(e.algorithm_name || e.algorithm)}`, esc(e.channel),
           ts(e.t_start), ts(e.t_end), num(e.duration_s || 0, 2), e.cycles, dir,
-          sc.D.f(nilmMag(e)), sc.Q.f(e.delta_q_var), sc.I.f(e.delta_i_a), sc.P.f(e.pre_p_w), sc.P.f(e.post_p_w), isNum(e.score) ? num(e.score, 3) : ''];
+          sc.D.f(nilmMag(e)), sc.Q.f(e.delta_q_var), sc.I.f(e.delta_i_a), sc.P.f(e.pre_p_w), sc.P.f(e.post_p_w),
+          e.algorithm === 'profile' ? nilmProfileCell(e) : (isNum(e.score) ? num(e.score, 3) : '')];
+}
+/* v0.90：画像匹配事件的「检验量」列＝设备 ID · 置信度（D²，状态，质量标记） */
+function nilmProfileCell(e) {
+  const fl = e.quality_flags ? `，${esc(e.quality_flags)}` : '';
+  const st = e.status === 'low_confidence' ? '<span class="badge">低置信</span>' : '';
+  return `${esc(e.device_id || '?')} · ${isNum(e.confidence) ? (e.confidence * 100).toFixed(1) + '%' : ''} ${st}<span class="mut" title="D²=${isNum(e.d2) ? num(e.d2, 3) : ''}${fl}">(D²=${isNum(e.d2) ? num(e.d2, 2) : ''}${fl})</span>`;
 }
 
 /* v0.24：P/Q/S 趋势（与总览同一数据 /api/history/power、同一 pqsSeries）+ 各算法事件竖线 */
@@ -3632,6 +3658,7 @@ function renderNilm() {
   $('#nilm-table').innerHTML = listEv.length ? table(nilmHeader(nsc), listEv.map(e => nilmRow(e, nsc))) : `<div class="notes">${NL.events.length ? '当前筛选下无事件' : '暂无事件'}</div>`;
   const cfg = curState().config || {};
   fillNilmForm(cfg.nilm);
+  nilmProfileState();
   const ll = curState().loaded_last;
   $('#nilm-notes').innerHTML = notes((sm.notes || []).concat(sm.errors || []), [
     ...(ll && !tt.length ? [`已加载上次播放（${ll.t_anchor_local || ll.t_last_local || ''} 前 ${ll.hours || 24} h）的负荷事件 ${ll.nilm_events || 0} 条与 P/Q/S 趋势；周波窗（逐周波 P/Q/I 序列）是内存数据，重启后不恢复，重新播放后显示。`] : []),
@@ -4331,9 +4358,69 @@ function bindWavePreview() {
   renderWavePreview();
 }
 
+/* v0.90：数据处理 · 设备画像提取（POST /api/process/nilm_profile；公共配置沿用 nt-* 调参区） */
+const NP = { last: null };
+function npPayload() {
+  const v = id => ($('#' + id).value || '').trim();
+  const t = ntPayload();
+  return { path: t.path, t_start: t.t_start, t_end: t.t_end, quantity: t.quantity, custom_time: t.custom_time,
+           custom_time_start: t.custom_time_start, custom_time_end: t.custom_time_end, base_mode: t.base_mode, base: t.base,
+           col_map_enabled: t.col_map_enabled, col_map: t.col_map,
+           device_id: v('np-device'), labels: $('#np-labels').value, label_tol_s: v('np-tol') || null,
+           pre_cycles: v('np-pre') || null, post_cycles: v('np-post') || null, name: v('np-name') };
+}
+function npRender(d) {
+  const p = d.profile || {}; const F = d.features || [];
+  $('#np-status').innerHTML = `<div>画像已写出 <code>${esc(d.saved_to)}</code> · 设备 <b>${esc(p.device_id)}</b> · 口径 ${esc(p.unit)} · 标签方式 ${p.label_mode === 'labels' ? '人工标签' : '自动定位'} · 前后窗 ${p.pre_cycles}/${p.post_cycles} 周波 · 文件 <code>${esc(d.file)}</code></div>`
+    + (d.notes || []).map(n => `<div class="muted">提示：${esc(n)}</div>`).join('');
+  const cr = $('#np-cmdrow'); cr.style.display = d.command ? '' : 'none'; $('#np-cmd').textContent = d.command || '';
+  const f = x => (typeof x === 'number' ? (+x.toPrecision(4)).toString() : String(x));
+  let h = '';
+  [['startup', '启动画像'], ['shutdown', '停止画像']].forEach(([k, name]) => {
+    const g = d[k];
+    if (!g) { h += `<div class="notes">${name}：无样本</div>`; return; }
+    h += `<table style="margin-top:6px"><thead><tr><th colspan="${F.length + 1}">${name}：${g.n} 次事件 · 持续 ${f(g.dur_cycles.min)}~${f(g.dur_cycles.max)} 周波</th></tr><tr><th></th>${F.map(x => `<th>${esc(x)}</th>`).join('')}</tr></thead><tbody>`
+      + `<tr><td>μ</td>${g.mu.map(x => `<td>${f(x)}</td>`).join('')}</tr><tr><td>σ</td>${g.sigma.map(x => `<td>${f(x)}</td>`).join('')}</tr>`
+      + g.events.map(e => `<tr><td class="mut">${esc(e.t_start_local)}<br><small>${esc(e.source)}</small></td>${F.map(x => `<td>${f(e.vec[x])}</td>`).join('')}</tr>`).join('')
+      + '</tbody></table>';
+  });
+  $('#np-result').innerHTML = h;
+  $('#np-json').textContent = JSON.stringify(d, null, 2);
+}
+async function npRun() {
+  const p = npPayload();
+  if (!p.path) { toast('请先在上方负荷辨识调参区填写设备侧波形文件路径', 'err'); return; }
+  const mode = ntBaseMode(); const side = mode === 'custom' ? 'bus' : mode;
+  const btn = $('#btn-np-run'); btn.disabled = true; $('#np-status').textContent = '正在回放设备侧文件并提取画像…';
+  try {
+    const d = await api('/api/process/nilm_profile', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(p) }, side);
+    NP.last = d; npRender(d);
+    $('#btn-np-fill-bus').disabled = false; $('#btn-np-fill-branch').disabled = false;
+    toast('画像已写出 ' + d.saved_to, 'ok');
+  } catch (e) { $('#np-status').innerHTML = `<span class="err">失败：${esc(e.message)}</span>`; toast(e.message, 'err'); }
+  finally { btn.disabled = false; }
+}
+function npFill(side) {
+  if (!NP.last) return;
+  if (!NLs(side).formBuilt) buildNilmForm(side);
+  // 表单可能尚未按该侧配置回填（未进过负荷辨识页）：先回填再改，避免之后保存时其它算法参数为空
+  const st = side === 'branch' ? BRD.state : S.state;
+  if (!NLs(side).dirty && st && st.config) fillNilmForm(st.config.nilm, side);
+  const el = E(side, 'nilm-profile_path'); if (!el) { toast('负荷辨识表单尚未建立', 'err'); return; }
+  el.value = NP.last.saved_to; NLs(side).dirty = true;
+  const en = E(side, 'nilm-profile-enabled'); if (en && !en.checked) en.checked = true;
+  toast(`已填入${side === 'branch' ? '分路侧' : '总线侧'}画像路径并勾选「设备画像匹配」；请到负荷辨识页点「保存${side === 'branch' ? '分路侧' : '总线侧'}配置」生效`, 'ok');
+}
+
 function bindProcess() {
   if (!$('#view-process')) return;
   bindWavePreview();
+  if ($('#np-form')) {                                            // v0.90：设备画像提取
+    $('#btn-np-run').addEventListener('click', npRun);
+    $('#btn-np-fill-bus').addEventListener('click', () => npFill('bus'));
+    $('#btn-np-fill-branch').addEventListener('click', () => npFill('branch'));
+    $('#btn-np-copy').addEventListener('click', () => { navigator.clipboard && navigator.clipboard.writeText($('#np-cmd').textContent || ''); toast('已复制', 'ok'); });
+  }
   if ($('#nt-form')) {
     $('#nt-files').addEventListener('change', () => { if ($('#nt-files').value) $('#nt-path').value = $('#nt-files').value; });
     $('#btn-nt-run').addEventListener('click', ntRun);

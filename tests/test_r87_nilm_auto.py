@@ -8,7 +8,7 @@ import numpy as np
 import pytest
 
 from elec_tool.blocks import SampleBlock
-from elec_tool.config import AppConfig, NILM_ALGO_DEFAULTS
+from elec_tool.config import AppConfig, NILM_ALGO_DEFAULTS, NILM_SCALAR_ALGOS
 from elec_tool.nilm import NilmDetector, detect_steps
 from elec_tool.nilm_auto import AUTO_MIN_CYCLES, auto_params, window_stats
 
@@ -78,7 +78,7 @@ def test_detector_auto_params_both_sides(tmp_path, monkeypatch):
     t, u, i = _wave()
     cfg = AppConfig(); cfg.nilm.auto_params = True; cfg.nilm.channels = ["total"]
     # 故意把手填参数设成荒谬值：自适应模式下不应影响结果
-    for a in NILM_ALGO_DEFAULTS:
+    for a in NILM_SCALAR_ALGOS:
         cfg.nilm.algorithms[a]["min_delta_w"] = 1e9
     cfg.nilm.rel_tol_pct = 50; cfg.nilm.min_delta_pct = 100
     cfg.validate()
@@ -86,10 +86,10 @@ def test_detector_auto_params_both_sides(tmp_path, monkeypatch):
     sm = det.summary()
     assert sm["auto_params"] is True and sm["auto_params_effective"] is True and "total" in sm["auto_last"]
     st = sm["auto_last"]["total"]["stats"]; algs = sm["auto_last"]["total"]["algorithms"]
-    assert st["hold"] == 1 and set(algs) == set(NILM_ALGO_DEFAULTS) and algs["steady_state"]["min_delta_w"] < 100
+    assert st["hold"] == 1 and set(algs) == set(NILM_SCALAR_ALGOS) and algs["steady_state"]["min_delta_w"] < 100
     assert any("自适应算法参数已启用" in n for n in sm["notes"])
     ups = {e["algorithm"] for e in ev if e["direction"] == "up"}; downs = {e["algorithm"] for e in ev if e["direction"] == "down"}
-    assert ups == set(NILM_ALGO_DEFAULTS) and downs == set(NILM_ALGO_DEFAULTS), (ups, downs)
+    assert ups == set(NILM_SCALAR_ALGOS) and downs == set(NILM_SCALAR_ALGOS), (ups, downs)
     for e in ev:
         assert abs(e["magnitude_w"] - (500 if e["direction"] == "up" else 300)) < 60, e
     # 同样配置手填荒谬值但不启用自适应 → 没有事件

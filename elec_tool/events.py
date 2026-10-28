@@ -98,7 +98,8 @@ def _rotate_if_header_differs(path: str, fields) -> bool:
     if head == list(fields):
         return False
     # v0.36：v0.32~v0.35 的文件（已有 run_id 列、尚无 quantity 列）改名 .pre-v036；更早的改名 .pre-v032
-    tag = "v036" if (head and "run_id" in head) else "v032"
+    # v0.90：已有 unit/run_id、尚无 device_id（画像匹配附加列）的 nilm_events 文件改名 .pre-v090
+    tag = "v090" if (head and "unit" in head and "run_id" in head) else ("v036" if (head and "run_id" in head) else "v032")
     bak = path[:-4] + f".pre-{tag}.csv"
     try:
         if not os.path.exists(bak):

@@ -749,12 +749,20 @@ NILM_ALGO_DEFAULTS: Dict[str, Dict[str, Any]] = {
     # 中值滤波差分：先 median_cycles 点中值滤波去尖峰，再按阈值差分法检测（对暂态尖峰/缺口不敏感）
     "median_diff":  {"enabled": True, "median_cycles": 5, "min_delta_w": 50.0, "settle_cycles": 5, "settle_tol_w": 20.0, "max_rise_cycles": 40,
                      "min_delta_a": 0.3, "settle_tol_a": 0.1},
+    # v0.90：设备画像匹配（《设备画像提取与总线侧负荷辨识事件检测算法方案》基础版）：画像文件路径在 nilm.profile_path；
+    #   候选＝稳健双滑窗（前后窗长取画像 pre/post，门槛 k_sigma×噪声 且 ≥ 画像幅值一半）→ 特征向量与启动/停止画像的对角马氏距离 D²
+    #   → 置信度 exp(−D²/2d)。d2_max＝每维平均 D² 上限；min_confidence＝最低置信度；margin＝最优/次优 D² 比下限（区分度）；
+    #   lambda_rel＝协方差收缩系数；state_check＝1 启用设备状态机（OFF→START / ON→STOP 合理，否则置信度减半并标记）。默认不启用。
+    "profile":      {"enabled": False, "d2_max": 9.0, "min_confidence": 0.3, "k_sigma": 4.0, "margin": 1.5, "lambda_rel": 0.1, "state_check": 1},
 }
+# 逐周波标量序列上的 6 种突变检测算法（画像匹配是多特征算法，不在其中）
+NILM_SCALAR_ALGOS = ("threshold", "two_window", "cusum", "glr", "steady_state", "median_diff")
 # W 参数 → I 口径下对应的 A 参数（算法函数始终读 *_w 键；I 口径时检测器用 *_a 的值覆盖 *_w 再调用）
 NILM_W_TO_A = {"min_delta_w": "min_delta_a", "settle_tol_w": "settle_tol_a", "tol_w": "tol_a",
                "drift_w": "drift_a", "noise_w": "noise_a", "threshold_w": "threshold_a"}
 NILM_ALGO_NAMES = {"threshold": "阈值差分", "two_window": "双滑窗均值差", "cusum": "CUSUM 累积和",
-                   "glr": "GLR 广义似然比", "steady_state": "稳态分段(Hart)", "median_diff": "中值滤波差分"}
+                   "glr": "GLR 广义似然比", "steady_state": "稳态分段(Hart)", "median_diff": "中值滤波差分",
+                   "profile": "设备画像匹配"}
 
 
 @dataclass
@@ -786,6 +794,9 @@ class NilmConfig:
     #   （噪声 σ / 稳定周波 / 最短稳态 / 暂态时长 / 最小幅值 / 各门限，见 nilm_auto.py），下方各算法数值与 rel_tol_pct /
     #   min_delta_pct 不再参与（算法 enabled 仍由配置决定）；两侧各自独立配置、各自按本侧数据推导（v0.88）。
     auto_params: bool = False
+    # v0.90：设备画像文件路径（tools/nilm_profile.py 或数据处理页「设备画像提取」生成的 JSON；相对路径相对仓库根）。
+    #   空＝未加载画像，algorithms.profile.enabled 即使为 true 也不检测并在 summary.notes 说明。
+    profile_path: str = ""
     algorithms: Dict[str, Dict[str, Any]] = field(default_factory=lambda: {k: dict(v) for k, v in NILM_ALGO_DEFAULTS.items()})
 
     def params(self, algo: str) -> Dict[str, Any]:
@@ -796,6 +807,7 @@ class NilmConfig:
     def validate(self) -> None:
         self.auto_params = bool(self.auto_params) if not isinstance(self.auto_params, str) else self.auto_params.strip().lower() in ("1", "true", "on", "yes")
         self.quantity = str(self.quantity or "auto").strip().lower()
+        self.profile_path = str(self.profile_path or "").strip()
         if self.quantity not in NILM_QUANTITIES:
             raise ConfigError(f"nilm.quantity 必须是 {NILM_QUANTITIES} 之一（当前 {self.quantity!r}）")
         if not self.channels or any(c not in NILM_CHANNELS for c in self.channels):
@@ -824,7 +836,7 @@ class NilmConfig:
                     fv = float(v)
                 except (TypeError, ValueError):
                     raise ConfigError(f"nilm.algorithms.{a}.{k} 必须是数值（当前 {v!r}）")
-                if fv <= 0:
+                if fv <= 0 and not (a == "profile" and k == "state_check"):      # v0.90：state_check 允许 0（关闭状态机）
                     raise ConfigError(f"nilm.algorithms.{a}.{k} 必须 > 0（当前 {v}）")
                 if k.endswith("cycles") and int(fv) != fv:
                     raise ConfigError(f"nilm.algorithms.{a}.{k} 必须是整数周波数（当前 {v}）")
