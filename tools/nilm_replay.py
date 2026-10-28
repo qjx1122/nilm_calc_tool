@@ -127,9 +127,13 @@ def main() -> int:
             mag = [e.get("magnitude", e["magnitude_w"]) for e in evs]
             rng = f"{min(mag):.4g} ~ {max(mag):.4g}" if mag else "-"
             print(f"  {algo:14s} {len(evs):4d} {up:5d} {dn:5d}  {rng}   {NILM_ALGO_NAMES.get(algo, '')}")
-        if bool(cfg.nilm.params("profile").get("enabled", False)):
+        prof_on = bool(cfg.nilm.params("profile").get("enabled", False))
+        print("—— 设备画像匹配诊断（v0.92.2）——")
+        if not prof_on:
+            print(f"  本次回放 profile 未启用（配置 {a.config or '默认 configs/default.json'} 里 nilm.algorithms.profile.enabled={prof_on}，"
+                  f"nilm.profile_path={cfg.nilm.profile_path!r}）；请用 --config 指向勾选了画像匹配的那一侧配置，或加 --set profile.enabled=1 --set nilm.profile_path=<画像.json>")
+        else:
             pf = det.summary().get("profile") or {}
-            print("—— 设备画像匹配诊断（v0.92.2）——")
             print(f"  画像文件 {pf.get('path')}  加载 {'成功' if pf.get('loaded') else '失败'}  {pf.get('error') or ''}  设备状态 {pf.get('device_state')}")
             s_ = pf.get("summary") or {}
             if s_:
