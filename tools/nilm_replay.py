@@ -22,7 +22,7 @@ from typing import Any, Dict, List
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
-from elec_tool.config import NILM_ALGO_DEFAULTS, AppConfig, load_or_default   # noqa: E402
+from elec_tool.config import ConfigError, NILM_ALGO_DEFAULTS, AppConfig, load_or_default   # noqa: E402
 from elec_tool.nilm_tuning import apply_nilm_params                              # noqa: E402
 from elec_tool.nilm import _CSV_FIELDS, NILM_ALGO_NAMES, NilmDetector           # noqa: E402
 from elec_tool.scaling import scale_block                                        # noqa: E402
@@ -70,7 +70,10 @@ def main() -> int:
     ap.add_argument("--quiet", action="store_true")
     a = ap.parse_args()
 
-    cfg = load_or_default(a.config)
+    try:
+        cfg = load_or_default(a.config, strict=True)
+    except ConfigError as exc:
+        print(f"错误：{exc}", file=sys.stderr); return 2
     cfg.source.kind = "csv_file"; cfg.source.path = a.file; cfg.source.file_speed = 0.0
     cfg.source.play_window = False; cfg.source.play_start_mode = "begin"; cfg.source.play_start_value = ""
     if a.custom_time_start:

@@ -1034,8 +1034,18 @@ class AppConfig:
         return path
 
 
-def load_or_default(path: Optional[str]) -> AppConfig:
-    """存在则加载，否则返回默认配置（CLI/服务启动用）。"""
+def load_or_default(path: Optional[str], strict: bool = False) -> AppConfig:
+    """存在则加载，否则返回默认配置（CLI/服务启动用）。
+
+    v0.92.3：``strict=True``（命令行工具显式传入 --config 时）——文件不存在直接报 ConfigError，而不是悄悄退回出厂配置
+    （曾导致用户传错路径 config/ vs configs/ 后，回放用的是默认配置：PT/CT 启用、6 种算法全开、profile 关闭，却看不出来）。
+    """
     if path and os.path.isfile(path):
         return AppConfig.load(path)
+    if path and strict:
+        hint = ""
+        alt = [c for c in (path.replace("config/", "configs/", 1), path.replace("config\\", "configs\\", 1)) if c != path and os.path.isfile(c)]
+        if alt:
+            hint = f"；是否想用 {alt[0]}？"
+        raise ConfigError(f"配置文件不存在：{path}（当前目录 {os.getcwd()}）{hint}")
     return AppConfig().validate()

@@ -76,7 +76,7 @@ def main() -> int:
     ap.add_argument("--json", action="store_true", help="把画像文档打印到 stdout")
     a = ap.parse_args()
     try:
-        cfg = load_or_default(a.config)
+        cfg = load_or_default(a.config, strict=True)
         labels_txt = None
         if a.labels:
             if os.path.isfile(a.labels):

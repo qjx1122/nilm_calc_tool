@@ -1133,6 +1133,7 @@ U10-4 B/C 相为 0：____  U10-5 列号交换：Ia≈____  U10-6 无时间戳：
 - v0.92（2026-10-28）：`tests/test_r92_profile_polarity_merge.py` 3 项——极性反转在 PT/CT 启用/未启用下均生效；CT 接反的合成数据勾选反转后 ΔP/ΔI 同号、启动 μ 为正；分级带载（3 级 +5 %）自动定位 4 个启动 → merge_gap 10 s 合并为 1 个。API `/api/process/nilm_profile` 带 merge_gap_s 实测合并 3 个，command 含 `--merge-gap 10`。
 - v0.92.1（2026-10-28）：电机型合成波（P 0.5 s 衰减、无功启动电流 3 s 衰减）：改前 P/I 两口径稳态分段都漏掉启动（前后稳态段间隔 161/503 周波 > max_transient 80），I 口径还把 −0.08 A 的前导波动当成停止；改后 P/I 各得 1 启 + 1 停且停止为真实大台阶（`test_r92` 第 4 项）。test_r90/r92/tools 22 passed。
 - v0.92.2（2026-10-28）：用用户给的画像 JSON + 合成"设备1"（fs 10000、P<0、23.6 kW/36 A、启动 82 周波斜坡、7 A 小负荷）按用户分路侧 nilm 配置回放：画像/数据一致时 2/2 命中（STOP D²/维 0.07，START 1.5）；ΔQ 符号与画像不一致时全部 `d2_exceeds`（d_q 贡献 112/274）；PT/CT 不一致时给出错误。test_r92 第 5 项覆盖首 gap 与 PT/CT；全量 439 passed。
+- v0.92.3（2026-10-28）：用户回放输出（口径一次侧、6 算法全开、profile 关、profile_path 空）与其配置文件矛盾 ⇒ 路径 `config/branch_runtime.json` 不存在被静默回退。修复后 `--config config/zz.json` 退出码 2 并提示 `configs/zz.json`。test_tools/config/r9x 65 passed。
   - 基线：瞬时值 817 ms、有效值 816 ms、负荷辨识周波窗 273 ms、自定义时间 910 / 286 ms；cProfile：`_count_rows`×2 0.52 s + `_count_newlines` 0.19 s + JSON 逐元素 round 0.17 s，占 1.1 s 中的 0.88 s。
   - 优化后：104 / 112 / 95 / 103 / 118 ms；HTTP 端到端（含 2.3 MB JSON 传输）`/api/nilm/wave_file` 0.32 s、`/api/elec/cycles_file` 0.10 s、`/api/nilm/cycles_file` 0.09 s。
   - 正确性：索引三接口 vs 暴力计数（随机 / 定长跨边界 / 边界对齐）逐位一致；time / row / seconds 定位 `skipped_rows` 与首块 t 在顺序扫 vs 索引路径一致；三条周波窗端点 + 自定义时间两路径结果逐位一致。

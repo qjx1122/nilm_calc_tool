@@ -69,7 +69,7 @@ def main() -> int:
     a = ap.parse_args()
 
     cfg_path = a.config or _default_config_path()
-    base_cfg = load_or_default(cfg_path)
+    base_cfg = load_or_default(cfg_path, strict=bool(a.config))
     try:
         out = run_tune(base_cfg, a.file, channel=a.channel, quantity=a.quantity, min_load_w=a.min_load_w,
                        min_load_a=a.min_load_a, max_cycles=a.max_cycles, t_start=a.t_start, t_end=a.t_end,
