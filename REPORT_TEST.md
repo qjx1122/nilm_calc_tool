@@ -1135,6 +1135,7 @@ U10-4 B/C 相为 0：____  U10-5 列号交换：Ia≈____  U10-6 无时间戳：
 - v0.92.2（2026-10-28）：用用户给的画像 JSON + 合成"设备1"（fs 10000、P<0、23.6 kW/36 A、启动 82 周波斜坡、7 A 小负荷）按用户分路侧 nilm 配置回放：画像/数据一致时 2/2 命中（STOP D²/维 0.07，START 1.5）；ΔQ 符号与画像不一致时全部 `d2_exceeds`（d_q 贡献 112/274）；PT/CT 不一致时给出错误。test_r92 第 5 项覆盖首 gap 与 PT/CT；全量 439 passed。
 - v0.92.3（2026-10-28）：用户回放输出（口径一次侧、6 算法全开、profile 关、profile_path 空）与其配置文件矛盾 ⇒ 路径 `config/branch_runtime.json` 不存在被静默回退。修复后 `--config config/zz.json` 退出码 2 并提示 `configs/zz.json`。test_tools/config/r9x 65 passed。
 - v0.92.4（2026-10-28）：用户回放"全程没有候选"根因＝画像前后窗 3000/3000 > window_cycles 300（`_two_window_candidates` 需 L ≥ pre+post+2）。修复后提示「需要约 9092 周波的检测窗…已自动缓存」。
+- v0.92.5（2026-10-28）：用户回放显示同一次停机产生 80+ 个起点逐块右移的候选、首个被接受的时刻偏早 15 s、STOP 组因 dur σ=2 被 dur 维（贡献 32）压住。200 s 合成长文件 + 用户画像（3000/3000）：修后停止只出 1 个候选、时刻精确到秒；10/50 画像停止/启动各 1 次命中。全量 440 passed。
   - 基线：瞬时值 817 ms、有效值 816 ms、负荷辨识周波窗 273 ms、自定义时间 910 / 286 ms；cProfile：`_count_rows`×2 0.52 s + `_count_newlines` 0.19 s + JSON 逐元素 round 0.17 s，占 1.1 s 中的 0.88 s。
   - 优化后：104 / 112 / 95 / 103 / 118 ms；HTTP 端到端（含 2.3 MB JSON 传输）`/api/nilm/wave_file` 0.32 s、`/api/elec/cycles_file` 0.10 s、`/api/nilm/cycles_file` 0.09 s。
   - 正确性：索引三接口 vs 暴力计数（随机 / 定长跨边界 / 边界对齐）逐位一致；time / row / seconds 定位 `skipped_rows` 与首块 t 在顺序扫 vs 索引路径一致；三条周波窗端点 + 自定义时间两路径结果逐位一致。

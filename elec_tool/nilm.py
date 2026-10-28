@@ -682,7 +682,8 @@ class NilmDetector:
         if need > int(self.ncfg.window_cycles):
             msg = (f"画像前后窗 {prof.get('pre_cycles')}/{prof.get('post_cycles')} 周波（最长持续 {need - int(prof.get('pre_cycles', 10)) - 2 * int(prof.get('post_cycles', 50)) - 10}）"
                    f"需要约 {need} 周波的检测窗，大于 nilm.window_cycles={self.ncfg.window_cycles}：已自动按 {need} 周波缓存评估；"
-                   f"建议把画像前后窗改小（典型 10/50～10/200）重提，或加大 window_cycles")
+                   f"建议把画像前后窗改小（典型 10/50～10/200）重提，或加大 window_cycles。"
+                   f"注意：前后窗取的是中位数，间隔小于后窗的两次动作会互相污染，事件时刻也可能偏移")
             if msg not in self.errors:
                 self.errors.append(msg)
         try:
@@ -730,8 +731,8 @@ class NilmDetector:
             self.profile_last = diag[-20:]
             # v0.92.2：按窗内全局位置去重累积（最终状态覆盖早先的"等数据"版本），供回放工具 / 界面解释"为什么没报"
             for d_ in diag:
-                if d_.get("seen") and int(d_["g_on"]) in self.profile_hist:
-                    continue                                   # 已报过的候选再次评估（状态机已翻转）不覆盖首次结论
+                if d_.get("seen"):
+                    continue                                   # 已报过 / 被 min_gap 压制的候选不进历史（状态机已翻转，结论无意义）
                 self.profile_hist[int(d_["g_on"])] = d_
             if len(self.profile_hist) > 400:
                 for k_ in sorted(self.profile_hist)[:len(self.profile_hist) - 400]:

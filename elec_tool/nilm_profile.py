@@ -37,7 +37,8 @@ FEATURE_NAMES = {"d_ia": "ΔIa (A)", "d_ib": "ΔIb (A)", "d_ic": "ΔIc (A)", "d_
 TEMPLATE_POINTS = 16
 # σ 收缩下限：相对中心的比例（单次事件也能给出合理容差）与绝对下限（电流 A / 功率 W / 比值 / 周波）
 _REL_FLOOR = {"d_ia": 0.15, "d_ib": 0.15, "d_ic": 0.15, "d_p": 0.15, "d_q": 0.25, "peak_ratio": 0.3, "dur_cycles": 0.5}
-_ABS_FLOOR = {"d_ia": 0.02, "d_ib": 0.02, "d_ic": 0.02, "d_p": 5.0, "d_q": 5.0, "peak_ratio": 0.1, "dur_cycles": 2.0}
+# v0.92.5：dur_cycles 下限 2→5 周波（在线终点估计对噪声敏感，单样本画像 σ=2 时 10 周波偏差就贡献 25）
+_ABS_FLOOR = {"d_ia": 0.02, "d_ib": 0.02, "d_ic": 0.02, "d_p": 5.0, "d_q": 5.0, "peak_ratio": 0.1, "dur_cycles": 5.0}
 
 
 class ProfileError(ValueError):
@@ -130,8 +131,18 @@ def validate_profile(doc: Dict[str, Any]) -> Dict[str, Any]:
 
 def load_profile(path: str, root: Optional[str] = None) -> Dict[str, Any]:
     p = path if os.path.isabs(path) else os.path.join(root or os.getcwd(), path)
+    doc = _load_profile_raw(p)
+    jd = FEATURES.index("dur_cycles")
+    for k in ("startup", "shutdown"):          # v0.92.5：旧画像的 σ 按当前绝对下限抬升
+        g = doc.get(k)
+        if g and len(g.get("sigma", [])) > jd:
+            g["sigma"][jd] = max(float(g["sigma"][jd]), _ABS_FLOOR["dur_cycles"])
+    return doc
+
+
+def _load_profile_raw(p: str) -> Dict[str, Any]:
     if not os.path.isfile(p):
-        raise ProfileError(f"画像文件不存在：{path}")
+        raise ProfileError(f"画像文件不存在：{p}")
     with open(p, encoding="utf-8") as fh:
         doc = json.load(fh)
     doc = validate_profile(doc)
@@ -205,6 +216,8 @@ def _two_window_candidates(x: np.ndarray, pre_n: int, post_n: int, min_d: float,
         k0 = j
         while j < idx.size and exceed[j]:
             j += 1
+        if j >= idx.size:
+            break          # v0.92.5：超限游程顶到右边界＝后窗还没装满，峰值位置未定（在线会随新数据右移），等下一块再评估
         pk = k0 + int(np.argmax(np.abs(delta[k0:j])))
         onset = int(idx[pk])
         # 终点：onset 之后「相对事件后电平的偏差 > 稳态偏差 20%」的最后一个周波的下一周波（过渡结束处），封顶 post_n
