@@ -236,6 +236,7 @@ class EngineRunner:
                 self.engine.on_event = self._on_event
                 self.engine.on_nilm_event = self._on_nilm_event
                 self.latest = None
+        _warm_line_index(cfg)
 
         # v0.17.2：总线侧改了落盘/导出目录 → 分路侧跟着改（两侧共用同一文件）
         if self.side == "bus" and "RUNNERS" in globals():
@@ -457,6 +458,7 @@ class EngineRunner:
         # 「append 结果要拿锁」上就会互等到超时（2s），旧线程存活后继续轮询
         # 被替换的新引擎 → 同一批数据双重摄入（samples_in 虚高、窗内点数不足）。
         self.stop(quiet=True)
+        _warm_line_index(cfg)
         with self.lock:
             # 每轮用全新的 Event：旧线程只持有旧 Event，绝不会因新一轮 clear() 复活
             self.stop_event = threading.Event()
@@ -951,6 +953,16 @@ def _autoload_last() -> None:
 # ------------------------------------------------------------------ 公共时间段（v0.15）
 
 COMMON_WINDOW: Dict[str, Any] = {"enabled": False}      # 最近一次联动启动计算出的公共时间段（界面顶部显示）
+
+
+def _warm_line_index(cfg: AppConfig) -> None:
+    """v0.91：本侧为离线文件源时，后台预建该文件的行索引（周波窗右键定位 / 文件信息共用），首次右键不必等整文件扫描。"""
+    try:
+        if cfg.source.kind == "csv_file" and str(cfg.source.path or "").strip():
+            from elec_tool.line_index import warm
+            warm(_abs_path(cfg.source.path))
+    except Exception as exc:                      # 预热失败不影响任何功能
+        log.debug("行索引预热跳过：%s", exc)
 
 
 def _abs_path(p: str) -> str:

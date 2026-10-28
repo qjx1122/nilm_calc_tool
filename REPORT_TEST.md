@@ -1127,3 +1127,9 @@ U10-4 B/C 相为 0：____  U10-5 列号交换：Ia≈____  U10-6 无时间戳：
   - API：`POST /api/process/nilm_profile`（总线 / 分路路由、标签文本 / 自动两种、坏标签 400、文件不存在 400）；CLI `tools/nilm_profile.py` 写出含 `command` 的画像。UI：`tools/ui_r90_check.cjs` 13/13（jsdom 打 8033 实服务）。
   - 回归：r12 / r18 / r87 中「全部算法」断言改 `NILM_SCALAR_ALGOS`；CSV 列断言改按列名定位。全量 **444 passed / 1 skipped**（约 128 s）。
   - 未覆盖：真实设备录波（无样本）；同幅值同 pf 的孪生设备（方法局限，必然高置信误配）；I 口径画像端到端（仅单元层路径）；DTW / 幅值校准未实现。
+- v0.91（2026-10-28）：**周波窗定位提速** `tests/test_r91_line_index.py` 5 项 + 402 MB 实测基线 / 优化后对照（bench：`_wave_window_from_file` / `cycle_values` / `load_cycles_from_file`，定位第 600 s，n=300，页缓存热）：
+  - 基线：瞬时值 817 ms、有效值 816 ms、负荷辨识周波窗 273 ms、自定义时间 910 / 286 ms；cProfile：`_count_rows`×2 0.52 s + `_count_newlines` 0.19 s + JSON 逐元素 round 0.17 s，占 1.1 s 中的 0.88 s。
+  - 优化后：104 / 112 / 95 / 103 / 118 ms；HTTP 端到端（含 2.3 MB JSON 传输）`/api/nilm/wave_file` 0.32 s、`/api/elec/cycles_file` 0.10 s、`/api/nilm/cycles_file` 0.09 s。
+  - 正确性：索引三接口 vs 暴力计数（随机 / 定长跨边界 / 边界对齐）逐位一致；time / row / seconds 定位 `skipped_rows` 与首块 t 在顺序扫 vs 索引路径一致；三条周波窗端点 + 自定义时间两路径结果逐位一致。
+  - 发现并修的实现坑：检查点 `cum[k]==target` 时目标行首可能在边界之前（行跨边界），须从上一个检查点扫（改为严格小于）。
+  - 未覆盖：冷页缓存 / 机械盘上的绝对耗时（只能按「读整文件 → 读 ≤1 MiB」推断）；多进程部署下索引不共享。

@@ -505,8 +505,14 @@ def _line_starts_after(raw, pos: int, lo: int) -> int:
     return raw.tell()
 
 
-def _byte_offset_of_row(raw, n_skip: int, lo: int, size: int) -> Tuple[int, int]:
+def _byte_offset_of_row(raw, n_skip: int, lo: int, size: int, path: Optional[str] = None) -> Tuple[int, int]:
     """从数据起点 lo 开始数 n_skip 个换行，返回 (第 n_skip 行的行首字节, 实际跳过行数)。"""
+    if path is not None:
+        try:
+            from ..line_index import byte_offset_of_row            # v0.91：稀疏行索引
+            return byte_offset_of_row(path, n_skip, lo)
+        except OSError:
+            pass
     raw.seek(lo)
     remaining = n_skip
     pos = lo
@@ -528,7 +534,14 @@ def _byte_offset_of_row(raw, n_skip: int, lo: int, size: int) -> Tuple[int, int]
     return pos, n_skip
 
 
-def _count_newlines(raw, lo: int, hi: int) -> int:
+def _count_newlines(raw, lo: int, hi: int, path: Optional[str] = None) -> int:
+    if path is not None:
+        # v0.91：有路径时用稀疏行索引（首次构建后只需再扫 ≤1 MiB），否则按旧法顺序数
+        try:
+            from ..line_index import count_newlines
+            return count_newlines(path, lo, hi)
+        except OSError:
+            pass
     raw.seek(lo); n = 0; left = hi - lo
     while left > 0:
         chunk = raw.read(min(8 << 20, left))
@@ -676,7 +689,7 @@ def iter_csv_blocks(path: str, colmap: ColumnMap, sampling: SamplingConfig,
                     except Exception:
                         fast_pos = None
             if fast_pos is not None and fast_pos > data_lo:
-                pre_rows = _count_newlines(fh.buffer, data_lo, fast_pos)
+                pre_rows = _count_newlines(fh.buffer, data_lo, fast_pos, path)
                 reader = _rewrap(fast_pos)
                 buf, skipped, hit_t = _seek_time(reader, [], colmap, idx_map, start_time, tz_offset_h)
                 skipped += pre_rows
@@ -708,7 +721,7 @@ def iter_csv_blocks(path: str, colmap: ColumnMap, sampling: SamplingConfig,
                                   "skipped_rows": None, "reached_eof": start_byte >= size})
         elif skip_rows and skip_rows > 0:
             if fast:
-                pos, skipped = _byte_offset_of_row(fh.buffer, int(skip_rows), data_lo, size)
+                pos, skipped = _byte_offset_of_row(fh.buffer, int(skip_rows), data_lo, size, path)
                 reader = _rewrap(pos)
                 buf = []
                 if seek_info is not None:

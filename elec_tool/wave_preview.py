@@ -109,16 +109,16 @@ def _parse_t(text: str) -> Optional[float]:
 
 
 def _count_rows(p: str, has_header: bool) -> int:
-    n = 0
-    with open(p, "rb") as fh:
-        last = b""
-        while True:
-            buf = fh.read(1 << 20)
-            if not buf:
-                break
-            n += buf.count(b"\n"); last = buf[-1:]
-        if last and last != b"\n":
-            n += 1
+    # v0.91：整文件换行数走进程内稀疏行索引（elec_tool.line_index）：同一文件只在首次 / 文件变化后扫一遍，
+    #   之后周波窗每次右键不再重复读整个文件
+    from .line_index import total_newlines
+    n = total_newlines(p)
+    size = os.path.getsize(p)
+    if size > 0:
+        with open(p, "rb") as fh:
+            fh.seek(size - 1)
+            if fh.read(1) != b"\n":
+                n += 1
     return max(0, n - (1 if has_header else 0))
 
 
@@ -390,10 +390,21 @@ def load_waveform(base: AppConfig, path: str, *, t_start: str = "", t_end: str =
     if fs_eff is not None and abs(fs_eff - fs_o) / fs_o > 1e-9:
         notes.append(f"fft 方法输出点数取整后实际采样率 {fs_eff:.6f} Hz（目标 {fs_o:g}，偏差 {abs(fs_eff - fs_o) / fs_o * 100:.4f}%）；时间轴仍按目标采样率")
     rnd = 6
+
+    def _col(a: np.ndarray) -> list:
+        # v0.91：向量化取整 + tolist（原来逐元素 round/isfinite，38400 点 × 6 通道占一次周波窗请求近一半时间）
+        a = np.asarray(a, dtype=np.float64)
+        ok = np.isfinite(a)
+        if ok.all():
+            return np.round(a, rnd).tolist()
+        lst = np.round(np.where(ok, a, 0.0), rnd).tolist()
+        for i in np.flatnonzero(~ok).tolist():
+            lst[i] = None
+        return lst
     return {"ok": True, "path": path, "fs": fs_o, "fs_src": fs_src, "resampled": resample, "method": (method if resample else None),
             "fs_effective": fs_eff, "samples_per_cycle": max(1, int(round(fs_o / float(cfg.sampling.f_nom)))), "channels_loaded": chans,
-            "n": int(t_out.size), "t": [float(x) for x in t_out],
-            "channels": {c: [float(round(float(v), rnd)) if math.isfinite(v) else None for v in out[c]] for c in chans},
+            "n": int(t_out.size), "t": np.asarray(t_out, dtype=np.float64).tolist(),
+            "channels": {c: _col(out[c]) for c in chans},
             "units": {c: ("V" if c[0] == "U" else "A") for c in chans},
             "t_first": float(t_out[0]) if t_out.size else None, "t_last": float(t_out[-1]) if t_out.size else None,
             "request": {"t_start": str(t_start or ""), "t_end": str(t_end or ""), "n_points": n_req, "n_cycles": n_cycles, "fs_out": fs_out,
