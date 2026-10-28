@@ -544,7 +544,7 @@ class NilmDetector:
             self._p = np.concatenate([self._p, f["p"]], axis=1)
             self._q = np.concatenate([self._q, f["q"]], axis=1)
             self._i = np.concatenate([self._i, f["i"]], axis=1)
-            W = int(self.ncfg.window_cycles)
+            W = max(int(self.ncfg.window_cycles), self._profile_window_need())   # v0.92.4：画像匹配需要的窗口可能大于 window_cycles
             if self._t.shape[0] > W:
                 cut = self._t.shape[0] - W
                 self._t = self._t[cut:]; self._p = self._p[:, cut:]; self._q = self._q[:, cut:]; self._i = self._i[:, cut:]
@@ -646,6 +646,14 @@ class NilmDetector:
         out.sort(key=lambda e: (e.t_start, e.algorithm))
         return out
 
+    def _profile_window_need(self) -> int:
+        """画像匹配评估一个候选至少需要的周波数：pre + 最长持续 + 2×post（候选搜索需 post，终点后再等 post 个周波确认）。"""
+        if self._profile is None or not bool(self.ncfg.params("profile").get("enabled", False)):
+            return 0
+        pre_n = int(self._profile.get("pre_cycles", 10)); post_n = int(self._profile.get("post_cycles", 50))
+        dur = max([int((self._profile.get(k) or {}).get("dur_cycles", {}).get("max", 0) or 0) for k in ("startup", "shutdown")] + [0])
+        return pre_n + dur + 2 * post_n + 10
+
     def _evaluate_profile(self, qty: str, gap: int, g_last: int) -> List[NilmEvent]:
         """v0.90：设备画像匹配（多特征，对象固定为三相合成 total；P 口径用总有功做候选，I 口径用三相电流合成量）。"""
         prm = self.ncfg.params("profile")
@@ -670,6 +678,13 @@ class NilmDetector:
             if msg not in self.errors:
                 self.errors.append(msg)
             return []
+        need = self._profile_window_need()
+        if need > int(self.ncfg.window_cycles):
+            msg = (f"画像前后窗 {prof.get('pre_cycles')}/{prof.get('post_cycles')} 周波（最长持续 {need - int(prof.get('pre_cycles', 10)) - 2 * int(prof.get('post_cycles', 50)) - 10}）"
+                   f"需要约 {need} 周波的检测窗，大于 nilm.window_cycles={self.ncfg.window_cycles}：已自动按 {need} 周波缓存评估；"
+                   f"建议把画像前后窗改小（典型 10/50～10/200）重提，或加大 window_cycles")
+            if msg not in self.errors:
+                self.errors.append(msg)
         try:
             res = detect_profile(self._p, self._q, self._i, prof, prm, use_p, self.device_state)
         except Exception as exc:
