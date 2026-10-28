@@ -108,3 +108,34 @@ def test_engine_first_gap_not_suppressed_and_ptct_mismatch_warns(tmp_path):
     det2, evs2 = run(c)
     assert not [e for e in evs2 if e["algorithm"] == "profile"]
     assert any("PT/CT" in e for e in det2.summary()["errors"])
+
+
+def test_engine_warns_when_phase_missing_or_signs_disagree(tmp_path):
+    """v0.92.6：B 相电流为 0、A 相极性与 C 相相反时，ΣP 抵消 → 无候选，但必须给出数据体检提示。"""
+    import csv, json
+    from elec_tool.nilm import NilmDetector
+    from elec_tool.scaling import scale_block
+    from elec_tool.sources import create_source
+    FS, F = T.FS, T.F; n = int(FS * 8.0); t = np.arange(n) / FS; w = 2 * np.pi * F * t
+    I = np.where(t < 4, 36.0, 0.3); u = np.zeros((3, n)); i = np.zeros((3, n))
+    for k, ph in enumerate((0, -2 * np.pi / 3, 2 * np.pi / 3)):
+        u[k] = 230 * np.sqrt(2) * np.sin(w + ph); i[k] = I * np.sqrt(2) * np.sin(w + ph)
+    i[0] *= -1; i[1] *= 0
+    f = str(tmp_path / "bus.csv"); T._write_csv(f, T.T0 + t, u, i)
+    c = AppConfig(); c.transform.enabled = False
+    d = str(tmp_path / "dev.csv"); td, ud, idd = T._wave(T._dev, 8.0); T._write_csv(d, td, ud, idd)
+    prof = build_profile(c, d, device_id="d"); pp = str(tmp_path / "p.json"); json.dump(prof, open(pp, "w"))
+    c.source.kind = "csv_file"; c.source.path = f; c.source.file_speed = 0.0; c.nilm.enabled = True; c.nilm.save = False
+    for a in c.nilm.algorithms: c.nilm.algorithms[a]["enabled"] = False
+    c.nilm.algorithms["profile"] = {"enabled": True}; c.nilm.profile_path = pp
+    det = NilmDetector(c, root=str(tmp_path))
+    with create_source(c) as src:
+        while True:
+            b = src.read()
+            if b is None:
+                if src.exhausted: break
+                continue
+            det.ingest(scale_block(b, c.transform))
+    errs = det.summary()["errors"]
+    assert sum("数据体检" in e for e in errs) == 1
+    assert any("B 相电流≈0" in e and "符号不一致" in e for e in errs)

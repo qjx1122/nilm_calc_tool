@@ -678,6 +678,22 @@ class NilmDetector:
             if msg not in self.errors:
                 self.errors.append(msg)
             return []
+        # v0.92.6：本侧数据体检——画像候选按三相合成量找，若某相无数据或各相有功符号不一致，总有功会互相抵消、台阶被吞掉
+        if self._p.shape[1] >= 20:
+            pm = [float(np.median(self._p[k, -200:])) for k in (1, 2, 3)]
+            im = [float(np.median(self._i[k, -200:])) for k in (1, 2, 3)]
+            ia_max = max(abs(v) for v in im) if im else 0.0
+            dead = [ch for ch, v in zip("ABC", im) if ia_max > 0 and abs(v) < 0.01 * ia_max]
+            live = [k for k, ch in enumerate("ABC") if ch not in dead and abs(pm[k]) > 0]
+            signs = {(pm[k] > 0) for k in live}
+            msgs = []
+            if dead:
+                msgs.append(f"{'/'.join(dead)} 相电流≈0（该相电压或电流列未映射/无数据）")
+            if len(signs) > 1:
+                msgs.append("各相有功符号不一致（" + "，".join(f"P{ch}={pm[k]:.0f}W" for k, ch in enumerate("ABC")) + "）：电压/电流相别配对或 CT 极性有误，总有功 ΣP 相互抵消")
+            if msgs and not getattr(self, "_profile_health_warned", False):
+                self._profile_health_warned = True
+                self.errors.append("画像匹配数据体检：" + "；".join(msgs) + "。画像候选按三相合成 ΣP/ΣI 搜索，这种数据下设备台阶会被抵消或失真，先修正列映射/极性再用画像匹配")
         need = self._profile_window_need()
         if need > int(self.ncfg.window_cycles):
             msg = (f"画像前后窗 {prof.get('pre_cycles')}/{prof.get('post_cycles')} 周波（最长持续 {need - int(prof.get('pre_cycles', 10)) - 2 * int(prof.get('post_cycles', 50)) - 10}）"
