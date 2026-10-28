@@ -327,13 +327,9 @@ def _locate_near(x: np.ndarray, k_center: int, half: int, pre_n: int, post_n: in
     return best, end, delta
 
 
-def build_profile(cfg, file: str, *, device_id: str = "device", labels: Optional[str] = None, label_tol_s: float = 2.0,
-                  pre_cycles: int = 10, post_cycles: int = 50, max_cycles: int = 400000, quantity: Optional[str] = None,
-                  t_start: str = "", t_end: str = "", custom_time: bool = False, custom_time_start: str = "",
-                  custom_time_end: str = "", merge_gap_s: float = 10.0) -> Dict[str, Any]:
-    """从设备侧文件构建画像。``merge_gap_s``（v0.92，仅自动定位模式）：同方向、中间没有反向事件、起点间隔 ≤ 该秒数的
-    相邻事件视为同一次动作被稳态分段切碎（或启动后的分级带载 / 反复重启），只保留最早的一个；0＝不合并。``cfg``＝基准配置（PT/CT、fs、列映射，不被修改）。``labels``＝标签文本（空＝自动用稳态分段 +
-    自适应参数找启停事件：幅值为正＝启动、为负＝停止）。返回画像文档（含 ``events`` 明细与 ``notes``）。"""
+def load_cycles(cfg, file: str, *, max_cycles: int = 400000, t_start: str = "", t_end: str = "", custom_time: bool = False,
+                custom_time_start: str = "", custom_time_end: str = ""):
+    """读取设备侧文件为逐周波序列。返回 (c, feat, t, p4, q4, i4, u_nonzero)；``cfg`` 不被修改。"""
     from .config import AppConfig, parse_play_start
     from .nilm import CycleFeatures, detect_steps
     from .nilm_auto import auto_params
@@ -377,6 +373,21 @@ def build_profile(cfg, file: str, *, device_id: str = "device", labels: Optional
         raise ProfileError("没有读到整周波数据")
     t = np.concatenate(ts)[:max_cycles]; p4 = np.concatenate(ps, axis=1)[:, :max_cycles]
     q4 = np.concatenate(qs, axis=1)[:, :max_cycles]; i4 = np.concatenate(is_, axis=1)[:, :max_cycles]
+    return c, feat, t, p4, q4, i4, u_nonzero
+
+
+def build_profile(cfg, file: str, *, device_id: str = "device", labels: Optional[str] = None, label_tol_s: float = 2.0,
+                  pre_cycles: int = 10, post_cycles: int = 50, max_cycles: int = 400000, quantity: Optional[str] = None,
+                  t_start: str = "", t_end: str = "", custom_time: bool = False, custom_time_start: str = "",
+                  custom_time_end: str = "", merge_gap_s: float = 10.0) -> Dict[str, Any]:
+    """从设备侧文件构建画像。``merge_gap_s``（v0.92，仅自动定位模式）：同方向、中间没有反向事件、起点间隔 ≤ 该秒数的
+    相邻事件视为同一次动作被稳态分段切碎（或启动后的分级带载 / 反复重启），只保留 |ΔI| 最大的一个；0＝不合并。``cfg``＝基准配置（PT/CT、fs、列映射，不被修改）。``labels``＝标签文本（空＝自动用稳态分段 +
+    自适应参数找启停事件：幅值为正＝启动、为负＝停止）。返回画像文档（含 ``events`` 明细与 ``notes``）。"""
+    c, feat, t, p4, q4, i4, u_nonzero = load_cycles(cfg, file, max_cycles=max_cycles, t_start=t_start, t_end=t_end, custom_time=custom_time,
+                                                   custom_time_start=custom_time_start, custom_time_end=custom_time_end)
+    from .nilm import detect_steps
+    from .nilm_auto import auto_params
+    from .timefmt import fmt_local
     q_req = quantity or str(getattr(c.nilm, "quantity", "auto") or "auto")
     use_p = (q_req == "p") or (q_req == "auto" and u_nonzero)
     if use_p and not u_nonzero:
@@ -409,14 +420,23 @@ def build_profile(cfg, file: str, *, device_id: str = "device", labels: Optional
         if ap is None:
             raise ProfileError("文件太短（不足 60 个有效周波），无法自动定位启停事件；请给启停标签")
         prm = ap["algorithms"]["steady_state"]
-        steps = detect_steps("steady_state", x, prm)
-        if not steps:
-            prm2 = ap["algorithms"]["two_window"]; steps = detect_steps("two_window", x, prm2)
-        for onset, end, pre, post, score in steps:
+        steps = [(int(a_), int(b_), pr_, po_, sc_, "auto:steady_state") for a_, b_, pr_, po_, sc_ in detect_steps("steady_state", x, prm)]
+        # v0.92.1：稳态分段要求过渡在 max_transient 周波内收敛到稳态——电机启动电流（I 口径尤甚）常衰减数秒，整个事件被丢掉；
+        #          用双滑窗补充：其 onset 与已找到事件相距 > max(post_n, max_transient) 周波的才加入（同一次动作不重复）
+        prm2 = ap["algorithms"]["two_window"]
+        guard = max(post_n, int(prm.get("max_transient_cycles", post_n)))
+        for a_, b_, pr_, po_, sc_ in detect_steps("two_window", x, prm2):
+            if all(abs(int(a_) - s0[0]) > guard for s0 in steps):
+                steps.append((int(a_), int(b_), pr_, po_, sc_, "auto:two_window"))
+        steps.sort(key=lambda s0: s0[0])
+        for onset, end, pre, post, score, src in steps:
             ef = event_features(p4, q4, i4, int(onset), int(end), pre_n, post_n)
             # v0.91.2：方向按合成电流有效值的变化判（RMS 恒正，启动必升、停止必降），不再按 P 判——P 的符号受 CT 极性 / 相别配对影响
             samples.append({**ef, "direction": "START" if ef["d_it"] >= 0 else "STOP", "onset": int(onset), "end": int(end),
-                            "t_start": float(t[onset]), "t_start_local": fmt_local(float(t[onset])), "source": "auto:steady_state"})
+                            "t_start": float(t[onset]), "t_start_local": fmt_local(float(t[onset])), "source": src})
+        n_tw = sum(1 for s0 in steps if s0[5] == "auto:two_window")
+        if n_tw:
+            notes.append(f"自动定位：稳态分段漏掉的 {n_tw} 个事件由双滑窗补充（source=auto:two_window）——多为过渡过程长于 max_transient 的启动；其后窗若仍在过渡中，ΔI/ΔP 会偏大，建议加大 post 或给标签")
         mode = "auto"
         # v0.92：合并被稳态分段切碎的同一次动作（同方向连续出现、间隔 ≤ merge_gap_s；设备不可能不停就再启）
         if merge_gap_s and float(merge_gap_s) > 0 and len(samples) > 1:
@@ -426,11 +446,13 @@ def build_profile(cfg, file: str, *, device_id: str = "device", labels: Optional
                 k_ = kept[-1] if kept else None
                 if k_ is not None and k_["direction"] == s_["direction"] and (s_["t_start"] - last_t) <= float(merge_gap_s):
                     merged += 1; last_t = s_["t_start"]   # 以最后一段起点续算间隔（一串切片整体合并）
+                    if abs(s_["d_it"]) > abs(k_["d_it"]):
+                        kept[-1] = s_                     # 一组里保留 |ΔI| 最大的那次（小前导波动 / 分级带载的小级不代表设备）
                     continue
                 kept.append(s_); last_t = s_["t_start"]
             if merged:
                 samples = kept
-                notes.append(f"自动定位：有 {merged} 个事件与前一事件同方向、间隔 ≤{float(merge_gap_s):g} s 且中间无反向事件，判为同一次动作被切碎 / 分级带载 / 反复重启，只保留最早一个，已合并（merge_gap_s=0 可关闭）")
+                notes.append(f"自动定位：有 {merged} 个事件与前一事件同方向、间隔 ≤{float(merge_gap_s):g} s 且中间无反向事件，判为同一次动作被切碎 / 分级带载 / 反复重启，只保留 |ΔI| 最大的一个，已合并（merge_gap_s=0 可关闭）")
         notes.append(f"未提供启停标签：用稳态分段 + 自适应参数自动定位到 {len(samples)} 个事件（合并后）（幅值为正＝启动、为负＝停止），请核对事件明细")
     if not samples:
         raise ProfileError("没有定位到任何启停事件：请检查标签时刻 / 文件内容")

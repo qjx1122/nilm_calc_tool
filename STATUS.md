@@ -101,6 +101,7 @@
 - **v0.91.1**：NILM_TUNING_GUIDE 增加画像算法（§5-C / G.9 / H.14 / 附录 A、C）；nilm_replay `--set nilm.profile_path` 字符串修复。
 - **v0.91.2**：画像方向按 ΔI 判定 + 极性/方向一致性提示 + `tools/nilm_profile_diag.py`。
 - **v0.92**：`transform.invert_current` 电流极性反转（UI 两侧）+ 画像自动定位 `merge_gap_s` 合并。
+- **v0.92.1**：画像自动定位双滑窗补充 + 合并保留最大 |ΔI| + diag 文件模式（`load_cycles` 抽出）。
 - **v0.86**：数据处理页重采样 / 调参 / 波形预览各加「启用离线文件列映射」（默认不启用＝固定列序；启用后 7 列号；只本次请求生效、不写运行配置；调参两种基准模式都生效）。405 passed；ui_r86 18 项 ALL PASS。
 - **v0.85**：分路侧离线倍速可单独设置（`source.file_speed_follow`，默认随总线侧；界面勾选、启动按界面值、随总线侧不改写分路侧配置）。401 passed；ui_r85 ALL PASS。
 - **v0.84**：总线侧「列出 data 目录」改为与分路侧同构（只列 CSV、可点击填入路径、dirty 标记）。ui_r84 ALL PASS。

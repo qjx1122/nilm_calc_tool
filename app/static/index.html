@@ -1102,7 +1102,7 @@
             <div class="row2">
               <label title="事件前窗周波数（取稳态前值）">前窗 (周波) <input id="np-pre" type="number" min="3" step="1" value="10"></label>
               <label title="事件后窗周波数：应 ≥ 设备启动过程（冲击 / 爬升）时长；总线侧确认事件也要等这么多周波">后窗 (周波) <input id="np-post" type="number" min="3" step="1" value="50"></label>
-              <label title="自动定位模式：同方向连续、起点间隔 ≤ 该秒数的相邻事件视为同一次动作被切碎 / 分级带载 / 反复重启，只保留最早一个；0＝不合并">合并间隔 (s · 自动定位) <input id="np-merge" type="number" min="0" step="1" value="10"></label>
+              <label title="自动定位模式：同方向连续、起点间隔 ≤ 该秒数的相邻事件视为同一次动作被切碎 / 分级带载 / 反复重启，只保留 |ΔI| 最大的一个；0＝不合并">合并间隔 (s · 自动定位) <input id="np-merge" type="number" min="0" step="1" value="10"></label>
             </div>
             <label>画像文件名（写到 output/nilm/；留空＝profile_{设备}_{时间}.json） <input id="np-name" placeholder="profile_{设备}_{时间}.json"></label>
             <div class="btnrow">

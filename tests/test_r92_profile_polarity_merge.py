@@ -48,3 +48,29 @@ def test_merge_gap_collapses_fragmented_events(tmp_path):
     assert n0 >= n1 >= 1
     if n0 > 1:
         assert n1 == 1 and any("已合并" in n for n in d1["notes"])
+
+
+def _motor_wave(dur=20.0):
+    """电机型负荷：P 过渡 0.5 s 衰减，启动无功电流 5 倍 / 3 s 衰减——I 口径过渡远长于稳态分段的 max_transient。"""
+    FS, F = T.FS, T.F
+    n = int(FS * dur); t = np.arange(n) / FS; w = 2 * np.pi * F * t
+    on = (t >= 3) & (t < 15); tau = np.clip(t - 3, 0, None)
+    P = 20 + np.where(on, 500.0 + 250 * np.exp(-tau / 0.5), 0); Imag = np.where(on, 2000 * np.exp(-tau / 3.0), 0)
+    U, ang = 57.74, np.arccos(0.9); u = np.zeros((3, n)); i = np.zeros((3, n)); rng = np.random.default_rng(1)
+    for k, ph in enumerate((0, -2 * np.pi / 3, 2 * np.pi / 3)):
+        u[k] = U * np.sqrt(2) * np.sin(w + ph)
+        i[k] = (P / 3) / (U * 0.9) * np.sqrt(2) * np.sin(w + ph - ang) + (Imag / 3) / U * np.sqrt(2) * np.sin(w + ph - np.pi / 2) + rng.normal(0, 0.01, n)
+    return T.T0 + t, u, i
+
+
+def test_two_window_supplements_long_transient_start_for_p_and_i(tmp_path):
+    """v0.92.1：稳态分段因过渡过长漏掉启动时，由双滑窗补充；P / I 两种口径都应各得 1 次启动 + 1 次停止，且停止是真正的大台阶。"""
+    t, u, i = _motor_wave(); f = str(tmp_path / "motor.csv"); T._write_csv(f, t, u, i)
+    c = AppConfig(); c.transform.enabled = False
+    for q in ("p", "i"):
+        d = build_profile(c, f, device_id="m", quantity=q)
+        assert d["startup"] and d["startup"]["n"] == 1, q
+        assert d["shutdown"] and d["shutdown"]["n"] == 1, q
+        ia = d["features"].index("d_ia")
+        assert d["startup"]["mu"][ia] > 3 and d["shutdown"]["mu"][ia] < -3, (q, d["shutdown"]["mu"][ia])
+        assert any("双滑窗补充" in n for n in d["notes"]), q
