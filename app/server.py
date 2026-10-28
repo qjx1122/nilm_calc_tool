@@ -2766,6 +2766,7 @@ async def process_nilm_profile(payload: Dict[str, Any]) -> Any:
             quantity = None
         kw = dict(device_id=device_id, labels=labels, label_tol_s=_num("label_tol_s", 2.0), pre_cycles=int(_num("pre_cycles", 10)),
                   post_cycles=int(_num("post_cycles", 50)), max_cycles=int(_num("max_cycles", 400000)), quantity=quantity,
+                  merge_gap_s=_num("merge_gap_s", 10.0),
                   t_start=str(payload.get("t_start") or ""), t_end=str(payload.get("t_end") or ""),
                   custom_time=bool(payload.get("custom_time", False)),
                   custom_time_start=str(payload.get("custom_time_start") or ""), custom_time_end=str(payload.get("custom_time_end") or ""))
@@ -2796,7 +2797,7 @@ async def process_nilm_profile(payload: Dict[str, Any]) -> Any:
         doc["col_map_enabled"] = bool(base.columns.mapping_enabled)
         doc["col_map"] = dict(base.columns.mapping) if base.columns.mapping_enabled else None
         doc["command"] = _profile_cmd(_display_path(src_abs), device=device_id, config=cfg_arg, labels=("<标签文本>" if labels else None),
-                                      label_tol=kw["label_tol_s"], pre=kw["pre_cycles"], post=kw["post_cycles"], quantity=quantity,
+                                      label_tol=kw["label_tol_s"], pre=kw["pre_cycles"], post=kw["post_cycles"], quantity=quantity, merge_gap=kw["merge_gap_s"],
                                       t_start=kw["t_start"], t_end=kw["t_end"], custom_time=kw["custom_time"],
                                       custom_time_start=kw["custom_time_start"], custom_time_end=kw["custom_time_end"], out=_display_path(fp))
         save_profile(doc, fp)

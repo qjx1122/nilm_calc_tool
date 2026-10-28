@@ -27,7 +27,7 @@ from elec_tool.nilm_profile import FEATURES, ProfileError, build_profile, save_p
 
 
 def build_cli_command(file: str, *, device: str, config=None, labels=None, label_tol=None, pre=None, post=None, quantity=None,
-                      t_start="", t_end="", custom_time=False, custom_time_start="", custom_time_end="", out=None) -> str:
+                      t_start="", t_end="", custom_time=False, custom_time_start="", custom_time_end="", out=None, merge_gap=None) -> str:
     q = lambda s: f'"{s}"' if any(ch in str(s) for ch in " \t\"'") else str(s)   # noqa: E731
     parts = ["python", "tools/nilm_profile.py", "--file", q(file), "--device", q(device)]
     if config:
@@ -40,6 +40,8 @@ def build_cli_command(file: str, *, device: str, config=None, labels=None, label
         parts += ["--pre", str(int(pre))]
     if post is not None:
         parts += ["--post", str(int(post))]
+    if merge_gap is not None:
+        parts += ["--merge-gap", f"{float(merge_gap):g}"]
     if quantity:
         parts += ["--quantity", str(quantity)]
     if t_start:
@@ -66,6 +68,7 @@ def main() -> int:
     ap.add_argument("--label-tol", type=float, default=2.0, help="标签时刻容差（s）")
     ap.add_argument("--pre", type=int, default=10, help="事件前窗周波数")
     ap.add_argument("--post", type=int, default=50, help="事件后窗周波数（应 ≥ 设备启动过程时长）")
+    ap.add_argument("--merge-gap", type=float, default=10.0, help="自动定位模式：同方向连续、间隔 ≤ 该秒数的事件合并为一次（0＝不合并）")
     ap.add_argument("--quantity", default=None, choices=[None, "auto", "p", "i"], help="画像口径（缺省取配置 nilm.quantity）")
     ap.add_argument("--t-start", default=""); ap.add_argument("--t-end", default="")
     ap.add_argument("--custom-time", action="store_true"); ap.add_argument("--custom-time-start", default=""); ap.add_argument("--custom-time-end", default="")
@@ -82,7 +85,7 @@ def main() -> int:
             else:
                 labels_txt = a.labels.replace(";", "\n")
         doc = build_profile(cfg, a.file, device_id=a.device, labels=labels_txt, label_tol_s=a.label_tol, pre_cycles=a.pre,
-                            post_cycles=a.post, quantity=a.quantity, t_start=a.t_start, t_end=a.t_end, custom_time=a.custom_time,
+                            post_cycles=a.post, quantity=a.quantity, merge_gap_s=a.merge_gap, t_start=a.t_start, t_end=a.t_end, custom_time=a.custom_time,
                             custom_time_start=a.custom_time_start, custom_time_end=a.custom_time_end)
     except (ProfileError, ConfigError, OSError, ValueError) as exc:
         print(f"错误：{exc}", file=sys.stderr)

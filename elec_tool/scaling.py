@@ -23,16 +23,17 @@ def scale_voltage(u: np.ndarray, tr: TransformConfig) -> np.ndarray:
 
 
 def scale_current(i: np.ndarray, tr: TransformConfig) -> np.ndarray:
+    sgn = -1.0 if bool(getattr(tr, "invert_current", False)) else 1.0
     if not tr.enabled:
-        return np.asarray(i, dtype=np.float64)
-    return np.asarray(i, dtype=np.float64) * float(tr.ct_ratio)
+        return np.asarray(i, dtype=np.float64) * sgn if sgn < 0 else np.asarray(i, dtype=np.float64)
+    return np.asarray(i, dtype=np.float64) * (float(tr.ct_ratio) * sgn)
 
 
 def scale_block(block: SampleBlock, tr: TransformConfig) -> SampleBlock:
     """返回一次侧数据块（不修改原对象；已变换过则原样返回）。"""
-    if block.scaled or tr.pt_ratio == 1.0 and tr.ct_ratio == 1.0 and not tr.enabled:
-        return block
     if block.scaled:
+        return block
+    if not tr.enabled and not bool(getattr(tr, "invert_current", False)):
         return block
     return SampleBlock(
         t=block.t,

@@ -330,8 +330,9 @@ def _locate_near(x: np.ndarray, k_center: int, half: int, pre_n: int, post_n: in
 def build_profile(cfg, file: str, *, device_id: str = "device", labels: Optional[str] = None, label_tol_s: float = 2.0,
                   pre_cycles: int = 10, post_cycles: int = 50, max_cycles: int = 400000, quantity: Optional[str] = None,
                   t_start: str = "", t_end: str = "", custom_time: bool = False, custom_time_start: str = "",
-                  custom_time_end: str = "") -> Dict[str, Any]:
-    """从设备侧文件构建画像。``cfg``＝基准配置（PT/CT、fs、列映射，不被修改）。``labels``＝标签文本（空＝自动用稳态分段 +
+                  custom_time_end: str = "", merge_gap_s: float = 10.0) -> Dict[str, Any]:
+    """从设备侧文件构建画像。``merge_gap_s``（v0.92，仅自动定位模式）：同方向、中间没有反向事件、起点间隔 ≤ 该秒数的
+    相邻事件视为同一次动作被稳态分段切碎（或启动后的分级带载 / 反复重启），只保留最早的一个；0＝不合并。``cfg``＝基准配置（PT/CT、fs、列映射，不被修改）。``labels``＝标签文本（空＝自动用稳态分段 +
     自适应参数找启停事件：幅值为正＝启动、为负＝停止）。返回画像文档（含 ``events`` 明细与 ``notes``）。"""
     from .config import AppConfig, parse_play_start
     from .nilm import CycleFeatures, detect_steps
@@ -417,7 +418,20 @@ def build_profile(cfg, file: str, *, device_id: str = "device", labels: Optional
             samples.append({**ef, "direction": "START" if ef["d_it"] >= 0 else "STOP", "onset": int(onset), "end": int(end),
                             "t_start": float(t[onset]), "t_start_local": fmt_local(float(t[onset])), "source": "auto:steady_state"})
         mode = "auto"
-        notes.append(f"未提供启停标签：用稳态分段 + 自适应参数自动定位到 {len(samples)} 个事件（幅值为正＝启动、为负＝停止），请核对事件明细")
+        # v0.92：合并被稳态分段切碎的同一次动作（同方向连续出现、间隔 ≤ merge_gap_s；设备不可能不停就再启）
+        if merge_gap_s and float(merge_gap_s) > 0 and len(samples) > 1:
+            samples.sort(key=lambda s_: s_["onset"])
+            kept: List[Dict[str, Any]] = []; merged = 0; last_t = None
+            for s_ in samples:
+                k_ = kept[-1] if kept else None
+                if k_ is not None and k_["direction"] == s_["direction"] and (s_["t_start"] - last_t) <= float(merge_gap_s):
+                    merged += 1; last_t = s_["t_start"]   # 以最后一段起点续算间隔（一串切片整体合并）
+                    continue
+                kept.append(s_); last_t = s_["t_start"]
+            if merged:
+                samples = kept
+                notes.append(f"自动定位：有 {merged} 个事件与前一事件同方向、间隔 ≤{float(merge_gap_s):g} s 且中间无反向事件，判为同一次动作被切碎 / 分级带载 / 反复重启，只保留最早一个，已合并（merge_gap_s=0 可关闭）")
+        notes.append(f"未提供启停标签：用稳态分段 + 自适应参数自动定位到 {len(samples)} 个事件（合并后）（幅值为正＝启动、为负＝停止），请核对事件明细")
     if not samples:
         raise ProfileError("没有定位到任何启停事件：请检查标签时刻 / 文件内容")
     # v0.91.2：一致性检查——方向与 ΔI 符号相反（标签时刻偏差 / 前后窗跨事件）、ΔP 与 ΔI 异号（P 极性可疑）

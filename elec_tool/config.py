@@ -173,6 +173,7 @@ class TransformConfig:
     ct_ratio: float = 15.0
     voltage_input: str = "phase"   # phase＝CSV 中为相电压；line＝CSV 中为线电压
     enabled: bool = True           # False＝直接用二次值（调试/对比用）
+    invert_current: bool = False   # v0.92：电流极性反转（CT 接反 / P 为负时勾选；不依赖 enabled，三相同时取反）
 
     @property
     def power_ratio(self) -> float:

@@ -1130,6 +1130,7 @@ U10-4 B/C 相为 0：____  U10-5 列号交换：Ia≈____  U10-6 无时间戳：
 - v0.91（2026-10-28）：**周波窗定位提速** `tests/test_r91_line_index.py` 5 项 + 402 MB 实测基线 / 优化后对照（bench：`_wave_window_from_file` / `cycle_values` / `load_cycles_from_file`，定位第 600 s，n=300，页缓存热）：
 - v0.91.1（2026-10-28，文档）：NILM_TUNING_GUIDE 画像算法章节；文中三条命令（nilm_profile → nilm_replay --set nilm.profile_path/profile.enabled → nilm_check）用合成数据实跑通过（profile 行 2 真值/2 命中/0 误报）。发现并修复 nilm_replay `--set nilm.profile_path=` 被转成 bool。tests/test_tools + test_r90 19 passed。
 - v0.91.2（2026-10-28）：合成数据电流取反（P<0）复现"启动 ΔI<0 / 停止 ΔI>0"：原因＝自动模式方向按 ΔP 符号；改按 d_it 后方向正确并给出"6/6 事件 ΔP 与 ΔI 异号"提示。test_r90 + test_tools 19 passed。
+- v0.92（2026-10-28）：`tests/test_r92_profile_polarity_merge.py` 3 项——极性反转在 PT/CT 启用/未启用下均生效；CT 接反的合成数据勾选反转后 ΔP/ΔI 同号、启动 μ 为正；分级带载（3 级 +5 %）自动定位 4 个启动 → merge_gap 10 s 合并为 1 个。API `/api/process/nilm_profile` 带 merge_gap_s 实测合并 3 个，command 含 `--merge-gap 10`。
   - 基线：瞬时值 817 ms、有效值 816 ms、负荷辨识周波窗 273 ms、自定义时间 910 / 286 ms；cProfile：`_count_rows`×2 0.52 s + `_count_newlines` 0.19 s + JSON 逐元素 round 0.17 s，占 1.1 s 中的 0.88 s。
   - 优化后：104 / 112 / 95 / 103 / 118 ms；HTTP 端到端（含 2.3 MB JSON 传输）`/api/nilm/wave_file` 0.32 s、`/api/elec/cycles_file` 0.10 s、`/api/nilm/cycles_file` 0.09 s。
   - 正确性：索引三接口 vs 暴力计数（随机 / 定长跨边界 / 边界对齐）逐位一致；time / row / seconds 定位 `skipped_rows` 与首块 t 在顺序扫 vs 索引路径一致；三条周波窗端点 + 自定义时间两路径结果逐位一致。

@@ -278,6 +278,11 @@ New-Item -ItemType Directory -Force output | Out-Null
 
 ## 7. 第六步：把参数写进生产（Web 界面）
 
+**常见坑（v0.92）：启动事件 ΔI<0、停止事件 ΔI>0。** 先跑 `python tools/nilm_profile_diag.py --profile <画像.json>`：
+- 提示「ΔP 与 ΔI 异号」⇒ 有功为负（CT 接反 / 电压电流相别未配对）。在「数据源与控制 → 量纲与口径」勾选该侧的 **电流极性反转**（`transform.invert_current`）后重提；不修的话画像里 ΔP/ΔQ 符号与总线侧相反，在线必然匹配不上。
+- 同方向事件几秒内连续出现多次（一次启动被稳态分段切碎、分级带载、反复重启）⇒ 自动定位模式用「合并间隔」（`--merge-gap`，默认 10 s）合并，或直接给标签。
+- 启动过渡长于后窗（`dur_cycles` 顶到 post、template 末端远大于 1）⇒ 把 `--post` 放大到 ≥ 启动过程周波数（大电机常需 200+）。
+
 ### 7-1 把最终参数存成配置文件
 
 把 §6 里最后一次成功的那条 `nilm_replay.py` 命令，**原样再加上** `--save-config output\site.json` 跑一遍：

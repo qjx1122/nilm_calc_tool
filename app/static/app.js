@@ -2003,6 +2003,7 @@ function fillSourceForm(cfg) {
     $('#cfg-pt').value = cfg.transform.pt_ratio;
     $('#cfg-ct').value = cfg.transform.ct_ratio;
     $('#cfg-scale').checked = !!cfg.transform.enabled;
+    $('#cfg-inv').checked = !!cfg.transform.invert_current;
     $('#cfg-uin').value = cfg.transform.voltage_input || 'phase';
   }
   if (cfg.sampling) {
@@ -2095,7 +2096,7 @@ async function loadBranchForm(force) {
       fillSourceFields('br-', cfg.source);
       const tr = cfg.transform || {}, sp = cfg.sampling || {}, hm = cfg.harmonic || {}, pw = cfg.power || {};
       $('#br-pt').value = tr.pt_ratio ?? ''; $('#br-ct').value = tr.ct_ratio ?? '';
-      $('#br-scale').checked = tr.enabled !== false; $('#br-uin').value = tr.voltage_input || 'phase';
+      $('#br-scale').checked = tr.enabled !== false; $('#br-uin').value = tr.voltage_input || 'phase'; $('#br-inv').checked = !!tr.invert_current;
       $('#br-fs').value = sp.fs ?? ''; $('#br-fnom').value = sp.f_nom ?? ''; $('#br-adaptive').checked = !!sp.adaptive_freq;
       $('#br-hmax').value = hm.order_max ?? '';
       $('#br-apparent').value = pw.apparent || 'arithmetic'; $('#br-reactive').value = pw.reactive || 'harmonic_sum';
@@ -2191,7 +2192,7 @@ function collectBranchConfigPayload() {
   const src = collectSourceFields('br-');
   // 分路侧量纲与口径：空输入框跳过（保留服务端原值），与总线侧 collectConfigPayload 同规则
   const posv = (id) => { const v = parseFloat($('#' + id).value); return Number.isFinite(v) && v > 0 ? v : null; };
-  const transform = { enabled: $('#br-scale').checked, voltage_input: $('#br-uin').value };
+  const transform = { enabled: $('#br-scale').checked, voltage_input: $('#br-uin').value, invert_current: $('#br-inv').checked };
   const pt = posv('br-pt'), ct = posv('br-ct'); if (pt !== null) transform.pt_ratio = pt; if (ct !== null) transform.ct_ratio = ct;
   const sampling = { adaptive_freq: $('#br-adaptive').checked };
   const fs = posv('br-fs'), fnom = posv('br-fnom'); if (fs !== null) sampling.fs = fs; if (fnom !== null) sampling.f_nom = fnom;
@@ -2704,7 +2705,7 @@ function collectConfigPayload() {
     skipped.push(label);
     return null;
   };
-  const transform = { enabled: $('#cfg-scale').checked, voltage_input: $('#cfg-uin').value };
+  const transform = { enabled: $('#cfg-scale').checked, voltage_input: $('#cfg-uin').value, invert_current: $('#cfg-inv').checked };
   const pt = pos('cfg-pt', 'PT 变比'), ct = pos('cfg-ct', 'CT 变比');
   if (pt !== null) transform.pt_ratio = pt;
   if (ct !== null) transform.ct_ratio = ct;
@@ -3093,7 +3094,7 @@ function bind() {
   $('#btn-br-stop').addEventListener('click', stopBranchAlone);
   $('#btn-br-pause').addEventListener('click', toggleBranchPause);
   $('#btn-br-common-preview').addEventListener('click', previewCommonWindow);
-  ['br-pt', 'br-ct', 'br-fs', 'br-fnom', 'br-adaptive', 'br-scale', 'br-uin', 'br-hmax', 'br-apparent', 'br-reactive', 'br-toffset', 'br-tol']
+  ['br-pt', 'br-ct', 'br-inv', 'br-fs', 'br-fnom', 'br-adaptive', 'br-scale', 'br-uin', 'br-hmax', 'br-apparent', 'br-reactive', 'br-toffset', 'br-tol']
     .forEach(id => { const el = $('#' + id); if (el) el.addEventListener('input', () => { BR.dirty = true; }); });
   $('#cmp-key').addEventListener('change', e => { CMP.key = e.target.value; CMP.data = null; refreshCompare(); });
   $('#cmp-field').addEventListener('change', e => { CMP.field = e.target.value; renderCompare(); });
@@ -4367,7 +4368,7 @@ function npPayload() {
            custom_time_start: t.custom_time_start, custom_time_end: t.custom_time_end, base_mode: t.base_mode, base: t.base,
            col_map_enabled: t.col_map_enabled, col_map: t.col_map,
            device_id: v('np-device'), labels: $('#np-labels').value, label_tol_s: v('np-tol') || null,
-           pre_cycles: v('np-pre') || null, post_cycles: v('np-post') || null, name: v('np-name') };
+           pre_cycles: v('np-pre') || null, post_cycles: v('np-post') || null, merge_gap_s: ($('#np-merge') && $('#np-merge').value !== '') ? parseFloat($('#np-merge').value) : null, name: v('np-name') };
 }
 function npRender(d) {
   const p = d.profile || {}; const F = d.features || [];
