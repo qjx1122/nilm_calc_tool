@@ -99,6 +99,7 @@
 - **v0.90**：负荷辨识新增「设备画像匹配」算法（基础版：`elec_tool/nilm_profile.py` 画像构建 + 对角马氏匹配 + 状态机；`nilm.profile_path`；`POST /api/process/nilm_profile`；`tools/nilm_profile.py`；数据处理页「设备画像提取」区；事件 CSV +6 列 → 旧文件 `.pre-v090`）。444 passed；ui_r90 13 项 ALL PASS。缺口：无 DTW / 无幅值校准 / 单设备画像。
 - **v0.91**：曲线图右键周波窗定位提速：`elec_tool/line_index.py` 稀疏行索引替换三处整文件扫描（行数 / 定位前行数 / 行号定位）+ 启动 / 配置时后台预热 + 波形 JSON 向量化；402 MB 文件 817→104 ms。435 passed。
 - **v0.91.1**：NILM_TUNING_GUIDE 增加画像算法（§5-C / G.9 / H.14 / 附录 A、C）；nilm_replay `--set nilm.profile_path` 字符串修复。
+- **v0.91.2**：画像方向按 ΔI 判定 + 极性/方向一致性提示 + `tools/nilm_profile_diag.py`。
 - **v0.86**：数据处理页重采样 / 调参 / 波形预览各加「启用离线文件列映射」（默认不启用＝固定列序；启用后 7 列号；只本次请求生效、不写运行配置；调参两种基准模式都生效）。405 passed；ui_r86 18 项 ALL PASS。
 - **v0.85**：分路侧离线倍速可单独设置（`source.file_speed_follow`，默认随总线侧；界面勾选、启动按界面值、随总线侧不改写分路侧配置）。401 passed；ui_r85 ALL PASS。
 - **v0.84**：总线侧「列出 data 目录」改为与分路侧同构（只列 CSV、可点击填入路径、dirty 标记）。ui_r84 ALL PASS。

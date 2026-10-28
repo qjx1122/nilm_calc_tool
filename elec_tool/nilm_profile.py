@@ -413,12 +413,20 @@ def build_profile(cfg, file: str, *, device_id: str = "device", labels: Optional
             prm2 = ap["algorithms"]["two_window"]; steps = detect_steps("two_window", x, prm2)
         for onset, end, pre, post, score in steps:
             ef = event_features(p4, q4, i4, int(onset), int(end), pre_n, post_n)
-            samples.append({**ef, "direction": "START" if post - pre >= 0 else "STOP", "onset": int(onset), "end": int(end),
+            # v0.91.2：方向按合成电流有效值的变化判（RMS 恒正，启动必升、停止必降），不再按 P 判——P 的符号受 CT 极性 / 相别配对影响
+            samples.append({**ef, "direction": "START" if ef["d_it"] >= 0 else "STOP", "onset": int(onset), "end": int(end),
                             "t_start": float(t[onset]), "t_start_local": fmt_local(float(t[onset])), "source": "auto:steady_state"})
         mode = "auto"
         notes.append(f"未提供启停标签：用稳态分段 + 自适应参数自动定位到 {len(samples)} 个事件（幅值为正＝启动、为负＝停止），请核对事件明细")
     if not samples:
         raise ProfileError("没有定位到任何启停事件：请检查标签时刻 / 文件内容")
+    # v0.91.2：一致性检查——方向与 ΔI 符号相反（标签时刻偏差 / 前后窗跨事件）、ΔP 与 ΔI 异号（P 极性可疑）
+    n_dir = sum(1 for s_ in samples if (s_["d_it"] >= 0) != (s_["direction"] == "START") and abs(s_["d_it"]) > 1e-9)
+    if n_dir:
+        notes.append(f"{n_dir}/{len(samples)} 个事件的电流变化方向与归类方向相反（启动 ΔI<0 或停止 ΔI>0）：标签时刻偏差超过容差、或前后窗跨过了相邻事件，请复核标签 / 减小 post 窗")
+    n_pol = sum(1 for s_ in samples if s_["vec"]["d_p"] * s_["d_it"] < 0 and abs(s_["vec"]["d_p"]) > 1e-6)
+    if n_pol:
+        notes.append(f"{n_pol}/{len(samples)} 个事件的 ΔP 与 ΔI 异号（有功为负）：CT 极性接反或电压/电流相别未配对（列映射），画像 ΔP/ΔQ 的符号与总线侧不一致将匹配不上；请核对接线 / 列映射，或改用 quantity=i")
     startup = fit_group([s for s in samples if s["direction"] == "START"])
     shutdown = fit_group([s for s in samples if s["direction"] == "STOP"])
     for name, g in (("启动", startup), ("停止", shutdown)):
