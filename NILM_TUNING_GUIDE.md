@@ -18,6 +18,8 @@
 3. **怎么知道配对了**：拿一段**明知道设备什么时候开、什么时候关**的数据回放一遍，软件报出来的开关时刻和你知道的一一对上、而且没有多报，就是配对了。本手册的 `nilm_check.py` 会直接打印 ✅ / ⚠ / ✗。
 4. **检测 ≠ 归属**：软件报的是"总线上有一个台阶"，不是"是这台设备"。在**设备自己的支路**上两者一回事；在**总线**上，别的设备开关也会报出来——它们**不是误报**，要靠"台阶多高"（设备指纹）把它们分开。所以本手册分两条路：**路线 A 分路侧**（简单，优先）和**路线 B 总线侧**（多一步"取指纹"）。§1 会告诉你走哪条。
 
+5. **v0.90 新增第 7 种算法「设备画像匹配」（`profile`）——唯一一个会写"是哪台设备"的算法**：先在**设备自己的支路**录几次开/关，提取成一份"设备画像"（JSON 文件），再让总线侧拿每个台阶的 ΔIa/ΔIb/ΔIc/ΔP/ΔQ/启动冲击/持续时间去和画像比，像的才报，并给出**置信度**；不像的（其它设备）直接拒识。它把路线 B 里"靠幅值带离线归属"这一步搬到了线上，适合**总线上有多台设备、但待检设备特征与别家差异明显**的场景。详见 **§5-C**、附录 A 末行、附录 G.9、附录 C 第 6 条、H.14。
+
 > **单位提醒（最常见的坑）**：所有阈值的单位都是 **W（瓦）**。如果配置里启用了 PT/CT 变比（`transform.enabled=true`），阈值要按**一次侧**填（比如 1 台 500 kW 的电机就是 500000）；没启用就按二次侧 W 填。脚本的输出会告诉你当前是哪种口径，照抄即可。
 
 ---
@@ -190,6 +192,56 @@ New-Item -ItemType Directory -Force output | Out-Null
 
 **带宽怎么定**：默认 ±30 %。其它设备里最接近的那台功率与待检设备差 D %，带宽取 **< D/2**（例：差 50 % → 取 20 %）；差 < 30 % 的就是 §1 Q2 说的"无法区分"。
 
+### 5-C 路线 C（v0.90，总线侧，在线归属）：设备画像匹配算法
+
+路线 B 是"6 种算法先报所有台阶，再离线用幅值带挑出这台设备"。路线 C 把这件事做成**第 7 种在线算法 `profile`**：设备侧录波 → 画像文件 → 总线侧只报与画像相似的事件，事件表里直接写 `device_id · 置信度`。**前提与路线 B 相同**：必须有一段**设备自己支路**的录波（含 ≥ 2 次开、≥ 2 次关，建议 ≥ 3 次、不同日期 / 工况），并且这台设备和总线上其它设备的"长相"（ΔP、ΔQ、三相分配、启动冲击、暂态时长）有明显差别。
+
+**第 ① 步 提取画像**（设备侧文件 + 真值表，表格式同 §4，动作写 开/关 或 on/off / start/stop 都行）：
+
+```powershell
+# --labels 可以是真值表 CSV，也可直接写文本 "08:00:02,开;08:00:32,关"；不给 --labels ＝自动定位（稳态分段 + 自适应参数，ΔP>0 当启动、<0 当停止）
+# --pre / --post：事件前 / 后各取多少周波算"稳态"（默认 10 / 50；--post 必须 ≥ 设备启动过程时长，电机软启 2 s → --post 120）
+.\.venv\Scripts\python.exe tools\nilm_profile.py --file data\dev_onoff.csv --device pumpA --labels data\truth_dev.csv --config configs\default.json --pre 10 --post 50 --out output\nilm\profile_pumpA.json
+# 期望输出（节选）：
+#   设备画像已写出：output\nilm\profile_pumpA.json
+#     设备 pumpA  口径 W  周波 1000  标签方式 labels  前后窗 10/50
+#     启动画像：3 次事件  持续 15~17 周波
+#         d_p         μ=      500.0  σ=     75.0      ← μ＝3 次的中心值，σ＝离散度（样本少时按 15 % 中心值给下限）
+#         peak_ratio  μ=        1.6  σ=     0.48      ← 启动冲击峰值 / 稳态台阶（1.0＝没有冲击）
+#     停止画像：3 次事件  持续 1~1 周波
+#     ⚠ 启动画像只有 1 次事件：σ 按相对下限给出，建议采集 ≥3 次独立启停   ← 出现这行就再录几次
+```
+
+看三件事：(a) 启动 / 停止各 ≥ 2 次事件、起点时刻与真值表吻合（逐事件一行，`label:08:00:02` 为标签来源）；(b) `d_p` 的 μ 与铭牌功率 × 功率因数同量级、三次之间 σ 不离谱（σ/μ > 30 % 说明有一次定位错了或工况差异大，去看那一行）；(c) 没有 ⚠。画像与总线侧**检测量口径必须一致**（总线侧按 P 检测就用 P 口径画像；只有电流的数据源两边都用 I 口径，`--quantity i`）。
+
+**第 ② 步 总线侧回放验证**（把画像路径写进配置，开启 `profile`；其它 6 种算法可以同时开着——它们照常报所有台阶，`profile` 只报这台设备）：
+
+```powershell
+# 配置里：nilm.profile_path = "output/nilm/profile_pumpA.json"，nilm.algorithms.profile.enabled = true（可用 --set 临时覆盖）
+.\.venv\Scripts\python.exe tools\nilm_replay.py --file data\bus_onoff.csv --config configs\default.json --set nilm.profile_path=output/nilm/profile_pumpA.json --set profile.enabled=1 --out output\bus_events.csv
+# 期望：各算法事件数表里 profile 一行只有这台设备的开 / 关次数；其它 6 行 = 总线上所有设备的开关数之和
+#   profile           2     1     1  500 ~ 500   设备画像匹配
+# 对账：真值表只写这台设备 → profile 行直接按普通方式对账即可，不需要 --signature-*：
+.\.venv\Scripts\python.exe tools\nilm_check.py --events output\bus_events.csv --truth data\truth_bus.csv --tol-s 1
+#   结论表按算法一行一行列，只看 profile 那一行 ✅/⚠/✗（其它 6 行照例把别的设备算成"误报"，忽略或按 5-B 带指纹对账）
+```
+
+`bus_events.csv` 里 `profile` 事件多出 6 列：`device_id`、`confidence`（0~1）、`d2`（与画像的马氏距离平方，越小越像；≈ 维数 7 时相当于平均偏 1σ）、`profile_direction`（START/STOP）、`status`（`confirmed` 干净命中 / `low_confidence` 被接受但带标记）、`quality_flags`（`state_mismatch` 状态机不合理 / `ambiguous_direction` 启动停止分不清 / `trajectory_deviates` 启动轨迹形状不像）。
+
+**第 ③ 步 不达标怎么调**（只改一个参数，改完回到 ②；全部在 `nilm.algorithms.profile`，界面「负荷辨识」页同名）：
+
+| 现象 | 看什么 | 改什么 |
+|---|---|---|
+| 这台设备的开/关**漏报** | 界面画像面板「最近候选」或 `summary.profile.last`：该时刻候选存在但 `rejected[d2_exceeds]` → 看 `contrib` 哪一维贡献最大 | 那一维在总线侧确实和设备侧不同（最常见：总线侧 ΔQ 被别的无功补偿吃掉、三相分配不同）→ 先用更多次启停重做画像让 σ 变大；仍不行把 `d2_max` 9 → 16 |
+| 候选**根本没出现** | `last` 里没有该时刻 | 台阶没过候选门槛：`k_sigma` 4 → 3；或画像 `d_p` 比总线上这台设备的实际增量大很多（设备侧电流 ≠ 总线增量）→ 用总线侧录波重做画像（见下"画像从哪一侧取"） |
+| 报出的是**别的设备**（误报） | 误报行 `confidence` 很高说明两台设备长得一样——方法局限，到分路侧 | 置信度中等（0.3~0.6）→ `min_confidence` 0.3 → 0.5；`d2_max` 9 → 4 |
+| 开关方向反了 / `ambiguous_direction` | 启动与停止画像太像（无冲击的纯阻性设备） | 正常现象：方向由 ΔP 符号兜底；`margin` 1.5 → 1.2 放宽，或忽略该标记 |
+| 连续两次 START、`state_mismatch` | 上一次 STOP 漏了（状态机卡在 ON） | 先解决 STOP 漏报；临时可 `state_check=0` 关状态机 |
+
+**画像从哪一侧取**：方案与本工具都**不做**设备侧 ↔ 总线侧的幅值校准（事件只给 `observed_delta_p`，`estimated_device_delta_p` 恒为 null）。设备侧与总线侧之间有变压器 / 无功补偿 / 线路损耗时，ΔP、ΔQ、ΔI 会系统性不同——这时**用总线侧一段"只有这台设备在动"的录波来提画像**（`tools/nilm_profile.py --file data\bus_only_pumpA.csv ...`）效果更好，设备侧录波只用来确认标签时刻。
+
+**与路线 B 的关系**：两者可以同时用——`profile` 在线给归属与置信度，`nilm_check.py` 离线用幅值带复核；上线打勾清单（§8）里路线 C 的要求见倒数第 3 项。
+
 ---
 
 ## 6. 第五步：不达标怎么调（只改一个，改完回到 §5 重跑）
@@ -284,6 +336,7 @@ Invoke-RestMethod -Method Post -Uri http://localhost:8000/api/nilm/tune/apply -C
 - [ ] 换**另一段**包含该设备开关的数据（不同日期 / 不同时段）再跑一次 §5，结论仍 ✅ —— 防止参数只对一段数据有效
 - [ ] 用一段**不含**该设备开关的长数据（≥ 10 min）跑 §5-1 并对账（真值表只写表头、路线 B 带指纹），达标算法的**带内**事件数应为 0 —— 验证不会误报（总线上其它设备的事件不算）
 - [ ] （路线 B）待检设备指纹与总线上其它设备的功率相差 ≥ 30 %，且 `bus_check.csv` 中"其它设备"行的 ΔP 确实都明显偏离指纹 —— 否则总线侧无法区分，必须到分路侧
+- [ ] （路线 C）画像启动 / 停止各 ≥ 3 次事件且无 ⚠；§5-C ② 回放中 `profile` 行命中 100%、误报 0，命中事件 `status` 全为 `confirmed`、`confidence` ≥ 0.8；用一段不含该设备开关的总线数据回放，`profile` 行事件数为 0（其它设备的台阶全部被拒识）
 - [ ] "设备特征 |ΔP|" 与铭牌功率 × 功率因数同一量级（相差 < 30 %）—— 否则口径或变比可能错
 - [ ] §7 已推送、界面「检测参数」与 `site.json` 一致，重启软件后仍一致
 - [ ] 把 `output\site.json`、`output\tune.json`、`data\truth.csv`、`output\replay_check.csv` 四个文件归档到项目资料里（下次调参 / 排障的依据）
@@ -302,6 +355,7 @@ Invoke-RestMethod -Method Post -Uri http://localhost:8000/api/nilm/tune/apply -C
 | `cusum` 累积和 | 把偏离累加起来，累到门限就报 | 能捉**慢慢爬升**的负荷 | `drift_w`（多小的偏差忽略，= 建议值）；`threshold_w`（累到多少报，= 建议值；误报 ×1.5） |
 | `glr` 广义似然比 | 统计学意义上"前后两段是不是两个不同平均值" | 对噪声尺度最敏感、最"讲理" | `window_cycles`（看多宽，默认 15）；`threshold`（门限，无单位，回放 15~25，无人值守 30~50）；`noise_w`（= 量出的 σ） |
 | `steady_state` 稳态分段 | 先把曲线切成一段段"平的"，相邻两段平均值差多少就是事件 | 幅值最准；暂态超长会丢 | `tol_w`（多平算一段，= 建议值）；`min_steady_cycles`（至少平几个点，默认 10）；`max_transient_cycles`（两段之间最多允许多长暂态，≥ 暂态周波数） |
+| `profile` 设备画像匹配（v0.90） | 拿每个台阶前后的 ΔIa/ΔIb/ΔIc/ΔP/ΔQ/启动冲击比/持续周波 这 7 个数，和事先录好的这台设备"画像"比，像的才报，并给**置信度**和**设备 ID** | 总线上多台设备时**只报这一台**、能分开/关；设备侧录波必不可少；两台长得一样的设备分不开；不做幅值校准 | **默认关闭**；`nilm.profile_path`（画像文件，§5-C ① 生成）；`d2_max`（每维平均允许偏几个 σ²，默认 9＝平均 3σ；漏报放大、误报缩小）；`min_confidence`（最低置信度，默认 0.3；误报多 → 0.5）；`k_sigma`（候选台阶要超过前窗噪声几倍，默认 4；候选缺失 → 3）；`margin`（启动/停止 D² 比至少多少才算方向明确，默认 1.5）；`lambda_rel`（协方差收缩，默认 0.1，一般不动）；`state_check`（1＝启用 OFF→开 / ON→关 状态机，默认 1）。**不受「自适应算法参数」影响**，`nilm_tune.py` 也不给它建议值——它的"噪声尺度"来自画像的 σ |
 
 **全局参数**（`nilm.*`）：
 
@@ -312,8 +366,9 @@ Invoke-RestMethod -Method Post -Uri http://localhost:8000/api/nilm/tune/apply -C
 | `min_gap_cycles` | 同一算法两次事件最小间隔（默认 10 = 0.2 s） | 重复报 → 调大；快速连续投切 → 调小 |
 | `rel_tol_pct` | 容差至少是基荷的百分之几（默认 1.0） | 基荷大、设备小时降到 0.1~0.3；`nilm_tune` 会给 |
 | `min_delta_pct` | 最小台阶至少是基荷的百分之几（默认 0） | 一般用 `nilm_tune` 给的值 |
+| `profile_path`（v0.90） | 设备画像 JSON 路径（相对软件目录），只给 `profile` 算法用 | 由 `tools/nilm_profile.py` 或界面「数据处理 · 设备画像提取」生成；空＝即使勾了 `profile` 也不检测（界面与 summary.notes 会提示） |
 
-**检测 ≠ 归属（再强调一次）**：6 种算法在线只做"事件检测"，界面「负荷辨识」页的事件表里**不会**写是哪台设备；把事件归到设备是 `nilm_check.py` 用幅值带做的离线辅助。总线上多台设备时，线上看到的事件数 = 所有设备的开关数之和，这是正常的。
+**检测 ≠ 归属（再强调一次）**：6 种标量算法在线只做"事件检测"，界面「负荷辨识」页的事件表里**不会**写是哪台设备；把事件归到设备是 `nilm_check.py` 用幅值带做的离线辅助。总线上多台设备时，线上看到的事件数 = 所有设备的开关数之和，这是正常的。**唯一例外是 `profile`**（v0.90）：它只报与画像相似的事件，事件表「检验量」列写 `设备 ID · 置信度 (D², 标记)`——但它也只是"相似性匹配"，不是物理上的唯一辨识（§5-C）。
 
 ---
 
@@ -352,6 +407,10 @@ cd D:\nilm_calc_tool
 #    之后回放可直接 --config output\nilm\nilm_tuned_config_<时间戳>.json，不用 --params
 # 5 定稿 + 推送
 .\.venv\Scripts\python.exe tools\nilm_replay.py --file data\dev_onoff.csv --config configs\default.json --params output\tune.json --set threshold.min_delta_w=100000 --save-config output\site.json --out output\replay_events.csv
+# 6（v0.90）设备画像：设备侧录波 + 真值表 → 画像 JSON；总线侧回放只看 profile 行（详见 §5-C）
+.\.venv\Scripts\python.exe tools\nilm_profile.py --file data\dev_onoff.csv --device pumpA --labels data\truth_dev.csv --config configs\default.json --out output\nilm\profile_pumpA.json
+.\.venv\Scripts\python.exe tools\nilm_replay.py --file data\bus_onoff.csv --config configs\default.json --set nilm.profile_path=output/nilm/profile_pumpA.json --set profile.enabled=1 --out output\bus_events.csv
+.\.venv\Scripts\python.exe tools\nilm_check.py --events output\bus_events.csv --truth data\truth_bus.csv --tol-s 1      # 只看 profile 行
 # 5′（v0.50）把 tune.json 直接套到运行中的软件（当前侧运行配置为基准；persist=false 不写配置文件）
 $body = [System.Text.Encoding]::UTF8.GetBytes('{"params": ' + (Get-Content output\tune.json -Raw -Encoding UTF8) + ', "persist": false}')
 Invoke-RestMethod -Method Post -Uri http://localhost:8000/api/nilm/tune/apply -ContentType 'application/json; charset=utf-8' -Body $body | Select-Object ok, saved_to
@@ -633,6 +692,44 @@ Invoke-RestMethod -Method Put -Uri http://localhost:8000/api/branch/config -Cont
 
 ---
 
+### G.9（v0.90）设备画像匹配 `profile`（`elec_tool/nilm_profile.py`）——唯一的多特征算法
+
+> 放在 G.7 之前是因为它**不走 G.0 的公共流程**：不是标量序列上的"找台阶"，而是"找台阶 → 量 7 个特征 → 和画像比"。实现依据仓库根《设备画像提取与总线侧负荷辨识事件检测算法方案.md》的基础版路线（无 DTW、无幅值校准）。
+
+**(a) 画像是什么**（`build_profile`，设备侧离线一次性完成）
+
+1. 用与调参 / 波形预览同一套基准配置（PT/CT、列映射、自定义时间）回放设备侧文件，得到逐周波 `P / Q / Ia / Ib / Ic`（口径同 G.0）。
+2. **定位每次启停**：有标签 → 在标签 ± `label_tol_s`（默认 2 s）内找"前窗（`pre_cycles`）中位数 vs 紧随其后 5 周波的最小偏离"最大的周波，再取第一个得分 ≥ 0.5×最大的周波作起点（台阶恰为跳变周波、斜坡落在坡脚）；无标签 → `steady_state` + 自适应参数（G.6 / 附录 E）找台阶，ΔP > 0 记为启动、< 0 记为停止。
+3. **每次事件取 7 维特征向量** `FEATURES = [d_ia, d_ib, d_ic, d_p, d_q, peak_ratio, dur_cycles]`：
+   - `d_*` ＝ 事件后窗 `[end, end+post_cycles)` 的中位数 − 事件前窗 `[onset−pre_cycles, onset)` 的中位数（前后差分，不受基荷影响）；
+   - `peak_ratio` ＝ 事件窗内三相电流合成量相对前窗基线的**最大偏移 / 稳态偏移**（≥ 1；电机直启 1.5~6，阻性负荷 1.0）；
+   - `dur_cycles` ＝ 从起点到"进入事件后电平 ±20 % 带"的周波数（启动过程长短）；
+   - 另存一条 **16 点归一化轨迹模板**（事件窗内合成电流相对基线的变化 / 稳态变化，时间归一化），作为"启动形状"证据。
+4. **启动 / 停止各自统计**：中心 μ ＝ 各次均值，σ ＝ 各次标准差，但 σ 不小于 `max(相对下限 × |μ|, 绝对下限)`（相对下限：电流 / 有功 15 %、无功 25 %、峰值比 30 %、持续周波 50 %；绝对下限：0.02 A / 5 W / 5 var / 0.1 / 2 周波）——这样 1 次事件也能用，但 notes 会 ⚠ 建议 ≥ 3 次。模板取各次均值，并记录各次与均值的 RMS 散布 `template_spread`。
+5. 写成一个 JSON（schema `nilm_profile/1`）：`device_id / quantity(p|i) / unit / pre_cycles / post_cycles / features / startup{n, mu[7], sigma[7], template[16], template_spread, dur_cycles{min,max}, events[…逐事件 vec/t_start/source]} / shutdown{同} / calibration{bus_mapping: null} / notes / command`。
+
+**(b) 总线侧在线检测**（`detect_profile`，每块数据到达后在最近 `window_cycles` 个周波的窗上跑一次，对象固定为**三相合成**）
+
+| 步骤 | 做法 | 参数 |
+|---|---|---|
+| ① 候选 | 稳健双滑窗：前窗长 = 画像 `pre_cycles`、后窗长 = `post_cycles`，`\|mean(后) − mean(前)\| ≥ max(min_d, k_sigma × 前窗标准差)` 的连通区取峰值为 onset；`min_d` ＝ 画像里启动 / 停止 \|ΔP\| 最小者的一半（I 口径用 √(ΔIa²+ΔIb²+ΔIc²)）；终点 ＝ onset 后首个进入事件后电平 ±20 % 带的周波（封顶 `post_cycles`） | `k_sigma`（默认 4） |
+| ② 特征 | 对每个候选按 (a)-3 同一公式取 7 维向量与 16 点模板（用的是**总线侧**的 P/Q/I 序列） | — |
+| ③ 匹配 | 与启动、停止画像分别算**对角马氏距离** `D² = Σ_j (x_j − μ_j)² / (σ_j² + λ·median(σ²))`（λ 收缩避免某一维 σ 过小一票否决）；取 D² 小者为方向 `START/STOP`；`margin` ＝ 另一方向 D² / 本方向 D²（越大方向越明确）；轨迹：模板 RMS 距离 `td` > 3 × `template_spread` 时置信度乘 `max(0.3, 3·spread/td)`，并打 `trajectory_deviates` | `lambda_rel`（默认 0.1） |
+| ④ 置信度 | `confidence = exp(−D² / (2·d)) × 轨迹折扣`，d = 7。直觉：每维平均偏 1σ → D² = 7 → 0.61；平均偏 2σ → 0.14；平均偏 3σ（D²/d = 9）→ 0.011 | — |
+| ⑤ 拒识 | `D²/d > d2_max` → `d2_exceeds`（直接拒）；`margin < margin` → `ambiguous_direction`（只打标记）；状态机：当前已 ON 又来 START、或已 OFF 又来 STOP → `state_mismatch`，置信度 × 0.5；最终 `confidence < min_confidence` → 拒 | `d2_max`（默认 9）、`margin`（1.5）、`min_confidence`（0.3）、`state_check`（1） |
+| ⑥ 状态机 | 接受的 START → 设备状态 `on`，STOP → `off`（初始 `unknown` 时第一个事件不做状态检查）；状态写在 `summary.profile.device_state`，界面画像面板可见 | `state_check` |
+| ⑦ 确认与去重 | 事件终点之后窗里还要有 ≥ `post_cycles` 个周波才输出（所以比 6 种标量算法滞后约 `post_cycles` 周波）；同一事件在后续窗里按全局周波号去重（`min_gap_cycles` 同样适用） | — |
+
+**(c) 输出**：`NilmEvent` 公共字段照旧（`t_start/t_end/direction(up=START,down=STOP)/delta_p_w/delta_q_var/delta_i_a/pre_p_w/post_p_w`，`score` ＝ 置信度），另加 `device_id / confidence / d2 / profile_direction / status(confirmed|low_confidence) / quality_flags`；`to_dict` 里 `observed_delta_p` ＝ 总线侧观测 ΔP、`estimated_device_delta_p = null`。事件 CSV `nilm_events_*.csv` 末尾多 6 列（旧文件自动改名 `.pre-v090.csv`）。`summary.profile.last` 保留最近 20 个候选（含被拒的）及各维 `contrib`（每一维对 D² 的贡献）——排查漏报 / 误报先看它。
+
+**(d) 与标量算法的区别与限制**
+
+- 不参与「自适应算法参数」（它的噪声尺度来自画像 σ，不是窗内数据）；`nilm_tune.py` 不给它建议值；`NILM_SCALAR_ALGOS` 只含原 6 种。
+- 画像与总线侧 `nilm.quantity` 口径必须一致，否则不检测并在 `summary.errors` 说明。
+- 设备侧电流 ≠ 总线侧增量（变压器 / 补偿 / 损耗）；本版不做校准，差异大时请用总线侧"只有这台设备在动"的录波提画像（§5-C）。
+- 两台特征相近的设备会互相高置信度匹配——这是相似性匹配的固有局限，不是参数问题；此时只能到分路侧。
+- 单画像单设备：多台设备要各自一份画像、分别配置（本版不做多设备联合判决 / 画像库）。
+
 ### G.7 一张表对比
 
 | 算法 | 起点怎么定 | 终点怎么定 | 检验量 score | 擅长 | 弱点 |
@@ -643,6 +740,7 @@ Invoke-RestMethod -Method Put -Uri http://localhost:8000/api/branch/config -Cont
 | cusum | 累积量最后一次归零处 + 1 | 触发后首个极差 ≤ 2k 处（找不到即触发点） | 越限的累积量 | 缓慢爬坡 / 软启动 | 参数两个且有比例关系；尖峰当周波触发 |
 | glr | 对数似然比的峰 | onset + settle_cycles | llr | 统一门限跨量级可用 | 灵敏度随窗长变；长暂态位置偏移 |
 | steady_state | 前一稳态结束处 | 新稳态开始处 | post − pre | 电机 / 任意暂态形状 | 出事件最慢；tol 过小整体漏报 |
+| profile（v0.90） | 稳健双滑窗峰（窗长取画像 pre/post） | onset 后首个进入 ±20 % 带处 | 置信度 exp(−D²/2d)（D²＝与画像的对角马氏距离） | 总线上多设备时只报这一台、带设备 ID 与置信度 | 需设备侧录波做画像；相似设备分不开；滞后 post_cycles；不做幅值校准 |
 
 ### G.8 参数与 `nilm_tune.py` 建议值的对应关系（见附录 E）
 
@@ -943,3 +1041,23 @@ Invoke-RestMethod -Method Post -Uri http://localhost:8000/api/nilm/tune/apply -C
 **等价命令（v0.54）**：每次运行后结果区多一行「等价命令」（带「复制」按钮），结果 JSON 的 `command` 字段、保存文件的 `_tuning.command` 也带同一条——即与这次界面操作完全等价的 `tools/nilm_tune.py` 命令：只列实际填写的参数，`--config` 为该侧原配置文件（不存在则省略），勾选保存时追加 `--apply --out <保存路径>`。例：`python tools/nilm_tune.py --file data/bus_bg.csv --config configs/runtime.json --min-load-w 300000 --t-start 08:00:10 --duration 30 --json --apply --out output/nilm/tune_20261021_103000.json`。用途：留档、在 PowerShell 复现（把 `python` 换成 `.\.venv\Scripts\python.exe`，含空格的路径已自动加引号）、或改几个参数再跑。
 
 结果区：第一行＝文件 / 对象 / 周波数 / 时长 / 口径 / 检测量；第二行＝时间段与实际落到的首末周波时刻；之后是噪声统计表与建议参数表（与命令行输出逐项相同）；「原始结果 JSON」可展开复制。错误（文件不存在、时间文本无法解析、段内无数据、I 口径填三相总）直接显示在结果区，不会改动任何配置。
+
+### H.14（v0.90）在 Web 界面里提取设备画像、启用「设备画像匹配」
+
+命令行 `tools/nilm_profile.py` 与「🧮 数据处理」页「**设备画像提取**」区（紧跟在「负荷辨识调参」之后，`POST /api/process/nilm_profile`）同一实现：
+
+| 界面项 | 对应命令行参数 | 说明 |
+|---|---|---|
+| 波形文件 / 起止时间 / 自定义时间 / 基准配置 / 列映射 | `--file` `--t-start` `--t-end` `--custom-time*` `--config` | **沿用上方「负荷辨识调参」区当前填写的公共配置**（独立基准配置或某侧运行配置），本区不重复出现；先在上方选好**设备侧**文件 |
+| 设备 ID | `--device` | 写进画像与事件表 |
+| 启停标签（多行文本） | `--labels` | 每行「时间,动作」；时间写法同真值表；留空＝自动定位 |
+| 标签时刻容差 (s) | `--label-tol` | 默认 2 |
+| 前窗 / 后窗 (周波) | `--pre` / `--post` | 后窗 ≥ 设备启动过程；总线侧确认事件也要等这么多周波 |
+| 画像文件名 | `--out` | 写到 `output\nilm\`，留空＝`profile_{设备}_{时间}.json` |
+| 「提取设备画像」 | 运行 | 结果区：状态行（设备 / 口径 / 标签方式 / 前后窗）、等价命令、启动 / 停止画像表（μ、σ 与逐事件 7 维特征、标签来源）、原始 JSON；⚠ 提示同命令行 |
+| 「填入总线侧画像路径」/「填入分路侧画像路径」 | 手工把路径写进 `nilm.profile_path` | 把本次画像路径填进该侧「负荷辨识」页的「画像文件路径」框并**勾选「设备画像匹配」**，表单标脏；**要到负荷辨识页点「保存总线侧 / 分路侧配置」才生效** |
+
+「负荷辨识」页：算法面板最后一个是「设备画像匹配」（两侧各一份），含画像文件路径、6 个参数（附录 A）、加载状态行（设备 / 口径 / 启动·停止样本数 / 当前设备状态 / 最近候选与拒识原因）。事件表中 `profile` 行的「检验量」列显示 `设备 ID · 置信度 (D²=…, 标记)`，低置信事件带「低置信」徽标；筛选 / 标注下拉里也有它。勾选「自适应算法参数」时其它算法参数灰显，`profile` 的参数**不灰显**（不由自适应推导）。
+
+常见提示：「设备画像匹配已勾选但 nilm.profile_path 为空」→ 先提取画像再填路径；「画像加载失败：…」→ 路径错 / 文件不是画像 JSON；「画像按 A 口径构建，本侧检测量为 P」→ 两边口径不一致，统一 `nilm.quantity` 或重提画像。
+
