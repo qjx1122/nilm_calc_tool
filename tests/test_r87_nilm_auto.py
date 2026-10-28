@@ -160,3 +160,36 @@ def test_frontend_wiring():
     assert 'id="nilm-auto_params"' in html and 'id="nilm-auto-out"' in html and 'id="nilm-auto_params-lbl"' in html
     assert "'auto_params'" in js and "function nilmDimAuto" in js and "auto_params_effective" in js
     assert "p.auto_params = false" not in js and "nilm-auto_params-lbl'); if (l) l.style.display = 'none'" not in js   # v0.88：分路侧不再隐藏/强制 false
+
+
+# ---- v0.89.1：自适应 vs 调参工具对照核查中发现并修复的两处偏差 ----
+def test_corr_time_not_inflated_by_big_step():
+    """窗内一个大台阶（Δ≫σ）曾让 τ 恒为 20（mean(d) 去心后全部噪声被削峰成同一常数）：现在 τ=1、settle=5，与白噪声一致。"""
+    rng = np.random.default_rng(0)
+    p = 1.8e6 + rng.normal(0, 28, 300); p[100:] += 750000; p[220:] -= 450000
+    st = window_stats(p, F)
+    assert st["tau"] == 1 and st["settle"] == 5 and st["transient"] == 20 and st["min_steady"] <= 32, st
+    st0 = window_stats(1.8e6 + rng.normal(0, 28, 300), F)
+    assert st0["tau"] == 1 and st0["settle"] == 5
+
+
+def test_hold_not_declared_on_long_ramp():
+    """长斜坡占窗一半：σ_lag 随滞后逐档增长、在大滞后处平台化，曾被判为采样保持（hold=25）→ 抽稀后不足 60 周波 → 不评估。"""
+    rng = np.random.default_rng(1)
+    p = 1e6 + rng.normal(0, 30, 1000); p[100:500] += np.linspace(0, 2.9e6, 400); p[500:] += 2.9e6
+    st = window_stats(p, F)
+    assert st is not None and st["hold"] == 1
+    # 真正的采样保持（50 周波一段）仍被识别
+    sec = 1.0 + rng.normal(0, 0.0086, 60); q = np.repeat(sec, 50) + rng.normal(0, 4e-7, 3000)
+    assert window_stats(q, F)["hold"] == 50
+
+
+def test_tune_measure_not_blocky_on_dense_steps():
+    """调参工具：500 周波里 5 个 MW 级台阶（nilm_bus_mixed）曾被判为「分段恒定」把 σ 量成 1.57e6 W；现在 σ≈噪声。"""
+    from elec_tool.nilm_tuning import measure
+    rng = np.random.default_rng(2)
+    p = 2.25e6 + rng.normal(0, 27.6, 500)
+    for a, d in ((100, 7.5e5), (175, 2.25e6), (250, 1.8e5), (300, -7.5e5), (400, -2.25e6)):
+        p[a:] += d
+    m = measure(p, "W")
+    assert m["repeated_cycles"] is False and m["sigma_method"] == "diff_mad" and 20 < m["sigma_cycle"] < 40, m

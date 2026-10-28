@@ -97,6 +97,15 @@ def measure(p: np.ndarray, unit: str = "W", *, repeat_frac_limit: float = 0.2, b
             run = run_eq
         else:
             run = float(next((k for k, v in finite if v >= 0.9 * s_max), finite[-1][0]))
+            # v0.89.1：没有逐位相等证据时，还要求 σ_k 在段长处是**突变**（段长以内各档 ≤ σ_max/5）且段长之后有**平台**
+            # （下一档 < 1.5×σ_max）。短文件里台阶密集（如 500 周波 5 个台阶）或长斜坡占比大时，σ_k 随滞后逐档增长、
+            # 在最大滞后处才最大，以前会被误判为「分段恒定」把 σ 量成台阶尺度（MW 级），所有建议参数失真
+            before = [v for k, v in finite if k <= run / 2]            # 段长一半以内（跨段对不足半数，MAD 仍是段内抖动）
+            after = [v for k, v in finite if k > run]
+            abrupt = bool(before) and before[-1] <= 0.2 * s_max
+            plateau = bool(after) and after[0] < 1.5 * s_max
+            if not (abrupt and plateau):
+                blocky = False
         if run <= 1.0:                      # σ 在 lag=1 就饱和：不是分段恒定，只是普通噪声
             blocky = False
     if blocky:

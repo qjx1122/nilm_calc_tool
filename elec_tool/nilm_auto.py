@@ -59,8 +59,12 @@ def _corr_time(d: np.ndarray, sigma: float, max_lag: int = 20) -> int:
     n = d.size
     if n < 8 or sigma <= 0:
         return 1
-    x = d - np.mean(d)
+    # v0.89.1：先按中位数去心再削峰，再按削峰后的均值去心。以前用 mean(d) 去心：窗内只要有一个大台阶（Δ ≫ σ），
+    # mean(d)=Δ/n 就远大于 σ，全部噪声差分被整体平移后削峰成同一个常数 → 自相关≈1 → τ 恒为 max_lag（20），
+    # settle / min_steady / transient 全被顶到上限，与数据无关
+    x = d - np.median(d)
     x = np.clip(x, -5 * sigma * math.sqrt(2.0), 5 * sigma * math.sqrt(2.0))      # 事件尖峰不参与
+    x = x - np.mean(x)
     v = float(np.dot(x, x))
     if v <= 0:
         return 1
@@ -179,7 +183,11 @@ def _hold_length(p: np.ndarray):
     hold = 1
     for j in range(1, len(sig) - 1):
         lg, sv = sig[j]
-        if s1 > 0 and sv >= 20.0 * s1 and sig[j + 1][1] < 1.5 * sv:
+        # v0.89.1：跳升必须是突变——滞后 ≤ hold/2 处的 σ 必须 ≤ 本档 1/5。真实采样保持数据在段长一半以内各滞后 σ 都接近 σ_1
+        # （跨段对不足半数，MAD 仍落在段内抖动上）；长斜坡 σ_lag ∝ lag（一半处≈0.5×），密集台阶逐档增长，都不是保持，
+        # 不能判为 hold（否则抽稀后周波不足、本轮不评估）
+        half = [v for lg2, v in sig if lg2 <= lg // 2]
+        if s1 > 0 and sv >= 20.0 * s1 and sig[j + 1][1] < 1.5 * sv and half and half[-1] <= 0.2 * sv:
             hold = lg
             break
     return hold, sig
