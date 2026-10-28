@@ -127,6 +127,23 @@ def main() -> int:
             mag = [e.get("magnitude", e["magnitude_w"]) for e in evs]
             rng = f"{min(mag):.4g} ~ {max(mag):.4g}" if mag else "-"
             print(f"  {algo:14s} {len(evs):4d} {up:5d} {dn:5d}  {rng}   {NILM_ALGO_NAMES.get(algo, '')}")
+        if bool(cfg.nilm.params("profile").get("enabled", False)):
+            pf = det.summary().get("profile") or {}
+            print("—— 设备画像匹配诊断（v0.92.2）——")
+            print(f"  画像文件 {pf.get('path')}  加载 {'成功' if pf.get('loaded') else '失败'}  {pf.get('error') or ''}  设备状态 {pf.get('device_state')}")
+            s_ = pf.get("summary") or {}
+            if s_:
+                print(f"  画像口径 {s_.get('unit')}  启动样本 {(s_.get('startup') or {}).get('n', 0)}  停止样本 {(s_.get('shutdown') or {}).get('n', 0)}  前后窗 {s_.get('pre_cycles')}/{s_.get('post_cycles')}")
+            hist = det.profile_hist
+            if not hist:
+                print("  全程没有产生任何候选：候选门槛＝max(画像最小 |Δ| 的一半, k_sigma×前窗噪声)。请核对本侧检测量与画像口径、"
+                      "数据里是否真有 ≥ 该幅值的台阶（nilm_profile_diag.py --file 可看）")
+            for g_on in sorted(hist):
+                c = hist[g_on]
+                top = sorted(c.get("contrib", {}).items(), key=lambda kv: -kv[1])[:3]
+                print(f"  {c.get('t_start_local')}  {c['direction']:5s} D²/维={c['d2_per_dim']:<7g} 置信={c['confidence']:<7g} "
+                      f"{c['status']:14s} {','.join(c.get('flags') or []) or '-':28s} 最大贡献 " + "  ".join(f"{k}={v}" for k, v in top)
+                      + (f"   ΔP={c['vec'].get('d_p')} ΔIa={c['vec'].get('d_ia')}" if c.get("vec") else ""))
         print(f"事件已写入 {a.out}（{len(events)} 行）；下一步：python tools/nilm_check.py --events {a.out} --truth <真值表.csv>")
     return 0
 

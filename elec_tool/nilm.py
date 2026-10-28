@@ -475,6 +475,7 @@ class NilmDetector:
         self._profile_key: Tuple[str, float] = ("", 0.0)
         self.device_state: str = "unknown"                  # 画像状态机：unknown / on / off
         self.profile_last: List[Dict[str, Any]] = []        # 最近一次评估的候选（含被拒的，供界面诊断）
+        self.profile_hist: Dict[int, Dict[str, Any]] = {}   # v0.92.2：全程候选（按全局 onset 去重，≤400 条）
         self._load_profile()
 
     def _load_profile(self) -> None:
@@ -613,7 +614,7 @@ class NilmDetector:
                     continue
                 confirm = _confirm_cycles(algo, prm)
                 key = (algo, ch)
-                last_end = self._last_end.get(key, -1)
+                last_end = self._last_end.get(key, -gap - 1)          # v0.92.2：初值 −1 会把文件头 gap 个周波内的事件全部压掉
                 for onset, end, pre, post, score in steps:
                     g_on, g_end = self._g0 + onset, self._g0 + end
                     if g_on <= last_end + gap:                  # 已报过（或与上一事件太近）
@@ -659,6 +660,16 @@ class NilmDetector:
             if msg not in self.errors:
                 self.errors.append(msg)
             return []
+        # v0.92.2：口径一致性——画像在 PT/CT 启用 / 变比与本侧不同的配置下提取，幅值差一个变比，候选门槛永远达不到
+        pc = prof.get("pt_ct") or {}
+        tr = self.cfg.transform
+        if pc and (bool(pc.get("enabled")) != bool(tr.enabled) or (bool(tr.enabled) and (
+                abs(float(pc.get("pt_ratio", tr.pt_ratio)) - float(tr.pt_ratio)) > 1e-9 or abs(float(pc.get("ct_ratio", tr.ct_ratio)) - float(tr.ct_ratio)) > 1e-9))):
+            msg = (f"画像提取时 PT/CT={'启用 PT=' + str(pc.get('pt_ratio')) + ' CT=' + str(pc.get('ct_ratio')) if pc.get('enabled') else '关闭'}，"
+                   f"本侧运行配置 PT/CT={'启用 PT=' + str(tr.pt_ratio) + ' CT=' + str(tr.ct_ratio) if tr.enabled else '关闭'}：幅值口径不一致，画像匹配不会命中（请用同一基准配置重提画像或改本侧 PT/CT）")
+            if msg not in self.errors:
+                self.errors.append(msg)
+            return []
         try:
             res = detect_profile(self._p, self._q, self._i, prof, prm, use_p, self.device_state)
         except Exception as exc:
@@ -668,7 +679,7 @@ class NilmDetector:
             return []
         post_n = int(prof.get("post_cycles", 50))
         key = ("profile", "total")
-        last_end = self._last_end.get(key, -1)
+        last_end = self._last_end.get(key, -gap - 1)
         out: List[NilmEvent] = []
         diag: List[Dict[str, Any]] = []
         for r in res:
@@ -677,7 +688,7 @@ class NilmDetector:
             if g_end + post_n > g_last:                      # 事件后窗数据不够：等下一块
                 continue
             m = r["match"]; f = r["feat"]
-            diag.append({"t_start": float(self._t[onset]), "t_start_local": _ts(float(self._t[onset])), "direction": m["direction"],
+            diag.append({"t_start": float(self._t[onset]), "t_start_local": _ts(float(self._t[onset])), "g_on": int(g_on), "direction": m["direction"],
                          "d2": round(m["d2"], 3), "d2_per_dim": round(m["d2_per_dim"], 3), "confidence": round(r["confidence"], 4),
                          "margin": (round(m["margin"], 2) if math.isfinite(m["margin"]) else None), "status": r["status"],
                          "flags": list(r["flags"]), "contrib": {k: round(v, 2) for k, v in m["contrib"].items()},
@@ -702,6 +713,14 @@ class NilmDetector:
         self._last_end[key] = last_end
         if diag:
             self.profile_last = diag[-20:]
+            # v0.92.2：按窗内全局位置去重累积（最终状态覆盖早先的"等数据"版本），供回放工具 / 界面解释"为什么没报"
+            for d_ in diag:
+                if d_.get("seen") and int(d_["g_on"]) in self.profile_hist:
+                    continue                                   # 已报过的候选再次评估（状态机已翻转）不覆盖首次结论
+                self.profile_hist[int(d_["g_on"])] = d_
+            if len(self.profile_hist) > 400:
+                for k_ in sorted(self.profile_hist)[:len(self.profile_hist) - 400]:
+                    self.profile_hist.pop(k_, None)
         return out
 
     @staticmethod

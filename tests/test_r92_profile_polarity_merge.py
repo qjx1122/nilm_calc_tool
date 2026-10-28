@@ -74,3 +74,37 @@ def test_two_window_supplements_long_transient_start_for_p_and_i(tmp_path):
         ia = d["features"].index("d_ia")
         assert d["startup"]["mu"][ia] > 3 and d["shutdown"]["mu"][ia] < -3, (q, d["shutdown"]["mu"][ia])
         assert any("双滑窗补充" in n for n in d["notes"]), q
+
+
+def test_engine_first_gap_not_suppressed_and_ptct_mismatch_warns(tmp_path):
+    """v0.92.2：(1) 事件落在文件头 min_gap_cycles 周波内也应报出；(2) 画像 PT/CT 与本侧不一致时给出明确错误并不运行匹配。"""
+    import json
+    from elec_tool.nilm import NilmDetector
+    from elec_tool.nilm_profile import FEATURES
+    from elec_tool.scaling import scale_block
+    from elec_tool.sources import create_source
+    t, u, i = T._wave(T._dev, 8.0); f = str(tmp_path / "d.csv"); T._write_csv(f, t, u, i)
+    c = AppConfig(); c.transform.enabled = False
+    prof = build_profile(c, f, device_id="d")
+    pp = str(tmp_path / "p.json"); json.dump(prof, open(pp, "w"))
+    c.source.kind = "csv_file"; c.source.path = f; c.source.file_speed = 0.0
+    c.nilm.enabled = True; c.nilm.save = False; c.nilm.min_gap_cycles = 500; c.nilm.window_cycles = 300
+    for a in c.nilm.algorithms: c.nilm.algorithms[a]["enabled"] = False
+    c.nilm.algorithms["profile"] = {"enabled": True}; c.nilm.profile_path = pp
+
+    def run(cfg):
+        det = NilmDetector(cfg, root=str(tmp_path)); evs = []
+        with create_source(cfg) as src:
+            while True:
+                b = src.read()
+                if b is None:
+                    if src.exhausted: break
+                    continue
+                evs += det.ingest(scale_block(b, cfg.transform))
+        return det, evs
+    det, evs = run(c)
+    assert any(e["algorithm"] == "profile" and e["t_start"] < T.T0 + 3 for e in evs), "文件头 2 s 处的启动（<500 周波）应被报出"
+    prof["pt_ct"] = {"enabled": True, "pt_ratio": 100, "ct_ratio": 15}; json.dump(prof, open(pp, "w"))
+    det2, evs2 = run(c)
+    assert not [e for e in evs2 if e["algorithm"] == "profile"]
+    assert any("PT/CT" in e for e in det2.summary()["errors"])

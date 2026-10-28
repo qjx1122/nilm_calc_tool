@@ -207,13 +207,14 @@ def _two_window_candidates(x: np.ndarray, pre_n: int, post_n: int, min_d: float,
             j += 1
         pk = k0 + int(np.argmax(np.abs(delta[k0:j])))
         onset = int(idx[pk])
-        # 终点：onset 之后首个「相对事件后电平的偏差 ≤ 稳态偏差 20%」的周波，封顶 post_n
+        # 终点：onset 之后「相对事件后电平的偏差 > 稳态偏差 20%」的最后一个周波的下一周波（过渡结束处），封顶 post_n
+        #   v0.92.2：原为"首个进入 20% 带的周波"——斜坡 / 冲击型启动会在过渡中途就判终点，事件后窗落在过渡里，
+        #   ΔP/ΔQ/ΔI 与画像（设备侧按稳态分段取过渡结束后）系统性不一致
         seg = x[onset:onset + post_n]
         tgt = float(m_post[pk]); dlt = abs(float(delta[pk]))
-        end = onset + post_n - 1
-        for q in range(seg.size):
-            if abs(seg[q] - tgt) <= 0.2 * dlt and q >= 1:
-                end = onset + q; break
+        exc = np.nonzero(np.abs(seg - tgt) > 0.2 * dlt)[0]
+        end = onset + (int(exc[-1]) + 1 if exc.size else 1)
+        end = min(end, onset + post_n - 1)
         out.append((onset, min(end, L - 1), float(delta[pk])))
     return out
 
@@ -320,10 +321,9 @@ def _locate_near(x: np.ndarray, k_center: int, half: int, pre_n: int, post_n: in
     bd = max(sc)
     best = ks[next(i for i, v in enumerate(sc) if v >= 0.5 * bd)] if bd > 0 else lo
     delta = float(np.median(x[best:best + post_n]) - np.median(x[best - pre_n:best]))
-    seg = x[best:best + post_n]; tgt = float(np.median(seg)); end = best + post_n - 1
-    for q in range(1, seg.size):
-        if abs(seg[q] - tgt) <= 0.2 * abs(delta):
-            end = best + q; break
+    seg = x[best:best + post_n]; tgt = float(np.median(seg))
+    exc = np.nonzero(np.abs(seg - tgt) > 0.2 * abs(delta))[0]          # v0.92.2：终点＝过渡结束处（与在线候选同一规则）
+    end = min(best + (int(exc[-1]) + 1 if exc.size else 1), best + post_n - 1)
     return best, end, delta
 
 
