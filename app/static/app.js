@@ -4144,7 +4144,8 @@ async function ntEstimateFromDevice() {
   const path = ($('#nt-dev-path').value || '').trim() || $('#nt-dev-files').value;
   if (!path) { toast('请先选择设备侧波形文件', 'err'); return; }
   const p = Object.assign(ntPayload('nt'), { path, t_start: ($('#nt-dev-tstart').value || '').trim(), t_end: ($('#nt-dev-tend').value || '').trim(),
-                                            duration_s: null, min_load_w: null, min_load_a: null, min_load_auto: true, save: false, name: '' });
+                                            duration_s: null, custom_time: false, custom_time_start: '', custom_time_end: '',   // 自定义时间是第 ② 步文件专属，不带到设备侧文件
+                                            min_load_w: null, min_load_a: null, min_load_auto: true, save: false, name: '' });
   const mode = ntBaseMode('nt'); const side = mode === 'custom' ? 'bus' : mode;
   const btn = $('#btn-nt-est-dev'), out = $('#nt-dev-est'); btn.disabled = true; out.textContent = '正在从设备侧文件估计…';
   try {

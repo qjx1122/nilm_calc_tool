@@ -992,7 +992,54 @@
         <div class="panel">
           <h3>调参参数（与 <code>tools/nilm_tune.py</code> 同一实现）</h3>
           <div class="form" id="nt-form">
-            <div class="notes p" id="nt-steps-note"><b>两步法（用于总线侧检测）：</b>① 用<b>设备侧</b>含启停的录波估计「最小关心负荷」（幅值类参数，可选；知道额定功率可直接手填到第 ② 步）→ ② 用<b>总线侧稳态背景</b>文件量噪声，得到 6 种算法的噪声 / 容差类参数 → ③ 套用到总线侧运行配置。调参量的是所选文件的背景噪声，所以第 ② 步务必选总线侧文件。</div>
+            <div class="notes p" id="nt-steps-note"><b>两步法（用于总线侧检测）：</b>先在「公共配置」设好读文件口径 → ① 用<b>设备侧</b>含启停的录波估计「最小关心负荷」（幅值类参数，可选；知道额定功率可直接手填到第 ② 步）→ ② 用<b>总线侧稳态背景</b>文件量噪声，得到 6 种算法的噪声 / 容差类参数 → ③ 套用到总线侧运行配置。调参量的是所选文件的背景噪声，所以第 ② 步务必选总线侧文件。</div>
+            <div class="wp-group" id="nt-common">
+              <div class="wp-group-title">公共配置 · 读波形数据与口径 <small class="note">（第 ①、② 步共用：采样率 / PT·CT / 接线 / 极性 / 列映射 / 检测量与对象都在这里设一次；两步文件须口径一致，否则第 ① 步填入的幅值与第 ② 步的噪声不在同一量纲）</small></div>
+              <div class="row2">
+                <label class="f" title="v0.72：默认「独立基准配置」——出厂配置 + 下方各项（fs / f_nom / PT·CT / 时标 UTC），与总线侧、分路侧运行配置互不关联，可单独修改（保存在浏览器本地，并随每次调参写到 output/nilm/nilm_tune_base.json 供等价命令复现）；也可改选沿用某一侧当前运行配置（旧行为）"><span class="lbl">基准配置</span><select id="nt-side"><option value="custom">独立基准配置（本页，默认）</option><option value="bus">沿用总线侧运行配置</option><option value="branch">沿用分路侧运行配置</option></select></label>
+                <span class="f"><span class="lbl">&nbsp;</span><button id="btn-nt-refresh">刷新文件列表</button></span>
+              </div>
+              <div class="wp-group" id="nt-base" title="基准配置：独立时只影响本页调参、可单独修改；沿用某侧运行配置时只显示该侧值、不可修改；都不改动两侧运行配置">
+                <div class="wp-group-title" id="nt-base-title">独立基准配置（与两侧运行配置互不关联，可单独修改）</div>
+                <div class="row2">
+                  <label class="f" title="采样率：每周波点数 = fs / f_nom；文件有时标时源层仍按时标校核"><span class="lbl">采样率 fs (Hz)</span><input id="nt-base-fs" type="number" min="1" step="any"></label>
+                  <label class="f" title="额定频率"><span class="lbl">额定频率 f_nom (Hz)</span><input id="nt-base-fnom" type="number" min="1" step="any"></label>
+                </div>
+                <div class="row2">
+                  <label class="check" title="勾选＝数值换算为一次侧（电压 × PT、电流 × CT），最小关心负荷与结果同为一次侧口径"><input id="nt-base-ptct" type="checkbox"> 启用 PT/CT 变换（勾选后才可填 PT、CT；不勾选＝二次侧，PT、CT 均为 1）</label>
+                  <label class="check" title="文件时标按 UTC 解释"><input id="nt-base-utc" type="checkbox"> 文件时标为 UTC</label>
+                </div>
+                <div class="row2">
+                  <label class="f"><span class="lbl">PT 变比</span><input id="nt-base-pt" type="number" min="0.000001" step="any"></label>
+                  <label class="f"><span class="lbl">CT 变比</span><input id="nt-base-ct" type="number" min="0.000001" step="any"></label>
+                </div>
+                <div class="row2" title="v0.95：接线方式 / CT 极性（与运行配置「量纲与口径」同名项同义；调参、画像提取按此换算后再分析）">
+                  <label class="f"><span class="lbl">接线方式</span><select id="nt-base-wiring"><option value="3p4w">三相四线（三 CT）</option><option value="3p3w">三相三线两表法（B 相无 CT）</option></select></label>
+                  <label class="check"><input id="nt-base-recon3w" type="checkbox"> 3P3W 虚拟中性点重构（Ib=−(Ia+Ic)，相电压由 Uab/Ucb 重构；仅三相三线可选）</label>
+                </div>
+                <div class="row2">
+                  <label class="check"><input id="nt-base-inv" type="checkbox"> 电流极性反转（三相同时取反）</label>
+                  <label class="f"><span class="lbl">分相电流极性反转</span><span class="chk"><input id="nt-base-inv-a" type="checkbox"> A <input id="nt-base-inv-b" type="checkbox"> B <input id="nt-base-inv-c" type="checkbox"> C</span></label>
+                </div>
+              <div class="colmap-blk" id="nt-cm-blk" title="离线文件列映射：不启用＝各列依次为 时间, A相电压, A相电流, B相电压, B相电流, C相电压, C相电流（表头可识别时按表头）；启用＝只按下面填写的列号取列">
+                <label class="chk"><input id="nt-cm-on" type="checkbox"><span>启用离线文件列映射<small class="note">默认不启用：各列依次为 时间, A相电压, A相电流, B相电压, B相电流, C相电压, C相电流（表头可识别时按表头）；启用后只按下面的列号取列（从 1 起）</small></span></label>
+                <div class="colmap-row" id="nt-cm-row" style="display:none"><label title="时间所在列号（从 1 起；空＝不映射）">时间 <input id="nt-cm-ts" type="number" min="1" step="1" value="1"></label><label title="A相电压所在列号（从 1 起；空＝不映射）">A相电压 <input id="nt-cm-ua" type="number" min="1" step="1" value="2"></label><label title="A相电流所在列号（从 1 起；空＝不映射）">A相电流 <input id="nt-cm-ia" type="number" min="1" step="1" value="3"></label><label title="B相电压所在列号（从 1 起；空＝不映射）">B相电压 <input id="nt-cm-ub" type="number" min="1" step="1" value="4"></label><label title="B相电流所在列号（从 1 起；空＝不映射）">B相电流 <input id="nt-cm-ib" type="number" min="1" step="1" value="5"></label><label title="C相电压所在列号（从 1 起；空＝不映射）">C相电压 <input id="nt-cm-uc" type="number" min="1" step="1" value="6"></label><label title="C相电流所在列号（从 1 起；空＝不映射）">C相电流 <input id="nt-cm-ic" type="number" min="1" step="1" value="7"></label></div>
+              </div>
+                <div class="row2">
+                  <label class="f" title="独立基准配置：可单独选择；沿用总线侧 / 分路侧运行配置：随该侧 nilm.quantity，不可修改"><span class="lbl">检测量</span><select id="nt-quantity"><option value="" id="nt-quantity-follow">默认（出厂缺省 auto：无电压→I）</option><option value="auto">auto（无电压→I）</option><option value="p">p 有功</option><option value="i">i 电流有效值</option></select></label>
+                  <label class="f" title="独立基准配置：可单独选择；沿用总线侧 / 分路侧运行配置：随该侧 nilm.channels 的第一个检测对象，不可修改"><span class="lbl">检测对象</span><select id="nt-channel"><option value="">默认（P→三相总，I→A 相）</option><option value="total">三相总</option><option value="A">A 相</option><option value="B">B 相</option><option value="C">C 相</option></select></label>
+                </div>
+                <div class="row2">
+                  <span class="mut" style="align-self:flex-end">独立基准配置下以上各项可单独修改；沿用某侧运行配置时全部随该侧配置显示、不可修改</span>
+                  <span class="btnrow" style="align-items:flex-end">
+                    <button id="btn-nt-base-default" type="button" title="恢复为出厂配置 configs/default.json 的值">恢复出厂</button>
+                    <button id="btn-nt-base-bus" type="button" title="把总线侧当前运行配置的对应项填入（之后可再改，不影响总线侧）">填入总线侧值</button>
+                    <button id="btn-nt-base-branch" type="button" title="把分路侧当前运行配置的对应项填入（之后可再改，不影响分路侧）">填入分路侧值</button>
+                  </span>
+                </div>
+                <div id="nt-base-note" class="mut"></div>
+              </div>
+            </div>
             <div class="wp-group" id="nt-step1">
               <div class="wp-group-title">第 ① 步（可选）· 设备侧文件 → 估计最小关心负荷 <small class="note">（分路侧单设备、含完整启停的录波；估出的台阶幅值会自动填入第 ② 步的「最小关心负荷」；按第 ② 步的基准配置换算口径）</small></div>
               <label class="f"><span class="lbl">设备侧波形文件（data 目录下拉或手填路径）</span><select id="nt-dev-files"><option value="">— 选择 data/ 下的 CSV —</option></select></label>
@@ -1024,48 +1071,7 @@
               <label class="f" title="空＝起始时间 + 点数 / 采样率（按采样率计算的文件数据结束时间）；填写则作为结束时间为空时的缺省终点"><span class="lbl">自定义结束时间（空＝按采样率计算）</span><input id="nt-cend" placeholder="空＝起始 + 点数/fs"></label>
             </div>
             <div class="row2">
-              <label class="f" title="从起始时间（或文件开头）起分析的时长；与结束时间同时填时取先到者"><span class="lbl">或 时长 (s，空＝到结束时间/文件结尾)</span><input id="nt-duration" type="number" min="0.02" step="0.1" placeholder="空"></label>
-              <label class="f" title="v0.72：默认「独立基准配置」——出厂配置 + 下方各项（fs / f_nom / PT·CT / 时标 UTC），与总线侧、分路侧运行配置互不关联，可单独修改（保存在浏览器本地，并随每次调参写到 output/nilm/nilm_tune_base.json 供等价命令复现）；也可改选沿用某一侧当前运行配置（旧行为）"><span class="lbl">基准配置</span><select id="nt-side"><option value="custom">独立基准配置（本页，默认）</option><option value="bus">沿用总线侧运行配置</option><option value="branch">沿用分路侧运行配置</option></select></label>
-            </div>
-            <div class="wp-group" id="nt-base" title="基准配置：独立时只影响本页调参、可单独修改；沿用某侧运行配置时只显示该侧值、不可修改；都不改动两侧运行配置">
-              <div class="wp-group-title" id="nt-base-title">独立基准配置（与两侧运行配置互不关联，可单独修改）</div>
-              <div class="row2">
-                <label class="f" title="采样率：每周波点数 = fs / f_nom；文件有时标时源层仍按时标校核"><span class="lbl">采样率 fs (Hz)</span><input id="nt-base-fs" type="number" min="1" step="any"></label>
-                <label class="f" title="额定频率"><span class="lbl">额定频率 f_nom (Hz)</span><input id="nt-base-fnom" type="number" min="1" step="any"></label>
-              </div>
-              <div class="row2">
-                <label class="check" title="勾选＝数值换算为一次侧（电压 × PT、电流 × CT），最小关心负荷与结果同为一次侧口径"><input id="nt-base-ptct" type="checkbox"> 启用 PT/CT 变换（勾选后才可填 PT、CT；不勾选＝二次侧，PT、CT 均为 1）</label>
-                <label class="check" title="文件时标按 UTC 解释"><input id="nt-base-utc" type="checkbox"> 文件时标为 UTC</label>
-              </div>
-              <div class="row2">
-                <label class="f"><span class="lbl">PT 变比</span><input id="nt-base-pt" type="number" min="0.000001" step="any"></label>
-                <label class="f"><span class="lbl">CT 变比</span><input id="nt-base-ct" type="number" min="0.000001" step="any"></label>
-              </div>
-              <div class="row2" title="v0.95：接线方式 / CT 极性（与运行配置「量纲与口径」同名项同义；调参、画像提取按此换算后再分析）">
-                <label class="f"><span class="lbl">接线方式</span><select id="nt-base-wiring"><option value="3p4w">三相四线（三 CT）</option><option value="3p3w">三相三线两表法（B 相无 CT）</option></select></label>
-                <label class="check"><input id="nt-base-recon3w" type="checkbox"> 3P3W 虚拟中性点重构（Ib=−(Ia+Ic)，相电压由 Uab/Ucb 重构；仅三相三线可选）</label>
-              </div>
-              <div class="row2">
-                <label class="check"><input id="nt-base-inv" type="checkbox"> 电流极性反转（三相同时取反）</label>
-                <label class="f"><span class="lbl">分相电流极性反转</span><span class="chk"><input id="nt-base-inv-a" type="checkbox"> A <input id="nt-base-inv-b" type="checkbox"> B <input id="nt-base-inv-c" type="checkbox"> C</span></label>
-              </div>
-            <div class="colmap-blk" id="nt-cm-blk" title="离线文件列映射：不启用＝各列依次为 时间, A相电压, A相电流, B相电压, B相电流, C相电压, C相电流（表头可识别时按表头）；启用＝只按下面填写的列号取列">
-              <label class="chk"><input id="nt-cm-on" type="checkbox"><span>启用离线文件列映射<small class="note">默认不启用：各列依次为 时间, A相电压, A相电流, B相电压, B相电流, C相电压, C相电流（表头可识别时按表头）；启用后只按下面的列号取列（从 1 起）</small></span></label>
-              <div class="colmap-row" id="nt-cm-row" style="display:none"><label title="时间所在列号（从 1 起；空＝不映射）">时间 <input id="nt-cm-ts" type="number" min="1" step="1" value="1"></label><label title="A相电压所在列号（从 1 起；空＝不映射）">A相电压 <input id="nt-cm-ua" type="number" min="1" step="1" value="2"></label><label title="A相电流所在列号（从 1 起；空＝不映射）">A相电流 <input id="nt-cm-ia" type="number" min="1" step="1" value="3"></label><label title="B相电压所在列号（从 1 起；空＝不映射）">B相电压 <input id="nt-cm-ub" type="number" min="1" step="1" value="4"></label><label title="B相电流所在列号（从 1 起；空＝不映射）">B相电流 <input id="nt-cm-ib" type="number" min="1" step="1" value="5"></label><label title="C相电压所在列号（从 1 起；空＝不映射）">C相电压 <input id="nt-cm-uc" type="number" min="1" step="1" value="6"></label><label title="C相电流所在列号（从 1 起；空＝不映射）">C相电流 <input id="nt-cm-ic" type="number" min="1" step="1" value="7"></label></div>
-            </div>
-              <div class="row2">
-                <label class="f" title="独立基准配置：可单独选择；沿用总线侧 / 分路侧运行配置：随该侧 nilm.quantity，不可修改"><span class="lbl">检测量</span><select id="nt-quantity"><option value="" id="nt-quantity-follow">默认（出厂缺省 auto：无电压→I）</option><option value="auto">auto（无电压→I）</option><option value="p">p 有功</option><option value="i">i 电流有效值</option></select></label>
-                <label class="f" title="独立基准配置：可单独选择；沿用总线侧 / 分路侧运行配置：随该侧 nilm.channels 的第一个检测对象，不可修改"><span class="lbl">检测对象</span><select id="nt-channel"><option value="">默认（P→三相总，I→A 相）</option><option value="total">三相总</option><option value="A">A 相</option><option value="B">B 相</option><option value="C">C 相</option></select></label>
-              </div>
-              <div class="row2">
-                <span class="mut" style="align-self:flex-end">独立基准配置下以上各项可单独修改；沿用某侧运行配置时全部随该侧配置显示、不可修改</span>
-                <span class="btnrow" style="align-items:flex-end">
-                  <button id="btn-nt-base-default" type="button" title="恢复为出厂配置 configs/default.json 的值">恢复出厂</button>
-                  <button id="btn-nt-base-bus" type="button" title="把总线侧当前运行配置的对应项填入（之后可再改，不影响总线侧）">填入总线侧值</button>
-                  <button id="btn-nt-base-branch" type="button" title="把分路侧当前运行配置的对应项填入（之后可再改，不影响分路侧）">填入分路侧值</button>
-                </span>
-              </div>
-              <div id="nt-base-note" class="mut"></div>
+              <label class="f" title="从起始时间（或文件开头）起分析的时长；与结束时间同时填时取先到者"><span class="lbl">或 时长 (s，空＝到结束时间/文件结尾；只作用于本步文件)</span><input id="nt-duration" type="number" min="0.02" step="0.1" placeholder="空"></label>
             </div>
             <div class="row2">
               <label class="f"><span class="lbl">最小关心负荷 (W，P 口径；第 ① 步自动填入或手填额定功率)</span><input id="nt-minw" type="number" min="0" step="any" placeholder="空＝max(6σ, 2%×基荷)"></label>
@@ -1080,7 +1086,6 @@
             </div>
             <div class="btnrow">
               <button id="btn-nt-run" class="primary">② 量噪声并给出参数</button>
-              <button id="btn-nt-refresh">刷新文件列表</button>
               <span id="nt-step2-src" class="mut"></span>
             </div>
             </div>

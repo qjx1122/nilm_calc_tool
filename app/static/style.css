@@ -350,3 +350,5 @@ label.f .chk>input{width:14px;height:14px;margin:0}
 @keyframes ntflash{0%{box-shadow:0 0 0 0 #3ddc9700}30%{box-shadow:0 0 0 3px #3ddc97aa}100%{box-shadow:0 0 0 0 #3ddc9700}}
 input.flash{animation:ntflash 1.5s ease-out}
 #nt-form .wp-group{margin-top:6px}
+#nt-common{border-color:#3a4a6a;background:rgba(80,120,200,.06)}
+#nt-common #nt-base{margin-top:6px;border-style:dashed}
