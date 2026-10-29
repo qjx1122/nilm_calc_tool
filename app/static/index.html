@@ -362,6 +362,7 @@
             </div>
             <div class="row2">
               <label>接线方式 <select id="cfg-wiring"><option value="3p4w">三相四线（三 CT）</option><option value="3p3w">三相三线两表法（B 相无 CT，Pb≡0）</option></select></label>
+              <label class="chk"><input id="cfg-recon3w" type="checkbox"> 3P3W 虚拟中性点重构（Ib=−(Ia+Ic)，相电压由 Uab/Ucb 重构；分相量与四线同口径）</label>
               <label>分相电流极性反转 <span class="chk"><input id="cfg-inv-a" type="checkbox"> A <input id="cfg-inv-b" type="checkbox"> B <input id="cfg-inv-c" type="checkbox"> C</span></label>
             </div>
             <div class="row2">
@@ -400,6 +401,7 @@
             </div>
             <div class="row2">
               <label>接线方式 <select id="br-wiring"><option value="3p4w">三相四线（三 CT）</option><option value="3p3w">三相三线两表法（B 相无 CT）</option></select></label>
+              <label class="chk"><input id="br-recon3w" type="checkbox"> 3P3W 虚拟中性点重构（Ib=−(Ia+Ic)，相电压由线电压重构）</label>
               <label>分相电流极性反转 <span class="chk"><input id="br-inv-a" type="checkbox"> A <input id="br-inv-b" type="checkbox"> B <input id="br-inv-c" type="checkbox"> C</span></label>
             </div>
             <div class="row2">

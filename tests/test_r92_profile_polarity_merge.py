@@ -199,3 +199,64 @@ def test_v093_three_wire_bus_detects_after_wiring_and_polarity_fix(tmp_path):
     assert not any("数据体检" in e for e in errs)
     stops = [e for e in evs if e.get("algorithm") == "profile" and e.get("profile_direction") == "STOP"]
     assert len(stops) >= 2 and any(abs((float(st["t_start"]) % 86400) - ((T.T0 + 5.0) % 86400)) < 0.3 for st in stops)
+
+
+def test_v094_reconstruct_three_wire_matches_four_wire():
+    """v0.94：3p3w 虚拟中性点重构——不对称电流（ia+ib+ic=0）下分相 P 与 I 均与四线制一致（电压对称）。"""
+    from elec_tool.scaling import scale_block
+    FS = 10000.0; n = 4000; t = np.arange(n) / FS; w = 2 * np.pi * 50 * t; U = 230.0; phi = np.deg2rad(28)
+    ph = (0, -2 * np.pi / 3, 2 * np.pi / 3)
+    u = np.vstack([U * np.sqrt(2) * np.sin(w + p) for p in ph])
+    ia = -36 * np.sqrt(2) * np.sin(w + ph[0] + phi); ic = -40 * np.sqrt(2) * np.sin(w + ph[2] + phi); ib = -(ia + ic)
+    i = np.vstack([ia, ib, ic])
+    pqi = lambda uu, ii: ([float(np.mean(uu[k] * ii[k])) for k in range(3)], [float(np.sqrt(np.mean(ii[k] ** 2))) for k in range(3)])
+    P4, I4 = pqi(u, i)
+    u3 = np.vstack([u[0] - u[1], np.zeros(n), u[2] - u[1]]); i3 = np.vstack([-ia, np.zeros(n), ic])   # 两表法 + A 相 CT 反
+    tr = TransformConfig(enabled=False, wiring="3p3w", invert_phases="A", reconstruct_3w=True)
+    assert tr.reconstructing and not tr.b_phase_missing and not tr.voltage_is_line
+    b = scale_block(SampleBlock(t=t, u=u3, i=i3, scaled=False), tr)
+    P3, I3 = pqi(b.u, b.i)
+    assert np.allclose(P4, P3, rtol=1e-6) and np.allclose(I4, I3, rtol=1e-6)
+    # 未开重构：B 相缺失语义保持
+    tr0 = TransformConfig(enabled=False, wiring="3p3w")
+    assert tr0.b_phase_missing and not tr0.reconstructing
+    assert scale_block(SampleBlock(t=t, u=u3, i=i3, scaled=False), tr0) .i[1].max() == 0.0
+
+
+def test_v094_reconstruct_enables_b_channel_and_full_profile(tmp_path):
+    """v0.94：重构后 B 相通道可检测、画像匹配不再跳过 d_ib 且仍命中停机。"""
+    import json
+    from elec_tool.nilm import NilmDetector
+    from elec_tool.scaling import scale_block
+    from elec_tool.sources import create_source
+    t_, u, i = T._wave(T._dev, 20.0, pf=0.9)
+    u3 = np.vstack([u[0] - u[1], np.zeros(t_.size), u[2] - u[1]]); i3 = np.vstack([-i[0], np.zeros(t_.size), i[2]])
+    f = str(tmp_path / "bus.csv"); T._write_csv(f, t_, u3, i3)
+    c = AppConfig(); c.transform.enabled = False
+    d = str(tmp_path / "dev.csv"); T._write_csv(d, t_, u, i)
+    prof = build_profile(c, d, device_id="d", labels=T._labels(), pre_cycles=10, post_cycles=50)
+    pp = str(tmp_path / "p.json"); json.dump(prof, open(pp, "w"))
+
+    def run(algos, channels):
+        c2 = AppConfig(); c2.transform.enabled = False; c2.transform.wiring = "3p3w"; c2.transform.invert_phases = "A"; c2.transform.reconstruct_3w = True
+        c2.source.kind = "csv_file"; c2.source.path = f; c2.source.file_speed = 0.0; c2.nilm.enabled = True; c2.nilm.save = False
+        c2.nilm.channels = channels
+        for a in c2.nilm.algorithms: c2.nilm.algorithms[a]["enabled"] = False
+        for a in algos: c2.nilm.algorithms[a] = {"enabled": True}
+        c2.nilm.profile_path = pp
+        det = NilmDetector(c2, root=str(tmp_path)); evs = []
+        with create_source(c2) as src:
+            while True:
+                b = src.read()
+                if b is None:
+                    if src.exhausted: break
+                    continue
+                evs += det.ingest(scale_block(b, c2.transform))
+        return evs, det.summary()["errors"]
+
+    evs, errs = run(["profile"], ["A"])
+    assert not any("数据体检" in e for e in errs)
+    stops = [e for e in evs if e.get("algorithm") == "profile" and e.get("profile_direction") == "STOP"]
+    assert len(stops) >= 2
+    evs, _ = run(["threshold"], ["B"])
+    assert any(e.get("channel") == "B" for e in evs)   # 未重构时 B 相恒 0，不可能有事件

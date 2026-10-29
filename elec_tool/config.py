@@ -176,6 +176,7 @@ class TransformConfig:
     invert_current: bool = False   # v0.92：电流极性反转（CT 接反 / P 为负时勾选；不依赖 enabled，三相同时取反）
     invert_phases: str = ""        # v0.93：分相电流极性反转，如 "A" / "AC"（与 invert_current 叠加；单相 CT 接反时用）
     wiring: str = "3p4w"           # v0.93：接线方式 3p4w＝三相四线（三 PT 三 CT）；3p3w＝三相三线两表法（B 相无 CT，Pb≡0 属正常，ΣP=Pa+Pc）
+    reconstruct_3w: bool = False   # v0.94：3p3w 虚拟中性点重构——ib=−(ia+ic)（严格），相电压由 Uab/Ucb 重构（假设电压对称，近似）；重构后各分相量与 3p4w 同口径
 
     @property
     def power_ratio(self) -> float:
@@ -201,6 +202,21 @@ class TransformConfig:
     @property
     def three_wire(self) -> bool:
         return str(self.wiring) == "3p3w"
+
+    @property
+    def reconstructing(self) -> bool:
+        """v0.94：是否在做三线制重构（仅 wiring=3p3w 且 reconstruct_3w 时生效）。"""
+        return self.three_wire and bool(self.reconstruct_3w)
+
+    @property
+    def b_phase_missing(self) -> bool:
+        """本侧 B 相电流是否天然缺失（3p3w 且未重构）——画像匹配跳过 d_ib、体检不报 B 缺相。"""
+        return self.three_wire and not bool(self.reconstruct_3w)
+
+    @property
+    def voltage_is_line(self) -> bool:
+        """下游电压列是否仍为线电压（重构后已是相电压）。"""
+        return self.voltage_input == "line" and not self.reconstructing
 
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> "TransformConfig":

@@ -683,7 +683,7 @@ class NilmDetector:
             pm = [float(np.median(self._p[k, -200:])) for k in (1, 2, 3)]
             im = [float(np.median(self._i[k, -200:])) for k in (1, 2, 3)]
             ia_max = max(abs(v) for v in im) if im else 0.0
-            three_wire = bool(getattr(self.cfg.transform, "three_wire", False))   # v0.93：三相三线两表法 B 相无 CT 属正常
+            three_wire = bool(getattr(self.cfg.transform, "b_phase_missing", False))   # v0.93：三相三线两表法 B 相无 CT 属正常（v0.94 重构后 B 相已补回，照常检查）
             dead = [ch for ch, v in zip("ABC", im) if ia_max > 0 and abs(v) < 0.01 * ia_max and not (three_wire and ch == "B")]
             live = [k for k, ch in enumerate("ABC") if ch not in dead and abs(pm[k]) > 0 and not (three_wire and ch == "B")]
             signs = {(pm[k] > 0) for k in live}
@@ -712,7 +712,7 @@ class NilmDetector:
             if msg not in self.errors:
                 self.errors.append(msg)
         try:
-            skip = ("d_ib",) if bool(getattr(self.cfg.transform, "three_wire", False)) else ()   # v0.93：三相三线无 B 相电流
+            skip = ("d_ib",) if bool(getattr(self.cfg.transform, "b_phase_missing", False)) else ()   # v0.93：三相三线无 B 相电流；v0.94 重构后不再跳过
             res = detect_profile(self._p, self._q, self._i, prof, prm, use_p, self.device_state, skip)
         except Exception as exc:
             msg = f"profile 检测异常：{type(exc).__name__}: {exc}"

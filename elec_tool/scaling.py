@@ -38,16 +38,38 @@ def scale_current(i: np.ndarray, tr: TransformConfig) -> np.ndarray:
     return arr if k == 1.0 else arr * k
 
 
+def reconstruct_three_wire(u: np.ndarray, i: np.ndarray):
+    """v0.94：三相三线两表法 → 伪三相四线。
+
+    * 电流：无中性线 ⇒ ia+ib+ic≡0，ib = −(ia+ic)（严格成立）。
+    * 电压：CSV A/C 列＝Uab、Ucb（B 为公共端）。Uca = Ucb − Uab、Ubc = −Ucb；按虚拟中性点
+      Ua=(Uab−Uca)/3、Ub=(Ubc−Uab)/3、Uc=(Uca−Ubc)/3（假设电压三相对称，近似；电流可不对称）。
+    返回 (u3, i3)，形状同输入 (3,N)。
+    """
+    u = np.asarray(u, dtype=np.float64); i = np.asarray(i, dtype=np.float64)
+    if u.ndim != 2 or u.shape[0] != 3 or i.ndim != 2 or i.shape[0] != 3:
+        return u, i
+    uab, ucb = u[0], u[2]
+    uca = ucb - uab; ubc = -ucb
+    u3 = np.vstack([(uab - uca) / 3.0, (ubc - uab) / 3.0, (uca - ubc) / 3.0])
+    i3 = np.vstack([i[0], -(i[0] + i[2]), i[2]])
+    return u3, i3
+
+
 def scale_block(block: SampleBlock, tr: TransformConfig) -> SampleBlock:
-    """返回一次侧数据块（不修改原对象；已变换过则原样返回）。"""
+    """返回一次侧数据块（不修改原对象；已变换过则原样返回）。v0.94：3p3w+reconstruct_3w 时先取反/变比再重构。"""
     if block.scaled:
         return block
-    if not tr.enabled and not _needs_sign(tr):
+    recon = bool(getattr(tr, "reconstructing", False))
+    if not tr.enabled and not _needs_sign(tr) and not recon:
         return block
+    u = scale_voltage(block.u, tr); i = scale_current(block.i, tr)
+    if recon:
+        u, i = reconstruct_three_wire(u, i)
     return SampleBlock(
         t=block.t,
-        u=scale_voltage(block.u, tr),
-        i=scale_current(block.i, tr),
+        u=u,
+        i=i,
         scaled=True,
         source=block.source,
         seq=block.seq,

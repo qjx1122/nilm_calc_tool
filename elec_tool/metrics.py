@@ -566,7 +566,7 @@ class MetricsCalculator:
     def _q_voltage(self, seg: SampleBlock, f_used: float, spec: WindowSpec) -> Tuple[Dict, Dict, Dict]:
         cfg = self.cfg
         u = seg.u
-        if cfg.transform.voltage_input == "line":
+        if bool(getattr(cfg.transform, "voltage_is_line", cfg.transform.voltage_input == "line")):   # v0.94：重构后已是相电压
             from .analysis.rms import phase_from_line_inst
             u_phase = phase_from_line_inst(u)
         else:
