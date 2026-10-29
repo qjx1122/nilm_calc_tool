@@ -3219,7 +3219,10 @@ function buildNilmForm(side = sideOf()) {
     const inputs = Object.keys(sp.params).map(k =>
       `<label class="${k.endsWith('_w') ? 'nilm-unit-w' : (k.endsWith('_a') ? 'nilm-unit-a' : '')}">${sp.params[k]}<input type="number" step="any" min="0" id="nilm-${a}-${k}"></label>`).join('');
     // v0.90：画像匹配额外有画像文件路径（文本，nilm.profile_path）与加载状态
-    const extra = a === 'profile' ? `<div class="row2"><label style="grid-column:1/-1">画像文件路径（nilm.profile_path；相对仓库根；数据处理页「设备画像提取」生成）<input type="text" id="nilm-profile_path" placeholder="output/nilm/profile_<设备>_<时间>.json"></label></div><div id="nilm-profile-state" class="mut" style="font-size:12px"></div>` : '';
+    // v0.99.3：画像匹配的检测对象 / 检测量不可指定——对象固定为三相合成 total（候选按 ΣP 或三相电流合成量搜索，事件 channel=total），检测量随画像文件口径（p/i），须与本侧 nilm.quantity 一致；此处以只读项固定展示
+    const extra = a === 'profile' ? `<div class="row2"><label class="f" style="grid-column:1/-1"><span class="lbl">画像文件路径</span><input type="text" id="nilm-profile_path" placeholder="output/nilm/profile_<设备>_<时间>.json"><span class="note">nilm.profile_path；相对仓库根；数据处理页「设备画像提取」生成</span></label>
+      <label class="f nilm-fixed" title="画像匹配不支持按相检测：候选按三相合成量（P 口径＝ΣP，I 口径＝三相电流合成）搜索，事件对象固定为 total；上方「检测对象」勾选对本算法不生效"><span class="lbl">检测对象（固定）</span><input type="text" value="三相总 total（固定，不可选）" disabled><span class="note">上方「检测对象」勾选只作用于其它算法</span></label>
+      <label class="f nilm-fixed" title="画像匹配的检测量由画像文件决定（提取时的 quantity：p 有功 / i 电流），且必须与本侧「检测量」实际口径一致，否则 ΔP/ΔI 不可比、画像匹配不运行"><span class="lbl">检测量（固定）</span><input type="text" id="nilm-profile-qty" value="随画像文件（加载后显示）" disabled><span class="note">须与本侧「检测量」实际口径一致，不一致时不运行并在状态行提示</span></label></div><div id="nilm-profile-state" class="mut" style="font-size:12px"></div>` : '';
     // v0.26.1：标题行＝色块 + 勾选框 + 算法名（紧挨），算法说明单独一行
     return `<div class="panel nilm-algo" data-algo="${a}" style="margin-top:8px"><h3 class="algohdr"><label class="check"><input type="checkbox" id="nilm-${a}-enabled"><span class="sw" style="color:${NILM_COLORS[a]}">■</span>${sp.name}</label></h3>
       <div class="algodesc mut">${sp.desc}</div>
@@ -3306,6 +3309,8 @@ function fillNilmForm(nc, side = sideOf()) {
 function nilmProfileState(side = sideOf()) {
   const el = E(side, 'nilm-profile-state'); if (!el) return;
   const pf = (NLs(side).summary || {}).profile;
+  const qel = E(side, 'nilm-profile-qty');   // v0.99.3：固定检测量展示＝画像文件口径
+  if (qel) { const s0 = (pf && pf.loaded && pf.summary) || null; qel.value = s0 ? (s0.quantity === 'p' ? 'p 有功功率 P（画像文件口径，固定）' : s0.quantity === 'i' ? 'i 电流有效值 I（画像文件口径，固定）' : `${s0.quantity || s0.unit || '?'}（画像文件口径，固定）`) : '随画像文件（加载后显示）'; }
   if (!pf) { el.textContent = ''; return; }
   if (!pf.path) { el.textContent = '未设置画像文件路径。'; return; }
   if (pf.error) { el.innerHTML = `<span class="bad">${esc(pf.error)}</span>`; return; }
@@ -4638,7 +4643,8 @@ function splitLabelText(raw) {
 }
 function normalizeConfigForms(root = document) {
   root.querySelectorAll('.form label, .row2 label').forEach((lab) => {
-    if (lab.dataset.norm || lab.closest('.toggle') || lab.closest('.curvehdr') || lab.closest('.stat') || lab.closest('.colmap-blk')) return;   // v0.86.1：列映射块自带布局，不做规范化拆分
+    if (lab.dataset.norm || lab.closest('.toggle') || lab.closest('.curvehdr') || lab.closest('.stat') || lab.closest('.colmap-blk')) return;
+    if (lab.classList.contains('f') && lab.querySelector(':scope > .lbl')) { lab.dataset.norm = '1'; return; }   // v0.99.3：HTML 已按 label.f（.lbl + 控件 + .note）编排的标签不再二次包装   // v0.86.1：列映射块自带布局，不做规范化拆分
     const nodes = [...lab.childNodes];
     const ctrl = nodes.find(n => n.nodeType === 1 && /^(INPUT|SELECT|TEXTAREA)$/.test(n.tagName));
     if (!ctrl) return;
