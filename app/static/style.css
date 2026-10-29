@@ -332,7 +332,19 @@ label.chk>.lbl>.note{color:var(--mut);opacity:.85;font-size:11.5px;line-height:1
 .np-tbl th.cap{text-align:left;color:var(--fg);font-size:13px;padding-top:8px}
 .np-tbl td.n{text-align:right;font-variant-numeric:tabular-nums}
 .np-tbl tr.stat td{font-weight:600}
-.np-tbl td .src{color:var(--mut);font-size:11px;margin-left:6px}
+.np-tbl td .src{color:var(--mut);font-size:11px;margin-left:0;display:block;max-width:260px;overflow:hidden;text-overflow:ellipsis}
+/* v0.99.16：画像提取结果表布局修正——
+   ① 全局 th 为 position:sticky;top:0，分组标题行（th.cap「启动画像 / 停止画像」）也被吸顶，滚动时与列头行、彼此重叠 ⇒ 分组行改 static；
+   ② 结果容器无 max-height ⇒ 吸顶相对视口、被顶栏盖住；事件多时面板无限拉长 ⇒ 容器限高 + 自身滚动，列头在容器内吸顶；
+   ③ 8 列 nowrap 在半宽面板里横向溢出、首列（时刻 + 来源文件）随之滚走 ⇒ 首列左吸附并带底色，来源文件单独一行省略号 */
+#np-result{max-height:460px;overflow:auto}
+.np-tbl thead th{position:sticky;top:0;z-index:3;background:#141b2b}
+.np-tbl th.cap{position:static;background:transparent}
+.np-tbl th:first-child,.np-tbl td:first-child{position:sticky;left:0;z-index:2;background:var(--panel)}
+.np-tbl thead th:first-child{z-index:4;background:#141b2b}
+.np-tbl th.cap:first-child{position:static}
+.np-tbl tr.stat td:first-child{background:var(--panel)}
+.np-tbl td:first-child{padding-right:14px;box-shadow:2px 0 0 #1e2740}
 
 /* v0.99：工具条 / 行内容器里的对齐标签：标签列按内容宽、不强占 34% */
 .toolbar label.f,.btnrow label.f,.toggle label.f,.inline label.f{grid-template-columns:max-content 1fr;column-gap:6px}
