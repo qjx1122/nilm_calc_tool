@@ -4644,15 +4644,24 @@ function npRender(d) {
   const cr = $('#np-cmdrow'); cr.style.display = d.command ? '' : 'none'; $('#np-cmd').textContent = d.command || '';
   const f = x => (typeof x === 'number' ? (Number.isInteger(x) ? String(x) : (+x.toPrecision(4)).toString()) : String(x));
   const FN = { d_ia: 'ΔIa (A)', d_ib: 'ΔIb (A)', d_ic: 'ΔIc (A)', d_p: 'ΔP (W)', d_q: 'ΔQ (var)', peak_ratio: '峰值比', dur_cycles: '持续 (周波)' };
-  let h = `<table class="np-tbl"><thead><tr><th>事件 / 统计</th>${F.map(x => `<th>${esc(FN[x] || x)}</th>`).join('')}</tr></thead><tbody>`;
+  // v0.99.18：按列输出——特征为行（ΔIa/ΔIb/ΔIc/ΔP/ΔQ/峰值比/持续），μ、σ 与各次事件为列（以前特征为列、μ/σ 为行，
+  //   8 列 nowrap 在半宽面板横向溢出，μ/σ 像两行数据混在事件之间）。启动 / 停止画像各一张表。
+  let h = '';
   [['startup', '启动画像'], ['shutdown', '停止画像']].forEach(([k, name]) => {
     const g = d[k];
-    h += `<tr><th class="cap" colspan="${F.length + 1}">${name}${g ? `：${g.n} 次事件 · 持续 ${f(g.dur_cycles.min)}~${f(g.dur_cycles.max)} 周波` : '：无样本'}</th></tr>`;
+    h += `<div class="np-cap">${name}${g ? `：${g.n} 次事件 · 持续 ${f(g.dur_cycles.min)}~${f(g.dur_cycles.max)} 周波` : '：无样本'}</div>`;
     if (!g) return;
-    h += `<tr class="stat"><td>均值 μ</td>${g.mu.map(x => `<td class="n">${f(x)}</td>`).join('')}</tr><tr class="stat"><td>标准差 σ</td>${g.sigma.map(x => `<td class="n">${f(x)}</td>`).join('')}</tr>`
-       + g.events.map(e => `<tr><td>${esc(e.t_start_local)}<span class="src">${esc(e.source)}</span></td>${F.map(x => `<td class="n">${f(e.vec[x])}</td>`).join('')}</tr>`).join('');
+    const evs = g.events || [];
+    h += `<table class="np-tbl"><thead><tr><th>特征</th><th class="n stat">均值 μ</th><th class="n stat">标准差 σ</th>`
+       + evs.map((e, j) => `<th class="n ev" title="${esc(e.source || '')}">事件 ${j + 1}<br><span class="src">${esc((e.t_start_local || '').slice(11) || e.t_start_local || '')}</span></th>`).join('')
+       + `</tr></thead><tbody>`;
+    F.forEach((x, j) => {
+      h += `<tr><td>${esc(FN[x] || x)}</td><td class="n stat">${f(g.mu[j])}</td><td class="n stat">${f(g.sigma[j])}</td>`
+         + evs.map(e => `<td class="n">${f(e.vec[x])}</td>`).join('') + `</tr>`;
+    });
+    h += '</tbody></table>';
+    if (evs.length) h += `<div class="mut np-evsrc">事件来源：${esc([...new Set(evs.map(e => e.source || ''))].filter(Boolean).join('；') || '—')}；事件列头为时刻（时:分:秒），悬停看文件</div>`;
   });
-  h += '</tbody></table>';
   $('#np-result').innerHTML = h;
   $('#np-json').textContent = JSON.stringify(d, null, 2);
 }
