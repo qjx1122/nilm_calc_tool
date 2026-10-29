@@ -1285,3 +1285,7 @@ I.6 播总线带开关文件：profile 行只有这台泵   I.6 同左
 
 - 画像匹配的特征窗口（pre/post）必须与画像提取时一致，多尺度（`max_scale`）只负责在慢斜坡上**找到**候选，不改变量特征的窗口。若画像是按 post=50 提取的慢停机（只量到快降段），总线侧也只按同样窗口量——两边一致才可比。想让画像反映全幅，请在提取时把 post 加大（如 400），运行时自动同口径。
 - 总线上 6 种阈值类算法报的是**所有负荷**的台阶。其它设备投切幅值与目标设备同量级时，它们必然"误报"（其实是真实事件、只是不是你的设备）。设备归属请看 profile 事件；6 种算法可作总线事件日志或关闭。
+
+### H.19 v0.99.20：复盘所需文件都在运行目录
+
+`output/{yyyyMMdd_hhmmss}/`：`config_bus.json`、`config_branch.json`、`run_info.json`（含 `profile_file`）、`nilm/profile_{side}_*.json`（画像副本）、`nilm/nilm_events_{日期}.csv`（已接受事件）、`nilm/nilm_profile_candidates_{日期}.csv`（画像匹配全部候选，含被拒原因 flags 与各维 D² 贡献——"为什么没报"看这里）。把整个目录发来即可复盘。

@@ -3349,7 +3349,8 @@ function nilmProfileState(side = sideOf()) {
   if (!pf.loaded) { el.textContent = `画像未加载（${esc(pf.path)}）`; return; }
   const s = pf.summary || {}; const g = k => (s[k] ? `${s[k].n} 次` : '无');
   el.innerHTML = `已加载：设备 <b>${esc(s.device_id || '')}</b>（${esc(s.unit || '')} 口径，启动样本 ${g('startup')} / 停止样本 ${g('shutdown')}，前后窗 ${s.pre_cycles}/${s.post_cycles} 周波，${esc(s.created || '')}）· 设备状态 ${esc(pf.device_state || 'unknown')}`
-    + ((pf.last || []).length ? `<br>最近候选：${pf.last.slice(-5).map(c => `${esc(c.t_start_local || '')} ${c.direction} D²/d=${c.d2_per_dim} 置信 ${(c.confidence * 100).toFixed(0)}% ${c.status}${c.flags && c.flags.length ? '[' + c.flags.join(',') + ']' : ''}`).join('；')}` : '');
+    + ((pf.last || []).length ? `<br>最近候选：${pf.last.slice(-5).map(c => `${esc(c.t_start_local || '')} ${c.direction} D²/d=${c.d2_per_dim} 置信 ${(c.confidence * 100).toFixed(0)}% ${c.status}${c.flags && c.flags.length ? '[' + c.flags.join(',') + ']' : ''}`).join('；')}` : '')
+    + `<br><span class="mut">候选诊断（含被拒）全程落盘：运行目录 <code>output/{时间}/nilm/nilm_profile_candidates_{日期}.csv</code>（nilm.save 开启时）；画像文件副本 <code>nilm/profile_{侧}_{原文件名}.json</code></span>`;
 }
 
 function collectNilmPayload(side = sideOf()) {

@@ -135,6 +135,23 @@ def _dump_run_configs(run_dir: str, started_side: str) -> List[str]:
             info["sides"][s] = {"source_kind": c.source.kind, "source_path": c.source.path, "source_id": SIDE_SOURCE_ID[s],
                                 "config_file": os.path.basename(p), "config_copied_from": _display_path(src_file) if src_file else None,
                                 "config_mode": how}
+            # v0.99.20：本侧启用「设备画像匹配」且 profile_path 指向存在的文件 ⇒ 原封不动复制到运行目录 nilm/ 下
+            #   （文件名 profile_{side}_{原文件名}），run_info 记录来源；复盘时画像与事件 / 配置在同一目录
+            try:
+                prof_on = bool((c.nilm.algorithms.get("profile") or {}).get("enabled", False)) and bool(getattr(c.nilm, "profile_path", ""))
+                if prof_on:
+                    pp = _abs_path(str(c.nilm.profile_path))
+                    if os.path.isfile(pp):
+                        nd = os.path.join(run_dir, "nilm"); os.makedirs(nd, exist_ok=True)
+                        dst = os.path.join(nd, f"profile_{s}_{os.path.basename(pp)}")
+                        shutil.copyfile(pp, dst); written.append(dst)
+                        info["sides"][s]["profile_file"] = os.path.relpath(dst, run_dir).replace(os.sep, "/")
+                        info["sides"][s]["profile_copied_from"] = _display_path(pp)
+                    else:
+                        info["sides"][s]["profile_file"] = None
+                        info["sides"][s]["profile_error"] = f"画像文件不存在：{c.nilm.profile_path}"
+            except Exception as exc:
+                log.warning("运行目录复制画像失败（%s）：%s", s, exc)
         except Exception as exc:
             log.warning("运行目录写配置失败（%s）：%s", s, exc)
     try:

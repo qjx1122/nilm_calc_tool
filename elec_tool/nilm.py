@@ -456,6 +456,34 @@ class NilmWriter:
             finally:
                 self._fh = None
 
+    # v0.99.20：画像匹配候选诊断落盘（含被拒 / 低置信度）——与界面「画像匹配诊断（最近候选）」同一份数据
+    def write_profile_candidate(self, d: Dict[str, Any]) -> None:
+        if not self.cfg.save:
+            return
+        try:
+            day = wall_day()
+            path = os.path.join(self.dir, f"nilm_profile_candidates_{day}.csv")
+            fields = ["source_id", "run_id", "t_start", "t_start_local", "g_on", "direction", "status", "flags", "scale", "scales_hit",
+                      "confidence", "d2", "d2_per_dim", "margin", "d_ia", "d_ib", "d_ic", "d_p", "d_q", "peak_ratio", "dur_cycles",
+                      "c_d_ia", "c_d_ib", "c_d_ic", "c_d_p", "c_d_q", "c_peak_ratio", "c_dur_cycles"]
+            with SHARED_FILE_LOCK:
+                os.makedirs(self.dir, exist_ok=True)
+                from .events import _rotate_if_header_differs
+                new = _rotate_if_header_differs(path, fields)
+                with open(path, "a", encoding="utf-8-sig" if new else "utf-8", newline="") as fh:
+                    w = csv.writer(fh)
+                    if new:
+                        w.writerow(fields)
+                    v = d.get("vec") or {}; c = d.get("contrib") or {}
+                    w.writerow([self.source_id, self.run_id, f"{float(d.get('t_start', 0.0)):.4f}", d.get("t_start_local", ""), d.get("g_on", ""),
+                                d.get("direction", ""), d.get("status", ""), ",".join(d.get("flags") or []), d.get("scale", 1),
+                                "/".join(str(x) for x in (d.get("scales_hit") or [])),
+                                d.get("confidence", ""), d.get("d2", ""), d.get("d2_per_dim", ""), d.get("margin", "")]
+                               + [v.get(k, "") for k in ("d_ia", "d_ib", "d_ic", "d_p", "d_q", "peak_ratio", "dur_cycles")]
+                               + [c.get(k, "") for k in ("d_ia", "d_ib", "d_ic", "d_p", "d_q", "peak_ratio", "dur_cycles")])
+        except Exception as exc:   # pragma: no cover
+            self.errors.append(f"候选诊断写盘失败：{exc}")
+
     def info(self) -> Dict[str, Any]:
         return {"enabled": bool(self.cfg.save), "dir": self.dir, "current_file": self._path,
                 "rows_written": self.rows_written, "errors": list(self.errors)}
@@ -803,7 +831,7 @@ class NilmDetector:
             diag.append({"t_start": float(self._t[onset]), "t_start_local": _ts(float(self._t[onset])), "g_on": int(g_on), "direction": m["direction"],
                          "d2": round(m["d2"], 3), "d2_per_dim": round(m["d2_per_dim"], 3), "confidence": round(r["confidence"], 4),
                          "margin": (round(m["margin"], 2) if math.isfinite(m["margin"]) else None), "status": r["status"],
-                         "flags": list(r["flags"]), "scale": int(r.get("scale", 1)), "contrib": {k: round(v, 2) for k, v in m["contrib"].items()},
+                         "flags": list(r["flags"]), "scale": int(r.get("scale", 1)), "scales_hit": list(r.get("scales_hit") or []), "contrib": {k: round(v, 2) for k, v in m["contrib"].items()},
                          "vec": {k: round(float(v), 4) for k, v in f["vec"].items()}, "seen": g_on <= last_end + gap})
             if g_on <= last_end + gap:
                 continue
@@ -829,6 +857,8 @@ class NilmDetector:
             for d_ in diag:
                 if d_.get("seen"):
                     continue                                   # 已报过 / 被 min_gap 压制的候选不进历史（状态机已翻转，结论无意义）
+                if int(d_["g_on"]) not in self.profile_hist:    # v0.99.20：首次出现即落盘（nilm/nilm_profile_candidates_{日期}.csv）
+                    self.writer.write_profile_candidate(d_)
                 self.profile_hist[int(d_["g_on"])] = d_
             if len(self.profile_hist) > 400:
                 for k_ in sorted(self.profile_hist)[:len(self.profile_hist) - 400]:
