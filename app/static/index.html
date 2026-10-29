@@ -1069,6 +1069,7 @@
             </div>
             <div id="nt-hint" class="notes">
               <div>理想输入是<b>没有投切的稳态段</b>（几十秒即可）；段内偶有开关会由稳健统计削弱，并在结果里提示。单位口径与界面一致（启用 PT/CT 时为一次侧 W / A）。</div>
+              <div><b>要用到总线侧检测时：</b>噪声 / 容差类参数（settle_tol、drift、threshold_w、noise、k_sigma、rel_tol_pct）必须用<b>总线侧稳态背景文件</b>在此量测（基准配置选「沿用总线侧运行配置」，套用目标选「总线侧」）；幅值类参数（最小关心负荷）可先用<b>设备侧文件</b>勾选「从文件投切台阶估计」得到并「填入输入框」，再换回总线侧背景文件量噪声。详见 <code>NILM_TUNING_GUIDE.md</code> H.15 / 附录 I.3。</div>
               <div>只做噪声统计与参数建议，<b>不改运行配置、不启动引擎</b>；「保存结果到配置文件」默认关闭。建议值的复核与回放对账见 <code>NILM_TUNING_GUIDE.md</code> §3–§5。</div>
             </div>
           </div>
