@@ -1294,72 +1294,107 @@
           <canvas id="wp-cyc2" height="260"></canvas>
         </div>
       </div>
-      <!-- v0.96：估计 CT -->
+      <!-- v0.96 / v0.97：估计 CT -->
       <h2 style="margin-top:18px">数据处理 · 估计 CT（同一次设备启停在两侧的电流台阶之比 → 估计未知一侧 CT 变比）</h2>
-      <div class="notes">原理：同一台设备的一次启停在总线侧与分路侧造成的<b>一次侧</b>电流台阶相同：ΔI<sub>总线·二次</sub>×CT<sub>总线</sub> = ΔI<sub>分路·二次</sub>×CT<sub>分路</sub>。两侧分别指定文件、该次启停的时刻、所用单相电流、接线方式与 CT 极性，PT/CT 变换在此强制关闭（直接量二次侧安培）；离线文件列映射沿用上方「波形预览」公共配置。粗估：只用单相电流有效值台阶，其它负荷同时变化、两侧相别对应错误、总线背景负荷功率因数与设备差异大时会有偏差。</div>
+      <div class="notes p">原理：同一台设备的一次启停在总线侧与分路侧造成的<b>一次侧</b>电流台阶相同：ΔI<sub>总线·二次</sub> × CT<sub>总线</sub> = ΔI<sub>分路·二次</sub> × CT<sub>分路</sub>。两侧分别指定文件、同一次动作的<b>事件类型</b>（启动 / 停机）与<b>事件时间段</b>（开始 / 结束时刻）、所用单相电流、接线方式与 CT 极性；事件前稳态＝开始时刻前 N 个周波有效值中位数、事件后稳态＝结束时刻后 N 个周波中位数（N＝计算周波数，默认 50）。PT/CT 变换在此强制关闭（直接量二次侧安培）；离线文件列映射沿用上方「波形预览」公共配置。粗估：其它负荷同时动作、两侧相别对应错、总线背景负荷与设备功率因数差异大时有偏差。</div>
       <div class="grid2">
         <div class="panel col-bus">
-          <h3><span class="sidename bus">总线侧</span> 文件 / 启停时刻 / 单相 / 接线 / CT 极性</h3>
+          <h3><span class="sidename bus">总线侧</span> 文件 · 事件 · 接线 / 极性 · CT</h3>
           <div class="form">
-            <div class="row2">
-              <label>data/ 下的文件 <select id="ct-bus-files"><option value="">— 选择 data/ 下的 CSV —</option></select></label>
-              <label>或文件路径 <input id="ct-bus-path" placeholder="data/xxx.csv 或绝对路径"></label>
+            <div class="wp-group">
+              <div class="wp-group-title">① 文件与逐周波 RMS 曲线</div>
+              <label class="f"><span class="lbl">data/ 下的文件</span><select id="ct-bus-files"><option value="">— 选择 data/ 下的 CSV —</option></select></label>
+              <label class="f"><span class="lbl">或文件路径</span><input id="ct-bus-path" placeholder="data/xxx.csv 或绝对路径"></label>
+              <div class="row2">
+                <label class="f"><span class="lbl">曲线起始</span><input id="ct-bus-cstart" placeholder="空＝文件起点；14:39:00 / epoch 秒"></label>
+                <label class="f"><span class="lbl">曲线结束</span><input id="ct-bus-cend" placeholder="空＝文件终点"></label>
+              </div>
+              <div class="row2">
+                <label class="f" title="事件前 / 后稳态取值的周波数：开始时刻前 N 个周波、结束时刻后 N 个周波各取有效值中位数"><span class="lbl">计算周波数</span><input id="ct-bus-win" type="number" min="3" step="1" value="50"></label>
+                <label class="f"><span class="lbl">&nbsp;</span><span class="btnrow"><button id="ct-bus-btn-rms" type="button" class="primary">加载逐周波 RMS 曲线</button></span></label>
+              </div>
             </div>
-            <div class="row2">
-              <label title="同一次设备启动或停止在本侧文件里的时刻（写法同数据源页：2026-10-12 08:00:00 / epoch 秒 / 08:00:00）">启停时刻 <input id="ct-bus-time" placeholder="14:39:30 / 2026-10-12 14:39:30 / epoch 秒"></label>
-              <label>单相电流 <select id="ct-bus-phase"><option value="A">A 相</option><option value="B">B 相</option><option value="C">C 相</option></select></label>
+            <div class="wp-group">
+              <div class="wp-group-title">② 事件类型与事件时间段 <small class="note">（在曲线上右键可直接设置启动 / 停机的开始、结束时刻；时间段应包住整个启动或停机过程）</small></div>
+              <label class="f"><span class="lbl">事件类型</span><select id="ct-bus-event"><option value="start">启动</option><option value="stop">停机</option></select></label>
+              <div class="row2">
+                <label class="f"><span class="lbl">开始时刻</span><input id="ct-bus-tbegin" placeholder="14:39:30 / 2026-10-12 14:39:30 / epoch 秒"></label>
+                <label class="f"><span class="lbl">结束时刻</span><input id="ct-bus-tend" placeholder="14:39:50"></label>
+              </div>
             </div>
-            <div class="row2">
-              <label>接线方式 <select id="ct-bus-wiring"><option value="3p4w">三相四线（三 CT）</option><option value="3p3w">三相三线两表法（B 相无 CT）</option></select></label>
-              <label class="chk"><input id="ct-bus-recon3w" type="checkbox"> 3P3W 虚拟中性点重构（选 B 相时必需）</label>
+            <div class="wp-group">
+              <div class="wp-group-title">③ 单相电流 · 接线方式 · CT 极性</div>
+              <div class="row2">
+                <label class="f"><span class="lbl">单相电流</span><select id="ct-bus-phase"><option value="A">A 相</option><option value="B">B 相</option><option value="C">C 相</option></select></label>
+                <label class="f"><span class="lbl">接线方式</span><select id="ct-bus-wiring"><option value="3p4w">三相四线（三 CT）</option><option value="3p3w">三相三线两表法（B 相无 CT）</option></select></label>
+              </div>
+              <div class="row2">
+                <label class="f"><span class="lbl">3P3W 重构</span><span class="chk"><input id="ct-bus-recon3w" type="checkbox"> 虚拟中性点重构（3p3w 选 B 相时必需）</span></label>
+                <label class="f"><span class="lbl">电流极性反转</span><span class="chk"><input id="ct-bus-inv" type="checkbox"> 三相 &nbsp; <input id="ct-bus-inv-a" type="checkbox"> A <input id="ct-bus-inv-b" type="checkbox"> B <input id="ct-bus-inv-c" type="checkbox"> C</span></label>
+              </div>
             </div>
-            <div class="row2">
-              <label class="chk"><input id="ct-bus-inv" type="checkbox"> 电流极性反转（三相）</label>
-              <label>分相电流极性反转 <span class="chk"><input id="ct-bus-inv-a" type="checkbox"> A <input id="ct-bus-inv-b" type="checkbox"> B <input id="ct-bus-inv-c" type="checkbox"> C</span></label>
-            </div>
-            <div class="row2">
-              <label class="chk"><input type="radio" name="ct-known" id="ct-bus-known" value="bus"> 本侧 CT 已知</label>
-              <label>本侧 CT 变比（已知时用；缺省＝本侧运行配置） <input id="ct-bus-ct" type="number" min="0.000001" step="any"></label>
+            <div class="wp-group">
+              <div class="wp-group-title">④ 本侧 CT</div>
+              <div class="row2">
+                <label class="f"><span class="lbl">本侧 CT 已知</span><span class="chk"><input id="ct-bus-known" type="checkbox"> 勾选＝用本侧 CT 估计另一侧（两侧都勾＝互相核对；都不勾＝只给台阶比值）</span></label>
+                <label class="f"><span class="lbl">本侧 CT 变比</span><input id="ct-bus-ct" type="number" min="0.000001" step="any" placeholder="缺省＝本侧运行配置"></label>
+              </div>
             </div>
           </div>
+          <h3 class="curvehdr" style="margin-top:10px"><span><span class="wp-tag wp-tag-rms">逐周波 RMS 曲线</span><small class="hdrhint" id="ct-bus-rms-sub">（未加载）</small></span></h3>
+          <canvas id="ct-bus-rms" height="240"></canvas>
         </div>
         <div class="panel col-branch">
-          <h3><span class="sidename branch">分路侧</span> 文件 / 启停时刻 / 单相 / 接线 / CT 极性</h3>
+          <h3><span class="sidename branch">分路侧</span> 文件 · 事件 · 接线 / 极性 · CT</h3>
           <div class="form">
-            <div class="row2">
-              <label>data/ 下的文件 <select id="ct-br-files"><option value="">— 选择 data/ 下的 CSV —</option></select></label>
-              <label>或文件路径 <input id="ct-br-path" placeholder="data/xxx.csv 或绝对路径"></label>
+            <div class="wp-group">
+              <div class="wp-group-title">① 文件与逐周波 RMS 曲线</div>
+              <label class="f"><span class="lbl">data/ 下的文件</span><select id="ct-br-files"><option value="">— 选择 data/ 下的 CSV —</option></select></label>
+              <label class="f"><span class="lbl">或文件路径</span><input id="ct-br-path" placeholder="data/xxx.csv 或绝对路径"></label>
+              <div class="row2">
+                <label class="f"><span class="lbl">曲线起始</span><input id="ct-br-cstart" placeholder="空＝文件起点；14:39:00 / epoch 秒"></label>
+                <label class="f"><span class="lbl">曲线结束</span><input id="ct-br-cend" placeholder="空＝文件终点"></label>
+              </div>
+              <div class="row2">
+                <label class="f" title="事件前 / 后稳态取值的周波数：开始时刻前 N 个周波、结束时刻后 N 个周波各取有效值中位数"><span class="lbl">计算周波数</span><input id="ct-br-win" type="number" min="3" step="1" value="50"></label>
+                <label class="f"><span class="lbl">&nbsp;</span><span class="btnrow"><button id="ct-br-btn-rms" type="button" class="primary">加载逐周波 RMS 曲线</button></span></label>
+              </div>
             </div>
-            <div class="row2">
-              <label title="同一次设备启动或停止在本侧文件里的时刻（写法同数据源页：2026-10-12 08:00:00 / epoch 秒 / 08:00:00）">启停时刻 <input id="ct-br-time" placeholder="14:39:30 / 2026-10-12 14:39:30 / epoch 秒"></label>
-              <label>单相电流 <select id="ct-br-phase"><option value="A">A 相</option><option value="B">B 相</option><option value="C">C 相</option></select></label>
+            <div class="wp-group">
+              <div class="wp-group-title">② 事件类型与事件时间段 <small class="note">（在曲线上右键可直接设置启动 / 停机的开始、结束时刻；时间段应包住整个启动或停机过程）</small></div>
+              <label class="f"><span class="lbl">事件类型</span><select id="ct-br-event"><option value="start">启动</option><option value="stop">停机</option></select></label>
+              <div class="row2">
+                <label class="f"><span class="lbl">开始时刻</span><input id="ct-br-tbegin" placeholder="14:39:30 / 2026-10-12 14:39:30 / epoch 秒"></label>
+                <label class="f"><span class="lbl">结束时刻</span><input id="ct-br-tend" placeholder="14:39:50"></label>
+              </div>
             </div>
-            <div class="row2">
-              <label>接线方式 <select id="ct-br-wiring"><option value="3p4w">三相四线（三 CT）</option><option value="3p3w">三相三线两表法（B 相无 CT）</option></select></label>
-              <label class="chk"><input id="ct-br-recon3w" type="checkbox"> 3P3W 虚拟中性点重构（选 B 相时必需）</label>
+            <div class="wp-group">
+              <div class="wp-group-title">③ 单相电流 · 接线方式 · CT 极性</div>
+              <div class="row2">
+                <label class="f"><span class="lbl">单相电流</span><select id="ct-br-phase"><option value="A">A 相</option><option value="B">B 相</option><option value="C">C 相</option></select></label>
+                <label class="f"><span class="lbl">接线方式</span><select id="ct-br-wiring"><option value="3p4w">三相四线（三 CT）</option><option value="3p3w">三相三线两表法（B 相无 CT）</option></select></label>
+              </div>
+              <div class="row2">
+                <label class="f"><span class="lbl">3P3W 重构</span><span class="chk"><input id="ct-br-recon3w" type="checkbox"> 虚拟中性点重构（3p3w 选 B 相时必需）</span></label>
+                <label class="f"><span class="lbl">电流极性反转</span><span class="chk"><input id="ct-br-inv" type="checkbox"> 三相 &nbsp; <input id="ct-br-inv-a" type="checkbox"> A <input id="ct-br-inv-b" type="checkbox"> B <input id="ct-br-inv-c" type="checkbox"> C</span></label>
+              </div>
             </div>
-            <div class="row2">
-              <label class="chk"><input id="ct-br-inv" type="checkbox"> 电流极性反转（三相）</label>
-              <label>分相电流极性反转 <span class="chk"><input id="ct-br-inv-a" type="checkbox"> A <input id="ct-br-inv-b" type="checkbox"> B <input id="ct-br-inv-c" type="checkbox"> C</span></label>
-            </div>
-            <div class="row2">
-              <label class="chk"><input type="radio" name="ct-known" id="ct-br-known" value="br" checked> 本侧 CT 已知</label>
-              <label>本侧 CT 变比（已知时用；缺省＝本侧运行配置） <input id="ct-br-ct" type="number" min="0.000001" step="any"></label>
+            <div class="wp-group">
+              <div class="wp-group-title">④ 本侧 CT</div>
+              <div class="row2">
+                <label class="f"><span class="lbl">本侧 CT 已知</span><span class="chk"><input id="ct-br-known" type="checkbox" checked> 勾选＝用本侧 CT 估计另一侧（两侧都勾＝互相核对；都不勾＝只给台阶比值）</span></label>
+                <label class="f"><span class="lbl">本侧 CT 变比</span><input id="ct-br-ct" type="number" min="0.000001" step="any" placeholder="缺省＝本侧运行配置"></label>
+              </div>
             </div>
           </div>
+          <h3 class="curvehdr" style="margin-top:10px"><span><span class="wp-tag wp-tag-rms">逐周波 RMS 曲线</span><small class="hdrhint" id="ct-br-rms-sub">（未加载）</small></span></h3>
+          <canvas id="ct-br-rms" height="240"></canvas>
         </div>
       </div>
       <div class="panel">
-        <h3>台阶窗口与结果</h3>
+        <h3>估计结果</h3>
         <div class="form">
-          <div class="row2">
-            <label title="取稳态前值的窗口长度（秒）">前窗 (s) <input id="ct-pre" type="number" min="0.1" step="0.1" value="2"></label>
-            <label title="取稳态后值的窗口长度（秒）；应 ≥ 设备启动过程（冲击 / 爬升）时长">后窗 (s) <input id="ct-post" type="number" min="0.1" step="0.1" value="2"></label>
-          </div>
-          <div class="row2">
-            <label title="在填写时刻 ± 容差范围内找台阶">时刻容差 (s) <input id="ct-tol" type="number" min="0.1" step="0.1" value="1"></label>
-            <span style="align-self:flex-end"><button id="btn-ct-run" class="primary">估计 CT</button> <button id="btn-ct-refresh" type="button" title="刷新 data/ 文件列表">刷新文件列表</button></span>
-          </div>
+          <div class="btnrow"><button id="btn-ct-run" class="primary">估计 CT</button> <button id="btn-ct-refresh" type="button" title="刷新 data/ 文件列表">刷新文件列表</button></div>
           <div id="ct-status" class="notes"></div>
           <div id="ct-cmdrow" class="notes" style="display:none">等价命令 <code id="ct-cmd"></code> <button id="btn-ct-copy" type="button" style="padding:1px 8px;font-size:12px">复制</button></div>
           <div id="ct-result" class="tablewrap"></div>

@@ -4378,56 +4378,114 @@ function bindWavePreview() {
   initCtEstimate();   // v0.96
 }
 
-/* v0.96：数据处理 · 估计 CT（POST /api/process/ct_estimate） */
-const CT = { files: [] };
+/* v0.96 / v0.97：数据处理 · 估计 CT（POST /api/process/ct_estimate；每侧逐周波 RMS 曲线 GET /api/process/wave/rms） */
+const CT = { files: [], rms: { 'ct-bus': null, 'ct-br': null } };
+const CT_SIDES = [['ct-bus', 'bus', '总线侧'], ['ct-br', 'branch', '分路侧']];
+function ctV(id) { const el = $('#' + id); return el ? String(el.value || '').trim() : ''; }
+function ctC(id) { const el = $('#' + id); return (el && el.checked) ? '1' : '0'; }
+function ctBase(pre) {   // 本侧接线 / 极性（PT/CT 关闭，量二次侧）+ 波形预览公共列映射
+  return { pt_ct_enabled: '0', wiring: ctV(pre + '-wiring') || '3p4w', reconstruct_3w: ctC(pre + '-recon3w'), invert_current: ctC(pre + '-inv'),
+           invert_phases: getInvPhases(pre), ...cmQuery('wp-cm') };
+}
 function ctSide(pre) {
-  const v = id => { const el = $('#' + id); return el ? String(el.value || '').trim() : ''; };
-  const c = id => ($('#' + id) && $('#' + id).checked) ? '1' : '0';
-  return { path: v(pre + '-path') || v(pre + '-files'), t_event: v(pre + '-time'), phase: v(pre + '-phase') || 'A',
-           wiring: v(pre + '-wiring') || '3p4w', reconstruct_3w: c(pre + '-recon3w'), invert_current: c(pre + '-inv'), invert_phases: getInvPhases(pre),
-           ...cmQuery('wp-cm') };
+  return { path: ctV(pre + '-path') || ctV(pre + '-files'), event: ctV(pre + '-event') || 'start', t_begin: ctV(pre + '-tbegin'), t_end: ctV(pre + '-tend'),
+           phase: ctV(pre + '-phase') || 'A', win_cycles: ctV(pre + '-win') || '50', known: ctC(pre + '-known'), ct: ctV(pre + '-ct'), ...ctBase(pre) };
 }
 async function ctListFiles() {
   try {
     const r = await api('/api/files?sub=data', undefined, 'bus');
     CT.files = (r.files || []).filter(f => !f.dir && f.name.toLowerCase().endsWith('.csv'));
-    ['ct-bus-files', 'ct-br-files'].forEach(id => { const sel = $('#' + id); if (!sel) return; const cur = sel.value;
+    CT_SIDES.forEach(([pre]) => { const sel = $('#' + pre + '-files'); if (!sel) return; const cur = sel.value;
       sel.innerHTML = '<option value="">— 选择 data/ 下的 CSV —</option>' + CT.files.map(f => `<option value="${esc(f.name)}">${esc(f.name)} (${f.size_mb} MB)</option>`).join('');
       if (cur && CT.files.some(f => f.name === cur)) sel.value = cur; });
   } catch (e) { toast('读取文件列表失败：' + e.message, 'err'); }
 }
 function ctStatus(html, cls) { const el = $('#ct-status'); if (el) el.innerHTML = html ? `<div class="${cls || ''}">${html}</div>` : ''; }
 async function ctFillDefaults() {
-  // 本侧 CT 缺省＝本侧运行配置的 ct_ratio（GET /api/config、/api/branch/config）
   for (const [url, id] of [['/api/config', 'ct-bus-ct'], ['/api/branch/config', 'ct-br-ct']]) {
     try { const el = $('#' + id); if (!el || el.value) continue; const r = await (await fetch(url)).json(); const c = r && (r.config || r); if (c && c.transform && c.transform.ct_ratio != null) el.value = c.transform.ct_ratio; } catch (e) { /* 忽略 */ }
   }
 }
+/* 曲线上的事件时间段标线 */
+function ctMarks(pre) {
+  const ev = ctV(pre + '-event'); const nm = ev === 'stop' ? '停机' : '启动'; const marks = [];
+  const d = CT.rms[pre]; if (!d || !d.t || !d.t.length) return marks;
+  const t0 = d.t[0];
+  const toEpoch = (txt) => { if (!txt) return null; if (/^\d+(\.\d+)?$/.test(txt)) return parseFloat(txt);
+    const m = txt.match(/^(\d{1,2}):(\d{2}):(\d{2}(?:\.\d+)?)$/); if (m) { const dd = new Date(t0 * 1000); dd.setHours(+m[1], +m[2], 0, 0); return dd.getTime() / 1000 + parseFloat(m[3]); }
+    const ms = Date.parse(txt.replace(' ', 'T')); return Number.isFinite(ms) ? ms / 1000 : null; };
+  const a = toEpoch(ctV(pre + '-tbegin')), b = toEpoch(ctV(pre + '-tend'));
+  if (isNum(a)) marks.push({ x: a - t0, label: nm + '开始', color: '#3ddc97', row: 0 });
+  if (isNum(b)) marks.push({ x: b - t0, label: nm + '结束', color: '#ff6b6b', row: 1 });
+  return marks;
+}
+function ctDrawRms(pre) {
+  const cv = $('#' + pre + '-rms'); if (!cv) return;
+  const sub = $('#' + pre + '-rms-sub'); const d = CT.rms[pre];
+  if (!d || !d.t || !d.t.length) { drawLine(cv, [], { empty: '点「加载逐周波 RMS 曲线」后显示；右键曲线可设置启动 / 停机的开始、结束时刻', height: 240 }); if (sub) sub.textContent = '（未加载）'; return; }
+  const t0 = d.t[0], span = d.t[d.t.length - 1] - t0; const ch = Object.keys(d.channels || {})[0];
+  drawLine(cv, [{ name: `${ch} RMS (A·二次)`, color: WP_COLORS[ch] || '#4ea1ff', data: d.t.map((x, i) => [x - t0, d.channels[ch][i]]) }],
+    { ylabel: 'A', fmtX: x => tsX(x + t0, span), fmtTip: x => fmtLocalInput(x + t0), tbase: t0, height: 240, marks: ctMarks(pre), force: true });
+  if (sub) sub.textContent = `（${ch} · ${d.n} 点 · ${d.agg_cycles > 1 ? '每 ' + d.agg_cycles + ' 周波一点' : '逐周波'} · ${wpFmtT(t0)} → ${wpFmtT(d.t[d.t.length - 1])}，${fmtDur(span)}；右键曲线设置事件时刻）`;
+  bindCtxMenu(cv, (xEpoch) => {
+    const noX = !isNum(xEpoch); const tTxt = noX ? '暂无曲线' : fmtLocalInput(xEpoch);
+    const set = (ev, which) => () => { $('#' + pre + '-event').value = ev; $('#' + pre + (which === 'begin' ? '-tbegin' : '-tend')).value = fmtLocalInput(xEpoch); ctDrawRms(pre); toast(`${ev === 'start' ? '启动' : '停机'}${which === 'begin' ? '开始' : '结束'}时刻 → ${fmtLocalInput(xEpoch)}`); };
+    return canvasNativeItems(cv).concat([
+      { key: 'sep', sep: true },
+      { key: 'start-begin', label: `设置启动开始时刻（${tTxt}）`, disabled: noX, hint: '事件类型→启动，开始时刻→该点', onClick: set('start', 'begin') },
+      { key: 'start-end', label: `设置启动结束时刻（${tTxt}）`, disabled: noX, hint: '事件类型→启动，结束时刻→该点', onClick: set('start', 'end') },
+      { key: 'stop-begin', label: `设置停机开始时刻（${tTxt}）`, disabled: noX, hint: '事件类型→停机，开始时刻→该点', onClick: set('stop', 'begin') },
+      { key: 'stop-end', label: `设置停机结束时刻（${tTxt}）`, disabled: noX, hint: '事件类型→停机，结束时刻→该点', onClick: set('stop', 'end') },
+      { key: 'sep2', sep: true },
+      { key: 'zoom-reset', label: '复位缩放', onClick: () => zoomReset(cv) },
+      { key: 'native', label: '浏览器原生菜单（Shift + 右键）', disabled: true },
+    ]);
+  });
+}
+async function ctLoadRms(pre) {
+  const path = ctV(pre + '-path') || ctV(pre + '-files');
+  if (!path) { toast('请先选择本侧文件', 'err'); return; }
+  const phase = ctV(pre + '-phase') || 'A';
+  if ((ctV(pre + '-wiring') === '3p3w') && phase === 'B' && ctC(pre + '-recon3w') !== '1') { toast('三相三线没有 B 相电流：请改选 A / C 相或勾选 3P3W 重构', 'err'); return; }
+  const params = Object.assign({ path, t_start: ctV(pre + '-cstart'), t_end: ctV(pre + '-cend'), agg_cycles: 1, channels: 'I' + phase.toLowerCase() }, ctBase(pre));
+  const btn = $('#' + pre + '-btn-rms'); if (btn) btn.disabled = true;
+  try {
+    const d = await api('/api/process/wave/rms?' + wpQuery(params), undefined, 'bus');
+    CT.rms[pre] = d; zoomReset($('#' + pre + '-rms')); ctDrawRms(pre);
+  } catch (e) { toast('加载逐周波 RMS 曲线失败：' + e.message, 'err'); }
+  finally { if (btn) btn.disabled = false; }
+}
 async function ctRun() {
-  const known = document.querySelector('input[name="ct-known"]:checked'); const knownSide = known ? known.value : 'branch';
-  const knownCt = $('#' + (knownSide === 'bus' ? 'ct-bus-ct' : 'ct-br-ct')).value;
-  const body = { bus: ctSide('ct-bus'), branch: ctSide('ct-br'), known_side: knownSide, known_ct: knownCt,
-                 pre_s: $('#ct-pre').value, post_s: $('#ct-post').value, tol_s: $('#ct-tol').value };
-  if (!body.bus.path || !body.branch.path) { ctStatus('请先选择两侧文件', 'err'); return; }
-  if (!knownCt) { ctStatus('请填写已知一侧的 CT 变比', 'err'); return; }
+  const body = { bus: ctSide('ct-bus'), branch: ctSide('ct-br') };
+  if (!body.bus.path || !body.branch.path) { ctStatus('请先选择两侧文件', 'bad'); return; }
+  for (const [pre, , nm] of CT_SIDES) { const sd = body[pre === 'ct-bus' ? 'bus' : 'branch']; if (!sd.t_begin || !sd.t_end) { ctStatus(`${nm}：请填写事件开始 / 结束时刻（可在曲线上右键设置）`, 'bad'); return; } if (sd.known === '1' && !sd.ct) { ctStatus(`${nm}：勾选了「本侧 CT 已知」但未填写 CT 变比`, 'bad'); return; } }
   ctStatus('正在估计…'); $('#ct-result').innerHTML = ''; $('#ct-cmdrow').style.display = 'none';
   try {
     const r = await api('/api/process/ct_estimate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }, 'bus');
-    const row = (m, name) => `<tr><td>${name}</td><td>${esc(m.path)}</td><td>${m.phase}</td><td>${m.wiring}${m.reconstruct_3w ? '+重构' : ''}</td><td>${m.invert_current ? '全部' : (m.invert_phases || '无')}</td><td>${esc(m.t_step_local || '')}</td><td>${num(m.pre_a, 4)}</td><td>${num(m.post_a, 4)}</td><td>${num(m.delta_a, 4)}</td><td>${m.snr == null ? '∞' : num(m.snr, 1)}</td></tr>`;
-    const est = r.estimated_ct == null ? '无法估计' : num(r.estimated_ct, 2);
-    $('#ct-result').innerHTML = `<table><thead><tr><th>侧</th><th>文件</th><th>相</th><th>接线</th><th>极性反转</th><th>台阶时刻</th><th>前 (A)</th><th>后 (A)</th><th>ΔI (A·二次)</th><th>信噪比</th></tr></thead><tbody>${row(r.bus, '总线侧')}${row(r.branch, '分路侧')}</tbody></table>
-      <div class="notes" style="margin-top:6px"><b>已知 ${r.known_side === 'bus' ? '总线侧' : '分路侧'} CT = ${num(r.known_ct, 3)} → 估计 ${r.estimated_side === 'bus' ? '总线侧' : '分路侧'} CT ≈ ${est}</b>（${esc(r.formula)}；ΔI<sub>分路</sub>/ΔI<sub>总线</sub> = ${r.ratio_branch_over_bus == null ? '—' : num(r.ratio_branch_over_bus, 4)}）${(r.notes || []).map(n => `<div>⚠ ${esc(n)}</div>`).join('')}
-      <div>要采用该值，请到「配置」页该侧「量纲与口径」填入 CT 电流变比并点「保存${r.estimated_side === 'bus' ? '总线侧' : '分路侧'}配置」（本功能不改运行配置）。</div></div>`;
+    const dirTxt = m => m.direction === 'up' ? '↑ 上升' : m.direction === 'down' ? '↓ 下降' : '— 无';
+    const row = (m, name) => `<tr><td>${name}</td><td title="${esc(m.path)}">${esc(m.path.split(/[\\/]/).pop())}</td><td class="c">${m.event_name}</td><td>${esc(m.t_begin_local)}</td><td>${esc(m.t_end_local)}</td><td class="c">${m.phase}</td><td class="c">${m.wiring}${m.reconstruct_3w ? '+重构' : ''}</td><td class="c">${m.invert_current ? '全部' : (m.invert_phases || '无')}</td><td class="n">${num(m.pre_a, 4)}</td><td class="n">${num(m.post_a, 4)}</td><td class="n">${num(m.delta_a, 4)}</td><td class="c">${dirTxt(m)}</td><td class="n">${m.snr == null ? '∞' : num(m.snr, 1)}</td><td class="n">${m.n_pre}/${m.n_post}</td></tr>`;
+    const card = (sd, nm) => { const e = r.estimates && r.estimates[sd]; if (!e) return ''; const dev = e.deviation_pct == null ? '' : `；填写值 ${num(e.configured, 3)}，偏差 ${num(e.deviation_pct, 1)}%`;
+      return `<div class="card"><div class="k">估计 ${nm} CT 变比</div><div class="v">${num(e.ct, 2)}</div><div class="s">由${e.from === 'bus' ? '总线侧' : '分路侧'} CT = ${num(e.known_ct, 3)} 推得${dev}${e.nominal ? '<br>' + esc(e.nominal) : ''}</div></div>`; };
+    $('#ct-result').innerHTML = `<table class="ct-tbl"><thead><tr><th>侧</th><th>文件</th><th class="c">事件</th><th>开始时刻</th><th>结束时刻</th><th class="c">相</th><th class="c">接线</th><th class="c">极性反转</th><th class="n">前 (A)</th><th class="n">后 (A)</th><th class="n">ΔI (A·二次)</th><th class="c">方向</th><th class="n">信噪比</th><th class="n">周波 前/后</th></tr></thead><tbody>${row(r.bus, '总线侧')}${row(r.branch, '分路侧')}</tbody></table>
+      <div class="ct-est"><div class="card"><div class="k">台阶比值 ΔI<sub>分路</sub> / ΔI<sub>总线</sub></div><div class="v">${r.ratio_branch_over_bus == null ? '—' : num(r.ratio_branch_over_bus, 4)}</div><div class="s">${esc(r.formula)}</div></div>${card('bus', '总线侧')}${card('branch', '分路侧')}</div>
+      <div class="notes" style="margin-top:6px">${(r.notes || []).map(n => `<div class="warn">⚠ ${esc(n)}</div>`).join('')}<div>要采用估计值，请到「配置」页对应侧「量纲与口径」填入 CT 电流变比并点「保存该侧配置」（本功能不改运行配置）。</div></div>`;
     if (r.command) { $('#ct-cmd').textContent = r.command; $('#ct-cmdrow').style.display = ''; }
     ctStatus('');
-  } catch (e) { ctStatus('估计失败：' + esc(e.message), 'err'); }
+  } catch (e) { ctStatus('估计失败：' + esc(e.message), 'bad'); }
 }
 function initCtEstimate() {
   if (!$('#btn-ct-run')) return;
   $('#btn-ct-run').addEventListener('click', ctRun);
   $('#btn-ct-refresh').addEventListener('click', ctListFiles);
   $('#btn-ct-copy').addEventListener('click', () => { navigator.clipboard && navigator.clipboard.writeText($('#ct-cmd').textContent || ''); toast('已复制'); });
-  [['ct-bus-files', 'ct-bus-path'], ['ct-br-files', 'ct-br-path']].forEach(([sel, inp]) => $('#' + sel).addEventListener('change', () => { if ($('#' + sel).value) $('#' + inp).value = $('#' + sel).value; }));
+  CT_SIDES.forEach(([pre]) => {
+    $('#' + pre + '-files').addEventListener('change', () => { if ($('#' + pre + '-files').value) { $('#' + pre + '-path').value = $('#' + pre + '-files').value; CT.rms[pre] = null; ctDrawRms(pre); } });
+    $('#' + pre + '-btn-rms').addEventListener('click', () => ctLoadRms(pre));
+    ['-event', '-tbegin', '-tend'].forEach(sfx => $('#' + pre + sfx).addEventListener('change', () => ctDrawRms(pre)));
+    ['-phase', '-wiring', '-recon3w', '-inv', '-inv-a', '-inv-b', '-inv-c'].forEach(sfx => $('#' + pre + sfx).addEventListener('change', () => { CT.rms[pre] = null; ctDrawRms(pre); }));
+    $('#' + pre + '-known').addEventListener('change', () => { const on = $('#' + pre + '-known').checked; $('#' + pre + '-ct').style.opacity = on ? '' : '.6'; });
+    ctDrawRms(pre);
+  });
   ctListFiles(); ctFillDefaults();
 }
 

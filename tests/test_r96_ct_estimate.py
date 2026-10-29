@@ -38,33 +38,50 @@ def files(tmp_path_factory):
     return bus, br
 
 
+def _spec(path, phase="A", event="stop", tb=T0 + 5.5, te=T0 + 6.5, **kw):
+    d = {"path": path, "event": event, "t_begin": str(tb), "t_end": str(te), "phase": phase}; d.update(kw); return d
+
+
 def test_estimate_ct_three_wire_bus(files):
     bus, br = files; cfg = AppConfig.load(str(ROOT / "configs" / "default.json"))
     for phase, rec in (("A", "0"), ("C", "0"), ("B", "1")):
-        r = estimate_ct(cfg, {"path": bus, "t_event": str(T0 + 6), "phase": phase, "wiring": "3p3w", "invert_phases": "A", "reconstruct_3w": rec},
-                        {"path": br, "t_event": str(T0 + 6), "phase": phase}, known_side="branch", known_ct=15)
+        r = estimate_ct(cfg, _spec(bus, phase, wiring="3p3w", invert_phases="A", reconstruct_3w=rec),
+                        _spec(br, phase, known="1", ct=15))
         assert r["estimated_side"] == "bus" and abs(r["estimated_ct"] - 40.0) < 0.5, (phase, r["estimated_ct"])
-        assert r["bus"]["direction"] == "down" == r["branch"]["direction"]
+        assert r["estimates"]["branch"] is None and r["estimates"]["bus"]["from"] == "branch"
+        assert r["bus"]["direction"] == "down" == r["branch"]["direction"] == r["bus"]["expected"]
         assert abs(r["bus"]["t_step"] - (T0 + 6)) < 0.05 and abs(r["branch"]["delta_a"] + 2.4) < 0.02
+        assert r["bus"]["n_pre"] == 50 == r["bus"]["n_post"]
         assert any("200/5" in n for n in r["notes"])
-    # 反向：已知总线 CT=40 → 估计分路 ≈15
-    r = estimate_ct(cfg, {"path": bus, "t_event": str(T0 + 6), "phase": "A", "wiring": "3p3w", "invert_phases": "A"},
-                    {"path": br, "t_event": str(T0 + 6), "phase": "A"}, known_side="bus", known_ct=40)
+    # 反向：已知总线 CT=40 → 估计分路 ≈15；两侧都勾 → 互相核对并给偏差；都不勾 → 只给比值
+    r = estimate_ct(cfg, _spec(bus, wiring="3p3w", invert_phases="A", known="1", ct=40), _spec(br))
     assert r["estimated_side"] == "branch" and abs(r["estimated_ct"] - 15.0) < 0.2
-    # 3p3w 选 B 相且未重构 → 明确报错；时刻超出范围 → 报错；坏参数 → 报错
+    r = estimate_ct(cfg, _spec(bus, wiring="3p3w", invert_phases="A", known="1", ct=42), _spec(br, known="1", ct=15))
+    assert r["estimated_side"] is None and abs(r["estimates"]["bus"]["ct"] - 40) < 0.5 and 4 < r["estimates"]["bus"]["deviation_pct"] < 6
+    assert abs(r["estimates"]["branch"]["ct"] - 15.75) < 0.1
+    r = estimate_ct(cfg, _spec(bus, wiring="3p3w", invert_phases="A"), _spec(br))
+    assert r["estimates"] == {"bus": None, "branch": None} and abs(r["ratio_branch_over_bus"] - 2.665) < 0.02 and any("都未勾选" in n for n in r["notes"])
+    # 事件类型与方向不符 → 提示；计算周波数可配
+    r = estimate_ct(cfg, _spec(bus, event="start", wiring="3p3w", invert_phases="A"), _spec(br, event="start", known="1", ct=15), win_cycles=20)
+    assert any("不符" in n for n in r["notes"]) and r["bus"]["n_pre"] == 20
+    # 错误：3p3w 选 B 相未重构 / 时刻超范围 / 勾已知未填 CT / 结束早于开始 / 非法接线 / 事件类型
     with pytest.raises(CtEstimateError, match="B 相"):
-        measure_step(cfg, {"path": bus, "t_event": str(T0 + 6), "phase": "B", "wiring": "3p3w"}, side="bus")
+        measure_step(cfg, _spec(bus, "B", wiring="3p3w"), side="bus")
     with pytest.raises(CtEstimateError, match="范围"):
-        measure_step(cfg, {"path": bus, "t_event": str(T0 + 60), "phase": "A"}, side="bus")
+        measure_step(cfg, _spec(bus, tb=T0 + 60, te=T0 + 61), side="bus")
+    with pytest.raises(CtEstimateError, match="未填写 CT"):
+        estimate_ct(cfg, _spec(bus, wiring="3p3w", invert_phases="A"), _spec(br, known="1", ct=""))
+    with pytest.raises(CtEstimateError, match="早于"):
+        measure_step(cfg, _spec(br, tb=T0 + 7, te=T0 + 6), side="branch")
     with pytest.raises(CtEstimateError):
-        estimate_ct(cfg, {"path": bus, "t_event": str(T0 + 6), "phase": "A"}, {"path": br, "t_event": str(T0 + 6), "phase": "A"}, known_ct=0)
-    with pytest.raises(CtEstimateError):
-        estimate_ct(cfg, {"path": bus, "t_event": str(T0 + 6), "phase": "A", "wiring": "xx"}, {"path": br, "t_event": str(T0 + 6), "phase": "A"})
+        estimate_ct(cfg, _spec(bus, wiring="xx"), _spec(br))
+    with pytest.raises(CtEstimateError, match="事件类型"):
+        measure_step(cfg, _spec(br, event="boom"), side="branch")
     # HH:MM:SS 写法（按文件当天）
     from elec_tool.timefmt import local_tod_s
-    tod = local_tod_s(T0 + 6); hh, mm, ss = int(tod // 3600), int(tod % 3600 // 60), tod % 60
-    m = measure_step(cfg, {"path": br, "t_event": f"{hh:02d}:{mm:02d}:{ss:06.3f}", "phase": "A"}, side="branch")
-    assert abs(m["t_step"] - (T0 + 6)) < 0.05
+    f = lambda x: (lambda tod: f"{int(tod // 3600):02d}:{int(tod % 3600 // 60):02d}:{tod % 60:06.3f}")(local_tod_s(x))   # noqa: E731
+    m = measure_step(cfg, {"path": br, "event": "stop", "t_begin": f(T0 + 5.5), "t_end": f(T0 + 6.5), "phase": "A"}, side="branch")
+    assert abs(m["t_step"] - (T0 + 6)) < 0.05 and abs(m["delta_a"] + 2.39) < 0.02
 
 
 def test_ct_estimate_api_and_cli(files, tmp_path_factory, monkeypatch):
@@ -78,19 +95,22 @@ def test_ct_estimate_api_and_cli(files, tmp_path_factory, monkeypatch):
     import app.server as srv
     importlib.reload(srv)
     with TestClient(srv.app) as client:
-        body = {"bus": {"path": bus, "t_event": str(T0 + 6), "phase": "A", "wiring": "3p3w", "invert_phases": "A"},
-                "branch": {"path": br, "t_event": str(T0 + 6), "phase": "A"}, "known_side": "branch", "known_ct": 15}
+        body = {"bus": _spec(bus, wiring="3p3w", invert_phases="A"), "branch": _spec(br, known="1", ct=15)}
         r = client.post("/api/process/ct_estimate", json=body)
         assert r.status_code == 200, r.text
-        j = r.json(); assert abs(j["estimated_ct"] - 40) < 0.5 and j["command"].startswith("python tools/ct_estimate.py") and "--bus-wiring 3p3w" in j["command"]
-        assert j["bus"]["t_step_local"] and j["branch"]["t_event_local"]
+        j = r.json(); assert abs(j["estimated_ct"] - 40) < 0.5 and j["command"].startswith("python tools/ct_estimate.py")
+        assert "--bus-wiring 3p3w" in j["command"] and "--branch-ct 15" in j["command"] and "--bus-event stop" in j["command"]
+        assert j["bus"]["t_begin_local"] and j["bus"]["t_end_local"] and j["branch"]["t_step_local"]
+        # 每侧逐周波 RMS 曲线（界面用同一 GET，带本侧接线 / 极性）
+        rr = client.get("/api/process/wave/rms", params={"path": bus, "channels": "Ia", "pt_ct_enabled": "0", "wiring": "3p3w", "invert_phases": "A", "agg_cycles": 1}).json()
+        assert rr["ok"] and rr["cycles_total"] == 600 and abs(rr["channels"]["Ia"][10] - 3.897) < 0.02 and abs(rr["channels"]["Ia"][-10] - 3.0) < 0.02
         assert client.post("/api/process/ct_estimate", json={"bus": {"path": bus}, "branch": {"path": br}}).status_code == 400
-        assert client.post("/api/process/ct_estimate", json={**body, "known_ct": "x"}).status_code == 400
+        assert client.post("/api/process/ct_estimate", json={**body, "win_cycles": "x"}).status_code == 400
     # CLI
     import subprocess
-    out = subprocess.run([sys.executable, str(ROOT / "tools" / "ct_estimate.py"), "--bus-file", bus, "--bus-time", str(T0 + 6), "--bus-wiring", "3p3w",
-                          "--bus-invert-phases", "A", "--branch-file", br, "--branch-time", str(T0 + 6), "--known-ct", "15", "--json"],
-                         capture_output=True, text=True, cwd=str(ROOT))
+    out = subprocess.run([sys.executable, str(ROOT / "tools" / "ct_estimate.py"), "--bus-file", bus, "--bus-event", "stop", "--bus-begin", str(T0 + 5.5), "--bus-end", str(T0 + 6.5),
+                          "--bus-wiring", "3p3w", "--bus-invert-phases", "A", "--branch-file", br, "--branch-event", "stop", "--branch-begin", str(T0 + 5.5),
+                          "--branch-end", str(T0 + 6.5), "--branch-ct", "15", "--json"], capture_output=True, text=True, cwd=str(ROOT))
     assert out.returncode == 0, out.stderr
     import json
     assert abs(json.loads(out.stdout)["estimated_ct"] - 40) < 0.5
