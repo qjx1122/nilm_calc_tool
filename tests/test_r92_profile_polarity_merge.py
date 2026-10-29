@@ -110,7 +110,7 @@ def test_engine_first_gap_not_suppressed_and_ptct_mismatch_warns(tmp_path):
     det2, evs2 = run(c)
     # v0.99.22：PT/CT 启用标志不一致只警告、匹配照常运行（口径是否真差一个变比由数据决定）：这里画像与数据同源，仍应报出
     assert [e for e in evs2 if e["algorithm"] == "profile"]
-    assert any("PT/CT" in e and "请确认两侧数据都是一次侧量" in e for e in det2.summary()["errors"])
+    assert any("PT=" in e and "变比不同不影响匹配" in e for e in det2.summary()["errors"])
 
 
 def test_engine_warns_when_phase_missing_or_signs_disagree(tmp_path):

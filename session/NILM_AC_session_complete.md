@@ -458,3 +458,13 @@
 - 回归：`tests/test_r164_profile_ptct_flag_mismatch.py`（2 项）；`test_r90`/`test_r92` 中原「拒绝」断言改为「提示且仍匹配」。全量 pytest 466 passed。
 - 前 6 种算法误报：结论同第 160 轮——总线上其它负荷每 30 s 10–30 A 真实投切，与目标设备 35 A 同量级，阈值类算法不可能区分，只能靠画像匹配；建议总线侧关闭 6 种标量算法或仅作参考。
 - 缺口：复验用的是 1 s RMS 插值（无周波级噪声），用户重跑原始 CSV 后的置信度可能略低于 0.83；两侧时间戳偏差 74 s 需用户确认是录波器时钟问题。
+
+
+## 第 165 轮（v0.99.23）重跑复盘 + 去掉 PT/CT 启用开关
+
+- tmp（01:14 运行）：候选 CSV 已生成 3 行。总线侧 14:38:16 STOP 候选 ΔI/ΔP 命中（贡献 ≤2.6），但 `c_dur_cycles=221`（dur 2161 vs 画像 256±128）、`c_d_q=110` ⇒ D²/维 48 ⇒ rejected。分路侧 14:39:31 STOP confirmed 0.997。
+- 根因：终点规则「最后一次越带」对总线噪声敏感（1 s RMS 插值仿真 dur=271 正常，加 σ=4 A/周波噪声即复现 rejected d2/dim 79）。
+- 修复：`transition_end`（平滑 + 首次进带并保持）三处共用；设备侧 auto 模式终点也改用它（原沿用 steady_state/two_window 各自终点，与总线侧定义不一致）。仿真：σ=0/2/4 A 噪声下 confirmed 0.84/0.79/0.74；他设备候选 rejected d2/dim 69–82。
+- 用户要求：去掉界面所有「启用 PT/CT 变换」，只留 PT/CT 输入，默认 1。实现：index.html 五处复选框改 hidden+checked，ptctSync 恒放开输入框；configs/default.json、branch.json PT=CT=1 enabled=true；`TransformConfig.__post_init__/validate` 旧 enabled=false ⇒ 1/1；`make_base` pt_ct_enabled=0 ⇒ 1/1；`load_profile` 旧画像同理；nilm.py 口径检查改为变比不同仅提示。代码级 dataclass 缺省仍 100/15（库/测试用），conftest `copy_default_ptct_on` 显式写 100/15。
+- 测试：新增 `tests/test_r165_transition_end_and_ptct_always_on.py`（5 项）；改 conftest、test_r9/r12/r61/r90/r92/r156/r164 断言到新语义。全量 pytest 469 passed。
+- 缺口：画像需用 v0.99.23 重提（dur 定义变）；两侧文件时间戳仍差 ~74 s；浏览器端未截图验证。

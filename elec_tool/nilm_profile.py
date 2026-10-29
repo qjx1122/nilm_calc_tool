@@ -137,6 +137,9 @@ def load_profile(path: str, root: Optional[str] = None) -> Dict[str, Any]:
         g = doc.get(k)
         if g and len(g.get("sigma", [])) > jd:
             g["sigma"][jd] = max(float(g["sigma"][jd]), _ABS_FLOOR["dur_cycles"])
+    pc = doc.get("pt_ct")
+    if isinstance(pc, dict) and not bool(pc.get("enabled", True)):     # v0.99.23：旧画像「PT/CT 关闭」＝未换算 ⇒ PT=CT=1
+        doc["pt_ct"] = {"enabled": True, "pt_ratio": 1.0, "ct_ratio": 1.0}
     return doc
 
 
@@ -249,6 +252,45 @@ def match_event(profile: Dict[str, Any], feat: Dict[str, Any], lam_rel: float = 
             "d2_start": res.get("START", {}).get("d2"), "d2_stop": res.get("STOP", {}).get("d2")}
 
 
+
+def transition_end(x: np.ndarray, onset: int, post_n: int, tgt: float, dlt: float) -> int:
+    """v0.99.23：过渡结束点（统一规则，在线候选 / 标签定位 / 自动定位三处共用）。
+
+    在 onset 之后的 post_n 周波上，先做长度 w 的滑动中值平滑（w≈post_n/20，3～25 周波），终点＝平滑轨迹**首次进入**
+    事件后电平 ±20 %·|Δ| 带内并**连续保持 hold 周波**（hold≈post_n/10，3～250 周波）的那个周波（+1）；从未保持过则退回
+    「最后一次越带的下一周波」。封顶 onset+post_n−1。
+
+    背景：v0.92.2 的「最后一次越带」规则在总线侧对噪声极敏感——目标设备 35 A 停机的 20 % 带只有 7 A，其它负荷在 60 s 后窗里
+    随便一次 ±7 A 的抖动就把终点推到几十秒之后（实录 dur 2161 周波 vs 画像 256，D² 贡献 221；后窗整体后移还把 ΔQ 量错，贡献 110），
+    真停机因此被拒。平滑 + 保持能同时抵御冲击尖峰（会离开带、保持失败）与孤立抖动（被中值吸收）。"""
+    L = x.size
+    seg = x[onset:onset + post_n]
+    n = seg.size
+    if n <= 1:
+        return min(onset + 1, L - 1)
+    band = 0.2 * abs(float(dlt))
+    w = max(1, min(25, post_n // 20))
+    if w > 1 and n >= w:
+        from numpy.lib.stride_tricks import sliding_window_view
+        sm = np.median(sliding_window_view(seg, w), axis=1)             # 长度 n−w+1，sm[k] 对应 seg[k:k+w]
+    else:
+        sm = seg
+    inside = np.abs(sm - float(tgt)) <= band
+    hold = max(3, min(250, post_n // 10))
+    end = None
+    if inside.size >= hold:
+        # 连续 hold 个 True 的首个起点
+        c = np.convolve(inside.astype(np.int32), np.ones(hold, dtype=np.int32), mode="valid")
+        hit = np.nonzero(c >= hold)[0]
+        if hit.size:
+            end = onset + int(hit[0]) + 1
+    if end is None:
+        exc = np.nonzero(np.abs(seg - float(tgt)) > band)[0]
+        end = onset + (int(exc[-1]) + 1 if exc.size else 1)
+    end = min(end, onset + post_n - 1)
+    return max(onset + 1, min(end, L - 1))
+
+
 # ------------------------------------------------------------------ 总线侧检测
 def _two_window_candidates(x: np.ndarray, pre_n: int, post_n: int, min_d: float, k_sig: float) -> List[Tuple[int, int, float]]:
     """稳健双滑窗候选：|median(后) − median(前)| 局部极大值 ≥ max(min_d, k·MAD 尺度)。返回 (onset, end, delta)。"""
@@ -278,11 +320,8 @@ def _two_window_candidates(x: np.ndarray, pre_n: int, post_n: int, min_d: float,
         # 终点：onset 之后「相对事件后电平的偏差 > 稳态偏差 20%」的最后一个周波的下一周波（过渡结束处），封顶 post_n
         #   v0.92.2：原为"首个进入 20% 带的周波"——斜坡 / 冲击型启动会在过渡中途就判终点，事件后窗落在过渡里，
         #   ΔP/ΔQ/ΔI 与画像（设备侧按稳态分段取过渡结束后）系统性不一致
-        seg = x[onset:onset + post_n]
-        tgt = float(m_post[pk]); dlt = abs(float(delta[pk]))
-        exc = np.nonzero(np.abs(seg - tgt) > 0.2 * dlt)[0]
-        end = onset + (int(exc[-1]) + 1 if exc.size else 1)
-        end = min(end, onset + post_n - 1)
+        #   v0.99.23：改为 transition_end（平滑 + 首次进带并保持），三处共用，见其说明
+        end = transition_end(x, onset, post_n, float(m_post[pk]), abs(float(delta[pk])))
         out.append((onset, min(end, L - 1), float(delta[pk])))
     return out
 
@@ -423,9 +462,7 @@ def _locate_near(x: np.ndarray, k_center: int, half: int, pre_n: int, post_n: in
     bd = max(sc)
     best = ks[next(i for i, v in enumerate(sc) if v >= 0.5 * bd)] if bd > 0 else lo
     delta = float(np.median(x[best:best + post_n]) - np.median(x[best - pre_n:best]))
-    seg = x[best:best + post_n]; tgt = float(np.median(seg))
-    exc = np.nonzero(np.abs(seg - tgt) > 0.2 * abs(delta))[0]          # v0.92.2：终点＝过渡结束处（与在线候选同一规则）
-    end = min(best + (int(exc[-1]) + 1 if exc.size else 1), best + post_n - 1)
+    end = transition_end(x, best, post_n, float(np.median(x[best:best + post_n])), abs(delta))   # v0.99.23：与在线候选同一规则
     return best, end, delta
 
 
@@ -532,6 +569,12 @@ def build_profile(cfg, file: str, *, device_id: str = "device", labels: Optional
                 steps.append((int(a_), int(b_), pr_, po_, sc_, "auto:two_window"))
         steps.sort(key=lambda s0: s0[0])
         for onset, end, pre, post, score, src in steps:
+            # v0.99.23：终点不再沿用 steady_state / two_window 各自的终点定义，统一按 transition_end（与总线侧在线候选同一规则），
+            #   否则 dur_cycles 在两侧按不同规则量出、不可比
+            onset = int(onset)
+            if onset + 2 <= x.size:
+                tgt_ = float(np.median(x[onset:onset + post_n])); dl_ = tgt_ - float(np.median(x[max(0, onset - pre_n):onset]))
+                end = transition_end(x, onset, post_n, tgt_, abs(dl_))
             ef = event_features(p4, q4, i4, int(onset), int(end), pre_n, post_n)
             # v0.91.2：方向按合成电流有效值的变化判（RMS 恒正，启动必升、停止必降），不再按 P 判——P 的符号受 CT 极性 / 相别配对影响
             samples.append({**ef, "direction": "START" if ef["d_it"] >= 0 else "STOP", "onset": int(onset), "end": int(end),

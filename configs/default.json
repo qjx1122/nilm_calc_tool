@@ -10,10 +10,10 @@
     "fs_tolerance": 0.01
   },
   "transform": {
-    "pt_ratio": 100.0,
-    "ct_ratio": 15.0,
+    "pt_ratio": 1.0,
+    "ct_ratio": 1.0,
     "voltage_input": "phase",
-    "enabled": false
+    "enabled": true
   },
   "harmonic": {
     "order_min": 2,

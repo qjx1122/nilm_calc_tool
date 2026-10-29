@@ -72,7 +72,7 @@ def test_single_scale_misses_slow_ramp_multiscale_finds_it():
     r = res8[0]
     assert r["scale"] > 1 and abs(r["onset"] - 1500) <= 60
     v = r["feat"]["vec"]
-    assert v["d_ia"] < -20 and r["match"]["direction"] == "STOP"   # 后窗落在过渡后，ΔIa 接近全幅
+    assert v["d_ia"] < -10 and r["match"]["direction"] == "STOP"   # v0.99.23：终点改为「首次进带并保持」，post=50 的后窗仍在 3 s 斜坡中段（两侧同规则即可比）
     assert r["post_wait"] == 50 and 8 in r["scales_hit"]        # v0.99.19：特征窗口＝画像 post（几何一致），尺度只用于找候选
 
 

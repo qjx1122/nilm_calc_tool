@@ -1,4 +1,5 @@
-"""第 164 轮（v0.99.22）：画像 PT/CT 启用标志与本侧不同 ⇒ 只警告、照常匹配（原为硬拒绝、画像匹配从不运行）。
+"""第 164 轮（v0.99.22/23）：画像 PT/CT 与本侧不同 ⇒ 只提示、照常匹配（原为按「启用」标志位硬拒绝、画像匹配从不运行）。
+v0.99.23：「启用 PT/CT」开关已去掉，旧画像 pt_ct.enabled=false ⇒ PT=CT=1；本侧 PT=4 CT=250 ⇒ 变比不同 ⇒ 提示一次。
 
 实录：分路侧记录仪直接输出一次侧量（PT/CT 关闭），总线侧二次侧 ×CT=250 ⇒ 两侧都是一次侧、可比，却被标志位拒绝。"""
 import json, os, numpy as np, pytest
@@ -51,7 +52,7 @@ def test_ptct_flag_mismatch_warns_but_still_matches(tmp_path):
     evs = _feed(det)
     prof_evs = [e for e in evs if e["algorithm"] == "profile"]
     assert prof_evs and prof_evs[0]["direction"] == "down" and prof_evs[0]["status"] in ("confirmed", "low_confidence")
-    assert any("请确认两侧数据都是一次侧量" in m for m in det.errors)
+    assert any("变比不同不影响匹配" in m for m in det.errors)
     assert not any("画像匹配不会命中" in m for m in det.errors)
     assert det.profile_hist, "候选诊断应已累积"
     files = os.listdir(tmp_path / "run")
@@ -59,7 +60,8 @@ def test_ptct_flag_mismatch_warns_but_still_matches(tmp_path):
 
 
 def test_ptct_flag_same_no_warning(tmp_path):
-    det = _detector(tmp_path, _profile(True), bus_ptct_enabled=True)
+    prof = _profile(True); prof["pt_ct"] = {"enabled": True, "pt_ratio": 4.0, "ct_ratio": 250.0}
+    det = _detector(tmp_path, prof, bus_ptct_enabled=True)
     evs = _feed(det)
     assert [e for e in evs if e["algorithm"] == "profile"]
-    assert not any("请确认两侧数据都是一次侧量" in m for m in det.errors)
+    assert not any("变比不同不影响匹配" in m for m in det.errors)   # 画像 PT/CT=1/1 vs 本侧 4/250 不同 ⇒ 会提示；这里改为同变比

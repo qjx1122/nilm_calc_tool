@@ -169,20 +169,26 @@ class SamplingConfig:
 class TransformConfig:
     """PT/CT 变比（需求：PT=100、CT=15，均可配置）。"""
 
-    pt_ratio: float = 100.0
+    pt_ratio: float = 100.0        # 代码级缺省（库/测试用）；界面出厂配置 configs/default.json 为 PT=CT=1（v0.99.23：PT/CT 始终参与换算，不再有「启用」开关）
     ct_ratio: float = 15.0
     voltage_input: str = "phase"   # phase＝CSV 中为相电压；line＝CSV 中为线电压
-    enabled: bool = True           # False＝直接用二次值（调试/对比用）；界面出厂配置 configs/default.json 为 false（v0.99.8：默认不启用）
+    enabled: bool = True           # v0.99.23：恒为 True（保留字段只为兼容旧配置：旧文件 enabled=false 时在 __post_init__ 里折算为 PT=CT=1，数值行为不变）
     invert_current: bool = False   # v0.92：电流极性反转（CT 接反 / P 为负时勾选；不依赖 enabled，三相同时取反）
     invert_phases: str = ""        # v0.93：分相电流极性反转，如 "A" / "AC"（与 invert_current 叠加；单相 CT 接反时用）
     wiring: str = "3p4w"           # v0.93：接线方式 3p4w＝三相四线（三 PT 三 CT）；3p3w＝三相三线两表法（B 相无 CT，Pb≡0 属正常，ΣP=Pa+Pc）
     reconstruct_3w: bool = False   # v0.94：3p3w 虚拟中性点重构——ib=−(ia+ic)（严格），相电压由 Uab/Ucb 重构（假设电压对称，近似）；重构后各分相量与 3p4w 同口径
+
+    def __post_init__(self) -> None:
+        # v0.99.23：去掉「启用 PT/CT 变换」开关——旧配置 enabled=false 的语义是「直接看二次侧值」，等价于 PT=CT=1
+        if not bool(self.enabled):
+            self.pt_ratio = 1.0; self.ct_ratio = 1.0; self.enabled = True
 
     @property
     def power_ratio(self) -> float:
         return self.pt_ratio * self.ct_ratio
 
     def validate(self) -> None:
+        self.__post_init__()                       # v0.99.23：构造后再赋 enabled=False 的同样折算为 PT=CT=1
         if self.pt_ratio <= 0 or self.ct_ratio <= 0:
             raise ConfigError(f"PT/CT 变比必须 > 0（当前 PT={self.pt_ratio}, CT={self.ct_ratio}）")
         if self.voltage_input not in VOLTAGE_INPUT_MODES:

@@ -612,8 +612,9 @@ def make_base(default_cfg: AppConfig, **overrides: Any) -> AppConfig:
         cfg.transform.pt_ratio = pt
     if ct is not None:
         cfg.transform.ct_ratio = ct
-    if en is not None:
-        cfg.transform.enabled = en
+    if en is not None and not en:              # v0.99.23：兼容旧调用方 pt_ct_enabled=0 ⇒ 不换算＝PT=CT=1
+        cfg.transform.pt_ratio = 1.0; cfg.transform.ct_ratio = 1.0
+    cfg.transform.enabled = True
     if utc is not None:
         cfg.source.file_time_utc = utc
     # v0.95：接线方式 / 3P3W 重构 / 电流极性（全局 + 分相）——与运行配置 transform 同名；空＝出厂值

@@ -25,13 +25,13 @@ PT = 100.0
 CT = 15.0
 
 def copy_default_ptct_on(dst):
-    """v0.99.8：出厂配置 configs/default.json 默认不启用 PT/CT 变换；这些历史测试按一次侧（PT=100/CT=15）口径写断言，
-    复制出厂配置后把 transform.enabled 置 true（不动入库文件）。"""
+    """v0.99.8：历史测试按一次侧（PT=100/CT=15）口径写断言；v0.99.23 起出厂配置 configs/default.json 为 PT=CT=1 且不再有
+    「启用 PT/CT 变换」开关（PT/CT 始终参与换算），复制出厂配置后显式把 PT/CT 写成 100/15（不动入库文件）。"""
     import json as _json
     src = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "configs", "default.json")
     with open(src, encoding="utf-8") as fh:
         d = _json.load(fh)
-    d.setdefault("transform", {})["enabled"] = True
+    d.setdefault("transform", {}).update({"enabled": True, "pt_ratio": PT, "ct_ratio": CT})
     with open(str(dst), "w", encoding="utf-8") as fh:
         _json.dump(d, fh, ensure_ascii=False, indent=2)
     return str(dst)

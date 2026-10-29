@@ -2589,7 +2589,7 @@ def _nt_make_base(payload: Dict[str, Any]) -> Tuple[AppConfig, str, Optional[str
         cfg.nilm.quantity = q
     cfg.validate()
     f = _nt_base_fields(cfg)
-    label = (f"独立基准配置（出厂配置 + fs={f['fs']:g} f_nom={f['f_nom']:g} PT/CT={'启用' if f['pt_ct_enabled'] else '关闭'} "
+    label = (f"独立基准配置（出厂配置 + fs={f['fs']:g} f_nom={f['f_nom']:g} "
              f"PT={f['pt_ratio']:g} CT={f['ct_ratio']:g} UTC={'是' if f['file_time_utc'] else '否'} quantity={f['quantity']} "
              f"接线={f['wiring']}{'+重构' if f['reconstruct_3w'] else ''} 极性反转={'全部' if f['invert_current'] else (f['invert_phases'] or '无')}）")
     return cfg, mode, label

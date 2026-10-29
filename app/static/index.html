@@ -343,10 +343,8 @@
         <div class="panel col-bus">
           <h3><span class="sidename bus">总线侧</span> 量纲与口径</h3>
           <div class="form">
-            <div class="row2" title="PT/CT 变换：勾选＝电压 × PT、电流 × CT 换算为一次侧；不勾选（默认）＝直接看二次侧值，PT、CT 固定为 1、不可设置">
-              <label class="check"><input id="cfg-scale" type="checkbox"> 启用 PT/CT 变换（不勾选＝直接看二次侧值，PT、CT 均为 1）</label>
-              <span class="mut" style="align-self:center">勾选后才可填写 PT、CT 变比</span>
-            </div>
+            <!-- v0.99.23：去掉「启用 PT/CT 变换」开关（PT/CT 始终参与换算，默认 1/1）；隐藏元素仅供脚本兼容 -->
+            <input id="cfg-scale" type="checkbox" checked hidden>
             <div class="row2">
               <label class="f"><span class="lbl">PT 电压变比</span><input id="cfg-pt" type="number" step="0.1"></label>
               <label class="f"><span class="lbl">CT 电流变比</span><input id="cfg-ct" type="number" step="0.1"></label>
@@ -379,10 +377,8 @@
         <div class="panel col-br">
           <h3><span class="sidename branch">分路侧</span> 量纲与口径 <span class="navhint">独立于总线侧，随「保存分路侧配置」保存</span></h3>
           <div class="form">
-            <div class="row2" title="PT/CT 变换：勾选＝电压 × PT、电流 × CT 换算为一次侧；不勾选（默认）＝直接看二次侧值，PT、CT 固定为 1、不可设置">
-              <label class="check"><input id="br-scale" type="checkbox"> 启用 PT/CT 变换（不勾选＝直接看二次侧值，PT、CT 均为 1）</label>
-              <span class="mut" style="align-self:center">勾选后才可填写 PT、CT 变比</span>
-            </div>
+            <!-- v0.99.23：去掉「启用 PT/CT 变换」开关（PT/CT 始终参与换算，默认 1/1）；隐藏元素仅供脚本兼容 -->
+            <input id="br-scale" type="checkbox" checked hidden>
             <div class="row2">
               <label class="f"><span class="lbl">PT 电压变比</span><input id="br-pt" type="number" step="0.1"></label>
               <label class="f"><span class="lbl">CT 电流变比</span><input id="br-ct" type="number" step="0.1"></label>
@@ -740,7 +736,7 @@
           <label class="check"><input type="checkbox" id="ev-enabled"> 启用事件检测</label>
           <label class="check"><input type="checkbox" id="ev-save"> 事件落盘 CSV（output/events/events_&lt;日期&gt;.csv）</label>
           <label class="f"><span class="lbl">复归滞回系数（越上限事件回到 limit×系数 以下才结束）</span><input type="number" step="0.01" min="0.5" max="1" id="ev-hysteresis"></label>
-          <label class="check"><input type="checkbox" id="ev-limits_secondary"> U_nom / I1 上限按二次侧填写（启用 PT/CT 时自动折算到一次侧）</label>
+          <label class="check"><input type="checkbox" id="ev-limits_secondary"> U_nom / I1 上限按二次侧填写（自动按 PT/CT 折算）</label>
           <label class="f"><span class="lbl">额定相电压 U_nom (V)</span><input type="number" step="0.01" id="ev-u_nom"></label>
           <label class="f"><span class="lbl">基波电压上限 (% U_nom)</span><input type="number" step="0.1" id="ev-u1_high_pct"></label>
           <label class="f"><span class="lbl">基波电压下限 (% U_nom)</span><input type="number" step="0.1" id="ev-u1_low_pct"></label>
@@ -1008,7 +1004,7 @@
                   <label class="f" title="额定频率"><span class="lbl">额定频率 f_nom (Hz)</span><input id="nt-base-fnom" type="number" min="1" step="any"></label>
                 </div>
                 <div class="row2">
-                  <label class="check" title="勾选＝数值换算为一次侧（电压 × PT、电流 × CT），最小关心负荷与结果同为一次侧口径"><input id="nt-base-ptct" type="checkbox"> 启用 PT/CT 变换（勾选后才可填 PT、CT；不勾选＝二次侧，PT、CT 均为 1）</label>
+                  <input id="nt-base-ptct" type="checkbox" checked hidden><span class="mut" title="PT/CT 始终参与换算（电压 × PT、电流 × CT）；不需要换算时填 1">PT/CT 变比在下一行填写（默认 1＝不换算）</span>
                   <label class="check" title="文件时标按 UTC 解释"><input id="nt-base-utc" type="checkbox"> 文件时标为 UTC</label>
                 </div>
                 <div class="row2">
@@ -1101,7 +1097,7 @@
               </div>
             </div>
             <div id="nt-hint" class="notes">
-              <div>理想输入是<b>没有投切的稳态段</b>（几十秒即可）；段内偶有开关会由稳健统计削弱，并在结果里提示。单位口径与界面一致（启用 PT/CT 时为一次侧 W / A）。</div>
+              <div>理想输入是<b>没有投切的稳态段</b>（几十秒即可）；段内偶有开关会由稳健统计削弱，并在结果里提示。单位口径与界面一致（按 PT/CT 换算后 W / A）。</div>
               <div><b>要用到总线侧检测时：</b>噪声 / 容差类参数（settle_tol、drift、threshold_w、noise、k_sigma、rel_tol_pct）必须用<b>总线侧稳态背景文件</b>在此量测（基准配置选「沿用总线侧运行配置」，套用目标选「总线侧」）；幅值类参数（最小关心负荷）可先用<b>设备侧文件</b>勾选「从文件投切台阶估计」得到并「填入输入框」，再换回总线侧背景文件量噪声。详见 <code>NILM_TUNING_GUIDE.md</code> H.15 / 附录 I.3。</div>
               <div>只做噪声统计与参数建议，<b>不改运行配置、不启动引擎</b>；「保存结果到配置文件」默认关闭。建议值的复核与回放对账见 <code>NILM_TUNING_GUIDE.md</code> §3–§5。</div>
             </div>
@@ -1150,7 +1146,7 @@
                 <label class="f" title="额定频率"><span class="lbl">额定频率 f_nom (Hz)</span><input id="np-base-fnom" type="number" min="1" step="any"></label>
               </div>
               <div class="row2">
-                <label class="check" title="勾选＝数值换算为一次侧（电压 × PT、电流 × CT），最小关心负荷与结果同为一次侧口径"><input id="np-base-ptct" type="checkbox"> 启用 PT/CT 变换（勾选后才可填 PT、CT；不勾选＝二次侧，PT、CT 均为 1）</label>
+                <input id="np-base-ptct" type="checkbox" checked hidden><span class="mut" title="PT/CT 始终参与换算（电压 × PT、电流 × CT）；不需要换算时填 1">PT/CT 变比在下一行填写（默认 1＝不换算）</span>
                 <label class="check" title="文件时标按 UTC 解释"><input id="np-base-utc" type="checkbox"> 文件时标为 UTC</label>
               </div>
               <div class="row2">
@@ -1242,7 +1238,7 @@
                 <label class="f" title="额定频率：每周波点数 = fs / f_nom"><span class="lbl">额定频率 f_nom (Hz)</span><input id="wp-base-fnom" type="number" min="1" step="any"></label>
               </div>
               <div class="row2">
-                <label class="chk" title="勾选＝数值换算为一次侧（电压 × PT、电流 × CT）"><input id="wp-base-ptct" type="checkbox"> 启用 PT/CT 变换（勾选后才可填 PT、CT；不勾选＝二次侧，PT、CT 均为 1）</label>
+                <input id="wp-base-ptct" type="checkbox" checked hidden><span class="mut" title="PT/CT 始终参与换算（电压 × PT、电流 × CT）；不需要换算时填 1">PT/CT 变比在下一行填写（默认 1＝不换算）</span>
                 <label class="chk" title="文件时标按 UTC 解释（显示时换算为本地时间）"><input id="wp-base-utc" type="checkbox"> 文件时标为 UTC</label>
               </div>
               <div class="row2">

@@ -199,7 +199,7 @@ def test_events_release_after_limit_raised_and_missing_subject():
 def test_events_limits_scaled_by_pt_ct():
     from elec_tool.scaling import scale_block
     cfg = _cfg()
-    cfg.transform.enabled = True                                           # PT=100 CT=15 → 计算结果为一次值
+    cfg.transform.enabled = True; cfg.transform.pt_ratio = 100.0; cfg.transform.ct_ratio = 15.0   # v0.99.23：_cfg 的 enabled=False 已被 validate 折算为 1/1，这里显式设 100/15 → 一次值
     det, calc = EventDetector(cfg), MetricsCalculator(cfg)
     sc = lambda b: scale_block(b, cfg.transform)                           # 引擎在 _ingest 里做的折算
     ch = _run(det, calc, [sc(_blk(T0))])                                   # 57.7×100 V、5×15 A：正常，不应报

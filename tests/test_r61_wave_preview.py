@@ -30,7 +30,7 @@ def wave_file(tmp_path_factory):
 @pytest.fixture(scope="module")
 def cfg():
     from elec_tool.config import AppConfig
-    c = AppConfig.load(str(ROOT / "configs" / "default.json")); c.transform.enabled = True; return c   # v0.99.8：按一次侧口径断言
+    c = AppConfig.load(str(ROOT / "configs" / "default.json")); c.transform.pt_ratio = 100.0; c.transform.ct_ratio = 15.0; return c   # v0.99.23：出厂 PT=CT=1，按一次侧口径断言需显式设 100/15
 
 
 # ---------- ① 文件信息 ----------
@@ -112,7 +112,7 @@ def test_make_base_independent(cfg, wave_file):
                   "custom_time": False, "custom_time_start": "", "custom_time_end": "", "max_points": 20_000_000,   # v0.64 +4
                   "wiring": "3p4w", "reconstruct_3w": False, "invert_current": False, "invert_phases": ""}         # v0.95 +4
     b = make_base(cfg, fs="6400", f_nom="50", pt_ct_enabled="0", pt_ratio="", ct_ratio=None)
-    assert b.transform.enabled is False and b.transform.pt_ratio == 100.0 and b.sampling.fs == 6400.0
+    assert b.transform.enabled is True and b.transform.pt_ratio == 1.0 and b.sampling.fs == 6400.0    # v0.99.23：pt_ct_enabled=0（旧调用方）⇒ PT=CT=1
     d = load_waveform(b, str(wave_file), n_cycles=2, channels=["Ua"])
     assert abs(np.max(np.abs(d["channels"]["Ua"])) - U_RMS * math.sqrt(2)) / (U_RMS * math.sqrt(2)) < 0.01      # 二次侧
     b2 = make_base(cfg, pt_ct_enabled="1", pt_ratio="50", ct_ratio="10")

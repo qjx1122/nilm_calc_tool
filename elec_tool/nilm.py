@@ -752,27 +752,15 @@ class NilmDetector:
             if msg not in self.errors:
                 self.errors.append(msg)
             return []
-        # v0.92.2：口径一致性——画像在 PT/CT 启用 / 变比与本侧不同的配置下提取，幅值差一个变比，候选门槛永远达不到
-        # v0.99.6 修正：两侧都启用 PT/CT ⇒ 画像与本侧都是一次侧量，变比不同也可比（总线 CT=40、分路 CT=15 正是常态）；
-        #   一侧启用一侧关闭 ⇒ 差一个变比，不可比（拒绝）；两侧都关闭 ⇒ 都是二次侧量，只有两侧 CT/PT 相同才可比（给出警告但仍运行）
+        # v0.99.23：PT/CT 始终参与换算（界面已无「启用」开关，旧配置 / 旧画像的「关闭」已折算为 PT=CT=1），两侧都是换算后的量、直接可比。
+        #   只在两侧变比不同时提示一次（变比不同本身不影响匹配：总线 CT=250、分路 CT=1 正是常态）
         pc = prof.get("pt_ct") or {}
         tr = self.cfg.transform
-        # v0.99.22：一侧启用 PT/CT、一侧关闭 ⇒ **只警告、照常匹配**，不再直接拒绝运行。
-        #   实录（第 164 轮）：分路侧记录仪直接输出一次侧量（239 V / 37 A，PT/CT 关闭），总线侧录的是二次侧（PT=4 CT=250 启用后换算到一次侧），
-        #   两侧实际都是一次侧量、ΔI 完全可比（−36/−38/−39 A vs 画像 −36/−32/−42 A），却因这个配置标志位的硬拒绝导致画像匹配一次都没跑、
-        #   候选 CSV 为空。口径是否真的差一个变比只能由数据判断：若确实差变比，候选门槛达不到 / D² 爆掉，会在候选诊断里体现。
-        if pc and bool(pc.get("enabled")) != bool(tr.enabled) and not getattr(self, "_profile_ptct_noted", False):
+        if pc and not getattr(self, "_profile_ptct_noted", False) and (abs(float(pc.get("ct_ratio", tr.ct_ratio)) - float(tr.ct_ratio)) > 1e-9
+                                                                      or abs(float(pc.get("pt_ratio", tr.pt_ratio)) - float(tr.pt_ratio)) > 1e-9):
             self._profile_ptct_noted = True
-            self.errors.append(f"画像提取时 PT/CT={'启用 PT=' + str(pc.get('pt_ratio')) + ' CT=' + str(pc.get('ct_ratio')) if pc.get('enabled') else '关闭'}，"
-                               f"本侧运行配置 PT/CT={'启用 PT=' + str(tr.pt_ratio) + ' CT=' + str(tr.ct_ratio) if tr.enabled else '关闭'}：请确认两侧数据都是一次侧量（或都是二次侧量）；"
-                               f"若设备侧文件本身已是一次侧值（记录仪已换算），PT/CT 关闭是正确的，画像匹配照常进行；若设备侧文件是二次侧原始值，"
-                               f"ΔI/ΔP 将差一个变比而匹配不上，请在画像提取的基准配置里启用 PT/CT 并填设备侧真实变比后重提")
-        if pc and not bool(tr.enabled) and (abs(float(pc.get("ct_ratio", tr.ct_ratio)) - float(tr.ct_ratio)) > 1e-9
-                                            or abs(float(pc.get("pt_ratio", tr.pt_ratio)) - float(tr.pt_ratio)) > 1e-9):
-            msg = (f"画像与本侧都按二次侧量匹配，但画像侧 PT/CT={pc.get('pt_ratio')}/{pc.get('ct_ratio')} 与本侧配置 {tr.pt_ratio}/{tr.ct_ratio} 不同："
-                   f"二次侧 ΔI/ΔP 相差变比倍数，匹配大概率不命中；建议两侧都启用 PT/CT（各填本侧真实变比），在一次侧口径下比较")
-            if msg not in self.errors:
-                self.errors.append(msg)
+            self.errors.append(f"提示：画像按 PT={pc.get('pt_ratio')} CT={pc.get('ct_ratio')} 换算后提取，本侧 PT={tr.pt_ratio:g} CT={tr.ct_ratio:g}；"
+                               f"两侧都是换算后的量、变比不同不影响匹配。若设备侧文件是未换算的二次侧原始值而 CT 填了 1，ΔI/ΔP 会差一个变比而匹配不上")
         # v0.99.6：接线不一致提示（只提示一次）：画像 3p4w、本侧 3p3w 未重构 ⇒ ΔIb 跳过；相序可用 phase_map 调整
         pw = (prof.get("wiring") or {}).get("wiring")
         if pw and pw != str(getattr(tr, "wiring", "3p4w")) and not getattr(self, "_profile_wiring_noted", False):

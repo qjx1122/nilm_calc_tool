@@ -117,7 +117,7 @@ def main() -> int:
 
     if not a.quiet:
         qty = det.quantity_effective
-        print(f"文件 {a.file}  样本 {n_samples}  周波 {det.cycles_total}  口径 {'一次侧(PT/CT)' if cfg.transform.enabled else '二次侧'}"
+        print(f"文件 {a.file}  样本 {n_samples}  周波 {det.cycles_total}  口径 PT={cfg.transform.pt_ratio:g} CT={cfg.transform.ct_ratio:g}"
               f"  检测量 {'有功 P (W)' if qty == 'p' else '电流有效值 I (A)'}" + ("（数据源无电压）" if det.voltage_missing else ""))
         for e in det.summary().get("errors", []):
             print("  ⚠ " + e)

@@ -762,28 +762,28 @@ def test_web_process_nilm_tune_independent_base(client):
     cfg_before = client.get("/api/config").json()
     assert cfg_before["transform"]["pt_ratio"] == 123
     b = client.get("/api/process/nilm_tune/base?source=default").json()
-    assert b["ok"] and b["base"]["pt_ratio"] == 100 and b["base"]["fs"] == 6400 and "quantity" in b["base"]
+    assert b["ok"] and b["base"]["pt_ratio"] == 1 and b["base"]["fs"] == 6400     # v0.99.23：出厂 PT=CT=1 and "quantity" in b["base"]
     b2 = client.get("/api/process/nilm_tune/base?source=running").json()
     assert b2["ok"] and b2["base"]["pt_ratio"] == 123 and b2["side"] == "bus"
     assert client.get("/api/process/nilm_tune/base?source=xx").status_code == 400
-    # 独立基准：PT/CT 关闭 → 二次侧口径；PT=77 只进基准、不进运行配置
-    base = {"fs": 6400, "f_nom": 50, "pt_ct_enabled": "0", "pt_ratio": 77, "ct_ratio": 15, "file_time_utc": "0", "quantity": "p"}
+    # 独立基准：PT=77 只进基准、不进运行配置（v0.99.23：PT/CT 恒启用，无「关闭」开关）
+    base = {"fs": 6400, "f_nom": 50, "pt_ratio": 77, "ct_ratio": 15, "file_time_utc": "0", "quantity": "p"}
     d = client.post("/api/process/nilm_tune", json={"path": str(p), "base": base, "duration_s": 2}).json()
-    assert d["ok"] and d["base_mode"] == "custom" and d["scaled"] is False and d["base"]["pt_ratio"] == 77 and d["base"]["pt_ct_enabled"] is False
+    assert d["ok"] and d["base_mode"] == "custom" and d["scaled"] is True and d["base"]["pt_ratio"] == 77 and d["base"]["pt_ct_enabled"] is True
     assert d["base_file"] and d["base_file"].endswith("nilm_tune_base.json") and "--config" in d["command"] and "nilm_tune_base.json" in d["command"]
     bf = Path(d["base_file"]) if os.path.isabs(d["base_file"]) else ROOT / d["base_file"]
-    assert bf.is_file() and AppConfig.load(str(bf)).transform.pt_ratio == 77 and AppConfig.load(str(bf)).transform.enabled is False
+    assert bf.is_file() and AppConfig.load(str(bf)).transform.pt_ratio == 77 and AppConfig.load(str(bf)).transform.enabled is True
     assert client.get("/api/config").json() == cfg_before                                 # 两侧运行配置未变
-    # 同文件按运行配置（PT=123 启用）→ 一次侧口径，量级不同
+    # 同文件按运行配置（PT=123）→ 与独立基准 PT=77 量级比为 123/77（v0.99.23：PT/CT 恒参与换算）
     d2 = client.post("/api/process/nilm_tune", json={"path": str(p), "base_mode": "running", "duration_s": 2}).json()
     assert d2["ok"] and d2["base_mode"] == "running" and d2["scaled"] is True and d2["base"]["pt_ratio"] == 123
-    assert d2["measure"]["level"] > d["measure"]["level"] * 100
+    assert d2["measure"]["level"] == pytest.approx(d["measure"]["level"] * 123 / 77, rel=0.02)
     # 保存：以独立基准为底（transform 取基准值，不是运行配置的 123）
     d3 = client.post("/api/process/nilm_tune", json={"path": str(p), "base": base, "duration_s": 2, "save": True, "name": "ind72"}).json()
     assert d3["ok"] and d3["saved_to"] and "独立基准配置" in d3["base_config"]
     saved = Path(d3["saved_to"]) if os.path.isabs(d3["saved_to"]) else ROOT / d3["saved_to"]
     data = _j.loads(saved.read_text(encoding="utf-8"))
-    assert data["transform"]["pt_ratio"] == 77 and data["transform"]["enabled"] is False and data["_tuning"]["base_mode"] == "custom"
+    assert data["transform"]["pt_ratio"] == 77 and data["transform"]["enabled"] is True and data["_tuning"]["base_mode"] == "custom"
     assert data["nilm"]["algorithms"]["threshold"]["min_delta_w"] == d3["suggest"]["algorithms"]["threshold"]["min_delta_w"]
     # 非法基准 → 400
     assert client.post("/api/process/nilm_tune", json={"path": str(p), "base": {"fs": "abc"}}).status_code == 400
@@ -865,7 +865,7 @@ def test_saved_tuned_config_contains_all_tune_settings(client):
     import json as _j
     client.post("/api/engine/stop")
     p = _write_csv(client.dir / "bg74.csv", dur=4.0)
-    body = {"path": str(p), "base": {"fs": 6400, "f_nom": 50, "pt_ct_enabled": "0", "pt_ratio": 77, "ct_ratio": 15},
+    body = {"path": str(p), "base": {"fs": 6400, "f_nom": 50, "pt_ratio": 77, "ct_ratio": 15},
             "quantity": "i", "channel": "C", "min_load_a": 2.5, "custom_time": True, "custom_time_start": "2026-01-01 00:00:00",
             "t_start": "00:00:01", "t_end": "00:00:03", "save": True, "name": "all74.json"}
     d = client.post("/api/process/nilm_tune", json=body).json()
@@ -875,7 +875,7 @@ def test_saved_tuned_config_contains_all_tune_settings(client):
     # 检测量 / 检测对象
     assert f["nilm"]["quantity"] == "i" and f["nilm"]["channels"] == ["C"]
     # 基准配置各项
-    assert f["transform"]["pt_ratio"] == 77 and f["transform"]["enabled"] is False and f["sampling"]["fs"] == 6400
+    assert f["transform"]["pt_ratio"] == 77 and f["transform"]["enabled"] is True and f["sampling"]["fs"] == 6400   # v0.99.23：PT/CT 恒启用
     # 独立基准：波形文件路径（不再是 make_base 的占位 x.csv）
     assert f["source"]["kind"] == "csv_file" and f["source"]["path"] == d["file"] and f["source"]["path"] != "x.csv"
     # 自定义时间三项

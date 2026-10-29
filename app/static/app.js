@@ -2033,7 +2033,7 @@ function fillSourceForm(cfg) {
   if (cfg.transform) {
     $('#cfg-pt').value = cfg.transform.pt_ratio;
     $('#cfg-ct').value = cfg.transform.ct_ratio;
-    $('#cfg-scale').checked = !!cfg.transform.enabled;
+    $('#cfg-scale').checked = true;   // v0.99.23：恒启用
     $('#cfg-inv').checked = !!cfg.transform.invert_current;
     setInvPhases('cfg', cfg.transform.invert_phases); $('#cfg-wiring').value = cfg.transform.wiring || '3p4w'; $('#cfg-recon3w').checked = !!cfg.transform.reconstruct_3w;
     $('#cfg-uin').value = cfg.transform.voltage_input || 'phase';
@@ -2129,7 +2129,7 @@ async function loadBranchForm(force) {
       fillSourceFields('br-', cfg.source);
       const tr = cfg.transform || {}, sp = cfg.sampling || {}, hm = cfg.harmonic || {}, pw = cfg.power || {};
       $('#br-pt').value = tr.pt_ratio ?? ''; $('#br-ct').value = tr.ct_ratio ?? '';
-      $('#br-scale').checked = tr.enabled !== false; $('#br-uin').value = tr.voltage_input || 'phase'; $('#br-inv').checked = !!tr.invert_current;
+      $('#br-scale').checked = true;   /* v0.99.23：恒启用 */ $('#br-uin').value = tr.voltage_input || 'phase'; $('#br-inv').checked = !!tr.invert_current;
       setInvPhases('br', tr.invert_phases); $('#br-wiring').value = tr.wiring || '3p4w'; $('#br-recon3w').checked = !!tr.reconstruct_3w;
       ptctSync('br-scale', 'br-pt', 'br-ct'); wiringSync('br-wiring', 'br-recon3w');   // v0.99.8
       $('#br-fs').value = sp.fs ?? ''; $('#br-fnom').value = sp.f_nom ?? ''; $('#br-adaptive').checked = !!sp.adaptive_freq;
@@ -2229,8 +2229,8 @@ function collectBranchConfigPayload() {
   const posv = (id) => { const v = parseFloat($('#' + id).value); return Number.isFinite(v) && v > 0 ? v : null; };
   const transform = { enabled: $('#br-scale').checked, voltage_input: $('#br-uin').value, invert_current: $('#br-inv').checked, invert_phases: getInvPhases('br'), wiring: $('#br-wiring').value, reconstruct_3w: $('#br-recon3w').checked };
   const pt = posv('br-pt'), ct = posv('br-ct');
-  if (!transform.enabled) { transform.pt_ratio = 1; transform.ct_ratio = 1; }      // v0.99.8：未启用 PT/CT 变换 ⇒ PT、CT 均为 1
-  else { if (pt !== null) transform.pt_ratio = pt; if (ct !== null) transform.ct_ratio = ct; }
+  transform.enabled = true;      // v0.99.23：PT/CT 恒启用（开关已去掉）；原 v0.99.8：未启用 ⇒ PT、CT 均为 1
+  if (pt !== null) transform.pt_ratio = pt; if (ct !== null) transform.ct_ratio = ct;
   const sampling = { adaptive_freq: $('#br-adaptive').checked };
   const fs = posv('br-fs'), fnom = posv('br-fnom'); if (fs !== null) sampling.fs = fs; if (fnom !== null) sampling.f_nom = fnom;
   const harmonic = {}; const hmax = posv('br-hmax'); if (hmax !== null) harmonic.order_max = Math.max(2, Math.round(hmax));
@@ -2744,8 +2744,8 @@ function collectConfigPayload() {
   };
   const transform = { enabled: $('#cfg-scale').checked, voltage_input: $('#cfg-uin').value, invert_current: $('#cfg-inv').checked, invert_phases: getInvPhases('cfg'), wiring: $('#cfg-wiring').value, reconstruct_3w: $('#cfg-recon3w').checked };
   const pt = pos('cfg-pt', 'PT 变比'), ct = pos('cfg-ct', 'CT 变比');
-  if (!transform.enabled) { transform.pt_ratio = 1; transform.ct_ratio = 1; }      // v0.99.8：未启用 PT/CT 变换 ⇒ PT、CT 均为 1
-  else { if (pt !== null) transform.pt_ratio = pt; if (ct !== null) transform.ct_ratio = ct; }
+  transform.enabled = true;      // v0.99.23：PT/CT 恒启用（开关已去掉）；原 v0.99.8：未启用 ⇒ PT、CT 均为 1
+  if (pt !== null) transform.pt_ratio = pt; if (ct !== null) transform.ct_ratio = ct;
   const sampling = { adaptive_freq: $('#cfg-adaptive').checked };
   const fs = pos('cfg-fs', '采样率 fs'), fnom = pos('cfg-fnom', '额定频率');
   if (fs !== null) sampling.fs = fs;
@@ -3707,7 +3707,7 @@ function renderNilm() {
   $('#nilm-notes').innerHTML = notes((sm.notes || []).concat(sm.errors || []), [
     ...(ll && !tt.length ? [`已加载上次播放（${ll.t_anchor_local || ll.t_last_local || ''} 前 ${ll.hours || 24} h）的负荷事件 ${ll.nilm_events || 0} 条与 P/Q/S 趋势；周波窗（逐周波 P/Q/I 序列）是内存数据，重启后不恢复，重新播放后显示。`] : []),
     '口径：每周波 P=mean(u·i)，Q=基波单频 DFT 无功，I=周波有效值；各算法在最近 window_cycles 个周波的窗上评估，同算法同对象按终点序号去重，终点之后需再看到足够周波才确认（所以事件会滞后几个周波出现）。',
-    '阈值单位为 W，按计算口径（启用 PT/CT 时为一次侧）填写；rel_tol_pct / min_delta_pct 把门槛按窗内 |P| 中位数折算成相对值，同一套默认值在 W 级与 MW 级都能用。',
+    '阈值单位为 W，按计算口径（PT/CT 换算后）填写；rel_tol_pct / min_delta_pct 把门槛按窗内 |P| 中位数折算成相对值，同一套默认值在 W 级与 MW 级都能用。',
     '检测量 auto/p/i（v0.36）：数据源只有三相电流（无电压）时选 auto 或 i，按逐周波电流有效值检测，六种算法均可用；此时事件幅值为 |ΔI|（A），ΔP/ΔQ 恒为 0。',
     'v0.39：I 口径不存在跨相合并（三相电流有效值不能像有功那样相加），只能单相检测——检测对象「三相总」被忽略，只配了三相总时按 A/B/C 各自检测；上方趋势图「曲线」可选三相电流（显示哪几相用曲线下方图例勾选），auto 时 I 口径自动画电流。',
     'v0.37：每个算法的绝对阈值分 W（P 口径）与 A（I 口径）两套，检测器只用当前口径那一套，另一套不参与（表单中灰显）；相对门槛 rel_tol_pct / min_delta_pct 对两种口径都按窗内中位数折算。',
@@ -3815,19 +3815,15 @@ async function rsProbe() {
    默认不启用＝各列依次为 时间, A相电压, A相电流, B相电压, B相电流, C相电压, C相电流；启用后按 7 个列号取列 */
 
 /* v0.99.8：PT/CT 与 3P3W 门控（数据源页两侧 + 数据处理各基准配置共用）
-   ptctGate：未勾选「启用 PT/CT 变换」→ PT、CT 输入框禁用并显示 1（原值暂存 data-prev，勾回时恢复）；
+   ptctGate：v0.99.23 起 PT/CT 恒启用（开关已去掉），ptctSync 只保证输入框可编辑、空值补 1；
    wiringGate：接线方式不是三相三线 → 「3P3W 虚拟中性点重构」取消勾选并禁用。 */
 function ptctSync(chkId, ptId, ctId) {
-  const chk = document.getElementById(chkId); if (!chk) return;
-  const on = chk.checked;
+  // v0.99.23：「启用 PT/CT 变换」开关已从界面去掉——PT/CT 始终参与换算（默认 1＝不换算）。隐藏复选框恒为勾选，输入框恒可编辑。
+  const chk = document.getElementById(chkId); if (chk) chk.checked = true;
   [ptId, ctId].forEach(id => {
     const el = document.getElementById(id); if (!el) return;
-    if (!on) {
-      if (!el.disabled && el.value !== '' && el.value !== '1') el.dataset.prev = el.value;
-      el.value = '1'; el.disabled = true; el.title = '未启用 PT/CT 变换：固定为 1';
-    } else {
-      if (el.disabled) { el.disabled = false; el.title = ''; if (el.dataset.prev) { el.value = el.dataset.prev; } }
-    }
+    if (el.disabled) { el.disabled = false; el.title = ''; }
+    if (el.value === '' ) el.value = '1';
   });
 }
 function ptctGate(chkId, ptId, ctId, onChange) {
