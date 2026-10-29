@@ -105,6 +105,7 @@
 - **v0.92.2**：在线画像匹配：首 gap 压制修复、PT/CT 一致性检查、候选终点规则、replay 候选诊断。
 - **v0.92.3**：CLI `--config` 不存在即报错（`load_or_default(strict=True)`）。
 - **v0.92.4**：画像窗口需求 > window_cycles 自动扩缓存 + 提示。
+- **v0.99.6**：画像 phase_map 相序映射；PT/CT 口径判定修正；接线不一致提示；可行性分析写入 NILM_TUNING_GUIDE。
 - **v0.99.5**：调参与画像提取配置剥离（np-* 独立公共配置）。
 - **v0.99.4**：画像提取表单固定展示检测对象/检测量。
 - **v0.99.3**：画像匹配面板固定展示检测对象/检测量；normalizeConfigForms 跳过已编排 label.f。

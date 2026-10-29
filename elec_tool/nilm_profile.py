@@ -172,8 +172,57 @@ def template_distance(template: Sequence[float], ref: Sequence[float]) -> float:
     return float(np.sqrt(np.mean((a[:n] - b[:n]) ** 2)))
 
 
-def match_event(profile: Dict[str, Any], feat: Dict[str, Any], lam_rel: float = 0.1, skip: Sequence[str] = ()) -> Dict[str, Any]:
-    """候选特征与启动 / 停止画像分别匹配；返回最优方向、D²、置信度、区分度与轨迹距离。``skip``：不参与匹配的特征（见 mahalanobis_diag）。"""
+# v0.99.6：相序映射——总线侧与设备侧接线 / 相别标注可能不一致（设备 A 相接在总线 B 相等），ΔIa/ΔIb/ΔIc 三个分相特征需要
+#   按映射重排后再与画像比较（ΔP/ΔQ/峰值比/持续周波是三相合成量，不受相序影响）。编码（配置 nilm.algorithms.profile.phase_map 为数值）：
+#   1 ABC（默认，不重排）2 ACB  3 BAC  4 BCA  5 CAB  6 CBA  0 自动（6 种全试，取 D² 最小者并在结果里报告）。
+#   字符串含义：第 i 位＝总线侧第 i 相（A,B,C）上接的是设备侧哪一相。
+PHASE_MAPS = {1: "ABC", 2: "ACB", 3: "BAC", 4: "BCA", 5: "CAB", 6: "CBA"}
+
+
+def phase_map_code(v: Any) -> int:
+    """配置值 → 编码（0 自动 / 1..6）；字符串 "ABC"/"auto" 也接受。"""
+    if isinstance(v, str):
+        t = v.strip().upper()
+        if t in ("", "AUTO", "0"):
+            return 0
+        for k, m in PHASE_MAPS.items():
+            if t == m:
+                return k
+        try:
+            v = float(t)
+        except ValueError:
+            raise ProfileError(f"phase_map 不认识：{v!r}（可写 0 自动 / 1..6 / ABC…CBA）")
+    code = int(float(v or 1))
+    if code not in PHASE_MAPS and code != 0:
+        raise ProfileError(f"phase_map 必须是 0（自动）或 1..6（当前 {v!r}）")
+    return code
+
+
+def remap_phases(vec: Dict[str, float], mapping: str) -> Dict[str, float]:
+    """按相序映射把总线侧分相特征重排为设备侧相序：mapping[i] 是总线第 i 相上的设备相。"""
+    if mapping == "ABC":
+        return dict(vec)
+    bus = {"A": vec["d_ia"], "B": vec["d_ib"], "C": vec["d_ic"]}
+    dev = {mapping[i]: bus[ph] for i, ph in enumerate("ABC")}
+    out = dict(vec)
+    out["d_ia"], out["d_ib"], out["d_ic"] = dev["A"], dev["B"], dev["C"]
+    return out
+
+
+def match_event(profile: Dict[str, Any], feat: Dict[str, Any], lam_rel: float = 0.1, skip: Sequence[str] = (),
+                phase_map: int = 1) -> Dict[str, Any]:
+    """候选特征与启动 / 停止画像分别匹配；返回最优方向、D²、置信度、区分度与轨迹距离。``skip``：不参与匹配的特征（见 mahalanobis_diag）。
+    ``phase_map``：相序映射编码（见 PHASE_MAPS；0＝自动试 6 种取 D² 最小）。"""
+    if phase_map == 0:
+        best = None
+        for code, m in PHASE_MAPS.items():
+            r = match_event(profile, feat, lam_rel, skip, code)
+            if best is None or r["d2"] < best["d2"]:
+                best = r
+        best["phase_map_auto"] = True
+        return best
+    mapping = PHASE_MAPS[int(phase_map)]
+    vec = remap_phases(feat["vec"], mapping)
     skip = [k for k in skip if k in FEATURES]
     d = max(1, len(FEATURES) - len(skip))
     res: Dict[str, Any] = {}
@@ -181,7 +230,7 @@ def match_event(profile: Dict[str, Any], feat: Dict[str, Any], lam_rel: float = 
         g = profile.get(key)
         if not g:
             continue
-        d2, contrib = mahalanobis_diag(feat["vec"], g["mu"], g["sigma"], lam_rel, skip)
+        d2, contrib = mahalanobis_diag(vec, g["mu"], g["sigma"], lam_rel, skip)
         td = template_distance(feat["template"], g["template"])
         res[name] = {"d2": d2, "contrib": contrib, "template_dist": td, "template_spread": float(g.get("template_spread", 0.3))}
     if not res:
@@ -195,6 +244,7 @@ def match_event(profile: Dict[str, Any], feat: Dict[str, Any], lam_rel: float = 
     traj_penalty = 1.0 if td <= 3.0 * sp else max(0.3, 3.0 * sp / td)
     margin = (res[other[0]]["d2"] / d2) if (other and d2 > 0) else float("inf")
     return {"direction": best, "d2": d2, "d2_per_dim": d2 / d, "confidence": conf * traj_penalty, "margin": margin,
+            "phase_map": mapping, "phase_map_auto": False,
             "template_dist": td, "traj_penalty": traj_penalty, "contrib": dict(zip(FEATURES, res[best]["contrib"])),
             "d2_start": res.get("START", {}).get("d2"), "d2_stop": res.get("STOP", {}).get("d2")}
 
@@ -261,12 +311,15 @@ def detect_profile(p4: np.ndarray, q4: np.ndarray, i4: np.ndarray, profile: Dict
     d2_max = float(prm.get("d2_max", 9.0)); min_conf = float(prm.get("min_confidence", 0.3))
     margin_min = float(prm.get("margin", 1.5)); lam = float(prm.get("lambda_rel", 0.1))
     state_check = int(float(prm.get("state_check", 1))) != 0
+    pmap = phase_map_code(prm.get("phase_map", 1))                      # v0.99.6：总线 / 设备侧相序映射
     out: List[Dict[str, Any]] = []
     state = device_state
     for onset, end, delta in cands:
         feat = event_features(p4, q4, i4, onset, end, pre_n, post_n)
-        m = match_event(profile, feat, lam, skip)
+        m = match_event(profile, feat, lam, skip, pmap)
         flags: List[str] = []
+        if m.get("phase_map_auto") and m.get("phase_map") != "ABC":
+            flags.append("phase_map_" + str(m.get("phase_map")))       # 自动相序：记录实际采用的映射（非 ABC 时提示）
         conf = m["confidence"]
         if m["d2_per_dim"] > d2_max:
             flags.append("d2_exceeds")

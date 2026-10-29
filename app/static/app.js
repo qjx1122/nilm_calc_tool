@@ -3203,7 +3203,7 @@ const NILM_ALGOS = {
                   params: { median_cycles: '中值窗 (周波)', min_delta_w: '最小幅值 (W · P口径)', min_delta_a: '最小幅值 (A · I口径)', settle_cycles: '稳定周波数', settle_tol_w: '稳定容差 (W · P口径)', settle_tol_a: '稳定容差 (A · I口径)', max_rise_cycles: '最长暂态 (周波)' } },
   // v0.90：设备画像匹配（多特征；对象固定为三相合成；画像文件由数据处理页「设备画像提取」生成）
   profile:      { name: '设备画像匹配', desc: '稳健双滑窗找候选 → 事件前后 ΔIa/ΔIb/ΔIc/ΔP/ΔQ/峰值比/持续周波 与启动/停止画像的对角马氏距离 D² → 置信度 exp(−D²/2d)，低于门槛拒识；设备状态机（OFF→启动 / ON→停止）；输出设备 ID、方向、观测幅值、置信度，不估计设备贡献幅值',
-                  params: { d2_max: 'D² 上限 (每维均值)', min_confidence: '最低置信度 (0~1)', k_sigma: '候选门槛 k×σ', margin: '最优/次优 D² 比下限', lambda_rel: '协方差收缩系数', state_check: '状态机 (1 启用 / 0 关闭)' } },
+                  params: { d2_max: 'D² 上限 (每维均值)', min_confidence: '最低置信度 (0~1)', k_sigma: '候选门槛 k×σ', margin: '最优/次优 D² 比下限', lambda_rel: '协方差收缩系数', state_check: '状态机 (1 启用 / 0 关闭)', phase_map: '相序映射 (1 ABC·2 ACB·3 BAC·4 BCA·5 CAB·6 CBA·0 自动)' } },
 };
 const NILM_COLORS = { threshold: '#ff6b6b', two_window: '#ffa94d', cusum: '#ffd43b', glr: '#69db7c', steady_state: '#4dabf7', median_diff: '#da77f2', profile: '#63e6be' };
 const NILM_FIELDS = ['enabled', 'save', 'quantity', 'window_cycles', 'min_gap_cycles', 'rel_tol_pct', 'min_delta_pct', 'auto_params', 'profile_path'];   // v0.87：auto_params；v0.90：profile_path（文本）
@@ -4578,7 +4578,7 @@ function bindProcess() {
     if ($('#np-side')) $('#np-side').addEventListener('change', () => ntSyncBaseUI('np'));
     if ($('#np-custom')) { $('#np-custom').addEventListener('change', () => ntSyncCustomTime('np')); ntSyncCustomTime('np'); }
     cmBind('np-cm', () => ntSaveBase('np'));
-    ['fs', 'fnom', 'pt', 'ct', 'ptct', 'utc', 'wiring', 'recon3w', 'inv', 'inv-a', 'inv-b', 'inv-c'].forEach(k => { const el = $('#np-base-' + k); if (el) el.addEventListener('change', () => ntSaveBase('np')); });
+    ['np-base-fs', 'np-base-fnom', 'np-base-pt', 'np-base-ct', 'np-base-ptct', 'np-base-utc', 'np-base-wiring', 'np-base-recon3w', 'np-base-inv', 'np-base-inv-a', 'np-base-inv-b', 'np-base-inv-c'].forEach(id => { const el = document.getElementById(id); if (el) el.addEventListener('change', () => ntSaveBase('np')); });
     if ($('#btn-np-base-default')) $('#btn-np-base-default').addEventListener('click', async () => { try { await ntLoadBase('default', 'bus', 'np'); toast('画像提取基准配置已恢复为出厂值', 'ok'); } catch (e) { toast(e.message, 'err'); } });
     if ($('#btn-np-base-bus')) $('#btn-np-base-bus').addEventListener('click', async () => { try { await ntLoadBase('running', 'bus', 'np'); toast('已填入总线侧运行配置的值（可再修改，不影响总线侧）', 'ok'); } catch (e) { toast(e.message, 'err'); } });
     if ($('#btn-np-base-branch')) $('#btn-np-base-branch').addEventListener('click', async () => { try { await ntLoadBase('running', 'branch', 'np'); toast('已填入分路侧运行配置的值（可再修改，不影响分路侧）', 'ok'); } catch (e) { toast(e.message, 'err'); } });

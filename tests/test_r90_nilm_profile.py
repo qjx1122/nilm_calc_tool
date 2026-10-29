@@ -264,3 +264,71 @@ def test_ui_assets_mention_profile():
     html = open(os.path.join(ROOT, "app", "static", "index.html"), encoding="utf-8").read()
     assert "profile:" in js and "nilm-profile_path" in js and "/api/process/nilm_profile" in js and "nilmProfileCell" in js
     assert 'id="np-form"' in html and 'id="btn-np-fill-bus"' in html and 'id="np-labels"' in html
+
+
+# ---------------------------------------------------------------- v0.99.6：相序映射 + PT/CT 口径判定修正
+def test_phase_map_remap_and_auto(profile_path):
+    from elec_tool.nilm_profile import PHASE_MAPS, phase_map_code, remap_phases
+    prof = load_profile(profile_path)
+    st = prof["startup"]
+    vec = dict(zip(FEATURES, st["mu"]))
+    # 构造不平衡的分相特征，使相序可辨：ΔIa=3, ΔIb=1, ΔIc=0.5（画像以此为准）
+    prof2 = json.loads(json.dumps(prof))
+    for g in ("startup", "shutdown"):
+        mu = list(prof2[g]["mu"]); mu[0], mu[1], mu[2] = 3.0, 1.0, 0.5
+        prof2[g]["sigma"][0] = prof2[g]["sigma"][1] = prof2[g]["sigma"][2] = 0.1
+        prof2[g]["mu"] = mu
+    dev = dict(vec); dev["d_ia"], dev["d_ib"], dev["d_ic"] = 3.0, 1.0, 0.5
+    # 总线侧 A 相上接的是设备 B 相、B 上是设备 C、C 上是设备 A ⇒ mapping "BCA"：bus[A]=dev B=1.0, bus[B]=dev C=0.5, bus[C]=dev A=3.0
+    bus = dict(dev); bus["d_ia"], bus["d_ib"], bus["d_ic"] = 1.0, 0.5, 3.0
+    assert remap_phases(bus, "BCA")["d_ia"] == 3.0 and remap_phases(bus, "BCA")["d_ic"] == 0.5
+    feat = {"vec": bus, "template": np.asarray(st["template"])}
+    m_abc = match_event(prof2, feat, 0.1, (), 1)
+    m_bca = match_event(prof2, feat, 0.1, (), 4)
+    m_auto = match_event(prof2, feat, 0.1, (), 0)
+    assert m_bca["d2"] < m_abc["d2"] and m_bca["phase_map"] == "BCA"
+    assert m_auto["phase_map"] == "BCA" and m_auto["phase_map_auto"] and abs(m_auto["d2"] - m_bca["d2"]) < 1e-9
+    assert phase_map_code("auto") == 0 and phase_map_code("bca") == 4 and phase_map_code(6) == 6 and PHASE_MAPS[1] == "ABC"
+    with pytest.raises(ProfileError):
+        phase_map_code(7)
+
+
+def test_config_phase_map_validation():
+    cfg = AppConfig(); cfg.nilm.algorithms["profile"]["phase_map"] = 0; cfg.validate()
+    cfg.nilm.algorithms["profile"]["phase_map"] = 7
+    with pytest.raises(ConfigError):
+        cfg.validate()
+    cfg.nilm.algorithms["profile"]["phase_map"] = 4; cfg.validate()
+
+
+def test_detector_auto_phase_map_still_detects(profile_path):
+    det, evs = _run_bus(profile_path, phase_map=0)
+    pe = [e for e in evs if e["algorithm"] == "profile"]
+    assert [e["profile_direction"] for e in pe] == ["START", "STOP"]
+    assert all(e["status"] == "confirmed" for e in pe)        # 平衡负荷下自动相序取 ABC，不产生 phase_map_* 标志
+
+
+def test_ptct_check_primary_side_ratios_may_differ(profile_path, tmp_path):
+    """两侧都启用 PT/CT 但变比不同 ⇒ 一次侧口径一致，应正常匹配（旧版误判为口径不一致）。"""
+    prof = load_profile(profile_path)
+    prof["pt_ct"] = {"enabled": True, "pt_ratio": 1.0, "ct_ratio": 15.0}
+    p2 = str(tmp_path / "prof_primary.json"); save_profile(prof, p2)
+    cfg = AppConfig(); cfg.transform.enabled = True; cfg.transform.pt_ratio = 1.0; cfg.transform.ct_ratio = 40.0
+    cfg.nilm.profile_path = p2; cfg.nilm.save = False
+    for a in NILM_SCALAR_ALGOS:
+        cfg.nilm.algorithms[a]["enabled"] = False
+    cfg.nilm.algorithms["profile"]["enabled"] = True; cfg.validate()
+    det = NilmDetector(cfg)
+    t, u, i = _wave(_bus, 4.0, seed=2)
+    for a in range(0, t.size, 640):
+        det.ingest(SampleBlock(t=t[a:a + 640], u=u[:, a:a + 640], i=i[:, a:a + 640]))
+    assert not any("口径不一致" in e for e in det.errors)
+    # 一侧启用一侧关闭 ⇒ 拒绝
+    cfg2 = AppConfig(); cfg2.transform.enabled = False; cfg2.nilm.profile_path = p2; cfg2.nilm.save = False
+    for a in NILM_SCALAR_ALGOS:
+        cfg2.nilm.algorithms[a]["enabled"] = False
+    cfg2.nilm.algorithms["profile"]["enabled"] = True; cfg2.validate()
+    det2 = NilmDetector(cfg2)
+    for a in range(0, t.size, 640):
+        det2.ingest(SampleBlock(t=t[a:a + 640], u=u[:, a:a + 640], i=i[:, a:a + 640]))
+    assert any("口径不一致" in e for e in det2.errors)

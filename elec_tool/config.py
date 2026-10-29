@@ -787,7 +787,8 @@ NILM_ALGO_DEFAULTS: Dict[str, Dict[str, Any]] = {
     #   候选＝稳健双滑窗（前后窗长取画像 pre/post，门槛 k_sigma×噪声 且 ≥ 画像幅值一半）→ 特征向量与启动/停止画像的对角马氏距离 D²
     #   → 置信度 exp(−D²/2d)。d2_max＝每维平均 D² 上限；min_confidence＝最低置信度；margin＝最优/次优 D² 比下限（区分度）；
     #   lambda_rel＝协方差收缩系数；state_check＝1 启用设备状态机（OFF→START / ON→STOP 合理，否则置信度减半并标记）。默认不启用。
-    "profile":      {"enabled": False, "d2_max": 9.0, "min_confidence": 0.3, "k_sigma": 4.0, "margin": 1.5, "lambda_rel": 0.1, "state_check": 1},
+    "profile":      {"enabled": False, "d2_max": 9.0, "min_confidence": 0.3, "k_sigma": 4.0, "margin": 1.5, "lambda_rel": 0.1, "state_check": 1,
+                     "phase_map": 1},   # v0.99.6：总线/设备侧相序映射 1 ABC·2 ACB·3 BAC·4 BCA·5 CAB·6 CBA·0 自动
 }
 # 逐周波标量序列上的 6 种突变检测算法（画像匹配是多特征算法，不在其中）
 NILM_SCALAR_ALGOS = ("threshold", "two_window", "cusum", "glr", "steady_state", "median_diff")
@@ -870,8 +871,10 @@ class NilmConfig:
                     fv = float(v)
                 except (TypeError, ValueError):
                     raise ConfigError(f"nilm.algorithms.{a}.{k} 必须是数值（当前 {v!r}）")
-                if fv <= 0 and not (a == "profile" and k == "state_check"):      # v0.90：state_check 允许 0（关闭状态机）
+                if fv <= 0 and not (a == "profile" and k in ("state_check", "phase_map")):      # v0.90：state_check 允许 0（关闭状态机）；v0.99.6：phase_map 0＝自动
                     raise ConfigError(f"nilm.algorithms.{a}.{k} 必须 > 0（当前 {v}）")
+                if a == "profile" and k == "phase_map" and (int(fv) != fv or not (0 <= fv <= 6)):
+                    raise ConfigError(f"nilm.algorithms.profile.phase_map 必须是 0（自动）或 1..6（1 ABC·2 ACB·3 BAC·4 BCA·5 CAB·6 CBA），当前 {v}")
                 if k.endswith("cycles") and int(fv) != fv:
                     raise ConfigError(f"nilm.algorithms.{a}.{k} 必须是整数周波数（当前 {v}）")
             if a in ("threshold", "median_diff") and int(prm["max_rise_cycles"]) < int(prm["settle_cycles"]):

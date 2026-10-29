@@ -669,15 +669,29 @@ class NilmDetector:
                 self.errors.append(msg)
             return []
         # v0.92.2：口径一致性——画像在 PT/CT 启用 / 变比与本侧不同的配置下提取，幅值差一个变比，候选门槛永远达不到
+        # v0.99.6 修正：两侧都启用 PT/CT ⇒ 画像与本侧都是一次侧量，变比不同也可比（总线 CT=40、分路 CT=15 正是常态）；
+        #   一侧启用一侧关闭 ⇒ 差一个变比，不可比（拒绝）；两侧都关闭 ⇒ 都是二次侧量，只有两侧 CT/PT 相同才可比（给出警告但仍运行）
         pc = prof.get("pt_ct") or {}
         tr = self.cfg.transform
-        if pc and (bool(pc.get("enabled")) != bool(tr.enabled) or (bool(tr.enabled) and (
-                abs(float(pc.get("pt_ratio", tr.pt_ratio)) - float(tr.pt_ratio)) > 1e-9 or abs(float(pc.get("ct_ratio", tr.ct_ratio)) - float(tr.ct_ratio)) > 1e-9))):
-            msg = (f"画像提取时 PT/CT={'启用 PT=' + str(pc.get('pt_ratio')) + ' CT=' + str(pc.get('ct_ratio')) if pc.get('enabled') else '关闭'}，"
-                   f"本侧运行配置 PT/CT={'启用 PT=' + str(tr.pt_ratio) + ' CT=' + str(tr.ct_ratio) if tr.enabled else '关闭'}：幅值口径不一致，画像匹配不会命中（请用同一基准配置重提画像或改本侧 PT/CT）")
+        if pc and bool(pc.get("enabled")) != bool(tr.enabled):
+            msg = (f"画像提取时 PT/CT={'启用 PT=' + str(pc.get('pt_ratio')) + ' CT=' + str(pc.get('ct_ratio')) if pc.get('enabled') else '关闭（二次侧量）'}，"
+                   f"本侧运行配置 PT/CT={'启用 PT=' + str(tr.pt_ratio) + ' CT=' + str(tr.ct_ratio) if tr.enabled else '关闭（二次侧量）'}：一次 / 二次侧口径不一致，差一个变比，画像匹配不会命中"
+                   f"（两侧都启用 PT/CT 并各填本侧真实变比即可，变比不同不影响）")
             if msg not in self.errors:
                 self.errors.append(msg)
             return []
+        if pc and not bool(tr.enabled) and (abs(float(pc.get("ct_ratio", tr.ct_ratio)) - float(tr.ct_ratio)) > 1e-9
+                                            or abs(float(pc.get("pt_ratio", tr.pt_ratio)) - float(tr.pt_ratio)) > 1e-9):
+            msg = (f"画像与本侧都按二次侧量匹配，但画像侧 PT/CT={pc.get('pt_ratio')}/{pc.get('ct_ratio')} 与本侧配置 {tr.pt_ratio}/{tr.ct_ratio} 不同："
+                   f"二次侧 ΔI/ΔP 相差变比倍数，匹配大概率不命中；建议两侧都启用 PT/CT（各填本侧真实变比），在一次侧口径下比较")
+            if msg not in self.errors:
+                self.errors.append(msg)
+        # v0.99.6：接线不一致提示（只提示一次）：画像 3p4w、本侧 3p3w 未重构 ⇒ ΔIb 跳过；相序可用 phase_map 调整
+        pw = (prof.get("wiring") or {}).get("wiring")
+        if pw and pw != str(getattr(tr, "wiring", "3p4w")) and not getattr(self, "_profile_wiring_noted", False):
+            self._profile_wiring_noted = True
+            self.errors.append(f"画像在 {pw} 接线下提取，本侧为 {getattr(tr, 'wiring', '3p4w')}：ΔP/ΔQ/峰值比/持续周波不受影响；分相 ΔI 若本侧为三相三线且未勾选 3P3W 重构则跳过 ΔIb；"
+                               f"两侧相别标注可能不同，可用 profile.phase_map 指定相序映射（0＝自动）")
         # v0.92.6：本侧数据体检——画像候选按三相合成量找，若某相无数据或各相有功符号不一致，总有功会互相抵消、台阶被吞掉
         if self._p.shape[1] >= 20:
             pm = [float(np.median(self._p[k, -200:])) for k in (1, 2, 3)]
