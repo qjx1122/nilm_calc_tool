@@ -14,6 +14,7 @@ import time
 
 import numpy as np
 import pytest
+from tests.conftest import copy_default_ptct_on  # noqa: E402
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 FS = 6400
@@ -37,7 +38,7 @@ def client(tmp_path_factory):
     from pytest import MonkeyPatch
     from starlette.testclient import TestClient
     d = tmp_path_factory.mktemp("r14")
-    shutil.copy(ROOT / "configs" / "default.json", d / "cfg.json")
+    copy_default_ptct_on(d / "cfg.json")
     mp = MonkeyPatch()
     mp.setenv("ELEC_TOOL_CONFIG_PATH", str(d / "cfg.json")); mp.setenv("ELEC_TOOL_AUTOSTART", "")
     mp.setenv("ELEC_TOOL_BRANCH_CONFIG_PATH", str(d / "branch.json"))

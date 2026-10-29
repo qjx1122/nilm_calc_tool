@@ -24,6 +24,19 @@ F_NOM = 50.0
 PT = 100.0
 CT = 15.0
 
+def copy_default_ptct_on(dst):
+    """v0.99.8：出厂配置 configs/default.json 默认不启用 PT/CT 变换；这些历史测试按一次侧（PT=100/CT=15）口径写断言，
+    复制出厂配置后把 transform.enabled 置 true（不动入库文件）。"""
+    import json as _json
+    src = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "configs", "default.json")
+    with open(src, encoding="utf-8") as fh:
+        d = _json.load(fh)
+    d.setdefault("transform", {})["enabled"] = True
+    with open(str(dst), "w", encoding="utf-8") as fh:
+        _json.dump(d, fh, ensure_ascii=False, indent=2)
+    return str(dst)
+
+
 HEADER_CN = ["时间戳", "A相电压", "A相电流", "B相电压", "B相电流", "C相电压", "C相电流"]
 HEADER_EN = ["timestamp", "Ua", "Ia", "Ub", "Ib", "Uc", "Ic"]
 

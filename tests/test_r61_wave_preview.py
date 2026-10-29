@@ -7,6 +7,7 @@ import shutil
 
 import numpy as np
 import pytest
+from tests.conftest import copy_default_ptct_on  # noqa: E402
 
 from tests.conftest import write_csv
 
@@ -29,7 +30,7 @@ def wave_file(tmp_path_factory):
 @pytest.fixture(scope="module")
 def cfg():
     from elec_tool.config import AppConfig
-    return AppConfig.load(str(ROOT / "configs" / "default.json"))
+    c = AppConfig.load(str(ROOT / "configs" / "default.json")); c.transform.enabled = True; return c   # v0.99.8：按一次侧口径断言
 
 
 # ---------- ① 文件信息 ----------
@@ -152,7 +153,7 @@ def client(tmp_path_factory):
     from pytest import MonkeyPatch
     from starlette.testclient import TestClient
     d = tmp_path_factory.mktemp("r61cfg")
-    shutil.copy(ROOT / "configs" / "default.json", d / "cfg.json")
+    copy_default_ptct_on(d / "cfg.json")
     mp = MonkeyPatch()
     mp.setenv("ELEC_TOOL_CONFIG_PATH", str(d / "cfg.json")); mp.setenv("ELEC_TOOL_AUTOSTART", "")
     mp.setenv("ELEC_TOOL_BRANCH_CONFIG_PATH", str(d / "branch.json")); mp.setenv("ELEC_TOOL_PERSIST_CONFIG", "0")

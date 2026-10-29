@@ -2009,6 +2009,7 @@ function fillSourceForm(cfg) {
     $('#cfg-inv').checked = !!cfg.transform.invert_current;
     setInvPhases('cfg', cfg.transform.invert_phases); $('#cfg-wiring').value = cfg.transform.wiring || '3p4w'; $('#cfg-recon3w').checked = !!cfg.transform.reconstruct_3w;
     $('#cfg-uin').value = cfg.transform.voltage_input || 'phase';
+    ptctSync('cfg-scale', 'cfg-pt', 'cfg-ct'); wiringSync('cfg-wiring', 'cfg-recon3w');   // v0.99.8
   }
   if (cfg.sampling) {
     $('#cfg-fs').value = cfg.sampling.fs;
@@ -2102,6 +2103,7 @@ async function loadBranchForm(force) {
       $('#br-pt').value = tr.pt_ratio ?? ''; $('#br-ct').value = tr.ct_ratio ?? '';
       $('#br-scale').checked = tr.enabled !== false; $('#br-uin').value = tr.voltage_input || 'phase'; $('#br-inv').checked = !!tr.invert_current;
       setInvPhases('br', tr.invert_phases); $('#br-wiring').value = tr.wiring || '3p4w'; $('#br-recon3w').checked = !!tr.reconstruct_3w;
+      ptctSync('br-scale', 'br-pt', 'br-ct'); wiringSync('br-wiring', 'br-recon3w');   // v0.99.8
       $('#br-fs').value = sp.fs ?? ''; $('#br-fnom').value = sp.f_nom ?? ''; $('#br-adaptive').checked = !!sp.adaptive_freq;
       $('#br-hmax').value = hm.order_max ?? '';
       $('#br-apparent').value = pw.apparent || 'arithmetic'; $('#br-reactive').value = pw.reactive || 'harmonic_sum';
@@ -2198,7 +2200,9 @@ function collectBranchConfigPayload() {
   // 分路侧量纲与口径：空输入框跳过（保留服务端原值），与总线侧 collectConfigPayload 同规则
   const posv = (id) => { const v = parseFloat($('#' + id).value); return Number.isFinite(v) && v > 0 ? v : null; };
   const transform = { enabled: $('#br-scale').checked, voltage_input: $('#br-uin').value, invert_current: $('#br-inv').checked, invert_phases: getInvPhases('br'), wiring: $('#br-wiring').value, reconstruct_3w: $('#br-recon3w').checked };
-  const pt = posv('br-pt'), ct = posv('br-ct'); if (pt !== null) transform.pt_ratio = pt; if (ct !== null) transform.ct_ratio = ct;
+  const pt = posv('br-pt'), ct = posv('br-ct');
+  if (!transform.enabled) { transform.pt_ratio = 1; transform.ct_ratio = 1; }      // v0.99.8：未启用 PT/CT 变换 ⇒ PT、CT 均为 1
+  else { if (pt !== null) transform.pt_ratio = pt; if (ct !== null) transform.ct_ratio = ct; }
   const sampling = { adaptive_freq: $('#br-adaptive').checked };
   const fs = posv('br-fs'), fnom = posv('br-fnom'); if (fs !== null) sampling.fs = fs; if (fnom !== null) sampling.f_nom = fnom;
   const harmonic = {}; const hmax = posv('br-hmax'); if (hmax !== null) harmonic.order_max = Math.max(2, Math.round(hmax));
@@ -2712,8 +2716,8 @@ function collectConfigPayload() {
   };
   const transform = { enabled: $('#cfg-scale').checked, voltage_input: $('#cfg-uin').value, invert_current: $('#cfg-inv').checked, invert_phases: getInvPhases('cfg'), wiring: $('#cfg-wiring').value, reconstruct_3w: $('#cfg-recon3w').checked };
   const pt = pos('cfg-pt', 'PT 变比'), ct = pos('cfg-ct', 'CT 变比');
-  if (pt !== null) transform.pt_ratio = pt;
-  if (ct !== null) transform.ct_ratio = ct;
+  if (!transform.enabled) { transform.pt_ratio = 1; transform.ct_ratio = 1; }      // v0.99.8：未启用 PT/CT 变换 ⇒ PT、CT 均为 1
+  else { if (pt !== null) transform.pt_ratio = pt; if (ct !== null) transform.ct_ratio = ct; }
   const sampling = { adaptive_freq: $('#cfg-adaptive').checked };
   const fs = pos('cfg-fs', '采样率 fs'), fnom = pos('cfg-fnom', '额定频率');
   if (fs !== null) sampling.fs = fs;
@@ -3780,6 +3784,48 @@ async function rsProbe() {
 
 /* v0.86：数据处理页三功能（重采样 / 负荷辨识调参 / 波形预览）共用的「离线文件列映射」：
    默认不启用＝各列依次为 时间, A相电压, A相电流, B相电压, B相电流, C相电压, C相电流；启用后按 7 个列号取列 */
+
+/* v0.99.8：PT/CT 与 3P3W 门控（数据源页两侧 + 数据处理各基准配置共用）
+   ptctGate：未勾选「启用 PT/CT 变换」→ PT、CT 输入框禁用并显示 1（原值暂存 data-prev，勾回时恢复）；
+   wiringGate：接线方式不是三相三线 → 「3P3W 虚拟中性点重构」取消勾选并禁用。 */
+function ptctSync(chkId, ptId, ctId) {
+  const chk = document.getElementById(chkId); if (!chk) return;
+  const on = chk.checked;
+  [ptId, ctId].forEach(id => {
+    const el = document.getElementById(id); if (!el) return;
+    if (!on) {
+      if (!el.disabled && el.value !== '' && el.value !== '1') el.dataset.prev = el.value;
+      el.value = '1'; el.disabled = true; el.title = '未启用 PT/CT 变换：固定为 1';
+    } else {
+      if (el.disabled) { el.disabled = false; el.title = ''; if (el.dataset.prev) { el.value = el.dataset.prev; } }
+    }
+  });
+}
+function ptctGate(chkId, ptId, ctId, onChange) {
+  const chk = document.getElementById(chkId); if (!chk) return;
+  chk.addEventListener('change', () => { ptctSync(chkId, ptId, ctId); if (onChange) onChange(); });
+  ptctSync(chkId, ptId, ctId);
+}
+function wiringSync(selId, reconId) {
+  const sel = document.getElementById(selId), rc = document.getElementById(reconId); if (!sel || !rc) return;
+  const three = sel.value === '3p3w';
+  if (!three) rc.checked = false;
+  rc.disabled = !three; rc.title = three ? '' : '仅三相三线两表法接线下可选';
+  const lab = rc.closest('label'); if (lab) lab.classList.toggle('nilm-auto-off', !three);
+}
+function wiringGate(selId, reconId, onChange) {
+  const sel = document.getElementById(selId); if (!sel) return;
+  sel.addEventListener('change', () => { wiringSync(selId, reconId); if (onChange) onChange(); });
+  wiringSync(selId, reconId);
+}
+/* 一次性把所有门控组同步（在表单回填后调用） */
+function syncAllGates() {
+  [['cfg-scale', 'cfg-pt', 'cfg-ct'], ['br-scale', 'br-pt', 'br-ct'], ['nt-base-ptct', 'nt-base-pt', 'nt-base-ct'],
+   ['np-base-ptct', 'np-base-pt', 'np-base-ct'], ['wp-base-ptct', 'wp-base-pt', 'wp-base-ct']].forEach(a => ptctSync(...a));
+  [['cfg-wiring', 'cfg-recon3w'], ['br-wiring', 'br-recon3w'], ['nt-base-wiring', 'nt-base-recon3w'], ['np-base-wiring', 'np-base-recon3w'],
+   ['wp-base-wiring', 'wp-base-recon3w'], ['ct-bus-wiring', 'ct-bus-recon3w'], ['ct-br-wiring', 'ct-br-recon3w']].forEach(a => wiringSync(...a));
+}
+
 const CM_FIELDS = [['ts', 'timestamp'], ['ua', 'ua'], ['ia', 'ia'], ['ub', 'ub'], ['ib', 'ib'], ['uc', 'uc'], ['ic', 'ic']];
 function cmEnabled(pre) { const el = $('#' + pre + '-on'); return !!(el && el.checked); }
 function cmMap(pre) { const m = {}; CM_FIELDS.forEach(([sfx, key]) => { const el = $('#' + pre + '-' + sfx); m[key] = el ? String(el.value || '').trim() : ''; }); return m; }
@@ -3955,6 +4001,7 @@ function ntSetBase(b, P = 'nt') {
   if ($('#' + P + '-base-inv') && b.invert_current !== undefined) $('#' + P + '-base-inv').checked = on(b.invert_current);
   if (b.invert_phases !== undefined) setInvPhases(P + '-base', b.invert_phases);
   if (b.col_map_enabled !== undefined) cmSet(P + '-cm', on(b.col_map_enabled), b.col_map);
+  ptctSync(P + '-base-ptct', P + '-base-pt', P + '-base-ct'); wiringSync(P + '-base-wiring', P + '-base-recon3w');   // v0.99.8
 }
 function ntSaveBase(P = 'nt') { if (ntBaseMode(P) !== 'custom') return; try { localStorage.setItem(NT_BASE_KEYS[P], JSON.stringify(ntBase(P))); } catch (e) { /* 隐私模式 */ } }
 function ntSyncCustomTime(P = 'nt') {
@@ -3974,6 +4021,7 @@ function ntSyncBaseUI(P = 'nt') {
   const fo = $('#' + P + '-quantity-follow'); if (fo) fo.textContent = custom ? '默认（出厂缺省 auto：无电压→I）' : '跟随配置 nilm.quantity';
   [P + '-base-fs', P + '-base-fnom', P + '-base-pt', P + '-base-ct', P + '-base-ptct', P + '-base-utc', P + '-quantity', P + '-channel',
    P + '-base-wiring', P + '-base-recon3w', P + '-base-inv', P + '-base-inv-a', P + '-base-inv-b', P + '-base-inv-c'].forEach(id => { const el = $('#' + id); if (el) el.disabled = !custom; });
+  if (custom) { ptctSync(P + '-base-ptct', P + '-base-pt', P + '-base-ct'); wiringSync(P + '-base-wiring', P + '-base-recon3w'); }   // v0.99.8：独立模式下再套门控
   ['btn-nt-base-default', 'btn-nt-base-bus', 'btn-nt-base-branch'].forEach(id => { const el = $('#' + id); if (el) el.style.display = custom ? '' : 'none'; });
   const q = $('#' + P + '-quantity'), ch = $('#' + P + '-channel');   // np 无 channel（检测对象固定 total）
   if (q) {
@@ -4152,6 +4200,7 @@ function wpSetBase(b) {
   const on1 = x => (x === true || x === '1' || x === 1 || x === 'true');
   if (b.wiring !== undefined) set('wp-base-wiring', b.wiring || '3p4w');
   if ($('#wp-base-recon3w') && b.reconstruct_3w !== undefined) $('#wp-base-recon3w').checked = on1(b.reconstruct_3w);
+  ptctSync('wp-base-ptct', 'wp-base-pt', 'wp-base-ct'); wiringSync('wp-base-wiring', 'wp-base-recon3w');   // v0.99.8
   if ($('#wp-base-inv') && b.invert_current !== undefined) $('#wp-base-inv').checked = on1(b.invert_current);
   if (b.invert_phases !== undefined) setInvPhases('wp-base', b.invert_phases);
   if ($('#wp-base-custom') && b.custom_time !== undefined) $('#wp-base-custom').checked = !!(b.custom_time === true || b.custom_time === '1' || b.custom_time === 1);
@@ -4696,6 +4745,14 @@ async function init() {
   normalizeConfigForms();
   buildDualViews();
   bind();
+  // v0.99.8：PT/CT 门控 + 3P3W 门控（数据源两侧 / 调参 / 画像 / 波形预览 / 估计 CT）
+  ptctGate('cfg-scale', 'cfg-pt', 'cfg-ct'); ptctGate('br-scale', 'br-pt', 'br-ct');
+  ptctGate('nt-base-ptct', 'nt-base-pt', 'nt-base-ct', () => ntSaveBase('nt')); ptctGate('np-base-ptct', 'np-base-pt', 'np-base-ct', () => ntSaveBase('np'));
+  ptctGate('wp-base-ptct', 'wp-base-pt', 'wp-base-ct', () => { if (typeof wpSaveBase === 'function') wpSaveBase(); });
+  wiringGate('cfg-wiring', 'cfg-recon3w'); wiringGate('br-wiring', 'br-recon3w');
+  wiringGate('nt-base-wiring', 'nt-base-recon3w', () => ntSaveBase('nt')); wiringGate('np-base-wiring', 'np-base-recon3w', () => ntSaveBase('np'));
+  wiringGate('wp-base-wiring', 'wp-base-recon3w', () => { if (typeof wpSaveBase === 'function') wpSaveBase(); });
+  wiringGate('ct-bus-wiring', 'ct-bus-recon3w'); wiringGate('ct-br-wiring', 'ct-br-recon3w');
   try {
     S.state = await api('/api/state');
   } catch (e) { toast('无法获取服务状态：' + e.message, 'err'); }

@@ -172,7 +172,7 @@ class TransformConfig:
     pt_ratio: float = 100.0
     ct_ratio: float = 15.0
     voltage_input: str = "phase"   # phase＝CSV 中为相电压；line＝CSV 中为线电压
-    enabled: bool = True           # False＝直接用二次值（调试/对比用）
+    enabled: bool = True           # False＝直接用二次值（调试/对比用）；界面出厂配置 configs/default.json 为 false（v0.99.8：默认不启用）
     invert_current: bool = False   # v0.92：电流极性反转（CT 接反 / P 为负时勾选；不依赖 enabled，三相同时取反）
     invert_phases: str = ""        # v0.93：分相电流极性反转，如 "A" / "AC"（与 invert_current 叠加；单相 CT 接反时用）
     wiring: str = "3p4w"           # v0.93：接线方式 3p4w＝三相四线（三 PT 三 CT）；3p3w＝三相三线两表法（B 相无 CT，Pb≡0 属正常，ΣP=Pa+Pc）

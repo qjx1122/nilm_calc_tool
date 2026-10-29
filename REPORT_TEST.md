@@ -1135,6 +1135,7 @@ U10-4 B/C 相为 0：____  U10-5 列号交换：Ia≈____  U10-6 无时间戳：
 - v0.92.2（2026-10-28）：用用户给的画像 JSON + 合成"设备1"（fs 10000、P<0、23.6 kW/36 A、启动 82 周波斜坡、7 A 小负荷）按用户分路侧 nilm 配置回放：画像/数据一致时 2/2 命中（STOP D²/维 0.07，START 1.5）；ΔQ 符号与画像不一致时全部 `d2_exceeds`（d_q 贡献 112/274）；PT/CT 不一致时给出错误。test_r92 第 5 项覆盖首 gap 与 PT/CT；全量 439 passed。
 - v0.92.3（2026-10-28）：用户回放输出（口径一次侧、6 算法全开、profile 关、profile_path 空）与其配置文件矛盾 ⇒ 路径 `config/branch_runtime.json` 不存在被静默回退。修复后 `--config config/zz.json` 退出码 2 并提示 `configs/zz.json`。test_tools/config/r9x 65 passed。
 - v0.92.4（2026-10-28）：用户回放"全程没有候选"根因＝画像前后窗 3000/3000 > window_cycles 300（`_two_window_candidates` 需 L ≥ pre+post+2）。修复后提示「需要约 9092 周波的检测窗…已自动缓存」。
+- v0.99.8（2026-10-29）：出厂 PT/CT 改为不启用后 14 个按一次侧口径断言的测试改用 `copy_default_ptct_on` 夹具；全量 452 passed。
 - v0.99.6（2026-10-29）：新增 4 项测试（相序重排/自动、配置校验、自动相序下检测不变、一次侧变比不同不误判 + 一侧关闭拒绝）；全量 452 passed。
 - v0.99.2（2026-10-29）：TestClient 复核 `/api/process/wave/rms` 对 1 A 二次电流：pt_ct 关 → 1.0；`pt_ct_enabled=1,pt_ratio=1,ct_ratio=40` → 39.99999；server/ct_estimate 测试通过。
 - v0.99（2026-10-29）：HTML 自动转换 190 处标签，id 集合与 label 配对数前后一致；JS 语法校验；全量 pytest 448 passed。

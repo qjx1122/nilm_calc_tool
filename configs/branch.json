@@ -13,7 +13,7 @@
     "pt_ratio": 100.0,
     "ct_ratio": 15.0,
     "voltage_input": "phase",
-    "enabled": true
+    "enabled": false
   },
   "harmonic": {
     "order_min": 2,

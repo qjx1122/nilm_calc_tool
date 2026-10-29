@@ -15,6 +15,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+from tests.conftest import copy_default_ptct_on  # noqa: E402
 
 from elec_tool.config import AppConfig, ColumnMap, ConfigError
 from elec_tool.sources.parsing import iter_csv_blocks, parse_rows
@@ -148,7 +149,7 @@ def client(tmp_path_factory):
     from starlette.testclient import TestClient
     cfg_dir = tmp_path_factory.mktemp("r10cfg")
     cfg_path = cfg_dir / "cfg.json"
-    shutil.copy(ROOT / "configs" / "default.json", cfg_path)
+    copy_default_ptct_on(cfg_path)
     mp = MonkeyPatch()
     mp.setenv("ELEC_TOOL_CONFIG_PATH", str(cfg_path))
     mp.setenv("ELEC_TOOL_AUTOSTART", "")

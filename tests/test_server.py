@@ -21,6 +21,7 @@ import time
 from pathlib import Path
 
 import pytest
+from tests.conftest import copy_default_ptct_on  # noqa: E402
 
 from elec_tool.config import QUANTITY_KEYS
 from tests.conftest import CT, F_NOM, FS, HEADER_CN, PT
@@ -39,7 +40,7 @@ def client(tmp_path_factory):
 
     cfg_dir = tmp_path_factory.mktemp("webcfg")
     cfg_path = cfg_dir / "cfg.json"
-    shutil.copy(ROOT / "configs" / "default.json", cfg_path)
+    copy_default_ptct_on(cfg_path)
 
     mp = MonkeyPatch()
     mp.setenv("ELEC_TOOL_CONFIG_PATH", str(cfg_path))   # 加载与持久化都指向 tmp

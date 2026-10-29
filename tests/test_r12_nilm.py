@@ -13,6 +13,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+from tests.conftest import copy_default_ptct_on  # noqa: E402
 
 from elec_tool.blocks import SampleBlock
 from elec_tool.config import AppConfig, ConfigError, NILM_ALGO_DEFAULTS, NILM_SCALAR_ALGOS, NilmConfig
@@ -182,7 +183,7 @@ def client(tmp_path_factory):
     from pytest import MonkeyPatch
     from starlette.testclient import TestClient
     d = tmp_path_factory.mktemp("r12cfg")
-    shutil.copy(ROOT / "configs" / "default.json", d / "cfg.json")
+    copy_default_ptct_on(d / "cfg.json")
     mp = MonkeyPatch()
     mp.setenv("ELEC_TOOL_CONFIG_PATH", str(d / "cfg.json")); mp.setenv("ELEC_TOOL_AUTOSTART", "")
     mp.setenv("ELEC_TOOL_PERSIST_CONFIG", "0"); mp.setenv("ELEC_TOOL_EVENTS_DIR", str(d / "ev"))

@@ -341,16 +341,20 @@
         <div class="panel col-bus">
           <h3><span class="sidename bus">总线侧</span> 量纲与口径</h3>
           <div class="form">
+            <div class="row2" title="PT/CT 变换：勾选＝电压 × PT、电流 × CT 换算为一次侧；不勾选（默认）＝直接看二次侧值，PT、CT 固定为 1、不可设置">
+              <label class="check"><input id="cfg-scale" type="checkbox"> 启用 PT/CT 变换（不勾选＝直接看二次侧值，PT、CT 均为 1）</label>
+              <span class="mut" style="align-self:center">勾选后才可填写 PT、CT 变比</span>
+            </div>
             <div class="row2">
               <label class="f"><span class="lbl">PT 电压变比</span><input id="cfg-pt" type="number" step="0.1"></label>
               <label class="f"><span class="lbl">CT 电流变比</span><input id="cfg-ct" type="number" step="0.1"></label>
             </div>
-            <div class="row2">
-              <label class="chk"><input id="cfg-inv" type="checkbox"> 电流极性反转（CT 接反 / 有功为负时勾选，三相同时取反；不依赖 PT/CT 启用）</label>
+            <div class="row2" title="接线方式：三相四线＝三 CT 分相；三相三线两表法＝B 相无 CT（Pb≡0）；3P3W 重构只在三相三线下可勾选">
+              <label class="f"><span class="lbl">接线方式</span><select id="cfg-wiring"><option value="3p4w">三相四线（三 CT）</option><option value="3p3w">三相三线两表法（B 相无 CT，Pb≡0）</option></select></label>
+              <label class="chk"><input id="cfg-recon3w" type="checkbox"> 3P3W 虚拟中性点重构（Ib=−(Ia+Ic)，相电压由 Uab/Ucb 重构；分相量与四线同口径；仅三相三线可选）</label>
             </div>
             <div class="row2">
-              <label class="f"><span class="lbl">接线方式</span><select id="cfg-wiring"><option value="3p4w">三相四线（三 CT）</option><option value="3p3w">三相三线两表法（B 相无 CT，Pb≡0）</option></select></label>
-              <label class="chk"><input id="cfg-recon3w" type="checkbox"> 3P3W 虚拟中性点重构（Ib=−(Ia+Ic)，相电压由 Uab/Ucb 重构；分相量与四线同口径）</label>
+              <label class="chk"><input id="cfg-inv" type="checkbox"> 电流极性反转（CT 接反 / 有功为负时勾选，三相同时取反；不依赖 PT/CT 启用）</label>
               <label class="f"><span class="lbl">分相电流极性反转</span><span class="chk"><input id="cfg-inv-a" type="checkbox"> A <input id="cfg-inv-b" type="checkbox"> B <input id="cfg-inv-c" type="checkbox"> C</span></label>
             </div>
             <div class="row2">
@@ -358,7 +362,6 @@
               <label class="f"><span class="lbl">额定频率 (Hz)</span><input id="cfg-fnom" type="number" step="0.1"></label>
             </div>
             <label class="check"><input id="cfg-adaptive" type="checkbox"> 频率自适应（估频后整周期截断，抗泄漏）</label>
-            <label class="check"><input id="cfg-scale" type="checkbox"> 启用 PT/CT 变换（取消勾选＝直接看二次值）</label>
             <div class="row2">
               <label class="f"><span class="lbl">电压列含义</span><select id="cfg-uin"><option value="phase">相电压</option><option value="line">线电压</option></select></label>
               <label class="f"><span class="lbl">最高谐波次数</span><input id="cfg-hmax" type="number" min="2" max="63"></label>
@@ -374,24 +377,27 @@
         <div class="panel col-br">
           <h3><span class="sidename branch">分路侧</span> 量纲与口径 <span class="navhint">独立于总线侧，随「保存分路侧配置」保存</span></h3>
           <div class="form">
+            <div class="row2" title="PT/CT 变换：勾选＝电压 × PT、电流 × CT 换算为一次侧；不勾选（默认）＝直接看二次侧值，PT、CT 固定为 1、不可设置">
+              <label class="check"><input id="br-scale" type="checkbox"> 启用 PT/CT 变换（不勾选＝直接看二次侧值，PT、CT 均为 1）</label>
+              <span class="mut" style="align-self:center">勾选后才可填写 PT、CT 变比</span>
+            </div>
             <div class="row2">
               <label class="f"><span class="lbl">PT 电压变比</span><input id="br-pt" type="number" step="0.1"></label>
               <label class="f"><span class="lbl">CT 电流变比</span><input id="br-ct" type="number" step="0.1"></label>
             </div>
-            <div class="row2">
-              <label class="chk"><input id="br-inv" type="checkbox"> 电流极性反转（CT 接反 / 有功为负时勾选，三相同时取反）</label>
+            <div class="row2" title="接线方式：三相四线＝三 CT 分相；三相三线两表法＝B 相无 CT（Pb≡0）；3P3W 重构只在三相三线下可勾选">
+              <label class="f"><span class="lbl">接线方式</span><select id="br-wiring"><option value="3p4w">三相四线（三 CT）</option><option value="3p3w">三相三线两表法（B 相无 CT，Pb≡0）</option></select></label>
+              <label class="chk"><input id="br-recon3w" type="checkbox"> 3P3W 虚拟中性点重构（Ib=−(Ia+Ic)，相电压由 Uab/Ucb 重构；分相量与四线同口径；仅三相三线可选）</label>
             </div>
             <div class="row2">
-              <label class="f"><span class="lbl">接线方式</span><select id="br-wiring"><option value="3p4w">三相四线（三 CT）</option><option value="3p3w">三相三线两表法（B 相无 CT）</option></select></label>
-              <label class="chk"><input id="br-recon3w" type="checkbox"> 3P3W 虚拟中性点重构（Ib=−(Ia+Ic)，相电压由线电压重构）</label>
+              <label class="chk"><input id="br-inv" type="checkbox"> 电流极性反转（CT 接反 / 有功为负时勾选，三相同时取反；不依赖 PT/CT 启用）</label>
               <label class="f"><span class="lbl">分相电流极性反转</span><span class="chk"><input id="br-inv-a" type="checkbox"> A <input id="br-inv-b" type="checkbox"> B <input id="br-inv-c" type="checkbox"> C</span></label>
             </div>
             <div class="row2">
               <label class="f"><span class="lbl">采样率 fs (Hz)</span><input id="br-fs" type="number" step="1"></label>
               <label class="f"><span class="lbl">额定频率 (Hz)</span><input id="br-fnom" type="number" step="0.1"></label>
             </div>
-            <label class="check"><input id="br-adaptive" type="checkbox"> 频率自适应（估频后整周期截断）</label>
-            <label class="check"><input id="br-scale" type="checkbox"> 启用 PT/CT 变换（取消＝直接看二次值）</label>
+            <label class="check"><input id="br-adaptive" type="checkbox"> 频率自适应（估频后整周期截断，抗泄漏）</label>
             <div class="row2">
               <label class="f"><span class="lbl">电压列含义</span><select id="br-uin"><option value="phase">相电压</option><option value="line">线电压</option></select></label>
               <label class="f"><span class="lbl">最高谐波次数</span><input id="br-hmax" type="number" min="2" max="63"></label>
@@ -1011,7 +1017,7 @@
                 <label class="f" title="额定频率"><span class="lbl">额定频率 f_nom (Hz)</span><input id="nt-base-fnom" type="number" min="1" step="any"></label>
               </div>
               <div class="row2">
-                <label class="check" title="勾选＝数值换算为一次侧（电压 × PT、电流 × CT），最小关心负荷与结果同为一次侧口径"><input id="nt-base-ptct" type="checkbox"> 启用 PT/CT（一次侧口径）</label>
+                <label class="check" title="勾选＝数值换算为一次侧（电压 × PT、电流 × CT），最小关心负荷与结果同为一次侧口径"><input id="nt-base-ptct" type="checkbox"> 启用 PT/CT 变换（勾选后才可填 PT、CT；不勾选＝二次侧，PT、CT 均为 1）</label>
                 <label class="check" title="文件时标按 UTC 解释"><input id="nt-base-utc" type="checkbox"> 文件时标为 UTC</label>
               </div>
               <div class="row2">
@@ -1020,7 +1026,7 @@
               </div>
               <div class="row2" title="v0.95：接线方式 / CT 极性（与运行配置「量纲与口径」同名项同义；调参、画像提取按此换算后再分析）">
                 <label class="f"><span class="lbl">接线方式</span><select id="nt-base-wiring"><option value="3p4w">三相四线（三 CT）</option><option value="3p3w">三相三线两表法（B 相无 CT）</option></select></label>
-                <label class="check"><input id="nt-base-recon3w" type="checkbox"> 3P3W 虚拟中性点重构（Ib=−(Ia+Ic)，相电压由 Uab/Ucb 重构）</label>
+                <label class="check"><input id="nt-base-recon3w" type="checkbox"> 3P3W 虚拟中性点重构（Ib=−(Ia+Ic)，相电压由 Uab/Ucb 重构；仅三相三线可选）</label>
               </div>
               <div class="row2">
                 <label class="check"><input id="nt-base-inv" type="checkbox"> 电流极性反转（三相同时取反）</label>
@@ -1110,7 +1116,7 @@
                 <label class="f" title="额定频率"><span class="lbl">额定频率 f_nom (Hz)</span><input id="np-base-fnom" type="number" min="1" step="any"></label>
               </div>
               <div class="row2">
-                <label class="check" title="勾选＝数值换算为一次侧（电压 × PT、电流 × CT），最小关心负荷与结果同为一次侧口径"><input id="np-base-ptct" type="checkbox"> 启用 PT/CT（一次侧口径）</label>
+                <label class="check" title="勾选＝数值换算为一次侧（电压 × PT、电流 × CT），最小关心负荷与结果同为一次侧口径"><input id="np-base-ptct" type="checkbox"> 启用 PT/CT 变换（勾选后才可填 PT、CT；不勾选＝二次侧，PT、CT 均为 1）</label>
                 <label class="check" title="文件时标按 UTC 解释"><input id="np-base-utc" type="checkbox"> 文件时标为 UTC</label>
               </div>
               <div class="row2">
@@ -1119,7 +1125,7 @@
               </div>
               <div class="row2" title="v0.95：接线方式 / CT 极性（与运行配置「量纲与口径」同名项同义；画像提取按此换算后再分析）">
                 <label class="f"><span class="lbl">接线方式</span><select id="np-base-wiring"><option value="3p4w">三相四线（三 CT）</option><option value="3p3w">三相三线两表法（B 相无 CT）</option></select></label>
-                <label class="check"><input id="np-base-recon3w" type="checkbox"> 3P3W 虚拟中性点重构（Ib=−(Ia+Ic)，相电压由 Uab/Ucb 重构）</label>
+                <label class="check"><input id="np-base-recon3w" type="checkbox"> 3P3W 虚拟中性点重构（Ib=−(Ia+Ic)，相电压由 Uab/Ucb 重构；仅三相三线可选）</label>
               </div>
               <div class="row2">
                 <label class="check"><input id="np-base-inv" type="checkbox"> 电流极性反转（三相同时取反）</label>
@@ -1202,7 +1208,7 @@
                 <label class="f" title="额定频率：每周波点数 = fs / f_nom"><span class="lbl">额定频率 f_nom (Hz)</span><input id="wp-base-fnom" type="number" min="1" step="any"></label>
               </div>
               <div class="row2">
-                <label class="chk" title="勾选＝数值换算为一次侧（电压 × PT、电流 × CT）"><input id="wp-base-ptct" type="checkbox"> 启用 PT/CT（一次侧口径）</label>
+                <label class="chk" title="勾选＝数值换算为一次侧（电压 × PT、电流 × CT）"><input id="wp-base-ptct" type="checkbox"> 启用 PT/CT 变换（勾选后才可填 PT、CT；不勾选＝二次侧，PT、CT 均为 1）</label>
                 <label class="chk" title="文件时标按 UTC 解释（显示时换算为本地时间）"><input id="wp-base-utc" type="checkbox"> 文件时标为 UTC</label>
               </div>
               <div class="row2">
@@ -1211,7 +1217,7 @@
               </div>
               <div class="row2" title="v0.95：接线方式 / CT 极性（与运行配置「量纲与口径」同名项同义；曲线按此换算后显示）">
                 <label class="f"><span class="lbl">接线方式</span><select id="wp-base-wiring"><option value="3p4w">三相四线（三 CT）</option><option value="3p3w">三相三线两表法（B 相无 CT）</option></select></label>
-                <label class="chk"><input id="wp-base-recon3w" type="checkbox"> 3P3W 虚拟中性点重构（Ib=−(Ia+Ic)，相电压由 Uab/Ucb 重构）</label>
+                <label class="chk"><input id="wp-base-recon3w" type="checkbox"> 3P3W 虚拟中性点重构（Ib=−(Ia+Ic)，相电压由 Uab/Ucb 重构；仅三相三线可选）</label>
               </div>
               <div class="row2">
                 <label class="chk"><input id="wp-base-inv" type="checkbox"> 电流极性反转（三相同时取反）</label>
