@@ -683,17 +683,26 @@ class NilmDetector:
             pm = [float(np.median(self._p[k, -200:])) for k in (1, 2, 3)]
             im = [float(np.median(self._i[k, -200:])) for k in (1, 2, 3)]
             ia_max = max(abs(v) for v in im) if im else 0.0
-            dead = [ch for ch, v in zip("ABC", im) if ia_max > 0 and abs(v) < 0.01 * ia_max]
-            live = [k for k, ch in enumerate("ABC") if ch not in dead and abs(pm[k]) > 0]
+            three_wire = bool(getattr(self.cfg.transform, "three_wire", False))   # v0.93：三相三线两表法 B 相无 CT 属正常
+            dead = [ch for ch, v in zip("ABC", im) if ia_max > 0 and abs(v) < 0.01 * ia_max and not (three_wire and ch == "B")]
+            live = [k for k, ch in enumerate("ABC") if ch not in dead and abs(pm[k]) > 0 and not (three_wire and ch == "B")]
             signs = {(pm[k] > 0) for k in live}
             msgs = []
             if dead:
-                msgs.append(f"{'/'.join(dead)} 相电流≈0（该相电压或电流列未映射/无数据）")
+                msgs.append(f"{'/'.join(dead)} 相电流≈0（该相电压或电流列未映射/无数据；若为三相三线两表法请把接线方式设为 3p3w）")
             if len(signs) > 1:
-                msgs.append("各相有功符号不一致（" + "，".join(f"P{ch}={pm[k]:.0f}W" for k, ch in enumerate("ABC")) + "）：电压/电流相别配对或 CT 极性有误，总有功 ΣP 相互抵消")
+                neg = [ch for k, ch in enumerate("ABC") if k in live and pm[k] < 0]
+                pos = [ch for k, ch in enumerate("ABC") if k in live and pm[k] > 0]
+                if len(pos) == len(neg):   # 两相相反（典型：三相三线两表法）——无法判定哪一相，提示按设备侧 P 符号核对
+                    both = pos + neg
+                    hint = f"{'/'.join(sorted(both))} 相中有一相 CT 极性可能接反（两表法 pf<0.5 时两表读数符号本可相反，请结合设备侧 P 符号核对）；可在配置 transform.invert_phases 填 \"{sorted(both)[0]}\" 或 \"{sorted(both)[1]}\"（界面「分相电流极性反转」）后重跑"
+                else:
+                    flip = pos if len(pos) < len(neg) else neg
+                    hint = f"{'/'.join(flip)} 相 CT 极性可能接反；可在配置 transform.invert_phases 填 \"{''.join(flip)}\"（界面「分相电流极性反转」）后重跑"
+                msgs.append("各相有功符号不一致（" + "，".join(f"P{ch}={pm[k]:.0f}W" for k, ch in enumerate("ABC")) + f"）：{hint}，总有功 ΣP 相互抵消")
             if msgs and not getattr(self, "_profile_health_warned", False):
                 self._profile_health_warned = True
-                self.errors.append("画像匹配数据体检：" + "；".join(msgs) + "。画像候选按三相合成 ΣP/ΣI 搜索，这种数据下设备台阶会被抵消或失真，先修正列映射/极性再用画像匹配")
+                self.errors.append("画像匹配数据体检：" + "；".join(msgs) + "。画像候选按三相合成 ΣP/ΣI 搜索，这种数据下设备台阶会被抵消或失真，先修正接线方式/极性再用画像匹配")
         need = self._profile_window_need()
         if need > int(self.ncfg.window_cycles):
             msg = (f"画像前后窗 {prof.get('pre_cycles')}/{prof.get('post_cycles')} 周波（最长持续 {need - int(prof.get('pre_cycles', 10)) - 2 * int(prof.get('post_cycles', 50)) - 10}）"
@@ -703,7 +712,8 @@ class NilmDetector:
             if msg not in self.errors:
                 self.errors.append(msg)
         try:
-            res = detect_profile(self._p, self._q, self._i, prof, prm, use_p, self.device_state)
+            skip = ("d_ib",) if bool(getattr(self.cfg.transform, "three_wire", False)) else ()   # v0.93：三相三线无 B 相电流
+            res = detect_profile(self._p, self._q, self._i, prof, prm, use_p, self.device_state, skip)
         except Exception as exc:
             msg = f"profile 检测异常：{type(exc).__name__}: {exc}"
             if msg not in self.errors:

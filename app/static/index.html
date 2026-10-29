@@ -361,6 +361,10 @@
               <label class="chk"><input id="cfg-inv" type="checkbox"> 电流极性反转（CT 接反 / 有功为负时勾选，三相同时取反；不依赖 PT/CT 启用）</label>
             </div>
             <div class="row2">
+              <label>接线方式 <select id="cfg-wiring"><option value="3p4w">三相四线（三 CT）</option><option value="3p3w">三相三线两表法（B 相无 CT，Pb≡0）</option></select></label>
+              <label>分相电流极性反转 <span class="chk"><input id="cfg-inv-a" type="checkbox"> A <input id="cfg-inv-b" type="checkbox"> B <input id="cfg-inv-c" type="checkbox"> C</span></label>
+            </div>
+            <div class="row2">
               <label>采样率 fs (Hz) <input id="cfg-fs" type="number" step="1"></label>
               <label>额定频率 (Hz) <input id="cfg-fnom" type="number" step="0.1"></label>
             </div>
@@ -393,6 +397,10 @@
             </div>
             <div class="row2">
               <label class="chk"><input id="br-inv" type="checkbox"> 电流极性反转（CT 接反 / 有功为负时勾选，三相同时取反）</label>
+            </div>
+            <div class="row2">
+              <label>接线方式 <select id="br-wiring"><option value="3p4w">三相四线（三 CT）</option><option value="3p3w">三相三线两表法（B 相无 CT）</option></select></label>
+              <label>分相电流极性反转 <span class="chk"><input id="br-inv-a" type="checkbox"> A <input id="br-inv-b" type="checkbox"> B <input id="br-inv-c" type="checkbox"> C</span></label>
             </div>
             <div class="row2">
               <label>采样率 fs (Hz) <input id="br-fs" type="number" step="1"></label>

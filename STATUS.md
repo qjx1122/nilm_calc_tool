@@ -105,6 +105,7 @@
 - **v0.92.2**：在线画像匹配：首 gap 压制修复、PT/CT 一致性检查、候选终点规则、replay 候选诊断。
 - **v0.92.3**：CLI `--config` 不存在即报错（`load_or_default(strict=True)`）。
 - **v0.92.4**：画像窗口需求 > window_cycles 自动扩缓存 + 提示。
+- **v0.93**：`transform.wiring`（3p4w/3p3w）、`transform.invert_phases`（分相电流极性反转）；3p3w 下画像匹配跳过 d_ib；两侧 UI + replay `--set transform.*`；测试 `test_v093_*` 2 个。
 - **v0.92.6**：画像匹配数据体检提示（缺相/各相有功符号不一致）；测试 `test_engine_warns_when_phase_missing_or_signs_disagree`。
 - **v0.92.5**：候选右边界等待、dur σ 下限 5、历史去噪。
 - **v0.86**：数据处理页重采样 / 调参 / 波形预览各加「启用离线文件列映射」（默认不启用＝固定列序；启用后 7 列号；只本次请求生效、不写运行配置；调参两种基准模式都生效）。405 passed；ui_r86 18 项 ALL PASS。

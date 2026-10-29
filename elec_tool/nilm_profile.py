@@ -151,12 +151,16 @@ def _load_profile_raw(p: str) -> Dict[str, Any]:
 
 
 # ------------------------------------------------------------------ 匹配
-def mahalanobis_diag(vec: Dict[str, float], mu: Sequence[float], sigma: Sequence[float], lam_rel: float = 0.1) -> Tuple[float, List[float]]:
-    """对角马氏距离 D² 与各维贡献；Σ_λ = diag(σ²) + λ·median(σ²)·I（§5.5 收缩）。"""
+def mahalanobis_diag(vec: Dict[str, float], mu: Sequence[float], sigma: Sequence[float], lam_rel: float = 0.1,
+                     skip: Sequence[str] = ()) -> Tuple[float, List[float]]:
+    """对角马氏距离 D² 与各维贡献；Σ_λ = diag(σ²) + λ·median(σ²)·I（§5.5 收缩）。``skip``：不参与的特征名（v0.93：三相三线无 B 相电流时跳过 d_ib）。"""
     x = _vec_array(vec); m = np.asarray(mu, dtype=np.float64); s = np.asarray(sigma, dtype=np.float64)
     var = s * s
     var = var + float(lam_rel) * float(np.median(var))
     contrib = (x - m) ** 2 / var
+    for k in skip:
+        if k in FEATURES:
+            contrib[FEATURES.index(k)] = 0.0
     return float(np.sum(contrib)), [float(c) for c in contrib]
 
 
@@ -168,15 +172,16 @@ def template_distance(template: Sequence[float], ref: Sequence[float]) -> float:
     return float(np.sqrt(np.mean((a[:n] - b[:n]) ** 2)))
 
 
-def match_event(profile: Dict[str, Any], feat: Dict[str, Any], lam_rel: float = 0.1) -> Dict[str, Any]:
-    """候选特征与启动 / 停止画像分别匹配；返回最优方向、D²、置信度、区分度与轨迹距离。"""
-    d = len(FEATURES)
+def match_event(profile: Dict[str, Any], feat: Dict[str, Any], lam_rel: float = 0.1, skip: Sequence[str] = ()) -> Dict[str, Any]:
+    """候选特征与启动 / 停止画像分别匹配；返回最优方向、D²、置信度、区分度与轨迹距离。``skip``：不参与匹配的特征（见 mahalanobis_diag）。"""
+    skip = [k for k in skip if k in FEATURES]
+    d = max(1, len(FEATURES) - len(skip))
     res: Dict[str, Any] = {}
     for key, name in (("startup", "START"), ("shutdown", "STOP")):
         g = profile.get(key)
         if not g:
             continue
-        d2, contrib = mahalanobis_diag(feat["vec"], g["mu"], g["sigma"], lam_rel)
+        d2, contrib = mahalanobis_diag(feat["vec"], g["mu"], g["sigma"], lam_rel, skip)
         td = template_distance(feat["template"], g["template"])
         res[name] = {"d2": d2, "contrib": contrib, "template_dist": td, "template_spread": float(g.get("template_spread", 0.3))}
     if not res:
@@ -233,8 +238,11 @@ def _two_window_candidates(x: np.ndarray, pre_n: int, post_n: int, min_d: float,
 
 
 def detect_profile(p4: np.ndarray, q4: np.ndarray, i4: np.ndarray, profile: Dict[str, Any], prm: Dict[str, Any],
-                   use_p: bool, device_state: str = "unknown") -> List[Dict[str, Any]]:
+                   use_p: bool, device_state: str = "unknown", skip: Sequence[str] = ()) -> List[Dict[str, Any]]:
     """窗上运行一次画像匹配检测。返回按 onset 排序的候选结果列表（每项含 onset/end/pre/post/match/flags/accepted）。
+
+    ``skip``：不参与匹配的特征名；三相三线两表法（transform.wiring=3p3w）本侧无 B 相电流，引擎传 ("d_ib",)，
+    此时 ΔI 合成幅值也只按 A/C 两相计算。
 
     prm：``d2_max``（每维平均 D² 上限）、``min_confidence``、``k_sigma``（候选门槛的噪声倍数）、``margin``（最优 / 次优 D² 比下限）、
     ``lambda_rel``（协方差收缩）、``state_check``（1/0）。候选的最小幅值＝画像里 |ΔP|（或 |ΔI 合成|）最小值的一半。
@@ -247,7 +255,7 @@ def detect_profile(p4: np.ndarray, q4: np.ndarray, i4: np.ndarray, profile: Dict
         amp = [abs(g["mu"][ip]) for g in groups]
     else:
         x = i4[0]
-        amp = [math.sqrt(sum(g["mu"][FEATURES.index(k)] ** 2 for k in ("d_ia", "d_ib", "d_ic"))) for g in groups]
+        amp = [math.sqrt(sum(g["mu"][FEATURES.index(k)] ** 2 for k in ("d_ia", "d_ib", "d_ic") if k not in skip)) for g in groups]
     min_d = 0.5 * min(amp) if amp else 0.0
     cands = _two_window_candidates(x, pre_n, post_n, min_d, float(prm.get("k_sigma", 4.0)))
     d2_max = float(prm.get("d2_max", 9.0)); min_conf = float(prm.get("min_confidence", 0.3))
@@ -257,7 +265,7 @@ def detect_profile(p4: np.ndarray, q4: np.ndarray, i4: np.ndarray, profile: Dict
     state = device_state
     for onset, end, delta in cands:
         feat = event_features(p4, q4, i4, onset, end, pre_n, post_n)
-        m = match_event(profile, feat, lam)
+        m = match_event(profile, feat, lam, skip)
         flags: List[str] = []
         conf = m["confidence"]
         if m["d2_per_dim"] > d2_max:

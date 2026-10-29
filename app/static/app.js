@@ -1,3 +1,6 @@
+// v0.93：分相电流极性反转（"A"/"AC"…）↔ 三个勾选框
+function setInvPhases(pre, v) { const s = String(v || '').toUpperCase(); for (const ch of 'abc') { const el = document.querySelector('#' + pre + '-inv-' + ch); if (el) el.checked = s.includes(ch.toUpperCase()); } }
+function getInvPhases(pre) { let out = ''; for (const ch of 'abc') { const el = document.querySelector('#' + pre + '-inv-' + ch); if (el && el.checked) out += ch.toUpperCase(); } return out; }
 /* app.js —— 电力电气量计算与负荷辨识工具 前端（原生 JS + Canvas，无外部 CDN 依赖）
  *
  * 结构：导航条切换子界面（需求③）；每个电气量一个子界面（需求②）；
@@ -2004,6 +2007,7 @@ function fillSourceForm(cfg) {
     $('#cfg-ct').value = cfg.transform.ct_ratio;
     $('#cfg-scale').checked = !!cfg.transform.enabled;
     $('#cfg-inv').checked = !!cfg.transform.invert_current;
+    setInvPhases('cfg', cfg.transform.invert_phases); $('#cfg-wiring').value = cfg.transform.wiring || '3p4w';
     $('#cfg-uin').value = cfg.transform.voltage_input || 'phase';
   }
   if (cfg.sampling) {
@@ -2097,6 +2101,7 @@ async function loadBranchForm(force) {
       const tr = cfg.transform || {}, sp = cfg.sampling || {}, hm = cfg.harmonic || {}, pw = cfg.power || {};
       $('#br-pt').value = tr.pt_ratio ?? ''; $('#br-ct').value = tr.ct_ratio ?? '';
       $('#br-scale').checked = tr.enabled !== false; $('#br-uin').value = tr.voltage_input || 'phase'; $('#br-inv').checked = !!tr.invert_current;
+      setInvPhases('br', tr.invert_phases); $('#br-wiring').value = tr.wiring || '3p4w';
       $('#br-fs').value = sp.fs ?? ''; $('#br-fnom').value = sp.f_nom ?? ''; $('#br-adaptive').checked = !!sp.adaptive_freq;
       $('#br-hmax').value = hm.order_max ?? '';
       $('#br-apparent').value = pw.apparent || 'arithmetic'; $('#br-reactive').value = pw.reactive || 'harmonic_sum';
@@ -2192,7 +2197,7 @@ function collectBranchConfigPayload() {
   const src = collectSourceFields('br-');
   // 分路侧量纲与口径：空输入框跳过（保留服务端原值），与总线侧 collectConfigPayload 同规则
   const posv = (id) => { const v = parseFloat($('#' + id).value); return Number.isFinite(v) && v > 0 ? v : null; };
-  const transform = { enabled: $('#br-scale').checked, voltage_input: $('#br-uin').value, invert_current: $('#br-inv').checked };
+  const transform = { enabled: $('#br-scale').checked, voltage_input: $('#br-uin').value, invert_current: $('#br-inv').checked, invert_phases: getInvPhases('br'), wiring: $('#br-wiring').value };
   const pt = posv('br-pt'), ct = posv('br-ct'); if (pt !== null) transform.pt_ratio = pt; if (ct !== null) transform.ct_ratio = ct;
   const sampling = { adaptive_freq: $('#br-adaptive').checked };
   const fs = posv('br-fs'), fnom = posv('br-fnom'); if (fs !== null) sampling.fs = fs; if (fnom !== null) sampling.f_nom = fnom;
@@ -2705,7 +2710,7 @@ function collectConfigPayload() {
     skipped.push(label);
     return null;
   };
-  const transform = { enabled: $('#cfg-scale').checked, voltage_input: $('#cfg-uin').value, invert_current: $('#cfg-inv').checked };
+  const transform = { enabled: $('#cfg-scale').checked, voltage_input: $('#cfg-uin').value, invert_current: $('#cfg-inv').checked, invert_phases: getInvPhases('cfg'), wiring: $('#cfg-wiring').value };
   const pt = pos('cfg-pt', 'PT 变比'), ct = pos('cfg-ct', 'CT 变比');
   if (pt !== null) transform.pt_ratio = pt;
   if (ct !== null) transform.ct_ratio = ct;

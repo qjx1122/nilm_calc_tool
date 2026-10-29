@@ -174,6 +174,8 @@ class TransformConfig:
     voltage_input: str = "phase"   # phase＝CSV 中为相电压；line＝CSV 中为线电压
     enabled: bool = True           # False＝直接用二次值（调试/对比用）
     invert_current: bool = False   # v0.92：电流极性反转（CT 接反 / P 为负时勾选；不依赖 enabled，三相同时取反）
+    invert_phases: str = ""        # v0.93：分相电流极性反转，如 "A" / "AC"（与 invert_current 叠加；单相 CT 接反时用）
+    wiring: str = "3p4w"           # v0.93：接线方式 3p4w＝三相四线（三 PT 三 CT）；3p3w＝三相三线两表法（B 相无 CT，Pb≡0 属正常，ΣP=Pa+Pc）
 
     @property
     def power_ratio(self) -> float:
@@ -184,6 +186,21 @@ class TransformConfig:
             raise ConfigError(f"PT/CT 变比必须 > 0（当前 PT={self.pt_ratio}, CT={self.ct_ratio}）")
         if self.voltage_input not in VOLTAGE_INPUT_MODES:
             raise ConfigError(f"transform.voltage_input 必须是 {VOLTAGE_INPUT_MODES}（当前 {self.voltage_input}）")
+        if self.wiring not in ("3p4w", "3p3w"):
+            raise ConfigError(f"transform.wiring 必须是 3p4w/3p3w（当前 {self.wiring}）")
+        bad = [c for c in str(self.invert_phases).upper() if c not in "ABC ,/"]
+        if bad:
+            raise ConfigError(f"transform.invert_phases 只能含 A/B/C（当前 {self.invert_phases!r}）")
+
+    def phase_signs(self) -> list:
+        """各相电流符号 [sA, sB, sC]（全局反转 × 分相反转）。"""
+        g = -1.0 if bool(self.invert_current) else 1.0
+        inv = str(self.invert_phases or "").upper()
+        return [g * (-1.0 if ch in inv else 1.0) for ch in "ABC"]
+
+    @property
+    def three_wire(self) -> bool:
+        return str(self.wiring) == "3p3w"
 
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> "TransformConfig":

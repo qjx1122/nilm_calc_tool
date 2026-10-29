@@ -22,18 +22,27 @@ def scale_voltage(u: np.ndarray, tr: TransformConfig) -> np.ndarray:
     return np.asarray(u, dtype=np.float64) * float(tr.pt_ratio)
 
 
+def _needs_sign(tr: TransformConfig) -> bool:
+    return bool(getattr(tr, "invert_current", False)) or bool(str(getattr(tr, "invert_phases", "") or "").strip())
+
+
 def scale_current(i: np.ndarray, tr: TransformConfig) -> np.ndarray:
-    sgn = -1.0 if bool(getattr(tr, "invert_current", False)) else 1.0
-    if not tr.enabled:
-        return np.asarray(i, dtype=np.float64) * sgn if sgn < 0 else np.asarray(i, dtype=np.float64)
-    return np.asarray(i, dtype=np.float64) * (float(tr.ct_ratio) * sgn)
+    """电流二次→一次，并按全局/分相极性取反（v0.93：invert_phases 如 "A" 只反转 A 相；i 形状 (3,N) 或 (N,)）。"""
+    arr = np.asarray(i, dtype=np.float64)
+    k = float(tr.ct_ratio) if tr.enabled else 1.0
+    if _needs_sign(tr):
+        sg = np.asarray(tr.phase_signs(), dtype=np.float64) if hasattr(tr, "phase_signs") else np.full(3, -1.0)
+        if arr.ndim == 2 and arr.shape[0] == 3:
+            return arr * (k * sg)[:, None]
+        return arr * (k * (-1.0 if bool(getattr(tr, "invert_current", False)) else 1.0))
+    return arr if k == 1.0 else arr * k
 
 
 def scale_block(block: SampleBlock, tr: TransformConfig) -> SampleBlock:
     """返回一次侧数据块（不修改原对象；已变换过则原样返回）。"""
     if block.scaled:
         return block
-    if not tr.enabled and not bool(getattr(tr, "invert_current", False)):
+    if not tr.enabled and not _needs_sign(tr):
         return block
     return SampleBlock(
         t=block.t,

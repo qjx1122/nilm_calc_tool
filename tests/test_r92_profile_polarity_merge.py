@@ -1,6 +1,8 @@
 """v0.92：电流极性反转开关 + 画像自动定位切碎事件合并。"""
 import sys, os
 sys.path.insert(0, os.path.dirname(__file__))
+import pytest
+from elec_tool.config import ConfigError
 import numpy as np
 import test_r90_nilm_profile as T
 from elec_tool.config import AppConfig, TransformConfig
@@ -139,3 +141,61 @@ def test_engine_warns_when_phase_missing_or_signs_disagree(tmp_path):
     errs = det.summary()["errors"]
     assert sum("数据体检" in e for e in errs) == 1
     assert any("B 相电流≈0" in e and "符号不一致" in e for e in errs)
+
+
+def test_v093_phase_signs_and_scale_current():
+    """v0.93：分相极性反转只翻指定相；与全局反转叠加。"""
+    from elec_tool.scaling import scale_current
+    tr = TransformConfig(enabled=False, invert_phases="A")
+    assert tr.phase_signs() == [-1.0, 1.0, 1.0]
+    i = np.ones((3, 4)); out = scale_current(i, tr)
+    assert out[0, 0] == -1.0 and out[1, 0] == 1.0 and out[2, 0] == 1.0
+    tr2 = TransformConfig(enabled=True, ct_ratio=15, invert_current=True, invert_phases="C")
+    assert tr2.phase_signs() == [-1.0, -1.0, 1.0]
+    assert np.allclose(scale_current(i, tr2)[:, 0], [-15, -15, 15])
+    with pytest.raises(ConfigError):
+        TransformConfig(wiring="xx").validate()
+    with pytest.raises(ConfigError):
+        TransformConfig(invert_phases="D").validate()
+
+
+def test_v093_three_wire_bus_detects_after_wiring_and_polarity_fix(tmp_path):
+    """v0.93：三相三线两表法（A/C 列为 Uab/Ucb、B 无 CT）+ A 相 CT 接反：
+    原样 → 无候选 + 体检提示；wiring=3p3w + invert_phases=A → 提示消失、停机命中。"""
+    import json
+    from elec_tool.nilm import NilmDetector
+    from elec_tool.scaling import scale_block
+    from elec_tool.sources import create_source
+    # 设备侧用 T._dev（600 W 台阶、pf 0.9）；总线侧同一设备装在三相三线两表法回路：A/C 电压列=Uab/Ucb、B 无 CT、A 相 CT 接反
+    t_, u, i = T._wave(T._dev, 20.0, pf=0.9)
+    t = t_ - T.T0
+    u3 = np.vstack([u[0] - u[1], np.zeros(t.size), u[2] - u[1]]); i3 = np.vstack([-i[0], np.zeros(t.size), i[2]])
+    f = str(tmp_path / "bus.csv"); T._write_csv(f, T.T0 + t, u3, i3)
+    c = AppConfig(); c.transform.enabled = False
+    d = str(tmp_path / "dev.csv"); T._write_csv(d, t_, u, i)
+    prof = build_profile(c, d, device_id="d", labels=T._labels(), pre_cycles=10, post_cycles=50)
+    pp = str(tmp_path / "p.json"); json.dump(prof, open(pp, "w"))
+
+    def run(wiring, inv):
+        c2 = AppConfig(); c2.transform.enabled = False; c2.transform.wiring = wiring; c2.transform.invert_phases = inv
+        c2.source.kind = "csv_file"; c2.source.path = f; c2.source.file_speed = 0.0; c2.nilm.enabled = True; c2.nilm.save = False
+        for a in c2.nilm.algorithms: c2.nilm.algorithms[a]["enabled"] = False
+        c2.nilm.algorithms["profile"] = {"enabled": True}; c2.nilm.profile_path = pp
+        det = NilmDetector(c2, root=str(tmp_path)); evs = []
+        with create_source(c2) as src:
+            while True:
+                b = src.read()
+                if b is None:
+                    if src.exhausted: break
+                    continue
+                evs += det.ingest(scale_block(b, c2.transform))
+        return evs, det.summary()["errors"]
+
+    evs, errs = run("3p4w", "")
+    assert not evs and any("数据体检" in e and "B 相电流≈0" in e and "CT 极性可能接反" in e for e in errs)
+    evs, errs = run("3p3w", "")
+    assert any("符号不一致" in e and "B 相电流≈0" not in e for e in errs)
+    evs, errs = run("3p3w", "A")
+    assert not any("数据体检" in e for e in errs)
+    stops = [e for e in evs if e.get("algorithm") == "profile" and e.get("profile_direction") == "STOP"]
+    assert len(stops) >= 2 and any(abs((float(st["t_start"]) % 86400) - ((T.T0 + 5.0) % 86400)) < 0.3 for st in stops)

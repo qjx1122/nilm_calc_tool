@@ -45,15 +45,19 @@ def apply_set(cfg: AppConfig, items: List[str]) -> List[str]:
             v = float(val)
         except ValueError:
             v = val.strip().lower() in ("1", "true", "on", "yes", "y")
-        if head == "nilm":
+        if head == "transform":   # v0.93：--set transform.wiring=3p3w / transform.invert_phases=A / transform.invert_current=1
+            cur = getattr(cfg.transform, name)
+            setattr(cfg.transform, name, (val.strip() if isinstance(cur, str) else (bool(v) if isinstance(cur, bool) else v)))
+            cfg.transform.validate()
+        elif head == "nilm":
             setattr(cfg.nilm, name, (val.strip() if name in ("quantity", "profile_path") else v))   # v0.91：字符串字段原样
         elif head in NILM_ALGO_DEFAULTS:
             cur = dict(cfg.nilm.algorithms.get(head) or {})
             cur[name] = (bool(v) if name == "enabled" else v)
             cfg.nilm.algorithms[head] = cur
         else:
-            raise SystemExit(f"--set 不认识的键：{key}（应为 nilm.xxx 或 <算法>.xxx，算法 = {list(NILM_ALGO_DEFAULTS)}）")
-        notes.append(f"{key} = {val.strip() if (head == 'nilm' and name in ('quantity', 'profile_path')) else v}")
+            raise SystemExit(f"--set 不认识的键：{key}（应为 nilm.xxx / transform.xxx 或 <算法>.xxx，算法 = {list(NILM_ALGO_DEFAULTS)}）")
+        notes.append(f"{key} = {val.strip() if head == 'transform' or (head == 'nilm' and name in ('quantity', 'profile_path')) else v}")
     return notes
 
 
