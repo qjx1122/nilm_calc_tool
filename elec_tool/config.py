@@ -829,6 +829,10 @@ class NilmConfig:
     #   （噪声 σ / 稳定周波 / 最短稳态 / 暂态时长 / 最小幅值 / 各门限，见 nilm_auto.py），下方各算法数值与 rel_tol_pct /
     #   min_delta_pct 不再参与（算法 enabled 仍由配置决定）；两侧各自独立配置、各自按本侧数据推导（v0.88）。
     auto_params: bool = False
+    # v0.99.17：性能。eval_every_cycles＝每进多少个新周波评估一次全部算法（1＝每块都评估，旧行为；默认 10≈0.2 s，事件时刻不变、
+    #   只影响上报延迟）；auto_stats_every_cycles＝自适应公共统计量（σ/Allan/τ…）每多少周波重算一次（默认 50≈1 s）。
+    eval_every_cycles: int = 10
+    auto_stats_every_cycles: int = 50
     # v0.90：设备画像文件路径（tools/nilm_profile.py 或数据处理页「设备画像提取」生成的 JSON；相对路径相对仓库根）。
     #   空＝未加载画像，algorithms.profile.enabled 即使为 true 也不检测并在 summary.notes 说明。
     profile_path: str = ""
@@ -847,6 +851,8 @@ class NilmConfig:
             raise ConfigError(f"nilm.quantity 必须是 {NILM_QUANTITIES} 之一（当前 {self.quantity!r}）")
         if not self.channels or any(c not in NILM_CHANNELS for c in self.channels):
             raise ConfigError(f"nilm.channels 必须是 {NILM_CHANNELS} 的非空子集（当前 {self.channels}）")
+        self.eval_every_cycles = max(1, int(float(getattr(self, "eval_every_cycles", 10) or 1)))
+        self.auto_stats_every_cycles = max(1, int(float(getattr(self, "auto_stats_every_cycles", 50) or 1)))
         if int(self.window_cycles) < 30:
             raise ConfigError(f"nilm.window_cycles 必须 ≥ 30（当前 {self.window_cycles}）")
         if int(self.min_gap_cycles) < 0:

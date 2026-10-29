@@ -365,6 +365,27 @@ def detect_steps(algo: str, p: np.ndarray, prm: Dict[str, Any]) -> List[Step]:
     return _ALGOS[algo](np.asarray(p, dtype=np.float64), prm)
 
 
+def _lookback_cycles(algo: str, prm: Dict[str, Any]) -> int:
+    """v0.99.17：某算法判定一个台阶所需的最大回看跨度（周波）——用于只在窗口尾部切片上运行算法（性能）。
+    threshold/median_diff：settle + max_rise（+ median 窗）；two_window：pre + post；glr：2×window；
+    steady_state：2×min_steady + max_transient；cusum：累积和理论上无界，按 门限/漂移 + settle 估计其有效记忆。"""
+    g = lambda k, d=0: int(float(prm.get(k, d) or 0))
+    if algo == "threshold":
+        return g("settle_cycles", 5) + g("max_rise_cycles", 40)
+    if algo == "median_diff":
+        return g("median_cycles", 5) + g("settle_cycles", 5) + g("max_rise_cycles", 40)
+    if algo == "two_window":
+        return g("pre_cycles", 10) + g("post_cycles", 10)
+    if algo == "glr":
+        return 2 * g("window_cycles", 15) + g("settle_cycles", 5)
+    if algo == "steady_state":
+        return 2 * g("min_steady_cycles", 10) + g("max_transient_cycles", 100)
+    if algo == "cusum":
+        dr = float(prm.get("drift_w", 0) or 0); th = float(prm.get("threshold_w", 0) or 0)
+        return int(min(2000, (th / dr if dr > 0 else 200))) + g("settle_cycles", 5)
+    return 200
+
+
 def _confirm_cycles(algo: str, prm: Dict[str, Any]) -> int:
     """事件终点之后至少要再看到多少个周波才算「确认」（终点才不会随新数据改变）。"""
     if algo == "two_window":
@@ -467,6 +488,11 @@ class NilmDetector:
         # v0.36：电压存在性（数据源只有电流时 u 全 0）；quantity=auto 据此选检测量
         self._u_blocks = 0
         self._u_nonzero_blocks = 0
+        # v0.99.17：性能——评估节流 / 自适应统计缓存 / 尾部切片
+        self._since_eval = 0                                     # 上次评估以来新进的周波数
+        self._pending_eval = 0                                   # 本次评估覆盖的新周波数（切片长度依据）
+        self._auto_cache: Dict[str, Tuple[int, Any]] = {}        # ch → (推导时的 g_last, stats)
+        self.eval_count = 0
         # v0.87：自适应参数——最近一次评估每个对象推导出的公共统计量与各算法参数（供界面 / 等价命令查看）
         self.auto_last: Dict[str, Dict[str, Any]] = {}
         # v0.90：设备画像（algorithm=profile）
@@ -549,6 +575,14 @@ class NilmDetector:
                 cut = self._t.shape[0] - W
                 self._t = self._t[cut:]; self._p = self._p[:, cut:]; self._q = self._q[:, cut:]; self._i = self._i[:, cut:]
                 self._g0 += cut
+            # v0.99.17：评估节流——每 eval_every_cycles 个新周波评估一次（640 样本/块 ≈ 3.2 周波，原来每块都对整窗重跑 7 种算法）
+            self._since_eval += m
+            every = max(1, int(getattr(self.ncfg, "eval_every_cycles", 10) or 1))
+            if self._since_eval < every:
+                return []
+            self._pending_eval = self._since_eval
+            self._since_eval = 0
+            self.eval_count += 1
             new = self._evaluate()
             for ev in new:
                 self._log.append(ev)
@@ -590,7 +624,14 @@ class NilmDetector:
             level = float(np.median(np.abs(p))) if p.size else 0.0
             st = None
             if auto:
-                st = window_stats(p, self.feat.f_nom)
+                # v0.99.17：公共统计量按 auto_stats_every_cycles 周波重算一次（整窗多尺度 MAD/Allan 约 3 ms/次，原来每块都算）
+                cached = self._auto_cache.get(ch)
+                a_every = max(1, int(getattr(self.ncfg, "auto_stats_every_cycles", 50) or 1))
+                if cached is not None and cached[1] is not None and g_last - cached[0] < a_every and cached[2] == qty:
+                    st = cached[1]
+                else:
+                    st = window_stats(p, self.feat.f_nom)
+                    self._auto_cache[ch] = (g_last, st, qty)
                 if st is None:
                     continue                                   # 窗内数据不足 AUTO_MIN_CYCLES：等更多数据
                 self.auto_last[ch] = {"stats": st, "algorithms": {}, "quantity": qty, "unit": "W" if qty == "p" else "A"}
@@ -605,17 +646,31 @@ class NilmDetector:
                     if qty == "i":
                         prm = params_for_current(prm)              # v0.37：I 口径用 *_a（A）这套绝对阈值
                     prm = effective_params(prm, level, rel_tol, min_pct)
+                # v0.99.17：只在窗口尾部切片上跑算法——已确认事件（≤ last_end+gap）不会再报，能产生新事件的只有
+                #   最近 pending 个新周波附近；切片 = 新周波 + 确认周波 + 3×算法回看跨度 + gap，再往前的数据对结果无影响
+                confirm = _confirm_cycles(algo, prm)
+                lb = _lookback_cycles(algo, prm)
+                tail = int(self._pending_eval) + confirm + 3 * lb + gap + 20
+                off = max(0, L - tail) if tail < L else 0
+                key = (algo, ch)
+                if off:
+                    # 切片不能从上一个已确认事件的过渡段中间开始（cusum 以段首 settle 周波为基准 μ，steady_state 以稳态段起算）：
+                    #   若上一事件离窗尾不远（≤ 4×tail），把切片起点提前到该事件终点之前 lb 周波，让算法在同一稳态上重新建立基准
+                    le = self._last_end.get(key)
+                    if le is not None:
+                        le_i = le - self._g0
+                        if 0 <= le_i < L and (L - le_i) <= 4 * tail:
+                            off = min(off, max(0, le_i - lb))
                 try:
-                    steps = detect_steps(algo, p, prm)
+                    steps = detect_steps(algo, p[off:] if off else p, prm)
                 except Exception as exc:
                     msg = f"{algo} 检测异常：{type(exc).__name__}: {exc}"
                     if msg not in self.errors:
                         self.errors.append(msg)
                     continue
-                confirm = _confirm_cycles(algo, prm)
-                key = (algo, ch)
                 last_end = self._last_end.get(key, -gap - 1)          # v0.92.2：初值 −1 会把文件头 gap 个周波内的事件全部压掉
                 for onset, end, pre, post, score in steps:
+                    onset += off; end += off                             # 切片索引 → 窗内索引
                     g_on, g_end = self._g0 + onset, self._g0 + end
                     if g_on <= last_end + gap:                  # 已报过（或与上一事件太近）
                         continue

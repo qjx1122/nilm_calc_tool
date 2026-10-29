@@ -1174,3 +1174,5 @@ U10-4 B/C 相为 0：____  U10-5 列号交换：Ia≈____  U10-6 无时间戳：
 **未能核实**：画像文件 output/nilm/profile_设备1_20261028_165536.json 与原始 CSV 不在 tmp/，pre/post_cycles、dur、sigma 与周波级 σ 为推断值。
 
 - v0.99.15（2026-10-29）：针对上节两条根因的代码改进已实现——auto `sigma_block/sigma_eff/drift_ratio`，画像 `max_scale`；合成实验：随机游走背景（周波 σ 0.42，50 周波漂移 ≈2.8）下 min_delta 由 1.55 → 8.9（drift_ratio 5.7）；3 s 快降 + τ=6 s 尾的 −34 A/相慢停机，单尺度 0 候选、×8 尺度 1 候选（ΔIa −27 A，STOP）。全量 pytest 456 passed。
+
+- v0.99.17（2026-10-29）：性能剖析（cProfile，config_bus.json 参数，10 kHz，640 样本/块）：优化前 `_evaluate` 占 98%，其中 detect_steps 67%（cusum/steady/threshold 纯 Python 循环遍历整窗）、window_stats 27%（多滞后 MAD median）；优化后单块 1.3 ms，评估次数 1/3，全量 pytest 459 passed。
