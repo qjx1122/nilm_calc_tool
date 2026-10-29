@@ -1044,6 +1044,14 @@
                 <label>PT 变比 <input id="nt-base-pt" type="number" min="0.000001" step="any"></label>
                 <label>CT 变比 <input id="nt-base-ct" type="number" min="0.000001" step="any"></label>
               </div>
+              <div class="row2" title="v0.95：接线方式 / CT 极性（与运行配置「量纲与口径」同名项同义；调参、画像提取按此换算后再分析）">
+                <label>接线方式 <select id="nt-base-wiring"><option value="3p4w">三相四线（三 CT）</option><option value="3p3w">三相三线两表法（B 相无 CT）</option></select></label>
+                <label class="check"><input id="nt-base-recon3w" type="checkbox"> 3P3W 虚拟中性点重构（Ib=−(Ia+Ic)，相电压由 Uab/Ucb 重构）</label>
+              </div>
+              <div class="row2">
+                <label class="check"><input id="nt-base-inv" type="checkbox"> 电流极性反转（三相同时取反）</label>
+                <label>分相电流极性反转 <span class="chk"><input id="nt-base-inv-a" type="checkbox"> A <input id="nt-base-inv-b" type="checkbox"> B <input id="nt-base-inv-c" type="checkbox"> C</span></label>
+              </div>
             <div class="colmap-blk" id="nt-cm-blk" title="离线文件列映射：不启用＝各列依次为 时间, A相电压, A相电流, B相电压, B相电流, C相电压, C相电流（表头可识别时按表头）；启用＝只按下面填写的列号取列">
               <label class="chk"><input id="nt-cm-on" type="checkbox"><span>启用离线文件列映射<small class="note">默认不启用：各列依次为 时间, A相电压, A相电流, B相电压, B相电流, C相电压, C相电流（表头可识别时按表头）；启用后只按下面的列号取列（从 1 起）</small></span></label>
               <div class="colmap-row" id="nt-cm-row" style="display:none"><label title="时间所在列号（从 1 起；空＝不映射）">时间 <input id="nt-cm-ts" type="number" min="1" step="1" value="1"></label><label title="A相电压所在列号（从 1 起；空＝不映射）">A相电压 <input id="nt-cm-ua" type="number" min="1" step="1" value="2"></label><label title="A相电流所在列号（从 1 起；空＝不映射）">A相电流 <input id="nt-cm-ia" type="number" min="1" step="1" value="3"></label><label title="B相电压所在列号（从 1 起；空＝不映射）">B相电压 <input id="nt-cm-ub" type="number" min="1" step="1" value="4"></label><label title="B相电流所在列号（从 1 起；空＝不映射）">B相电流 <input id="nt-cm-ib" type="number" min="1" step="1" value="5"></label><label title="C相电压所在列号（从 1 起；空＝不映射）">C相电压 <input id="nt-cm-uc" type="number" min="1" step="1" value="6"></label><label title="C相电流所在列号（从 1 起；空＝不映射）">C相电流 <input id="nt-cm-ic" type="number" min="1" step="1" value="7"></label></div>
@@ -1158,6 +1166,14 @@
               <div class="row2">
                 <label>PT 变比 <input id="wp-base-pt" type="number" min="0.000001" step="any"></label>
                 <label>CT 变比 <input id="wp-base-ct" type="number" min="0.000001" step="any"></label>
+              </div>
+              <div class="row2" title="v0.95：接线方式 / CT 极性（与运行配置「量纲与口径」同名项同义；曲线按此换算后显示）">
+                <label>接线方式 <select id="wp-base-wiring"><option value="3p4w">三相四线（三 CT）</option><option value="3p3w">三相三线两表法（B 相无 CT）</option></select></label>
+                <label class="chk"><input id="wp-base-recon3w" type="checkbox"> 3P3W 虚拟中性点重构（Ib=−(Ia+Ic)，相电压由 Uab/Ucb 重构）</label>
+              </div>
+              <div class="row2">
+                <label class="chk"><input id="wp-base-inv" type="checkbox"> 电流极性反转（三相同时取反）</label>
+                <label>分相电流极性反转 <span class="chk"><input id="wp-base-inv-a" type="checkbox"> A <input id="wp-base-inv-b" type="checkbox"> B <input id="wp-base-inv-c" type="checkbox"> C</span></label>
               </div>
             <div class="colmap-blk" id="wp-cm-blk" title="离线文件列映射：不启用＝各列依次为 时间, A相电压, A相电流, B相电压, B相电流, C相电压, C相电流（表头可识别时按表头）；启用＝只按下面填写的列号取列">
               <label class="chk"><input id="wp-cm-on" type="checkbox"><span>启用离线文件列映射<small class="note">默认不启用：各列依次为 时间, A相电压, A相电流, B相电压, B相电流, C相电压, C相电流（表头可识别时按表头）；启用后只按下面的列号取列（从 1 起）</small></span></label>

@@ -36,6 +36,19 @@ from elec_tool.nilm_tuning import (TuneError, _SUFFIX, _ceil_sig, export_tuned_c
                                    suggest)
 
 
+def _apply_wiring_args(cfg, a):
+    """v0.95：命令行接线 / 极性覆盖配置 transform 同名项。"""
+    if a.wiring:
+        cfg.transform.wiring = a.wiring
+    if a.reconstruct_3w:
+        cfg.transform.reconstruct_3w = True
+    if a.invert_current:
+        cfg.transform.invert_current = True
+    if a.invert_phases is not None:
+        cfg.transform.invert_phases = "".join(ch for ch in a.invert_phases.upper() if ch in "ABC")
+    cfg.transform.validate()
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--file", required=True, help="背景数据 CSV（与数据源同格式）")
@@ -59,6 +72,10 @@ def main() -> int:
     ap.add_argument("--custom-time-start", default="", help="自定义起始时间（空＝文件第 1 条数据时间）")
     ap.add_argument("--custom-time-end", default="", help="自定义结束时间（空＝起始 + 点数/采样率；作为 --t-end 为空时的缺省终点）")
     ap.add_argument("--max-cycles", type=int, default=30000, help="最多分析的周波数（默认 30000 ≈ 10 min@50Hz）")
+    ap.add_argument("--wiring", default=None, choices=("3p4w", "3p3w"), help="v0.95：接线方式（覆盖配置 transform.wiring）")
+    ap.add_argument("--reconstruct-3w", action="store_true", help="v0.95：3P3W 虚拟中性点重构（覆盖配置 transform.reconstruct_3w）")
+    ap.add_argument("--invert-current", action="store_true", help="v0.95：三相电流极性反转（覆盖配置 transform.invert_current）")
+    ap.add_argument("--invert-phases", default=None, help="v0.95：分相电流极性反转，如 A / AC（覆盖配置 transform.invert_phases）")
     ap.add_argument("--json", action="store_true", help="只输出 JSON")
     ap.add_argument("--apply", action="store_true",
                     help="v0.50：把建议参数叠加到 --config 配置上，写出更新后的完整配置到输出目录（默认 output/nilm/"
@@ -70,6 +87,7 @@ def main() -> int:
 
     cfg_path = a.config or _default_config_path()
     base_cfg = load_or_default(cfg_path, strict=bool(a.config))
+    _apply_wiring_args(base_cfg, a)
     try:
         out = run_tune(base_cfg, a.file, channel=a.channel, quantity=a.quantity, min_load_w=a.min_load_w,
                        min_load_a=a.min_load_a, max_cycles=a.max_cycles, t_start=a.t_start, t_end=a.t_end,

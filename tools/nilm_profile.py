@@ -59,6 +59,19 @@ def build_cli_command(file: str, *, device: str, config=None, labels=None, label
     return " ".join(parts)
 
 
+def _apply_wiring_args(cfg, a):
+    """v0.95：命令行接线 / 极性覆盖配置 transform 同名项。"""
+    if a.wiring:
+        cfg.transform.wiring = a.wiring
+    if a.reconstruct_3w:
+        cfg.transform.reconstruct_3w = True
+    if a.invert_current:
+        cfg.transform.invert_current = True
+    if a.invert_phases is not None:
+        cfg.transform.invert_phases = "".join(ch for ch in a.invert_phases.upper() if ch in "ABC")
+    cfg.transform.validate()
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--file", required=True, help="设备侧波形 CSV")
@@ -73,10 +86,15 @@ def main() -> int:
     ap.add_argument("--t-start", default=""); ap.add_argument("--t-end", default="")
     ap.add_argument("--custom-time", action="store_true"); ap.add_argument("--custom-time-start", default=""); ap.add_argument("--custom-time-end", default="")
     ap.add_argument("--out", default=None, help="输出画像 JSON 路径（默认 <nilm_dir>/profile_<device>_<时间戳>.json）")
+    ap.add_argument("--wiring", default=None, choices=("3p4w", "3p3w"), help="v0.95：接线方式（覆盖配置 transform.wiring）")
+    ap.add_argument("--reconstruct-3w", action="store_true", help="v0.95：3P3W 虚拟中性点重构（覆盖配置 transform.reconstruct_3w）")
+    ap.add_argument("--invert-current", action="store_true", help="v0.95：三相电流极性反转（覆盖配置 transform.invert_current）")
+    ap.add_argument("--invert-phases", default=None, help="v0.95：分相电流极性反转，如 A / AC（覆盖配置 transform.invert_phases）")
     ap.add_argument("--json", action="store_true", help="把画像文档打印到 stdout")
     a = ap.parse_args()
     try:
         cfg = load_or_default(a.config, strict=True)
+        _apply_wiring_args(cfg, a)
         labels_txt = None
         if a.labels:
             if os.path.isfile(a.labels):

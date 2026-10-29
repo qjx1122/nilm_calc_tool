@@ -3933,6 +3933,7 @@ function ntBase() {
   const c = id => { const el = $('#' + id); return el && el.checked ? '1' : '0'; };
   return { fs: v('nt-base-fs'), f_nom: v('nt-base-fnom'), pt_ct_enabled: c('nt-base-ptct'), pt_ratio: v('nt-base-pt'),
            ct_ratio: v('nt-base-ct'), file_time_utc: c('nt-base-utc'),   // 检测量只在「检测量」下拉填一处（v0.72.1 去重）
+           wiring: v('nt-base-wiring') || '3p4w', reconstruct_3w: c('nt-base-recon3w'), invert_current: c('nt-base-inv'), invert_phases: getInvPhases('nt-base'),   // v0.95
            col_map_enabled: cmEnabled('nt-cm'), col_map: cmMap('nt-cm') };   // v0.86：列映射随基准配置存浏览器本地（服务端按顶层 col_map* 读取）
 }
 function ntSetBase(b) {
@@ -3942,6 +3943,10 @@ function ntSetBase(b) {
   set('nt-base-fs', b.fs); set('nt-base-fnom', b.f_nom); set('nt-base-pt', b.pt_ratio); set('nt-base-ct', b.ct_ratio);
   if ($('#nt-base-ptct') && b.pt_ct_enabled !== undefined) $('#nt-base-ptct').checked = on(b.pt_ct_enabled);
   if ($('#nt-base-utc') && b.file_time_utc !== undefined) $('#nt-base-utc').checked = on(b.file_time_utc);
+  if (b.wiring !== undefined) set('nt-base-wiring', b.wiring || '3p4w');
+  if ($('#nt-base-recon3w') && b.reconstruct_3w !== undefined) $('#nt-base-recon3w').checked = on(b.reconstruct_3w);
+  if ($('#nt-base-inv') && b.invert_current !== undefined) $('#nt-base-inv').checked = on(b.invert_current);
+  if (b.invert_phases !== undefined) setInvPhases('nt-base', b.invert_phases);
   if (b.col_map_enabled !== undefined) cmSet('nt-cm', on(b.col_map_enabled), b.col_map);
 }
 function ntSaveBase() { if (ntBaseMode() !== 'custom') return; try { localStorage.setItem(NT_BASE_KEY, JSON.stringify(ntBase())); } catch (e) { /* 隐私模式 */ } }
@@ -3959,7 +3964,8 @@ function ntSyncBaseUI() {
   // v0.73：基准配置分组始终显示；独立＝可编辑；沿用某侧＝全部字段显示该侧运行配置值并禁用（检测量 / 检测对象也在分组内）
   const t = $('#nt-base-title'); if (t) t.textContent = custom ? '独立基准配置（与两侧运行配置互不关联，可单独修改）' : `基准配置（沿用${sideName}运行配置，不可修改）`;
   const fo = $('#nt-quantity-follow'); if (fo) fo.textContent = custom ? '默认（出厂缺省 auto：无电压→I）' : '跟随配置 nilm.quantity';
-  ['nt-base-fs', 'nt-base-fnom', 'nt-base-pt', 'nt-base-ct', 'nt-base-ptct', 'nt-base-utc', 'nt-quantity', 'nt-channel'].forEach(id => { const el = $('#' + id); if (el) el.disabled = !custom; });
+  ['nt-base-fs', 'nt-base-fnom', 'nt-base-pt', 'nt-base-ct', 'nt-base-ptct', 'nt-base-utc', 'nt-quantity', 'nt-channel',
+   'nt-base-wiring', 'nt-base-recon3w', 'nt-base-inv', 'nt-base-inv-a', 'nt-base-inv-b', 'nt-base-inv-c'].forEach(id => { const el = $('#' + id); if (el) el.disabled = !custom; });
   ['btn-nt-base-default', 'btn-nt-base-bus', 'btn-nt-base-branch'].forEach(id => { const el = $('#' + id); if (el) el.style.display = custom ? '' : 'none'; });
   const q = $('#nt-quantity'), ch = $('#nt-channel');
   if (q && ch) {
@@ -4111,6 +4117,7 @@ function wpBase() {
   // v0.65：采样率由文件数据时间推算、不可改 ⇒ 不再作为基准配置上送（wp-base-fs 只显示）
   return { f_nom: wpVal('wp-base-fnom'), pt_ct_enabled: chk('wp-base-ptct'),
            pt_ratio: wpVal('wp-base-pt'), ct_ratio: wpVal('wp-base-ct'), file_time_utc: chk('wp-base-utc'),
+           wiring: wpVal('wp-base-wiring') || '3p4w', reconstruct_3w: chk('wp-base-recon3w'), invert_current: chk('wp-base-inv'), invert_phases: getInvPhases('wp-base'),   // v0.95
            // v0.64：自定义时间（启用时：时间轴＝自定义起始(空＝文件数据起始) + 行号/fs；结束空＝按采样率计算）
            custom_time: custom, custom_time_start: custom === '1' ? wpVal('wp-base-cstart') : '', custom_time_end: custom === '1' ? wpVal('wp-base-cend') : '',
            ...cmQuery('wp-cm') };                                                     // v0.86：离线文件列映射
@@ -4133,6 +4140,11 @@ function wpSetBase(b) {
   set('wp-base-fnom', b.f_nom); set('wp-base-pt', b.pt_ratio); set('wp-base-ct', b.ct_ratio);
   if ($('#wp-base-ptct')) $('#wp-base-ptct').checked = !!(b.pt_ct_enabled === true || b.pt_ct_enabled === '1' || b.pt_ct_enabled === 1);
   if ($('#wp-base-utc')) $('#wp-base-utc').checked = !!(b.file_time_utc === true || b.file_time_utc === '1' || b.file_time_utc === 1);
+  const on1 = x => (x === true || x === '1' || x === 1 || x === 'true');
+  if (b.wiring !== undefined) set('wp-base-wiring', b.wiring || '3p4w');
+  if ($('#wp-base-recon3w') && b.reconstruct_3w !== undefined) $('#wp-base-recon3w').checked = on1(b.reconstruct_3w);
+  if ($('#wp-base-inv') && b.invert_current !== undefined) $('#wp-base-inv').checked = on1(b.invert_current);
+  if (b.invert_phases !== undefined) setInvPhases('wp-base', b.invert_phases);
   if ($('#wp-base-custom') && b.custom_time !== undefined) $('#wp-base-custom').checked = !!(b.custom_time === true || b.custom_time === '1' || b.custom_time === 1);
   set('wp-base-cstart', b.custom_time_start); set('wp-base-cend', b.custom_time_end);
   if (b.max_points !== undefined && b.max_points !== null && b.max_points !== '') set('wp-maxpts', b.max_points);
@@ -4348,7 +4360,8 @@ function bindWavePreview() {
   if (!$('#wp-form')) return;
   $('#wp-files').addEventListener('change', () => { if ($('#wp-files').value) { $('#wp-path').value = $('#wp-files').value; WP.info = null; wpInfo(true); } });
   $('#wp-path').addEventListener('change', () => { WP.info = null; const fsEl = $('#wp-base-fs'); if (fsEl) fsEl.value = ''; });
-  ['wp-base-fnom', 'wp-base-pt', 'wp-base-ct', 'wp-base-ptct', 'wp-base-utc', 'wp-base-custom', 'wp-base-cstart', 'wp-base-cend'].forEach(id => $('#' + id).addEventListener('change', () => { WP.info = null; wpSaveBase(); wpSyncCustom(); }));
+  ['wp-base-fnom', 'wp-base-pt', 'wp-base-ct', 'wp-base-ptct', 'wp-base-utc', 'wp-base-custom', 'wp-base-cstart', 'wp-base-cend',
+   'wp-base-wiring', 'wp-base-recon3w', 'wp-base-inv', 'wp-base-inv-a', 'wp-base-inv-b', 'wp-base-inv-c'].forEach(id => $('#' + id).addEventListener('change', () => { WP.info = null; wpSaveBase(); wpSyncCustom(); }));
   $('#btn-wp-cyc2-clear') && $('#btn-wp-cyc2-clear').addEventListener('click', () => { WP.cyc2 = null; renderWavePreview(); });
   $('#wp-maxpts').addEventListener('change', wpSaveBase);
   cmBind('wp-cm', () => { WP.info = null; wpSaveBase(); });   // v0.86：离线文件列映射（波形预览公共配置）
@@ -4434,7 +4447,8 @@ function bindProcess() {
     if ($('#nt-side')) $('#nt-side').addEventListener('change', ntSyncBaseUI);
     if ($('#nt-custom')) { $('#nt-custom').addEventListener('change', ntSyncCustomTime); ntSyncCustomTime(); }
     cmBind('nt-cm', ntSaveBase);                     // v0.86：离线文件列映射（调参，随基准配置存浏览器本地）
-    ['nt-base-fs', 'nt-base-fnom', 'nt-base-pt', 'nt-base-ct', 'nt-base-ptct', 'nt-base-utc'].forEach(id => { const el = $('#' + id); if (el) el.addEventListener('change', ntSaveBase); });
+    ['nt-base-fs', 'nt-base-fnom', 'nt-base-pt', 'nt-base-ct', 'nt-base-ptct', 'nt-base-utc',
+     'nt-base-wiring', 'nt-base-recon3w', 'nt-base-inv', 'nt-base-inv-a', 'nt-base-inv-b', 'nt-base-inv-c'].forEach(id => { const el = $('#' + id); if (el) el.addEventListener('change', ntSaveBase); });
     if ($('#btn-nt-base-default')) $('#btn-nt-base-default').addEventListener('click', async () => { try { await ntLoadBase('default'); toast('基准配置已恢复为出厂值', 'ok'); } catch (e) { toast(e.message, 'err'); } });
     if ($('#btn-nt-base-bus')) $('#btn-nt-base-bus').addEventListener('click', async () => { try { await ntLoadBase('running', 'bus'); toast('已填入总线侧运行配置的值（可再修改，不影响总线侧）', 'ok'); } catch (e) { toast(e.message, 'err'); } });
     if ($('#btn-nt-base-branch')) $('#btn-nt-base-branch').addEventListener('click', async () => { try { await ntLoadBase('running', 'branch'); toast('已填入分路侧运行配置的值（可再修改，不影响分路侧）', 'ok'); } catch (e) { toast(e.message, 'err'); } });

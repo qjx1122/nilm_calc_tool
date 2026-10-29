@@ -409,3 +409,5 @@
 
 - 第 134 轮（分析）：说明 3P3W 总线 vs 3P4W 分路下单相 P/Q/S 不可跨侧迁移（两表法列值随 pf 变），仅线电流与 ΣP/ΣQ 可迁移；提出 v0.94 重构方案。
 - 第 135 轮 v0.94：实施 `reconstruct_3w` 重构开关（scaling.reconstruct_three_wire），nilm/metrics 按 `b_phase_missing`/`voltage_is_line` 联动，两侧 UI 勾选；合成验证与测试通过。
+
+- 第 136 轮 v0.95：检查发现调参/画像/波形预览的独立基准配置缺接线与极性项（后端 scale_block 已支持，只是基准配置传不进去）；补齐 make_base、NT_BASE_KEYS、wave API 参数、两页 UI、CLI 参数、画像 JSON wiring 段；修正 base_defaults 旧断言。

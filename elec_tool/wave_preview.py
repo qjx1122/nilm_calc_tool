@@ -535,6 +535,9 @@ def base_defaults(cfg: AppConfig) -> Dict[str, Any]:
     return {"fs": float(cfg.sampling.fs), "f_nom": float(cfg.sampling.f_nom), "pt_ct_enabled": bool(cfg.transform.enabled),
             "pt_ratio": float(cfg.transform.pt_ratio), "ct_ratio": float(cfg.transform.ct_ratio),
             "file_time_utc": bool(cfg.source.file_time_utc),
+            # v0.95：接线 / 极性（与运行配置 transform 同名同义）
+            "wiring": str(getattr(cfg.transform, "wiring", "3p4w")), "reconstruct_3w": bool(getattr(cfg.transform, "reconstruct_3w", False)),
+            "invert_current": bool(getattr(cfg.transform, "invert_current", False)), "invert_phases": str(getattr(cfg.transform, "invert_phases", "") or ""),
             "custom_time": False, "custom_time_start": "", "custom_time_end": "", "max_points": MAX_POINTS_DEFAULT}
 
 
@@ -613,6 +616,23 @@ def make_base(default_cfg: AppConfig, **overrides: Any) -> AppConfig:
         cfg.transform.enabled = en
     if utc is not None:
         cfg.source.file_time_utc = utc
+    # v0.95：接线方式 / 3P3W 重构 / 电流极性（全局 + 分相）——与运行配置 transform 同名；空＝出厂值
+    wiring = str(overrides.get("wiring") or "").strip().lower()
+    if wiring:
+        if wiring not in ("3p4w", "3p3w"):
+            raise WaveError(f"基准配置 wiring 必须是 3p4w / 3p3w（当前 {wiring!r}）")
+        cfg.transform.wiring = wiring
+    rc = _b("reconstruct_3w"); inv = _b("invert_current")
+    if rc is not None:
+        cfg.transform.reconstruct_3w = rc
+    if inv is not None:
+        cfg.transform.invert_current = inv
+    if overrides.get("invert_phases") is not None:
+        ph = "".join(ch for ch in str(overrides.get("invert_phases") or "").upper() if ch in "ABC")
+        bad = [ch for ch in str(overrides.get("invert_phases") or "").upper() if ch not in "ABC ,/"]
+        if bad:
+            raise WaveError(f"基准配置 invert_phases 只能含 A/B/C（当前 {overrides.get('invert_phases')!r}）")
+        cfg.transform.invert_phases = ph
     cfg.source.custom_time = bool(cust); cfg.source.custom_time_start = ""; cfg.source.play_end_time = ""
     if cust:
         for txt, what in ((cs, "自定义起始时间"), (ce, "自定义结束时间")):

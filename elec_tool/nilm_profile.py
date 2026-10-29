@@ -498,6 +498,8 @@ def build_profile(cfg, file: str, *, device_id: str = "device", labels: Optional
            "quantity": "p" if use_p else "i", "unit": "W" if use_p else "A", "fs": float(c.sampling.fs), "f_nom": cps,
            "n_cycle": int(feat.n_cycle), "pt_ct": {"enabled": bool(c.transform.enabled), "pt_ratio": float(c.transform.pt_ratio),
                                                    "ct_ratio": float(c.transform.ct_ratio)},
+           "wiring": {"wiring": str(getattr(c.transform, "wiring", "3p4w")), "reconstruct_3w": bool(getattr(c.transform, "reconstruct_3w", False)),
+                      "invert_current": bool(getattr(c.transform, "invert_current", False)), "invert_phases": str(getattr(c.transform, "invert_phases", "") or "")},   # v0.95
            "pre_cycles": pre_n, "post_cycles": post_n, "features": list(FEATURES), "feature_names": dict(FEATURE_NAMES),
            "template_points": TEMPLATE_POINTS, "cycles": int(t.size), "t_first": float(t[0]), "t_last": float(t[-1]),
            "steady": {"level_first_window": lv_off}, "startup": startup, "shutdown": shutdown, "notes": notes,

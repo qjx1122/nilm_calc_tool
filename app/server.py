@@ -2521,7 +2521,8 @@ async def process_resample_cancel() -> Dict[str, Any]:
 
 
 # v0.72：负荷辨识调参的「独立基准配置」——出厂配置 configs/default.json + 界面给的几项，不关联两侧运行配置
-NT_BASE_KEYS = ("fs", "f_nom", "pt_ct_enabled", "pt_ratio", "ct_ratio", "file_time_utc")
+NT_BASE_KEYS = ("fs", "f_nom", "pt_ct_enabled", "pt_ratio", "ct_ratio", "file_time_utc",
+                "wiring", "reconstruct_3w", "invert_current", "invert_phases")   # v0.95：接线 / 极性进入基准配置
 NT_BASE_FILE = "nilm_tune_base.json"      # 独立基准配置落盘文件名（nilm_dir 下；每次调参覆盖，供等价命令 --config 复现）
 
 
@@ -2529,7 +2530,9 @@ def _nt_base_fields(cfg: AppConfig) -> Dict[str, Any]:
     return {"fs": float(cfg.sampling.fs), "f_nom": float(cfg.sampling.f_nom), "pt_ct_enabled": bool(cfg.transform.enabled),
             "pt_ratio": float(cfg.transform.pt_ratio), "ct_ratio": float(cfg.transform.ct_ratio),
             "file_time_utc": bool(cfg.source.file_time_utc), "quantity": str(cfg.nilm.quantity),
-            "channel": str((cfg.nilm.channels or ["total"])[0])}
+            "channel": str((cfg.nilm.channels or ["total"])[0]),
+            "wiring": str(cfg.transform.wiring), "reconstruct_3w": bool(cfg.transform.reconstruct_3w),
+            "invert_current": bool(cfg.transform.invert_current), "invert_phases": str(cfg.transform.invert_phases or "")}
 
 
 def _nt_make_base(payload: Dict[str, Any]) -> Tuple[AppConfig, str, Optional[str]]:
@@ -2556,7 +2559,8 @@ def _nt_make_base(payload: Dict[str, Any]) -> Tuple[AppConfig, str, Optional[str
     cfg.validate()
     f = _nt_base_fields(cfg)
     label = (f"独立基准配置（出厂配置 + fs={f['fs']:g} f_nom={f['f_nom']:g} PT/CT={'启用' if f['pt_ct_enabled'] else '关闭'} "
-             f"PT={f['pt_ratio']:g} CT={f['ct_ratio']:g} UTC={'是' if f['file_time_utc'] else '否'} quantity={f['quantity']}）")
+             f"PT={f['pt_ratio']:g} CT={f['ct_ratio']:g} UTC={'是' if f['file_time_utc'] else '否'} quantity={f['quantity']} "
+             f"接线={f['wiring']}{'+重构' if f['reconstruct_3w'] else ''} 极性反转={'全部' if f['invert_current'] else (f['invert_phases'] or '无')}）")
     return cfg, mode, label
 
 
@@ -2827,7 +2831,8 @@ def _wave_base_cfg(fs: Optional[str] = None, f_nom: Optional[str] = None, pt_ct_
                    pt_ratio: Optional[str] = None, ct_ratio: Optional[str] = None, file_time_utc: Optional[str] = None,
                    custom_time: Optional[str] = None, custom_time_start: Optional[str] = None,
                    custom_time_end: Optional[str] = None, col_map_enabled: Optional[str] = None,
-                   col_map: Optional[str] = None) -> AppConfig:
+                   col_map: Optional[str] = None, wiring: Optional[str] = None, reconstruct_3w: Optional[str] = None,
+                   invert_current: Optional[str] = None, invert_phases: Optional[str] = None) -> AppConfig:
     """v0.62：预览用基准配置**独立**于总线 / 分路侧运行配置：出厂配置 configs/default.json 副本 + 界面给的几项
     （采样率 / 额定频率 / PT·CT 启用与变比 / 时标 UTC；v0.64 + 自定义时间 开关 / 起始 / 结束）。不读、不改任何运行配置。
     v0.64：谐波次数限制按 fs 自动放宽（预览不算谐波）。"""
@@ -2835,7 +2840,8 @@ def _wave_base_cfg(fs: Optional[str] = None, f_nom: Optional[str] = None, pt_ct_
     return make_base(AppConfig.load(DEFAULT_CONFIG_PATH), fs=fs, f_nom=f_nom, pt_ct_enabled=pt_ct_enabled,
                      pt_ratio=pt_ratio, ct_ratio=ct_ratio, file_time_utc=file_time_utc,
                      custom_time=custom_time, custom_time_start=custom_time_start, custom_time_end=custom_time_end,
-                     col_map_enabled=col_map_enabled, col_map=col_map)   # v0.86：离线文件列映射（默认不启用）
+                     col_map_enabled=col_map_enabled, col_map=col_map,   # v0.86：离线文件列映射（默认不启用）
+                     wiring=wiring, reconstruct_3w=reconstruct_3w, invert_current=invert_current, invert_phases=invert_phases)   # v0.95
 
 
 WAVE_MAX_POINTS_CAP = 100_000_000      # v0.64：界面可配的「最多加载点数」硬上限（默认 20_000_000）
@@ -2866,13 +2872,14 @@ async def process_wave_defaults() -> Any:
 @app.get("/api/process/wave/info")
 async def process_wave_info(path: str, fs: Optional[str] = None, f_nom: Optional[str] = None, pt_ct_enabled: Optional[str] = None,
                             pt_ratio: Optional[str] = None, ct_ratio: Optional[str] = None, file_time_utc: Optional[str] = None,
+                            wiring: Optional[str] = None, reconstruct_3w: Optional[str] = None, invert_current: Optional[str] = None, invert_phases: Optional[str] = None,
                             custom_time: Optional[str] = None, custom_time_start: Optional[str] = None, custom_time_end: Optional[str] = None,
                             col_map_enabled: Optional[str] = None, col_map: Optional[str] = None) -> Any:
     """波形文件信息：通道数 / 通道 / 采样率（时标推算，<0.5% 偏差按基准配置值）/ 行数 / 时长（＝行数 / 采样率）/ 起止时间
     （结束＝起始 + (行数−1)/采样率）。基准配置项（fs/f_nom/pt_ct_enabled/pt_ratio/ct_ratio/file_time_utc）独立于运行配置。"""
     from elec_tool.wave_preview import file_info
     try:
-        cfg = _wave_base_cfg(fs, f_nom, pt_ct_enabled, pt_ratio, ct_ratio, file_time_utc, custom_time, custom_time_start, custom_time_end, col_map_enabled, col_map); p = _wave_path(path)
+        cfg = _wave_base_cfg(fs, f_nom, pt_ct_enabled, pt_ratio, ct_ratio, file_time_utc, custom_time, custom_time_start, custom_time_end, col_map_enabled, col_map, wiring, reconstruct_3w, invert_current, invert_phases); p = _wave_path(path)
         d = await asyncio.to_thread(file_info, cfg, p)
         d["path_display"] = _display_path(p)
         d["t_start_local"] = fmt_local(d["t_start"]) if d.get("t_start") is not None else None
@@ -2888,13 +2895,14 @@ async def process_wave_load(path: str, t_start: str = "", t_end: str = "", n: Op
                             fs_out: Optional[float] = None, method: str = "linear", channels: str = "", max_points: Optional[str] = None,
                             fs: Optional[str] = None, f_nom: Optional[str] = None, pt_ct_enabled: Optional[str] = None,
                             pt_ratio: Optional[str] = None, ct_ratio: Optional[str] = None, file_time_utc: Optional[str] = None,
+                            wiring: Optional[str] = None, reconstruct_3w: Optional[str] = None, invert_current: Optional[str] = None, invert_phases: Optional[str] = None,
                             custom_time: Optional[str] = None, custom_time_start: Optional[str] = None, custom_time_end: Optional[str] = None,
                             col_map_enabled: Optional[str] = None, col_map: Optional[str] = None) -> Any:
     """按 起止时刻、点数 n 或周波数 n_cycles（都空＝整段；v0.62 界面默认 300 周波）、重采样率 fs_out + 方式 method
     （linear/nearest/fft）、通道 加载一段原始波形（一次侧口径）。fs_out 空＝原采样率；channels 空＝全部。"""
     from elec_tool.wave_preview import load_waveform
     try:
-        cfg = _wave_base_cfg(fs, f_nom, pt_ct_enabled, pt_ratio, ct_ratio, file_time_utc, custom_time, custom_time_start, custom_time_end, col_map_enabled, col_map); p = _wave_path(path)
+        cfg = _wave_base_cfg(fs, f_nom, pt_ct_enabled, pt_ratio, ct_ratio, file_time_utc, custom_time, custom_time_start, custom_time_end, col_map_enabled, col_map, wiring, reconstruct_3w, invert_current, invert_phases); p = _wave_path(path)
         n_pts: Optional[int] = None; n_cyc: Optional[int] = None
         if n is not None and str(n).strip() != "":
             n_pts = int(float(str(n).strip()))
@@ -2921,12 +2929,13 @@ async def process_wave_rms(path: str, t_start: str = "", t_end: str = "", durati
                            agg_cycles: int = 1, max_points: int = 200_000,
                            fs: Optional[str] = None, f_nom: Optional[str] = None, pt_ct_enabled: Optional[str] = None,
                            pt_ratio: Optional[str] = None, ct_ratio: Optional[str] = None, file_time_utc: Optional[str] = None,
+                            wiring: Optional[str] = None, reconstruct_3w: Optional[str] = None, invert_current: Optional[str] = None, invert_phases: Optional[str] = None,
                             custom_time: Optional[str] = None, custom_time_start: Optional[str] = None, custom_time_end: Optional[str] = None,
                             col_map_enabled: Optional[str] = None, col_map: Optional[str] = None) -> Any:
     """指定时间段的逐周波有效值曲线（Ua/Ub/Uc/Ia/Ib/Ic）；点数过多时自动合并相邻周波。"""
     from elec_tool.wave_preview import rms_curve
     try:
-        cfg = _wave_base_cfg(fs, f_nom, pt_ct_enabled, pt_ratio, ct_ratio, file_time_utc, custom_time, custom_time_start, custom_time_end, col_map_enabled, col_map); p = _wave_path(path)
+        cfg = _wave_base_cfg(fs, f_nom, pt_ct_enabled, pt_ratio, ct_ratio, file_time_utc, custom_time, custom_time_start, custom_time_end, col_map_enabled, col_map, wiring, reconstruct_3w, invert_current, invert_phases); p = _wave_path(path)
         chans = [c for c in str(channels or "").split(",") if c.strip()] or None
         d = await asyncio.to_thread(rms_curve, cfg, p, t_start=t_start, t_end=t_end, duration_s=duration_s, channels=chans,
                                     agg_cycles=max(1, int(agg_cycles or 1)), max_points=max(10, min(int(max_points), 2_000_000)))

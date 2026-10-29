@@ -108,7 +108,8 @@ def test_make_base_independent(cfg, wave_file):
     from elec_tool.wave_preview import base_defaults, load_waveform, make_base, WaveError
     bd = base_defaults(cfg)
     assert bd == {"fs": 6400.0, "f_nom": 50.0, "pt_ct_enabled": True, "pt_ratio": 100.0, "ct_ratio": 15.0, "file_time_utc": False,
-                  "custom_time": False, "custom_time_start": "", "custom_time_end": "", "max_points": 20_000_000}   # v0.64 +4
+                  "custom_time": False, "custom_time_start": "", "custom_time_end": "", "max_points": 20_000_000,   # v0.64 +4
+                  "wiring": "3p4w", "reconstruct_3w": False, "invert_current": False, "invert_phases": ""}         # v0.95 +4
     b = make_base(cfg, fs="6400", f_nom="50", pt_ct_enabled="0", pt_ratio="", ct_ratio=None)
     assert b.transform.enabled is False and b.transform.pt_ratio == 100.0 and b.sampling.fs == 6400.0
     d = load_waveform(b, str(wave_file), n_cycles=2, channels=["Ua"])
@@ -371,3 +372,48 @@ def test_r68_1_tod_with_dateless_timestamps(tmp_path, monkeypatch):
     base.source.custom_time = False
     r3 = wp.load_waveform(base, str(p), t_start="00:14:30", t_end="00:15:30", channels=["Ia"])
     assert abs(r3["n"] - 60 * fs) <= 2, r3["n"]
+
+
+# ---------- v0.95：数据处理页基准配置含接线 / 极性 ----------
+def test_v095_base_wiring_polarity_in_process_apis(client, tmp_path_factory):
+    """波形预览 / 负荷辨识调参 / 画像提取 的基准配置支持 wiring / reconstruct_3w / invert_current / invert_phases。"""
+    import json
+    from elec_tool.selftest import HarmSpec, build_signal
+    d = tmp_path_factory.mktemp("r95")
+    t, u, i = build_signal([HarmSpec(1, U_RMS, I_RMS, phi_deg=0.0)], FS, 4.0, t0=T0)
+    # 两表法：A/C 电压列=Uab/Ucb、B 列为 0、A 相 CT 反
+    u3 = np.vstack([u[0] - u[1], np.zeros(t.size), u[2] - u[1]]); i3 = np.vstack([-i[0], np.zeros(t.size), i[2]])
+    p = str(d / "w3.csv"); write_csv(p, t, u3, i3)
+    base = {"pt_ct_enabled": "0", "wiring": "3p3w", "reconstruct_3w": "1", "invert_phases": "A"}
+    # 波形预览：重构后 Ib 不再为 0、Ua 幅值回到相电压
+    r0 = client.get("/api/process/wave/load", params={"path": p, "n_cycles": 1, "channels": "Ua,Ib", "pt_ct_enabled": "0"}).json()
+    r1 = client.get("/api/process/wave/load", params={"path": p, "n_cycles": 1, "channels": "Ua,Ib", **base}).json()
+    assert r0["ok"] and max(abs(v) for v in r0["channels"]["Ib"]) == 0.0
+    assert r1["ok"] and abs(max(abs(v) for v in r1["channels"]["Ib"]) - I_RMS * math.sqrt(2)) < 0.05 * I_RMS
+    assert abs(max(abs(v) for v in r1["channels"]["Ua"]) - U_RMS * math.sqrt(2)) < 0.02 * U_RMS
+    assert abs(max(abs(v) for v in r0["channels"]["Ua"]) - math.sqrt(3) * U_RMS * math.sqrt(2)) < 0.02 * U_RMS
+    # 非法值 → 400
+    assert client.get("/api/process/wave/load", params={"path": p, "wiring": "xx"}).status_code == 400
+    assert client.get("/api/process/wave/load", params={"path": p, "invert_phases": "D"}).status_code == 400
+    # 出厂基准值含新字段
+    bd = client.get("/api/process/wave/defaults").json()["base"]
+    assert bd["wiring"] == "3p4w" and bd["reconstruct_3w"] is False and bd["invert_phases"] == ""
+    # 负荷辨识调参：基准配置 base{} 带接线 / 极性，标签回显
+    r = client.post("/api/process/nilm_tune", json={"path": p, "channel": "B", "quantity": "p", "min_load_w": 100, "base_mode": "custom",
+                                                    "base": {"fs": FS, "f_nom": 50, "pt_ct_enabled": "0", "pt_ratio": 100, "ct_ratio": 15, "file_time_utc": "0",
+                                                             "wiring": "3p3w", "reconstruct_3w": "1", "invert_current": "0", "invert_phases": "A"}})
+    assert r.status_code == 200, r.text
+    j = r.json(); b = j["base"]
+    assert b["wiring"] == "3p3w" and b["reconstruct_3w"] is True and b["invert_phases"] == "A" and b["invert_current"] is False
+    # 落盘的独立基准配置（供等价命令 --config 复现）也带上接线 / 极性
+    bf = json.load(open(str(client.dir / "nilm" / "nilm_tune_base.json"), encoding="utf-8")) if hasattr(client, "dir") else None
+    if bf is not None:
+        assert bf["transform"]["wiring"] == "3p3w" and bf["transform"]["reconstruct_3w"] is True and bf["transform"]["invert_phases"] == "A"
+    # 画像提取同一基准配置：重构后 B 相电流特征不为 0
+    r = client.post("/api/process/nilm_profile", json={"path": p, "device_id": "d", "pre_cycles": 5, "post_cycles": 10, "base_mode": "custom",
+                                                       "base": {"fs": FS, "f_nom": 50, "pt_ct_enabled": "0", "wiring": "3p3w", "reconstruct_3w": "1", "invert_phases": "A"}})
+    assert r.status_code in (200, 400)   # 稳态文件无启停 → 可能 400「无事件」；只要不是基准配置错误
+    if r.status_code == 400:
+        assert "wiring" not in r.json()["error"] and "invert" not in r.json()["error"]
+    rr = client.post("/api/process/nilm_tune", json={"path": p, "base_mode": "custom", "base": {"wiring": "bad"}})
+    assert rr.status_code == 400
