@@ -448,3 +448,13 @@
 - 现象：μ / σ 两行下 7 个数值格错位。根因：`<td class="n stat">` 命中全局 `.stat{display:flex;flex-direction:column;min-width:78px}`（顶部状态栏样式），单元格失去 table-cell 语义。
 - 修复：类名改 `np-stat`，CSS 对应改名并显式 `display:table-cell;min-width:0`；新增静态回归测试 `tests/test_r163_np_table_stat_class.py`。全量 pytest 462+2 passed。
 - 缺口：沙箱无浏览器，未做像素级截图验证；若仍异常请提供截图。
+
+
+## 第 164 轮（v0.99.22）重跑复盘：画像匹配为何仍未识别
+
+- 数据事实：`tmp/`（00:13 运行）bus 182 条标量事件、0 条 profile、**无候选 CSV**。总线侧电流 14:38:16–14:38:30 由 ~94 A 斜降到 ~59 A（−35 A/15 s），设备侧 dev1 14:39:30–14:39:50 由 37 A 降到 0.3 A ⇒ 两文件时间戳相差 ~74 s，但幅值一致。
+- 根因（用 tmp 的 1 s RMS 插值驱动**真实 NilmDetector** + 实录配置复现）：`transform.enabled=true PT=4 CT=250`（总线）vs 画像 `pt_ct.enabled=false`，v0.99.6 口径检查按标志位 `return []` ⇒ 画像匹配从未运行。设备侧文件本身即一次侧值，两侧实际同口径。
+- 修复：只提示不拒绝；复验 14:38:17 STOP confirmed conf 0.83 d2/dim 0.37，另两个候选 rejected（d2/dim 135/132）；候选 CSV 正常生成。顺带修正「最长持续」提示数值。
+- 回归：`tests/test_r164_profile_ptct_flag_mismatch.py`（2 项）；`test_r90`/`test_r92` 中原「拒绝」断言改为「提示且仍匹配」。全量 pytest 466 passed。
+- 前 6 种算法误报：结论同第 160 轮——总线上其它负荷每 30 s 10–30 A 真实投切，与目标设备 35 A 同量级，阈值类算法不可能区分，只能靠画像匹配；建议总线侧关闭 6 种标量算法或仅作参考。
+- 缺口：复验用的是 1 s RMS 插值（无周波级噪声），用户重跑原始 CSV 后的置信度可能略低于 0.83；两侧时间戳偏差 74 s 需用户确认是录波器时钟问题。

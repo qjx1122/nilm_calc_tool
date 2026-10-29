@@ -1186,3 +1186,14 @@ U10-4 B/C 相为 0：____  U10-5 列号交换：Ia≈____  U10-6 无时间戳：
 **结论 2（画像仍未识别）**：用 tmp/ 1 s RMS 插值重建周波序列 + 以设备侧同法构造画像做仿真：v0.99.15 的多尺度在停止处产生候选但按 ×8 窗量特征（ΔIa −28、dur 399）与画像（按 post=50 提取：ΔIa −14、dur 99、σ 10 % 下限）不一致 ⇒ d2/dim 33.8 → rejected（界面只在 profile_last 诊断里能看到，事件文件里为空）。修正特征几何后同一候选 confirmed（conf 0.80，d2/dim 0.4），邻近另一设备 +10 A 事件 rejected（d2/dim 54.7）。PT=4 后 ΔP 两侧已一致（10.4 k vs 10.5 k）。另：分路侧自匹配 trajectory_deviates 说明模板散布下限 0.1 过严，已放宽至 0.25。
 
 **未能核实**：画像 JSON 与原始 CSV 仍不在 tmp/；仿真用 1 s RMS 线性插值（无周波级细节），结论为机理级而非逐值复现。建议下次把 `output/nilm/profile_*.json` 与负荷辨识页「画像匹配诊断（最近候选）」一并放入 tmp/。
+
+
+## 第 164 轮专题：总线侧画像匹配未运行（PT/CT 标志位硬拒绝）
+
+| 项 | 结果 |
+|---|---|
+| 复现方式 | `tmp/realtime/current_*.csv`+`power_*.csv`（source_id=0）1 s RMS 线性插值为 20 ms 周波序列，经 stub `CycleFeatures.push` 喂给 `NilmDetector(AppConfig.from_dict(tmp/config_bus.json))` |
+| 修复前 | profile 事件 0，`profile_hist` 0，errors 含「一次 / 二次侧口径不一致 … 画像匹配不会命中」 |
+| 修复后 | 14:38:17 STOP **confirmed** conf 0.830 d²/维 0.373（ΔIa/b/c −36.0/−38.3/−39.3 A，ΔP +25604 W，持续 271 周波）；14:39:45 与 14:48:22 候选 rejected（d²/维 135.6 / 131.9，state_mismatch） |
+| 候选 CSV | `run/nilm_profile_candidates_{日}.csv` 3 行 |
+| 回归 | 466 passed, 1 skipped |

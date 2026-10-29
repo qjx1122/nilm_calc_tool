@@ -757,13 +757,16 @@ class NilmDetector:
         #   一侧启用一侧关闭 ⇒ 差一个变比，不可比（拒绝）；两侧都关闭 ⇒ 都是二次侧量，只有两侧 CT/PT 相同才可比（给出警告但仍运行）
         pc = prof.get("pt_ct") or {}
         tr = self.cfg.transform
-        if pc and bool(pc.get("enabled")) != bool(tr.enabled):
-            msg = (f"画像提取时 PT/CT={'启用 PT=' + str(pc.get('pt_ratio')) + ' CT=' + str(pc.get('ct_ratio')) if pc.get('enabled') else '关闭（二次侧量）'}，"
-                   f"本侧运行配置 PT/CT={'启用 PT=' + str(tr.pt_ratio) + ' CT=' + str(tr.ct_ratio) if tr.enabled else '关闭（二次侧量）'}：一次 / 二次侧口径不一致，差一个变比，画像匹配不会命中"
-                   f"（两侧都启用 PT/CT 并各填本侧真实变比即可，变比不同不影响）")
-            if msg not in self.errors:
-                self.errors.append(msg)
-            return []
+        # v0.99.22：一侧启用 PT/CT、一侧关闭 ⇒ **只警告、照常匹配**，不再直接拒绝运行。
+        #   实录（第 164 轮）：分路侧记录仪直接输出一次侧量（239 V / 37 A，PT/CT 关闭），总线侧录的是二次侧（PT=4 CT=250 启用后换算到一次侧），
+        #   两侧实际都是一次侧量、ΔI 完全可比（−36/−38/−39 A vs 画像 −36/−32/−42 A），却因这个配置标志位的硬拒绝导致画像匹配一次都没跑、
+        #   候选 CSV 为空。口径是否真的差一个变比只能由数据判断：若确实差变比，候选门槛达不到 / D² 爆掉，会在候选诊断里体现。
+        if pc and bool(pc.get("enabled")) != bool(tr.enabled) and not getattr(self, "_profile_ptct_noted", False):
+            self._profile_ptct_noted = True
+            self.errors.append(f"画像提取时 PT/CT={'启用 PT=' + str(pc.get('pt_ratio')) + ' CT=' + str(pc.get('ct_ratio')) if pc.get('enabled') else '关闭'}，"
+                               f"本侧运行配置 PT/CT={'启用 PT=' + str(tr.pt_ratio) + ' CT=' + str(tr.ct_ratio) if tr.enabled else '关闭'}：请确认两侧数据都是一次侧量（或都是二次侧量）；"
+                               f"若设备侧文件本身已是一次侧值（记录仪已换算），PT/CT 关闭是正确的，画像匹配照常进行；若设备侧文件是二次侧原始值，"
+                               f"ΔI/ΔP 将差一个变比而匹配不上，请在画像提取的基准配置里启用 PT/CT 并填设备侧真实变比后重提")
         if pc and not bool(tr.enabled) and (abs(float(pc.get("ct_ratio", tr.ct_ratio)) - float(tr.ct_ratio)) > 1e-9
                                             or abs(float(pc.get("pt_ratio", tr.pt_ratio)) - float(tr.pt_ratio)) > 1e-9):
             msg = (f"画像与本侧都按二次侧量匹配，但画像侧 PT/CT={pc.get('pt_ratio')}/{pc.get('ct_ratio')} 与本侧配置 {tr.pt_ratio}/{tr.ct_ratio} 不同："
@@ -803,7 +806,9 @@ class NilmDetector:
                 self.errors.append("画像匹配数据体检：" + "；".join(msgs) + "。画像候选按三相合成 ΣP/ΣI 搜索，这种数据下设备台阶会被抵消或失真，先修正接线方式/极性再用画像匹配")
         need = self._profile_window_need()
         if need > int(self.ncfg.window_cycles):
-            msg = (f"画像前后窗 {prof.get('pre_cycles')}/{prof.get('post_cycles')} 周波（最长持续 {need - int(prof.get('pre_cycles', 10)) - 2 * int(prof.get('post_cycles', 50)) - 10}）"
+            dur_max = max([int((prof.get(k) or {}).get("dur_cycles", {}).get("max", 0) or 0) for k in ("startup", "shutdown")] + [0])
+            sc_max = max(1, int(float(prm.get("max_scale", 8))))
+            msg = (f"画像前后窗 {prof.get('pre_cycles')}/{prof.get('post_cycles')} 周波（最长持续 {dur_max}，多尺度 ×{sc_max}）"
                    f"需要约 {need} 周波的检测窗，大于 nilm.window_cycles={self.ncfg.window_cycles}：已自动按 {need} 周波缓存评估；"
                    f"建议把画像前后窗改小（典型 10/50～10/200）重提，或加大 window_cycles。"
                    f"注意：前后窗取的是中位数，间隔小于后窗的两次动作会互相污染，事件时刻也可能偏移")
