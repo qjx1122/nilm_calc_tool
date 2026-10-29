@@ -2,7 +2,7 @@
  "schema": "nilm_profile/1",
  "device_id": "device",
  "version": "1.0",
- "created": "2026-10-29 23:49:54",
+ "created": "2026-10-30 01:12:44",
  "source_file": "D:\\LiteWork\\test1Pycharm\\NILM_2026\\NILM_Web\\nilm_calc_tool\\data\\化工行业-海湾化工-dev1.csv",
  "label_mode": "auto",
  "quantity": "i",
@@ -11,7 +11,7 @@
  "f_nom": 50.0,
  "n_cycle": 200,
  "pt_ct": {
-  "enabled": false,
+  "enabled": true,
   "pt_ratio": 1.0,
   "ct_ratio": 1.0
  },
@@ -191,7 +191,7 @@
  "base": {
   "fs": 10000.0,
   "f_nom": 50.0,
-  "pt_ct_enabled": false,
+  "pt_ct_enabled": true,
   "pt_ratio": 1.0,
   "ct_ratio": 1.0,
   "file_time_utc": false,
@@ -202,8 +202,8 @@
   "invert_current": false,
   "invert_phases": ""
  },
- "base_config": "独立基准配置（出厂配置 + fs=10000 f_nom=50 PT/CT=关闭 PT=1 CT=1 UTC=否 quantity=auto 接线=3p4w 极性反转=无）",
+ "base_config": "独立基准配置（出厂配置 + fs=10000 f_nom=50 PT/CT=启用 PT=1 CT=1 UTC=否 quantity=auto 接线=3p4w 极性反转=无）",
  "col_map_enabled": false,
  "col_map": null,
- "command": "python tools/nilm_profile.py --file data\\化工行业-海湾化工-dev1.csv --device device --config output\\nilm\\nilm_tune_base.json --label-tol 10 --pre 3000 --post 3000 --merge-gap 20 --quantity i --out output\\nilm\\profile_device_20261029_234954.json"
+ "command": "python tools/nilm_profile.py --file data\\化工行业-海湾化工-dev1.csv --device device --config output\\nilm\\nilm_tune_base.json --label-tol 10 --pre 3000 --post 3000 --merge-gap 20 --quantity i --out output\\nilm\\profile_device_20261030_011244.json"
 }

@@ -202,7 +202,7 @@
   },
   "nilm": {
     "enabled": true,
-    "save": false,
+    "save": true,
     "nilm_dir": "output/nilm",
     "max_log": 5000,
     "channels": [
@@ -263,7 +263,7 @@
     },
     "quantity": "i",
     "auto_params": true,
-    "profile_path": "output\\nilm\\profile_device_20261029_234954.json"
+    "profile_path": "output\\nilm\\profile_device_20261030_011244.json"
   },
   "branch": {
     "enabled": false,
