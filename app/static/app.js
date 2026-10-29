@@ -4569,6 +4569,14 @@ function bindProcess() {
   bindWavePreview();
   if ($('#np-form')) {                                            // v0.90：设备画像提取
     $('#btn-np-run').addEventListener('click', npRun);
+    // v0.99.4：画像提取的检测量只读镜像（随基准配置区 nt-quantity / 基准模式），检测对象固定 total 不可选
+    const npQty = () => { const el = $('#np-qty-show'); if (!el) return; const q = $('#nt-quantity'); const v = q ? q.value : '';
+      const custom = ntBaseMode() === 'custom'; const names = { p: 'p 有功功率 P', i: 'i 电流有效值 I', auto: 'auto 自动（有电压→P，无电压→I）' };
+      el.value = v ? `${names[v] || v}（${custom ? '独立基准配置' : '沿用' + (ntBaseMode() === 'branch' ? '分路侧' : '总线侧') + '运行配置'}）` : (custom ? 'auto 自动（出厂缺省：有电压→P，无电压→I）' : `随${ntBaseMode() === 'branch' ? '分路侧' : '总线侧'}运行配置 nilm.quantity`); };
+    npQty();
+    const q0 = $('#nt-quantity'); if (q0) q0.addEventListener('change', npQty);
+    const side0 = $('#nt-side'); if (side0) side0.addEventListener('change', () => setTimeout(npQty, 300));
+    setInterval(npQty, 2000);   // 基准模式沿用运行配置时值由异步拉取填入，低频同步即可
     $('#btn-np-fill-bus').addEventListener('click', () => npFill('bus'));
     $('#btn-np-fill-branch').addEventListener('click', () => npFill('branch'));
     $('#btn-np-copy').addEventListener('click', () => { navigator.clipboard && navigator.clipboard.writeText($('#np-cmd').textContent || ''); toast('已复制', 'ok'); });

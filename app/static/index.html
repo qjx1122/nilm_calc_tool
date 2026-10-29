@@ -1102,7 +1102,12 @@
               </div>
             </div>
             <div class="wp-group">
-              <div class="wp-group-title">③ 事件前后窗</div>
+              <div class="wp-group-title">③ 检测对象与检测量 <small class="note">（画像匹配算法按三相合成量工作：检测对象不可指定；检测量在上方「负荷辨识调参 · 基准配置」的「检测量」里选择并写入画像文件，匹配时必须与运行侧口径一致）</small></div>
+              <div class="row2">
+                <label class="f nilm-fixed" title="画像特征＝ΔIa/ΔIb/ΔIc/ΔP/ΔQ 三相联合向量，候选按三相合成量（P 口径＝ΣP，I 口径＝三相电流合成）定位，匹配时事件对象固定为 total；上方基准配置区的「检测对象」对画像提取不生效"><span class="lbl">检测对象（固定）</span><input type="text" value="三相总 total（固定，不可选）" disabled></label>
+                <label class="f nilm-fixed" title="由上方基准配置区「检测量」决定（独立基准配置可选 auto / p / i；沿用某侧运行配置时随该侧 nilm.quantity）；此处只读显示实际生效值"><span class="lbl">检测量（随基准配置）</span><input type="text" id="np-qty-show" value="—" disabled><span class="note">在上方「基准配置 · 检测量」修改；写入画像文件后匹配侧口径须与之一致</span></label>
+              </div>
+              <div class="wp-group-title">④ 事件前后窗</div>
               <div class="row2">
                 <label class="f" title="事件前窗周波数（取稳态前值）"><span class="lbl">前窗 (周波)</span><input id="np-pre" type="number" min="3" step="1" value="10"></label>
                 <label class="f" title="事件后窗周波数：应 ≥ 设备启动过程（冲击 / 爬升）时长；总线侧确认事件也要等这么多周波"><span class="lbl">后窗 (周波)</span><input id="np-post" type="number" min="3" step="1" value="50"></label>
