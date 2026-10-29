@@ -192,6 +192,7 @@ class EngineRunner:
         self.loop: Optional[asyncio.AbstractEventLoop] = None
         self.clients: Set[asyncio.Queue] = set()
         self.started_at: Optional[float] = None
+        self.finished_at: Optional[float] = None    # v0.99.14：播完 / 停止 / 异常的墙钟时刻（顶栏耗时冻结用）
         self.error: Optional[str] = None
         self.loaded_last: Optional[Dict[str, Any]] = None     # v0.18：最近一次「加载上次播放数据」的摘要（state 里带出）
         self.cfg_path: str = DEFAULT_CONFIG_PATH        # 启动时加载哪个文件
@@ -485,7 +486,7 @@ class EngineRunner:
                 src.pace_abort = self.stop_event.is_set
             self.engine.on_event = self._on_event
             self.engine.on_nilm_event = self._on_nilm_event
-            self.started_at = time.time()
+            self.started_at = time.time(); self.finished_at = None
             # 引擎与停止事件按值传给线程：线程内绝不重读 self.engine
             self.thread = threading.Thread(target=self._run,
                                            args=(duration_s, self.engine, self.stop_event, self.pause_event),
@@ -561,6 +562,7 @@ class EngineRunner:
                 mine = self.engine is engine
                 if mine:
                     self._thread_done = True
+                    self.finished_at = time.time()
             if mine:
                 self.persist_last_result()      # v0.20：停止 / 播完 / 异常都把最后结果落盘，重启后读回
                 self.broadcast({"type": "state", "data": self.state()})
@@ -612,6 +614,8 @@ class EngineRunner:
     def stop(self, quiet: bool = False) -> None:
         with self.lock:
             self.stop_event.set()
+            if self.started_at and not self.finished_at:
+                self.finished_at = time.time()
             self.pause_event.clear()            # 暂停中停止：线程立刻退出等待
             th = self.thread
             self.thread = None
@@ -679,6 +683,8 @@ class EngineRunner:
                 "paused": bool(self.pause_event.is_set() and self.thread and self.thread.is_alive() and not self.stop_event.is_set() and not self._thread_done),
                 "pausable": bool(eng is not None and eng.cfg.source.kind == "csv_file"),
                 "paused_total_s": round(self.paused_total_s + ((time.time() - self.paused_at) if self.paused_at else 0.0), 3),
+                "started_at": self.started_at, "finished_at": self.finished_at,        # v0.99.14：顶栏「播放耗时」
+                "elapsed_s": (round((self.finished_at or time.time()) - self.started_at, 3) if self.started_at else None),
                 "finished": bool(st.get("finished")),
                 "error": self.error,
                 "loaded_last": self.loaded_last,
@@ -812,6 +818,9 @@ def _side_summary(side: str) -> Dict[str, Any]:
         "data_duration_s": (float(getattr(st, "data_duration_s", 0) or 0) if st else 0.0),
         "side": side, "enabled": enabled, "hide_ui": hide_ui, "label": SIDE_LABELS[side], "config_path": br.cfg_path,
         "running": running, "paused": bool(running and br.pause_event.is_set()),
+        "started_at": br.started_at, "finished_at": br.finished_at,
+        "elapsed_s": (round((br.finished_at or time.time()) - br.started_at, 3) if br.started_at else None),
+        "paused_total_s": round(br.paused_total_s + ((time.time() - br.paused_at) if br.paused_at else 0.0), 3),
         "finished": bool(st and st.finished), "error": br.error,
         "source_kind": (src.kind if src else None), "source_path": (src.path if src else None),
         "samples_in": int(st.samples_in) if st else 0,

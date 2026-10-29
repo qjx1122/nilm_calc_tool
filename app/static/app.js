@@ -879,8 +879,32 @@ function setNavFoot(t) { const el = $('#nav-foot'); if (el) el.textContent = t; 
 
 /* ------------------------------------------------------------------ 顶栏与导航 */
 
+/* v0.99.14：顶栏「播放耗时」——以服务端 started_at / finished_at 为准，本地每秒走表（用 server_time 校正时钟偏差） */
+const ELAPSED = { bus: null, branch: null, offset: 0 };
+function fmtElapsed(sec) {
+  if (!isNum(sec) || sec < 0) return '—';
+  const t = Math.floor(sec), d = Math.floor(t / 86400), h = Math.floor((t % 86400) / 3600), m = Math.floor((t % 3600) / 60), x = t % 60;
+  const p = n => String(n).padStart(2, '0');
+  return (d ? d + 'd ' : '') + p(h) + ':' + p(m) + ':' + p(x);
+}
+function elapsedInfo(o) {        // o：state（本侧）或对侧摘要，都含 started_at / finished_at / paused_total_s
+  if (!o || !isNum(o.started_at)) return null;
+  return { start: o.started_at, end: isNum(o.finished_at) ? o.finished_at : null, paused: o.paused_total_s || 0 };
+}
+function tickElapsed() {
+  const now = Date.now() / 1000 + ELAPSED.offset;
+  [['bus', '#st-elapsed'], ['branch', '#st-br-elapsed']].forEach(([k, sel]) => {
+    const el = $(sel); if (!el) return;
+    const e = ELAPSED[k];
+    if (!e) { el.textContent = '—'; el.title = ''; return; }
+    const total = (e.end !== null ? e.end : now) - e.start;
+    el.textContent = fmtElapsed(total) + (e.end !== null ? '（已结束）' : '');
+    el.title = `总耗时 ${fmtElapsed(total)}（含暂停 ${fmtElapsed(e.paused)}）· 净耗时 ${fmtElapsed(total - e.paused)}`;
+  });
+}
 function renderTop() {
   const st = S.state || {}, r = S.result;
+  if (isNum(st.server_time)) ELAPSED.offset = st.server_time - Date.now() / 1000;
   const eng = st.engine || {}, cfg = st.config || {};
   // 顶栏按总线侧 / 分路侧两行分开显示：当前侧用完整 state，对侧用 state 里的对侧摘要（每秒随 WS 刷新）
   const cur = {
@@ -904,6 +928,9 @@ function renderTop() {
     $('#' + pre + 'fs').textContent = d.fs; $('#' + pre + 'ptct').textContent = d.ptct; $('#' + pre + 'samples').textContent = d.samples;
   };
   fill('st-', bus); fill('st-br-', br);
+  const psE = peerSummary(st);
+  ELAPSED[S.side] = elapsedInfo(st); ELAPSED[S.side === 'bus' ? 'branch' : 'bus'] = elapsedInfo(psE);
+  tickElapsed();
   const cw = S.side === 'bus' ? st.common_window : (st.common_window || null);
   const cwEl = $('#topstats-common');
   if (cwEl) {
@@ -4786,6 +4813,7 @@ async function init() {
   normalizeConfigForms();
   buildDualViews();
   bind();
+  setInterval(tickElapsed, 1000);                                   // v0.99.14：顶栏播放耗时每秒走表
   // v0.99.9：顶栏高度 → CSS 变量 --topbar-h（导航条 sticky top / 高度随之变化；窗口缩放、状态行换行时实时更新）
   const syncTopbar = () => { const tb = $('#topbar'); if (tb) document.documentElement.style.setProperty('--topbar-h', Math.ceil(tb.getBoundingClientRect().height) + 'px'); };
   syncTopbar(); window.addEventListener('resize', syncTopbar);
