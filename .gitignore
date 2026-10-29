@@ -9,6 +9,8 @@ venv/
 # 数据与产物（大体量/涉密数据不入库；样例数据按需生成）
 data/
 *.csv
+# 但是 tmp 目录下csv不忽略
+!tmp/**/*.csv
 !tests/fixtures/*.csv
 output/
 configs/branch_runtime.json
