@@ -1322,7 +1322,7 @@
                 <label class="f"><span class="lbl">曲线结束</span><input id="ct-bus-cend" placeholder="空＝文件终点"></label>
               </div>
               <div class="row2">
-                <label class="f" title="事件前 / 后稳态取值的周波数：开始时刻前 N 个周波、结束时刻后 N 个周波各取有效值中位数"><span class="lbl">计算周波数</span><input id="ct-bus-win" type="number" min="3" step="1" value="50"></label>
+                <label class="f" title="N：曲线每个点＝N 个周波的有效值；估计时事件前稳态＝开始时刻前 N 个周波、事件后稳态＝结束时刻后 N 个周波的有效值中位数"><span class="lbl">计算周波数 N</span><input id="ct-bus-win" type="number" min="3" step="1" value="50"></label>
                 <label class="f"><span class="lbl">&nbsp;</span><span class="btnrow"><button id="ct-bus-btn-rms" type="button" class="primary">加载逐周波 RMS 曲线</button></span></label>
               </div>
             </div>
@@ -1353,7 +1353,7 @@
               </div>
             </div>
           </div>
-          <h3 class="curvehdr" style="margin-top:10px"><span><span class="wp-tag wp-tag-rms">逐周波 RMS 曲线</span><small class="hdrhint" id="ct-bus-rms-sub">（未加载）</small></span></h3>
+          <h3 class="curvehdr" style="margin-top:10px"><span><span class="wp-tag wp-tag-rms">RMS 曲线（每点＝N 个周波）</span><small class="hdrhint" id="ct-bus-rms-sub">（未加载）</small></span></h3>
           <canvas id="ct-bus-rms" height="240"></canvas>
         </div>
         <div class="panel col-branch">
@@ -1368,7 +1368,7 @@
                 <label class="f"><span class="lbl">曲线结束</span><input id="ct-br-cend" placeholder="空＝文件终点"></label>
               </div>
               <div class="row2">
-                <label class="f" title="事件前 / 后稳态取值的周波数：开始时刻前 N 个周波、结束时刻后 N 个周波各取有效值中位数"><span class="lbl">计算周波数</span><input id="ct-br-win" type="number" min="3" step="1" value="50"></label>
+                <label class="f" title="N：曲线每个点＝N 个周波的有效值；估计时事件前稳态＝开始时刻前 N 个周波、事件后稳态＝结束时刻后 N 个周波的有效值中位数"><span class="lbl">计算周波数 N</span><input id="ct-br-win" type="number" min="3" step="1" value="50"></label>
                 <label class="f"><span class="lbl">&nbsp;</span><span class="btnrow"><button id="ct-br-btn-rms" type="button" class="primary">加载逐周波 RMS 曲线</button></span></label>
               </div>
             </div>
@@ -1399,7 +1399,7 @@
               </div>
             </div>
           </div>
-          <h3 class="curvehdr" style="margin-top:10px"><span><span class="wp-tag wp-tag-rms">逐周波 RMS 曲线</span><small class="hdrhint" id="ct-br-rms-sub">（未加载）</small></span></h3>
+          <h3 class="curvehdr" style="margin-top:10px"><span><span class="wp-tag wp-tag-rms">RMS 曲线（每点＝N 个周波）</span><small class="hdrhint" id="ct-br-rms-sub">（未加载）</small></span></h3>
           <canvas id="ct-br-rms" height="240"></canvas>
         </div>
       </div>

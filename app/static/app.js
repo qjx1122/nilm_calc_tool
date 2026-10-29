@@ -4426,7 +4426,7 @@ function ctDrawRms(pre) {
   const t0 = d.t[0], span = d.t[d.t.length - 1] - t0; const ch = Object.keys(d.channels || {})[0];
   drawLine(cv, [{ name: `${ch} RMS (A·二次)`, color: WP_COLORS[ch] || '#4ea1ff', data: d.t.map((x, i) => [x - t0, d.channels[ch][i]]) }],
     { ylabel: 'A', fmtX: x => tsX(x + t0, span), fmtTip: x => fmtLocalInput(x + t0), tbase: t0, height: 240, marks: ctMarks(pre), force: true });
-  if (sub) sub.textContent = `（${ch} · ${d.n} 点 · ${d.agg_cycles > 1 ? '每 ' + d.agg_cycles + ' 周波一点' : '逐周波'} · ${wpFmtT(t0)} → ${wpFmtT(d.t[d.t.length - 1])}，${fmtDur(span)}；右键曲线设置事件时刻）`;
+  if (sub) sub.textContent = `（${ch} · ${d.n} 点 · 每点＝${d.agg_cycles} 个周波的有效值${d.agg_cycles !== parseInt(ctV(pre + '-win') || '50', 10) ? '（计算周波数已改，请重新加载）' : ''} · ${wpFmtT(t0)} → ${wpFmtT(d.t[d.t.length - 1])}，${fmtDur(span)}；右键曲线设置事件时刻）`;
   bindCtxMenu(cv, (xEpoch) => {
     const noX = !isNum(xEpoch); const tTxt = noX ? '暂无曲线' : fmtLocalInput(xEpoch);
     const set = (ev, which) => () => { $('#' + pre + '-event').value = ev; $('#' + pre + (which === 'begin' ? '-tbegin' : '-tend')).value = fmtLocalInput(xEpoch); ctDrawRms(pre); toast(`${ev === 'start' ? '启动' : '停机'}${which === 'begin' ? '开始' : '结束'}时刻 → ${fmtLocalInput(xEpoch)}`); };
@@ -4447,7 +4447,8 @@ async function ctLoadRms(pre) {
   if (!path) { toast('请先选择本侧文件', 'err'); return; }
   const phase = ctV(pre + '-phase') || 'A';
   if ((ctV(pre + '-wiring') === '3p3w') && phase === 'B' && ctC(pre + '-recon3w') !== '1') { toast('三相三线没有 B 相电流：请改选 A / C 相或勾选 3P3W 重构', 'err'); return; }
-  const params = Object.assign({ path, t_start: ctV(pre + '-cstart'), t_end: ctV(pre + '-cend'), agg_cycles: 1, channels: 'I' + phase.toLowerCase() }, ctBase(pre));
+  const win = Math.max(1, parseInt(ctV(pre + '-win') || '50', 10) || 50);   // v0.98.1：曲线每点＝「计算周波数」个周波的有效值
+  const params = Object.assign({ path, t_start: ctV(pre + '-cstart'), t_end: ctV(pre + '-cend'), agg_cycles: win, channels: 'I' + phase.toLowerCase() }, ctBase(pre));
   const btn = $('#' + pre + '-btn-rms'); if (btn) btn.disabled = true;
   try {
     const d = await api('/api/process/wave/rms?' + wpQuery(params), undefined, 'bus');
@@ -4483,6 +4484,7 @@ function initCtEstimate() {
     $('#' + pre + '-btn-rms').addEventListener('click', () => ctLoadRms(pre));
     ['-event', '-tbegin', '-tend'].forEach(sfx => $('#' + pre + sfx).addEventListener('change', () => ctDrawRms(pre)));
     ['-phase', '-wiring', '-recon3w', '-inv', '-inv-a', '-inv-b', '-inv-c'].forEach(sfx => $('#' + pre + sfx).addEventListener('change', () => { CT.rms[pre] = null; ctDrawRms(pre); }));
+    $('#' + pre + '-win').addEventListener('change', () => { if (CT.rms[pre]) ctLoadRms(pre); });   // 计算周波数改了 → 按新周波数重算曲线
     $('#' + pre + '-known').addEventListener('change', () => { const on = $('#' + pre + '-known').checked; $('#' + pre + '-ct').style.opacity = on ? '' : '.6'; });
     ctDrawRms(pre);
   });
