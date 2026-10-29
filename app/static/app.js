@@ -3235,7 +3235,7 @@ const NILM_ALGOS = {
                   params: { median_cycles: '中值窗 (周波)', min_delta_w: '最小幅值 (W · P口径)', min_delta_a: '最小幅值 (A · I口径)', settle_cycles: '稳定周波数', settle_tol_w: '稳定容差 (W · P口径)', settle_tol_a: '稳定容差 (A · I口径)', max_rise_cycles: '最长暂态 (周波)' } },
   // v0.90：设备画像匹配（多特征；对象固定为三相合成；画像文件由数据处理页「设备画像提取」生成）
   profile:      { name: '设备画像匹配', desc: '稳健双滑窗找候选 → 事件前后 ΔIa/ΔIb/ΔIc/ΔP/ΔQ/峰值比/持续周波 与启动/停止画像的对角马氏距离 D² → 置信度 exp(−D²/2d)，低于门槛拒识；设备状态机（OFF→启动 / ON→停止）；输出设备 ID、方向、观测幅值、置信度，不估计设备贡献幅值',
-                  params: { d2_max: 'D² 上限 (每维均值)', min_confidence: '最低置信度 (0~1)', k_sigma: '候选门槛 k×σ', margin: '最优/次优 D² 比下限', lambda_rel: '协方差收缩系数', state_check: '状态机 (1 启用 / 0 关闭)', phase_map: '相序映射 (1 ABC·2 ACB·3 BAC·4 BCA·5 CAB·6 CBA·0 自动)' } },
+                  params: { d2_max: 'D² 上限 (每维均值)', min_confidence: '最低置信度 (0~1)', k_sigma: '候选门槛 k×σ', margin: '最优/次优 D² 比下限', lambda_rel: '协方差收缩系数', state_check: '状态机 (1 启用 / 0 关闭)', phase_map: '相序映射 (1 ABC·2 ACB·3 BAC·4 BCA·5 CAB·6 CBA·0 自动)', max_scale: '候选多尺度最大倍数 (1＝单尺度；8＝前后窗 ×1/2/4/8 兼容慢斜坡)' } },
 };
 const NILM_COLORS = { threshold: '#ff6b6b', two_window: '#ffa94d', cusum: '#ffd43b', glr: '#69db7c', steady_state: '#4dabf7', median_diff: '#da77f2', profile: '#63e6be' };
 const NILM_FIELDS = ['enabled', 'save', 'quantity', 'window_cycles', 'min_gap_cycles', 'rel_tol_pct', 'min_delta_pct', 'auto_params', 'profile_path'];   // v0.87：auto_params；v0.90：profile_path（文本）
@@ -3299,7 +3299,7 @@ function nilmDimAuto(side = sideOf()) {
   let h = '<b>自适应算法参数（最近一次评估，由当前周波窗数据推导）</b>';
   Object.keys(al).forEach(ch => {
     const a = al[ch] || {}; const st = a.stats || {}; const u = a.unit || 'W';
-    h += `<div style="margin-top:4px"><b>${ch === 'total' ? '三相总' : ch + ' 相'}</b>（${a.quantity === 'i' ? 'I' : 'P'}，${u}）：σ=${f(st.sigma)} ${u} · 保持长度=${st.hold || 1} · 稳定周波=${st.settle} · 最短稳态=${st.min_steady} · 最长暂态=${st.transient} · k=${f(st.k)} · 最小幅值=${f(st.min_delta)} ${u} · 窗=${st.n} 周波</div>`;
+    h += `<div style="margin-top:4px"><b>${ch === 'total' ? '三相总' : ch + ' 相'}</b>（${a.quantity === 'i' ? 'I' : 'P'}，${u}）：σ=${f(st.sigma)} ${u}${isNum(st.drift_ratio) && st.drift_ratio > 1.2 ? ` · 秒级漂移 ×${f(st.drift_ratio)}（等效 σ=${f(st.sigma_eff)} ${u}）` : ''} · 保持长度=${st.hold || 1} · 稳定周波=${st.settle} · 最短稳态=${st.min_steady} · 最长暂态=${st.transient} · k=${f(st.k)} · 最小幅值=${f(st.min_delta)} ${u} · 窗=${st.n} 周波</div>`;
     h += '<table style="margin-top:2px"><tbody>' + Object.keys(a.algorithms || {}).map(al2 => {
       const prm = a.algorithms[al2] || {};
       return `<tr><td>${names[al2] || al2}</td><td>${(SHOW[al2] || Object.keys(prm)).filter(k => prm[k] !== undefined).map(k => `${k.replace(/_w$/, '')}=${f(prm[k])}`).join('  ')}</td></tr>`;

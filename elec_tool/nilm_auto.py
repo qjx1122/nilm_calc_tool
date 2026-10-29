@@ -17,7 +17,12 @@
                  （最长暂态必须装得下，否则起动过程被切成多段）；下限 4·settle；上限 L/3。
     k            统一显著性倍数 = √(2·ln ARL0)，ARL0 = 一天内的周波数（f_nom×86400）——即「平均一天 ≤ 1 次虚警」；
                  这是业务层虚警容忍度，不是算法参数。
-    min_delta    最小关心幅值 = max(k·σ·√(2/min_steady)·1.5, 4σ)：两段 min_steady 周波均值差的可检测下限。
+    sigma_block  min_steady 尺度的「块均值」稳健标准差（相邻块均值差的 MAD/√2，Allan 偏差）：白噪声下 = σ/√min_steady，
+                 总线上其它负荷的秒级漂移 / 慢波动会让它远大于 σ/√min_steady（v0.99.15 起纳入）。
+    sigma_eff    等效噪声尺度 = max(σ, sigma_block·√min_steady)：把秒级漂移折算成等效周波噪声，供 ≥ min_steady 跨度的门槛使用。
+    drift_ratio  sigma_block / (σ/√min_steady)（≈1 白噪声；≫1 存在慢漂移，自适应会相应抬高门槛）。
+    min_delta    最小关心幅值 = max(k·max(sigma_block, σ/√min_steady)·√2·1.5, 4σ)：两段 min_steady 周波均值差的可检测下限，
+                 v0.99.15 前只用 σ/√min_steady（周波级白噪声），总线背景秒级漂移下门槛过低、被 min_gap 限速后成饱和误报。
     tol(n)       n 个周波的噪声极差容差 = σ·(2·√(2·ln n) + 1)（高斯极差期望 + 1σ 余量）。
 
 各算法参数由上面的量映射（见 ``auto_algo_params``）；算法的 ``enabled`` 仍由配置决定（启停是人的选择）。
@@ -94,6 +99,15 @@ def _allan_min_steady(p: np.ndarray, lo: int, hi: int) -> int:
     return int(min(max(pick, lo), max(lo, hi)))
 
 
+def _block_sigma(p: np.ndarray, m: int) -> float:
+    """长度 m 的块均值序列相邻差的稳健 σ/√2（＝单个块均值的标准差，含慢漂移）。块数 < 6 时返回 0（不可靠，调用方回退白噪声值）。"""
+    m = max(1, int(m)); nb = p.size // m
+    if nb < 6:
+        return 0.0
+    bm = p[: nb * m].reshape(nb, m).mean(axis=1)
+    return _mad_sigma(np.diff(bm))
+
+
 def _transient_len(d: np.ndarray, sigma: float, settle: int, lo: int, hi: int) -> int:
     """|差分| > 4σ√2 的超限游程（允许 ≤ settle 周波间断）的最长长度，下限 4·settle。"""
     lo = max(lo, 4 * settle)
@@ -164,9 +178,15 @@ def window_stats(p: np.ndarray, f_nom: float = 50.0) -> Optional[Dict[str, Any]]
     transient = _transient_len(d, sigma, settle, lo=settle, hi=max(4 * settle, L // 3))
     arl0 = max(1e3, float(f_nom) * 86400.0 / hold)
     k = math.sqrt(2.0 * math.log(arl0))
-    min_delta = max(k * sigma * math.sqrt(2.0 / min_steady) * 1.5, 4.0 * sigma)
+    # v0.99.15：秒级（Allan）漂移——min_steady 尺度块均值的实测 σ 与白噪声期望 σ/√m 取大
+    sb_white = sigma / math.sqrt(min_steady)
+    sigma_block = max(_block_sigma(p, min_steady), sb_white)
+    drift_ratio = sigma_block / sb_white if sb_white > 0 else 1.0
+    sigma_eff = max(sigma, sigma_block * math.sqrt(min_steady))
+    min_delta = max(k * sigma_block * math.sqrt(2.0) * 1.5, 4.0 * sigma)
     return {"n": L0, "hold": int(hold), "n_eff": L, "sigma": float(sigma), "tau": int(tau * hold), "settle": int(settle * hold),
             "min_steady": int(min_steady * hold), "transient": int(transient * hold), "k": float(k), "arl0": float(arl0),
+            "sigma_block": float(sigma_block), "sigma_eff": float(sigma_eff), "drift_ratio": float(drift_ratio),
             "min_delta": float(min_delta), "level": float(np.median(np.abs(p0))),
             "sigma_lags": {str(lg): float(v) for lg, v in sig_lags}}
 
@@ -199,6 +219,7 @@ def auto_algo_params(algo: str, st: Dict[str, Any], base: Optional[Dict[str, Any
     if algo not in NILM_SCALAR_ALGOS:
         return prm                                              # v0.90：画像匹配不是标量算法，参数不由窗统计推导
     s, k, settle, ms, tr, md = st["sigma"], st["k"], st["settle"], st["min_steady"], st["transient"], st["min_delta"]
+    se = float(st.get("sigma_eff", s))        # v0.99.15：≥ min_steady 跨度的门槛用含秒级漂移的等效 σ；settle 跨度仍用周波 σ
     if algo == "threshold":
         prm.update(min_delta_w=md, settle_cycles=settle, settle_tol_w=_range_tol(s, settle), max_rise_cycles=tr)
     elif algo == "median_diff":
@@ -209,12 +230,12 @@ def auto_algo_params(algo: str, st: Dict[str, Any], base: Optional[Dict[str, Any
         prm.update(pre_cycles=ms, post_cycles=ms, min_delta_w=md, k_sigma=k)
     elif algo == "cusum":
         drift = 0.5 * md
-        h = _cusum_h(drift / s, st["arl0"]) * s
+        h = _cusum_h(drift / se, st["arl0"]) * se
         prm.update(drift_w=drift, threshold_w=h, min_delta_w=md, settle_cycles=settle)
     elif algo == "glr":
-        prm.update(window_cycles=ms, threshold=0.5 * k * k, min_delta_w=md, noise_w=s, settle_cycles=settle)
+        prm.update(window_cycles=ms, threshold=0.5 * k * k, min_delta_w=md, noise_w=se, settle_cycles=settle)
     elif algo == "steady_state":
-        prm.update(tol_w=_range_tol(s, ms), min_steady_cycles=ms, min_delta_w=md, max_transient_cycles=tr)
+        prm.update(tol_w=_range_tol(se, ms), min_steady_cycles=ms, min_delta_w=md, max_transient_cycles=tr)
     # A 套键与 W 套同值（算法函数只读 *_w；这里同步只为展示一致）
     for kw, ka in (("min_delta_w", "min_delta_a"), ("settle_tol_w", "settle_tol_a"), ("tol_w", "tol_a"),
                    ("drift_w", "drift_a"), ("noise_w", "noise_a"), ("threshold_w", "threshold_a")):

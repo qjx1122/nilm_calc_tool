@@ -652,7 +652,8 @@ class NilmDetector:
             return 0
         pre_n = int(self._profile.get("pre_cycles", 10)); post_n = int(self._profile.get("post_cycles", 50))
         dur = max([int((self._profile.get(k) or {}).get("dur_cycles", {}).get("max", 0) or 0) for k in ("startup", "shutdown")] + [0])
-        return pre_n + dur + 2 * post_n + 10
+        sc = max(1, int(float(self.ncfg.params("profile").get("max_scale", 8))))     # v0.99.15：多尺度候选的最大前后窗
+        return pre_n * sc + dur + 2 * post_n * sc + 10
 
     def _evaluate_profile(self, qty: str, gap: int, g_last: int) -> List[NilmEvent]:
         """v0.90：设备画像匹配（多特征，对象固定为三相合成 total；P 口径用总有功做候选，I 口径用三相电流合成量）。"""
@@ -741,13 +742,13 @@ class NilmDetector:
         for r in res:
             onset, end = r["onset"], r["end"]
             g_on, g_end = self._g0 + onset, self._g0 + end
-            if g_end + post_n > g_last:                      # 事件后窗数据不够：等下一块
+            if g_end + int(r.get("post_wait", post_n)) > g_last:   # 事件后窗（按命中尺度）数据不够：等下一块
                 continue
             m = r["match"]; f = r["feat"]
             diag.append({"t_start": float(self._t[onset]), "t_start_local": _ts(float(self._t[onset])), "g_on": int(g_on), "direction": m["direction"],
                          "d2": round(m["d2"], 3), "d2_per_dim": round(m["d2_per_dim"], 3), "confidence": round(r["confidence"], 4),
                          "margin": (round(m["margin"], 2) if math.isfinite(m["margin"]) else None), "status": r["status"],
-                         "flags": list(r["flags"]), "contrib": {k: round(v, 2) for k, v in m["contrib"].items()},
+                         "flags": list(r["flags"]), "scale": int(r.get("scale", 1)), "contrib": {k: round(v, 2) for k, v in m["contrib"].items()},
                          "vec": {k: round(float(v), 4) for k, v in f["vec"].items()}, "seen": g_on <= last_end + gap})
             if g_on <= last_end + gap:
                 continue

@@ -295,7 +295,13 @@ def detect_profile(p4: np.ndarray, q4: np.ndarray, i4: np.ndarray, profile: Dict
     此时 ΔI 合成幅值也只按 A/C 两相计算。
 
     prm：``d2_max``（每维平均 D² 上限）、``min_confidence``、``k_sigma``（候选门槛的噪声倍数）、``margin``（最优 / 次优 D² 比下限）、
-    ``lambda_rel``（协方差收缩）、``state_check``（1/0）。候选的最小幅值＝画像里 |ΔP|（或 |ΔI 合成|）最小值的一半。
+    ``lambda_rel``（协方差收缩）、``state_check``（1/0）、``max_scale``（v0.99.15：多尺度候选搜索的最大倍数，1＝只用画像 pre/post 单尺度）。
+    候选的最小幅值＝画像里 |ΔP|（或 |ΔI 合成|）最小值的一半。
+
+    多尺度（v0.99.15）：慢斜坡停机（如变频器减速 3 s 快降 + 25 s 指数尾）在 pre/post=10/50 周波的双滑窗里 1 s 内只能看到全幅的
+    一小部分，达不到「画像幅值一半」门槛 ⇒ 没有候选。现在依次用 ×1、×2、×4 … ×max_scale 的前后窗各搜一遍；同一事件在多个尺度
+    命中时合并为一个候选：onset 取最早（细尺度定位准）、end 取最晚、特征按最大尺度的 post 窗量（事件后窗落在过渡结束后，ΔI/ΔP 接近全幅）。
+    返回项附 ``scale``（命中的最大倍数，1＝原单尺度行为）。
     """
     pre_n = int(profile.get("pre_cycles", 10)); post_n = int(profile.get("post_cycles", 50))
     groups = [profile[k] for k in ("startup", "shutdown") if profile.get(k)]
@@ -307,15 +313,34 @@ def detect_profile(p4: np.ndarray, q4: np.ndarray, i4: np.ndarray, profile: Dict
         x = i4[0]
         amp = [math.sqrt(sum(g["mu"][FEATURES.index(k)] ** 2 for k in ("d_ia", "d_ib", "d_ic") if k not in skip)) for g in groups]
     min_d = 0.5 * min(amp) if amp else 0.0
-    cands = _two_window_candidates(x, pre_n, post_n, min_d, float(prm.get("k_sigma", 4.0)))
+    k_sig = float(prm.get("k_sigma", 4.0))
+    max_scale = max(1, int(float(prm.get("max_scale", 8))))
+    scales = [1]
+    while scales[-1] * 2 <= max_scale:
+        scales.append(scales[-1] * 2)
+    merged: List[Dict[str, Any]] = []            # {onset, end, delta, scale}
+    for sc in scales:
+        for onset, end, delta in _two_window_candidates(x, pre_n * sc, post_n * sc, min_d, k_sig):
+            hit = None
+            for g in merged:                      # 与已有候选重叠（onset 落在其 [onset − post·sc, end + post·sc]）⇒ 同一事件
+                if g["onset"] - post_n * sc <= onset <= g["end"] + post_n * sc:
+                    hit = g; break
+            if hit is None:
+                merged.append({"onset": onset, "end": end, "delta": delta, "scale": sc})
+            else:
+                hit["onset"] = min(hit["onset"], onset); hit["end"] = max(hit["end"], end); hit["scale"] = max(hit["scale"], sc)
+                if abs(delta) > abs(hit["delta"]):
+                    hit["delta"] = delta
+    merged.sort(key=lambda g: g["onset"])
+    cands = [(g["onset"], g["end"], g["delta"], g["scale"]) for g in merged]
     d2_max = float(prm.get("d2_max", 9.0)); min_conf = float(prm.get("min_confidence", 0.3))
     margin_min = float(prm.get("margin", 1.5)); lam = float(prm.get("lambda_rel", 0.1))
     state_check = int(float(prm.get("state_check", 1))) != 0
     pmap = phase_map_code(prm.get("phase_map", 1))                      # v0.99.6：总线 / 设备侧相序映射
     out: List[Dict[str, Any]] = []
     state = device_state
-    for onset, end, delta in cands:
-        feat = event_features(p4, q4, i4, onset, end, pre_n, post_n)
+    for onset, end, delta, sc in cands:
+        feat = event_features(p4, q4, i4, onset, end, pre_n, post_n * sc)
         m = match_event(profile, feat, lam, skip, pmap)
         flags: List[str] = []
         if m.get("phase_map_auto") and m.get("phase_map") != "ABC":
@@ -335,7 +360,7 @@ def detect_profile(p4: np.ndarray, q4: np.ndarray, i4: np.ndarray, profile: Dict
         if accepted:
             state = "on" if m["direction"] == "START" else "off"
         out.append({"onset": onset, "end": end, "delta": delta, "feat": feat, "match": m, "confidence": conf,
-                    "flags": flags, "accepted": accepted, "status": status})
+                    "flags": flags, "accepted": accepted, "status": status, "scale": int(sc), "post_wait": int(post_n * sc)})
     return out
 
 

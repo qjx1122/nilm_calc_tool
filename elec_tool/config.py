@@ -788,7 +788,7 @@ NILM_ALGO_DEFAULTS: Dict[str, Dict[str, Any]] = {
     #   → 置信度 exp(−D²/2d)。d2_max＝每维平均 D² 上限；min_confidence＝最低置信度；margin＝最优/次优 D² 比下限（区分度）；
     #   lambda_rel＝协方差收缩系数；state_check＝1 启用设备状态机（OFF→START / ON→STOP 合理，否则置信度减半并标记）。默认不启用。
     "profile":      {"enabled": False, "d2_max": 9.0, "min_confidence": 0.3, "k_sigma": 4.0, "margin": 1.5, "lambda_rel": 0.1, "state_check": 1,
-                     "phase_map": 1},   # v0.99.6：总线/设备侧相序映射 1 ABC·2 ACB·3 BAC·4 BCA·5 CAB·6 CBA·0 自动
+                     "phase_map": 1, "max_scale": 8},   # v0.99.15：多尺度候选最大倍数（1＝单尺度）；v0.99.6：总线/设备侧相序映射 1 ABC·2 ACB·3 BAC·4 BCA·5 CAB·6 CBA·0 自动
 }
 # 逐周波标量序列上的 6 种突变检测算法（画像匹配是多特征算法，不在其中）
 NILM_SCALAR_ALGOS = ("threshold", "two_window", "cusum", "glr", "steady_state", "median_diff")
