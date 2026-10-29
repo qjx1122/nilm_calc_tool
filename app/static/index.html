@@ -1294,6 +1294,77 @@
           <canvas id="wp-cyc2" height="260"></canvas>
         </div>
       </div>
+      <!-- v0.96：估计 CT -->
+      <h2 style="margin-top:18px">数据处理 · 估计 CT（同一次设备启停在两侧的电流台阶之比 → 估计未知一侧 CT 变比）</h2>
+      <div class="notes">原理：同一台设备的一次启停在总线侧与分路侧造成的<b>一次侧</b>电流台阶相同：ΔI<sub>总线·二次</sub>×CT<sub>总线</sub> = ΔI<sub>分路·二次</sub>×CT<sub>分路</sub>。两侧分别指定文件、该次启停的时刻、所用单相电流、接线方式与 CT 极性，PT/CT 变换在此强制关闭（直接量二次侧安培）；离线文件列映射沿用上方「波形预览」公共配置。粗估：只用单相电流有效值台阶，其它负荷同时变化、两侧相别对应错误、总线背景负荷功率因数与设备差异大时会有偏差。</div>
+      <div class="grid2">
+        <div class="panel col-bus">
+          <h3><span class="sidename bus">总线侧</span> 文件 / 启停时刻 / 单相 / 接线 / CT 极性</h3>
+          <div class="form">
+            <div class="row2">
+              <label>data/ 下的文件 <select id="ct-bus-files"><option value="">— 选择 data/ 下的 CSV —</option></select></label>
+              <label>或文件路径 <input id="ct-bus-path" placeholder="data/xxx.csv 或绝对路径"></label>
+            </div>
+            <div class="row2">
+              <label title="同一次设备启动或停止在本侧文件里的时刻（写法同数据源页：2026-10-12 08:00:00 / epoch 秒 / 08:00:00）">启停时刻 <input id="ct-bus-time" placeholder="14:39:30 / 2026-10-12 14:39:30 / epoch 秒"></label>
+              <label>单相电流 <select id="ct-bus-phase"><option value="A">A 相</option><option value="B">B 相</option><option value="C">C 相</option></select></label>
+            </div>
+            <div class="row2">
+              <label>接线方式 <select id="ct-bus-wiring"><option value="3p4w">三相四线（三 CT）</option><option value="3p3w">三相三线两表法（B 相无 CT）</option></select></label>
+              <label class="chk"><input id="ct-bus-recon3w" type="checkbox"> 3P3W 虚拟中性点重构（选 B 相时必需）</label>
+            </div>
+            <div class="row2">
+              <label class="chk"><input id="ct-bus-inv" type="checkbox"> 电流极性反转（三相）</label>
+              <label>分相电流极性反转 <span class="chk"><input id="ct-bus-inv-a" type="checkbox"> A <input id="ct-bus-inv-b" type="checkbox"> B <input id="ct-bus-inv-c" type="checkbox"> C</span></label>
+            </div>
+            <div class="row2">
+              <label class="chk"><input type="radio" name="ct-known" id="ct-bus-known" value="bus"> 本侧 CT 已知</label>
+              <label>本侧 CT 变比（已知时用；缺省＝本侧运行配置） <input id="ct-bus-ct" type="number" min="0.000001" step="any"></label>
+            </div>
+          </div>
+        </div>
+        <div class="panel col-branch">
+          <h3><span class="sidename branch">分路侧</span> 文件 / 启停时刻 / 单相 / 接线 / CT 极性</h3>
+          <div class="form">
+            <div class="row2">
+              <label>data/ 下的文件 <select id="ct-br-files"><option value="">— 选择 data/ 下的 CSV —</option></select></label>
+              <label>或文件路径 <input id="ct-br-path" placeholder="data/xxx.csv 或绝对路径"></label>
+            </div>
+            <div class="row2">
+              <label title="同一次设备启动或停止在本侧文件里的时刻（写法同数据源页：2026-10-12 08:00:00 / epoch 秒 / 08:00:00）">启停时刻 <input id="ct-br-time" placeholder="14:39:30 / 2026-10-12 14:39:30 / epoch 秒"></label>
+              <label>单相电流 <select id="ct-br-phase"><option value="A">A 相</option><option value="B">B 相</option><option value="C">C 相</option></select></label>
+            </div>
+            <div class="row2">
+              <label>接线方式 <select id="ct-br-wiring"><option value="3p4w">三相四线（三 CT）</option><option value="3p3w">三相三线两表法（B 相无 CT）</option></select></label>
+              <label class="chk"><input id="ct-br-recon3w" type="checkbox"> 3P3W 虚拟中性点重构（选 B 相时必需）</label>
+            </div>
+            <div class="row2">
+              <label class="chk"><input id="ct-br-inv" type="checkbox"> 电流极性反转（三相）</label>
+              <label>分相电流极性反转 <span class="chk"><input id="ct-br-inv-a" type="checkbox"> A <input id="ct-br-inv-b" type="checkbox"> B <input id="ct-br-inv-c" type="checkbox"> C</span></label>
+            </div>
+            <div class="row2">
+              <label class="chk"><input type="radio" name="ct-known" id="ct-br-known" value="br" checked> 本侧 CT 已知</label>
+              <label>本侧 CT 变比（已知时用；缺省＝本侧运行配置） <input id="ct-br-ct" type="number" min="0.000001" step="any"></label>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="panel">
+        <h3>台阶窗口与结果</h3>
+        <div class="form">
+          <div class="row2">
+            <label title="取稳态前值的窗口长度（秒）">前窗 (s) <input id="ct-pre" type="number" min="0.1" step="0.1" value="2"></label>
+            <label title="取稳态后值的窗口长度（秒）；应 ≥ 设备启动过程（冲击 / 爬升）时长">后窗 (s) <input id="ct-post" type="number" min="0.1" step="0.1" value="2"></label>
+          </div>
+          <div class="row2">
+            <label title="在填写时刻 ± 容差范围内找台阶">时刻容差 (s) <input id="ct-tol" type="number" min="0.1" step="0.1" value="1"></label>
+            <span style="align-self:flex-end"><button id="btn-ct-run" class="primary">估计 CT</button> <button id="btn-ct-refresh" type="button" title="刷新 data/ 文件列表">刷新文件列表</button></span>
+          </div>
+          <div id="ct-status" class="notes"></div>
+          <div id="ct-cmdrow" class="notes" style="display:none">等价命令 <code id="ct-cmd"></code> <button id="btn-ct-copy" type="button" style="padding:1px 8px;font-size:12px">复制</button></div>
+          <div id="ct-result" class="tablewrap"></div>
+        </div>
+      </div>
     </section>
   </main>
 </div>

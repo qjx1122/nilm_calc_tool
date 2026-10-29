@@ -4375,6 +4375,60 @@ function bindWavePreview() {
   wpLoadDefaults();
   wpListFiles();
   renderWavePreview();
+  initCtEstimate();   // v0.96
+}
+
+/* v0.96：数据处理 · 估计 CT（POST /api/process/ct_estimate） */
+const CT = { files: [] };
+function ctSide(pre) {
+  const v = id => { const el = $('#' + id); return el ? String(el.value || '').trim() : ''; };
+  const c = id => ($('#' + id) && $('#' + id).checked) ? '1' : '0';
+  return { path: v(pre + '-path') || v(pre + '-files'), t_event: v(pre + '-time'), phase: v(pre + '-phase') || 'A',
+           wiring: v(pre + '-wiring') || '3p4w', reconstruct_3w: c(pre + '-recon3w'), invert_current: c(pre + '-inv'), invert_phases: getInvPhases(pre),
+           ...cmQuery('wp-cm') };
+}
+async function ctListFiles() {
+  try {
+    const r = await api('/api/files?sub=data', undefined, 'bus');
+    CT.files = (r.files || []).filter(f => !f.dir && f.name.toLowerCase().endsWith('.csv'));
+    ['ct-bus-files', 'ct-br-files'].forEach(id => { const sel = $('#' + id); if (!sel) return; const cur = sel.value;
+      sel.innerHTML = '<option value="">— 选择 data/ 下的 CSV —</option>' + CT.files.map(f => `<option value="${esc(f.name)}">${esc(f.name)} (${f.size_mb} MB)</option>`).join('');
+      if (cur && CT.files.some(f => f.name === cur)) sel.value = cur; });
+  } catch (e) { toast('读取文件列表失败：' + e.message, 'err'); }
+}
+function ctStatus(html, cls) { const el = $('#ct-status'); if (el) el.innerHTML = html ? `<div class="${cls || ''}">${html}</div>` : ''; }
+async function ctFillDefaults() {
+  // 本侧 CT 缺省＝本侧运行配置的 ct_ratio（GET /api/config、/api/branch/config）
+  for (const [url, id] of [['/api/config', 'ct-bus-ct'], ['/api/branch/config', 'ct-br-ct']]) {
+    try { const el = $('#' + id); if (!el || el.value) continue; const r = await (await fetch(url)).json(); const c = r && (r.config || r); if (c && c.transform && c.transform.ct_ratio != null) el.value = c.transform.ct_ratio; } catch (e) { /* 忽略 */ }
+  }
+}
+async function ctRun() {
+  const known = document.querySelector('input[name="ct-known"]:checked'); const knownSide = known ? known.value : 'branch';
+  const knownCt = $('#' + (knownSide === 'bus' ? 'ct-bus-ct' : 'ct-br-ct')).value;
+  const body = { bus: ctSide('ct-bus'), branch: ctSide('ct-br'), known_side: knownSide, known_ct: knownCt,
+                 pre_s: $('#ct-pre').value, post_s: $('#ct-post').value, tol_s: $('#ct-tol').value };
+  if (!body.bus.path || !body.branch.path) { ctStatus('请先选择两侧文件', 'err'); return; }
+  if (!knownCt) { ctStatus('请填写已知一侧的 CT 变比', 'err'); return; }
+  ctStatus('正在估计…'); $('#ct-result').innerHTML = ''; $('#ct-cmdrow').style.display = 'none';
+  try {
+    const r = await api('/api/process/ct_estimate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }, 'bus');
+    const row = (m, name) => `<tr><td>${name}</td><td>${esc(m.path)}</td><td>${m.phase}</td><td>${m.wiring}${m.reconstruct_3w ? '+重构' : ''}</td><td>${m.invert_current ? '全部' : (m.invert_phases || '无')}</td><td>${esc(m.t_step_local || '')}</td><td>${num(m.pre_a, 4)}</td><td>${num(m.post_a, 4)}</td><td>${num(m.delta_a, 4)}</td><td>${m.snr == null ? '∞' : num(m.snr, 1)}</td></tr>`;
+    const est = r.estimated_ct == null ? '无法估计' : num(r.estimated_ct, 2);
+    $('#ct-result').innerHTML = `<table><thead><tr><th>侧</th><th>文件</th><th>相</th><th>接线</th><th>极性反转</th><th>台阶时刻</th><th>前 (A)</th><th>后 (A)</th><th>ΔI (A·二次)</th><th>信噪比</th></tr></thead><tbody>${row(r.bus, '总线侧')}${row(r.branch, '分路侧')}</tbody></table>
+      <div class="notes" style="margin-top:6px"><b>已知 ${r.known_side === 'bus' ? '总线侧' : '分路侧'} CT = ${num(r.known_ct, 3)} → 估计 ${r.estimated_side === 'bus' ? '总线侧' : '分路侧'} CT ≈ ${est}</b>（${esc(r.formula)}；ΔI<sub>分路</sub>/ΔI<sub>总线</sub> = ${r.ratio_branch_over_bus == null ? '—' : num(r.ratio_branch_over_bus, 4)}）${(r.notes || []).map(n => `<div>⚠ ${esc(n)}</div>`).join('')}
+      <div>要采用该值，请到「配置」页该侧「量纲与口径」填入 CT 电流变比并点「保存${r.estimated_side === 'bus' ? '总线侧' : '分路侧'}配置」（本功能不改运行配置）。</div></div>`;
+    if (r.command) { $('#ct-cmd').textContent = r.command; $('#ct-cmdrow').style.display = ''; }
+    ctStatus('');
+  } catch (e) { ctStatus('估计失败：' + esc(e.message), 'err'); }
+}
+function initCtEstimate() {
+  if (!$('#btn-ct-run')) return;
+  $('#btn-ct-run').addEventListener('click', ctRun);
+  $('#btn-ct-refresh').addEventListener('click', ctListFiles);
+  $('#btn-ct-copy').addEventListener('click', () => { navigator.clipboard && navigator.clipboard.writeText($('#ct-cmd').textContent || ''); toast('已复制'); });
+  [['ct-bus-files', 'ct-bus-path'], ['ct-br-files', 'ct-br-path']].forEach(([sel, inp]) => $('#' + sel).addEventListener('change', () => { if ($('#' + sel).value) $('#' + inp).value = $('#' + sel).value; }));
+  ctListFiles(); ctFillDefaults();
 }
 
 /* v0.90：数据处理 · 设备画像提取（POST /api/process/nilm_profile；公共配置沿用 nt-* 调参区） */

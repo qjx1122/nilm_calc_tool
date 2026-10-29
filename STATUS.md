@@ -105,6 +105,7 @@
 - **v0.92.2**：在线画像匹配：首 gap 压制修复、PT/CT 一致性检查、候选终点规则、replay 候选诊断。
 - **v0.92.3**：CLI `--config` 不存在即报错（`load_or_default(strict=True)`）。
 - **v0.92.4**：画像窗口需求 > window_cycles 自动扩缓存 + 提示。
+- **v0.96**：估计 CT（两侧单相电流台阶比）：核心 / API / CLI / UI；测试 `tests/test_r96_ct_estimate.py`（2 个）。
 - **v0.95**：数据处理页基准配置（调参/画像/波形预览）+ CLI 两工具支持 wiring/reconstruct_3w/invert_current/invert_phases；测试 `test_v095_base_wiring_polarity_in_process_apis`。
 - **v0.94**：`transform.reconstruct_3w`（3P3W 虚拟中性点重构：Ib 严格、相电压近似）；`b_phase_missing`/`reconstructing`/`voltage_is_line` 属性驱动 nilm/metrics；测试 `test_v094_*` 2 个。
 - **v0.93**：`transform.wiring`（3p4w/3p3w）、`transform.invert_phases`（分相电流极性反转）；3p3w 下画像匹配跳过 d_ib；两侧 UI + replay `--set transform.*`；测试 `test_v093_*` 2 个。

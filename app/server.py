@@ -2725,6 +2725,42 @@ async def process_nilm_tune(payload: Dict[str, Any]) -> Any:
         return JSONResponse(status_code=400, content={"ok": False, "error": f"{type(exc).__name__}: {exc}"})
 
 
+@app.post("/api/process/ct_estimate")
+async def process_ct_estimate(payload: Dict[str, Any]) -> Any:
+    """v0.96：数据处理子界面「估计 CT」——分别指定总线侧 / 分路侧文件、同一次设备启停的时刻、单相电流、接线方式、CT 极性，
+    量两侧二次侧电流台阶，按已知一侧 CT 估计另一侧（与 ``tools/ct_estimate.py`` 同一实现）。不改任何运行配置。
+
+    body：{bus: {path, t_event, phase, wiring?, reconstruct_3w?, invert_current?, invert_phases?, col_map_enabled?, col_map?, file_time_utc?},
+           branch: {同上}, known_side?: "branch"|"bus", known_ct?: 15, pre_s?: 2, post_s?: 2, tol_s?: 1}
+    """
+    from elec_tool.ct_estimate import CtEstimateError, estimate_ct
+    from tools.ct_estimate import build_cli_command as _ct_cmd
+    try:
+        bus = dict(payload.get("bus") or {}); br = dict(payload.get("branch") or {})
+        for d in (bus, br):
+            if str(d.get("path") or "").strip():
+                d["path"] = _abs_path(str(d["path"]).strip())
+
+        def _num(k: str, default: float) -> float:
+            v = payload.get(k)
+            if v in (None, ""):
+                return default
+            try:
+                return float(v)
+            except (TypeError, ValueError):
+                raise CtEstimateError(f"{k} 必须是数字（当前 {v!r}）")
+        out = estimate_ct(AppConfig.load(DEFAULT_CONFIG_PATH), bus, br, known_side=str(payload.get("known_side") or "branch"),
+                          known_ct=_num("known_ct", 15.0), pre_s=_num("pre_s", 2.0), post_s=_num("post_s", 2.0), tol_s=_num("tol_s", 1.0))
+        for k in ("bus", "branch"):
+            out[k]["path"] = _display_path(out[k]["path"]); out[k]["t_event_local"] = fmt_local(out[k]["t_event"]); out[k]["t_step_local"] = fmt_local(out[k]["t_step"])
+        out["command"] = _ct_cmd(payload, out)
+        return out
+    except (CtEstimateError, ConfigError, ValueError) as exc:
+        return JSONResponse(status_code=400, content={"ok": False, "error": str(exc)})
+    except Exception as exc:  # noqa: BLE001
+        return JSONResponse(status_code=400, content={"ok": False, "error": f"{type(exc).__name__}: {exc}"})
+
+
 @app.post("/api/process/nilm_profile")
 async def process_nilm_profile(payload: Dict[str, Any]) -> Any:
     """v0.90：数据处理子界面「设备画像提取」——对设备侧（分路侧）含启停过程的波形文件构建设备画像 JSON
