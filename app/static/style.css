@@ -331,3 +331,7 @@ label.chk>.lbl>.note{color:var(--mut);opacity:.85;font-size:11.5px;line-height:1
 .toolbar label.f,.btnrow label.f,.toggle label.f,.inline label.f{grid-template-columns:max-content 1fr;column-gap:6px}
 label.f .chk{display:inline-flex;align-items:center;gap:6px;flex-wrap:wrap;color:var(--fg);font-size:12.5px;min-height:26px}
 label.f .chk>input{width:14px;height:14px;margin:0}
+/* v0.99.1：.row（flex 工具行）里的对齐标签——.row>label 的 inline-flex 规则在后面会盖掉 label.f，这里显式恢复两列网格并均分行宽 */
+.row>label.f{display:grid;grid-template-columns:max-content 1fr;column-gap:8px;flex:1 1 220px;white-space:normal}
+.row>label.f[style*="flex:1 1 260px"]{flex:1 1 260px}
+.btnrow>label.f,.toggle>label.f{flex:0 1 auto}
