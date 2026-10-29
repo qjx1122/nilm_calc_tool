@@ -364,3 +364,9 @@ input.flash{animation:ntflash 1.5s ease-out}
 #nt-form .wp-group{margin-top:6px}
 #nt-common{border-color:#3a4a6a;background:rgba(80,120,200,.06)}
 #nt-common #nt-base{margin-top:6px;border-style:dashed}
+/* v0.99.18：画像结果表改为特征为行、μ/σ/事件为列 */
+.np-cap{margin-top:10px;font-weight:600;font-size:13px}
+.np-tbl td.stat,.np-tbl th.stat{font-weight:600;background:rgba(99,230,190,.06)}
+.np-tbl th.ev{font-weight:500;line-height:1.25}
+.np-tbl th.ev .src{display:block;color:var(--mut);font-size:11px;font-weight:400}
+.np-evsrc{margin-top:4px;font-size:11.5px}
