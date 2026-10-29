@@ -992,8 +992,25 @@
         <div class="panel">
           <h3>调参参数（与 <code>tools/nilm_tune.py</code> 同一实现）</h3>
           <div class="form" id="nt-form">
-            <label class="f"><span class="lbl">波形文件（data 目录下拉或手填路径）</span><select id="nt-files"><option value="">— 选择 data/ 下的 CSV —</option></select></label>
-            <label class="f"><span class="lbl">波形文件路径</span><input id="nt-path" placeholder="data/bus_bg.csv 或绝对路径"></label>
+            <div class="notes p" id="nt-steps-note"><b>两步法（用于总线侧检测）：</b>① 用<b>设备侧</b>含启停的录波估计「最小关心负荷」（幅值类参数，可选；知道额定功率可直接手填到第 ② 步）→ ② 用<b>总线侧稳态背景</b>文件量噪声，得到 6 种算法的噪声 / 容差类参数 → ③ 套用到总线侧运行配置。调参量的是所选文件的背景噪声，所以第 ② 步务必选总线侧文件。</div>
+            <div class="wp-group" id="nt-step1">
+              <div class="wp-group-title">第 ① 步（可选）· 设备侧文件 → 估计最小关心负荷 <small class="note">（分路侧单设备、含完整启停的录波；估出的台阶幅值会自动填入第 ② 步的「最小关心负荷」；按第 ② 步的基准配置换算口径）</small></div>
+              <label class="f"><span class="lbl">设备侧波形文件（data 目录下拉或手填路径）</span><select id="nt-dev-files"><option value="">— 选择 data/ 下的 CSV —</option></select></label>
+              <label class="f"><span class="lbl">设备侧波形文件路径</span><input id="nt-dev-path" placeholder="data/pumpA_dev.csv 或绝对路径"></label>
+              <div class="row2">
+                <label class="f" title="设备侧文件分析起始时间；空＝文件开头"><span class="lbl">起始时间（空＝文件开头）</span><input id="nt-dev-tstart" placeholder="2026-10-13 08:00:00.000"></label>
+                <label class="f" title="设备侧文件分析结束时间；空＝文件结尾"><span class="lbl">结束时间（空＝文件结尾）</span><input id="nt-dev-tend" placeholder="2026-10-13 08:05:00.000"></label>
+              </div>
+              <div class="btnrow">
+                <button id="btn-nt-est-dev" type="button">① 估计最小关心负荷并填入第 ② 步</button>
+                <label class="f" title="分两簇（主负荷 + 二级波动）时取哪个值填入"><span class="lbl">取值</span><select id="nt-dev-pick"><option value="primary">按最大台阶（主负荷）</option><option value="min">按最小台阶（候选）</option></select></label>
+                <span id="nt-dev-est" class="mut">未估计：也可跳过此步，直接在第 ② 步手填额定功率</span>
+              </div>
+            </div>
+            <div class="wp-group" id="nt-step2">
+              <div class="wp-group-title">第 ② 步 · 总线侧稳态背景文件 → 量噪声 / 容差类参数 <small class="note">（几十秒没有投切的总线侧平稳段；基准配置选「沿用总线侧运行配置」）</small></div>
+            <label class="f"><span class="lbl">总线侧背景波形文件（data 目录下拉或手填路径）</span><select id="nt-files"><option value="">— 选择 data/ 下的 CSV —</option></select></label>
+            <label class="f"><span class="lbl">总线侧背景波形文件路径</span><input id="nt-path" placeholder="data/bus_bg.csv 或绝对路径"></label>
             <div class="row2">
               <label class="f" title="分析起始时间；空＝文件开头。写法同播放时间段：2026-10-13 08:00:02.5 / 08:00:02.5（与文件时标当天时刻比较）/ epoch 秒"><span class="lbl">起始时间（空＝文件开头）</span><input id="nt-tstart" placeholder="2026-10-13 08:00:02.000"></label>
               <label class="f" title="分析结束时间；空＝文件结尾（或由时长决定）"><span class="lbl">结束时间（空＝文件结尾）</span><input id="nt-tend" placeholder="2026-10-13 08:00:32.000"></label>
@@ -1051,21 +1068,29 @@
               <div id="nt-base-note" class="mut"></div>
             </div>
             <div class="row2">
-              <label class="f"><span class="lbl">最小关心负荷 (W，P 口径)</span><input id="nt-minw" type="number" min="0" step="any" placeholder="空＝max(6σ, 2%×基荷)"></label>
-              <label class="f"><span class="lbl">最小关心负荷电流 (A，I 口径)</span><input id="nt-mina" type="number" min="0" step="any" placeholder="空＝max(6σ, 2%×基荷)"></label>
+              <label class="f"><span class="lbl">最小关心负荷 (W，P 口径；第 ① 步自动填入或手填额定功率)</span><input id="nt-minw" type="number" min="0" step="any" placeholder="空＝max(6σ, 2%×基荷)"></label>
+              <label class="f"><span class="lbl">最小关心负荷电流 (A，I 口径；第 ① 步自动填入或手填额定电流)</span><input id="nt-mina" type="number" min="0" step="any" placeholder="空＝max(6σ, 2%×基荷)"></label>
             </div>
             <div class="row2">
-              <label class="check" title="v0.55：未手填最小关心负荷时，从文件中的投切台阶估计（相邻稳态台阶最小间距 / 最小跳变幅值）。只对分路侧单设备、含启停的录波有效；纯背景文件或总线侧多设备文件估计不可靠时按未指定处理。估计值是上界候选，现场不关心二级负荷请手工改大"><input id="nt-minauto" type="checkbox"> 从文件投切台阶估计最小关心负荷（分路侧含启停录波）</label>
+              <label class="check" title="v0.55：未手填最小关心负荷时，从文件中的投切台阶估计（相邻稳态台阶最小间距 / 最小跳变幅值）。只对分路侧单设备、含启停的录波有效；纯背景文件或总线侧多设备文件估计不可靠时按未指定处理。估计值是上界候选，现场不关心二级负荷请手工改大"><input id="nt-minauto" type="checkbox"> 直接从本步所选文件估计最小关心负荷（仅当本步文件就是单设备含启停录波时勾选；总线侧背景文件请勿勾选，改用第 ① 步）</label>
             </div>
             <div class="row2">
               <label class="check" title="默认不保存；勾选后以所选侧的原配置文件（configs/runtime.json 或 branch_runtime.json）为基准，只更新算法参数、其它参数不变，把更新后的完整配置写到 output/nilm/ 下（原配置文件不改动；可直接作 --config / 回放配置使用）"><input id="nt-save" type="checkbox"> 保存为配置文件（原配置基础上更新算法参数）</label>
               <label class="f"><span class="lbl">文件名（留空＝tune_{时间}.json）</span><input id="nt-name" placeholder="tune_{时间}.json"></label>
             </div>
             <div class="btnrow">
-              <button id="btn-nt-run" class="primary">量噪声并给出参数</button>
+              <button id="btn-nt-run" class="primary">② 量噪声并给出参数</button>
               <button id="btn-nt-refresh">刷新文件列表</button>
-              <label class="f" title="「套用到运行配置」的目标侧（与基准配置无关；基准配置独立时也可套用到任一侧）"><span class="lbl">套用目标</span><select id="nt-apply-side"><option value="bus">总线侧运行配置</option><option value="branch">分路侧运行配置</option></select></label>
-              <button id="btn-nt-apply" disabled title="把上次结果套用到「套用目标」所选侧正在运行的配置（热生效，更新后的完整配置写 output/nilm/，不写配置文件）">套用到运行配置</button>
+              <span id="nt-step2-src" class="mut"></span>
+            </div>
+            </div>
+            <div class="wp-group" id="nt-step3">
+              <div class="wp-group-title">第 ③ 步 · 把结果套用到运行配置 <small class="note">（热生效；更新后的完整配置写 output/nilm/，不写配置文件；要持久化请到负荷辨识页「保存总线侧配置」）</small></div>
+              <div class="btnrow">
+                <label class="f" title="「套用到运行配置」的目标侧（与基准配置无关；基准配置独立时也可套用到任一侧）"><span class="lbl">套用目标</span><select id="nt-apply-side"><option value="bus">总线侧运行配置</option><option value="branch">分路侧运行配置</option></select></label>
+                <button id="btn-nt-apply" disabled title="把上次结果套用到「套用目标」所选侧正在运行的配置（热生效，更新后的完整配置写 output/nilm/，不写配置文件）">③ 套用到运行配置</button>
+                <span id="nt-step3-note" class="mut">先完成第 ② 步</span>
+              </div>
             </div>
             <div id="nt-hint" class="notes">
               <div>理想输入是<b>没有投切的稳态段</b>（几十秒即可）；段内偶有开关会由稳健统计削弱，并在结果里提示。单位口径与界面一致（启用 PT/CT 时为一次侧 W / A）。</div>

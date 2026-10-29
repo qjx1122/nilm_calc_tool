@@ -345,3 +345,8 @@ label.f .chk>input{width:14px;height:14px;margin:0}
 
 /* v0.99.3：算法面板里的固定（不可选）项 */
 .nilm-algo label.nilm-fixed>input[disabled]{opacity:.75;color:var(--mut);cursor:not-allowed}
+
+/* v0.99.11：两步法填入高亮 */
+@keyframes ntflash{0%{box-shadow:0 0 0 0 #3ddc9700}30%{box-shadow:0 0 0 3px #3ddc97aa}100%{box-shadow:0 0 0 0 #3ddc9700}}
+input.flash{animation:ntflash 1.5s ease-out}
+#nt-form .wp-group{margin-top:6px}

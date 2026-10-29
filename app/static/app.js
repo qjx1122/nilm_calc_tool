@@ -3971,6 +3971,7 @@ const NT = { last: null, side: 'bus', command: '', est: null, userBase: null, ru
 const NTS = { nt: NT, np: { userBase: null, runningQC: null } };
 const NT_BASE_KEYS = { nt: 'elec_tool.nilm_tune.base', np: 'elec_tool.nilm_profile.base' };
 async function ntListFiles(P = 'nt') {
+  if (P === 'nt') ntListFiles('nt-dev');          // v0.99.11：第 ① 步设备侧文件下拉一并刷新
   const sel = $('#' + P + '-files'); if (!sel) return;
   try {
     const r = await api('/api/files?sub=data');
@@ -4133,6 +4134,35 @@ function ntRender(d) {
   $('#nt-json').textContent = JSON.stringify(d, null, 2);
 
 }
+/* v0.99.11：两步法第 ① 步——用设备侧含启停文件估计最小关心负荷（min_load_auto），自动填入第 ② 步输入框 */
+function ntStep2Hint() {   // 第 ② 步与第 ① 步选了同一个文件 → 提醒（噪声要用总线侧背景）
+  const a = ($('#nt-path').value || '').trim() || $('#nt-files').value, b = ($('#nt-dev-path').value || '').trim() || $('#nt-dev-files').value;
+  const el = $('#nt-step2-src'); if (!el) return;
+  el.innerHTML = (a && b && a === b) ? '<span class="err">⚠ 第 ② 步选的是与第 ① 步相同的设备侧文件：量出的噪声是设备侧的，套到总线侧会误报。请改选总线侧稳态背景文件</span>' : '';
+}
+async function ntEstimateFromDevice() {
+  const path = ($('#nt-dev-path').value || '').trim() || $('#nt-dev-files').value;
+  if (!path) { toast('请先选择设备侧波形文件', 'err'); return; }
+  const p = Object.assign(ntPayload('nt'), { path, t_start: ($('#nt-dev-tstart').value || '').trim(), t_end: ($('#nt-dev-tend').value || '').trim(),
+                                            duration_s: null, min_load_w: null, min_load_a: null, min_load_auto: true, save: false, name: '' });
+  const mode = ntBaseMode('nt'); const side = mode === 'custom' ? 'bus' : mode;
+  const btn = $('#btn-nt-est-dev'), out = $('#nt-dev-est'); btn.disabled = true; out.textContent = '正在从设备侧文件估计…';
+  try {
+    const d = await api('/api/process/nilm_tune', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(p) }, side);
+    const est = d.min_load_estimate, u = d.unit || (d.quantity_effective === 'i' ? 'A' : 'W');
+    if (!est || est.candidate === null) { out.innerHTML = `<span class="err">无法估计：${esc((est && est.note) || '文件里没有可辨识的投切台阶')}</span>`; return; }
+    const pick = $('#nt-dev-pick').value;
+    const val = (pick === 'primary') ? (est.split ? est.primary_step : est.max_step) : est.candidate;
+    const tgt = u === 'A' ? $('#nt-mina') : $('#nt-minw');
+    tgt.value = ntFmt(val); $('#nt-minauto').checked = false;
+    const lv = (est.levels || []).map(ntFmt).join(', ');
+    out.innerHTML = `已填入第 ② 步：<b>${ntFmt(val)} ${u}</b>（${pick === 'primary' ? '主负荷 / 最大台阶' : '最小台阶候选'}${est.reliable ? '，✓ 可靠' : '，⚠ 不可靠，请核对'}）`
+      + `<br><span class="muted">台阶 [${esc(lv)}] ${u} · 最小跳变 ${ntFmt(est.min_step)} · 最大跳变 ${ntFmt(est.max_step)}${est.split ? ` · 分两簇：主负荷 ≈${ntFmt(est.primary_step)}（${est.n_primary} 次）+ 二级 ≈${ntFmt(est.secondary_step)}（${est.n_secondary} 次）` : ''} · ${esc(est.note || '')}</span>`;
+    tgt.classList.add('flash'); setTimeout(() => tgt.classList.remove('flash'), 1500);
+    toast(`最小关心负荷 ${ntFmt(val)} ${u} 已填入第 ② 步`, 'ok');
+  } catch (e) { out.innerHTML = `<span class="err">失败：${esc(e.message)}</span>`; toast(e.message, 'err'); }
+  finally { btn.disabled = false; }
+}
 async function ntRun() {
   const p = ntPayload();
   if (!p.path) { toast('请填写波形文件路径', 'err'); return; }
@@ -4143,6 +4173,8 @@ async function ntRun() {
     const d = await api('/api/process/nilm_tune', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(p) }, side);
     NT.last = d; NT.side = side; NT.baseMode = mode; $('#btn-nt-apply').disabled = false;
     ntRender(d);
+    const n3 = $('#nt-step3-note'); if (n3) n3.textContent = `第 ② 步已完成（文件 ${p.path.split(/[\\/]/).pop()}，噪声 / 容差类参数来自该文件；最小关心负荷 ${d.min_load_source === 'manual' ? '按手填 / 第 ① 步填入值' : d.min_load_source === 'estimated' ? '按本文件估计' : '按 max(6σ, 2%×基荷)'}）→ 可套用`;
+    const s2 = $('#nt-step2-src'); if (s2) s2.textContent = '';
     toast('调参完成' + (d.saved_to ? '，结果已保存 ' + d.saved_to : ''), 'ok');
   } catch (e) { $('#nt-status').innerHTML = `<span class="err">失败：${esc(e.message)}</span>`; toast(e.message, 'err'); }
   finally { btn.disabled = false; }
@@ -4639,7 +4671,11 @@ function bindProcess() {
     $('#btn-np-copy').addEventListener('click', () => { navigator.clipboard && navigator.clipboard.writeText($('#np-cmd').textContent || ''); toast('已复制', 'ok'); });
   }
   if ($('#nt-form')) {
-    $('#nt-files').addEventListener('change', () => { if ($('#nt-files').value) $('#nt-path').value = $('#nt-files').value; });
+    $('#nt-files').addEventListener('change', () => { if ($('#nt-files').value) $('#nt-path').value = $('#nt-files').value; ntStep2Hint(); });
+    $('#nt-path').addEventListener('change', ntStep2Hint);
+    // v0.99.11：第 ① 步（设备侧估计最小关心负荷）
+    $('#nt-dev-files').addEventListener('change', () => { if ($('#nt-dev-files').value) $('#nt-dev-path').value = $('#nt-dev-files').value; ntStep2Hint(); });
+    $('#btn-nt-est-dev').addEventListener('click', ntEstimateFromDevice);
     $('#btn-nt-run').addEventListener('click', ntRun);
     // v0.72：独立基准配置
     if ($('#nt-side')) $('#nt-side').addEventListener('change', () => ntSyncBaseUI('nt'));
