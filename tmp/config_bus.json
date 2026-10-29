@@ -262,7 +262,7 @@
     "autoload_last": true
   },
   "events": {
-    "enabled": true,
+    "enabled": false,
     "hysteresis": 0.95,
     "save": true,
     "events_dir": "output/events",
@@ -294,7 +294,6 @@
     "nilm_dir": "output/nilm",
     "max_log": 5000,
     "channels": [
-      "total",
       "A"
     ],
     "window_cycles": 3000,
@@ -364,7 +363,7 @@
       }
     },
     "auto_params": true,
-    "profile_path": "output\\nilm\\profile_device_20261029_212837.json"
+    "profile_path": "output\\nilm\\profile_device_20261029_234954.json"
   },
   "branch": {
     "enabled": true,

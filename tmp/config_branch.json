@@ -174,7 +174,7 @@
     "autoload_last": true
   },
   "events": {
-    "enabled": true,
+    "enabled": false,
     "hysteresis": 0.95,
     "save": true,
     "events_dir": "output/events",
@@ -202,7 +202,7 @@
   },
   "nilm": {
     "enabled": true,
-    "save": true,
+    "save": false,
     "nilm_dir": "output/nilm",
     "max_log": 5000,
     "channels": [
@@ -210,7 +210,7 @@
     ],
     "window_cycles": 3000,
     "min_gap_cycles": 1000,
-    "rel_tol_pct": 1.0,
+    "rel_tol_pct": 0,
     "min_delta_pct": 0.0,
     "algorithms": {
       "threshold": {
@@ -263,7 +263,7 @@
     },
     "quantity": "i",
     "auto_params": true,
-    "profile_path": "output\\nilm\\profile_device_20261029_212837.json"
+    "profile_path": "output\\nilm\\profile_device_20261029_234954.json"
   },
   "branch": {
     "enabled": false,
