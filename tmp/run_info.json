@@ -1,14 +1,14 @@
 {
-  "created_local": "2026-10-30 01:14:24.498",
+  "created_local": "2026-10-30 02:04:22.617",
   "started_side": "bus",
   "starts": [
     {
       "side": "bus",
-      "at_local": "2026-10-30 01:14:24.498"
+      "at_local": "2026-10-30 02:04:22.617"
     },
     {
       "side": "branch",
-      "at_local": "2026-10-30 01:14:24.579"
+      "at_local": "2026-10-30 02:04:22.666"
     }
   ],
   "sides": {
@@ -19,8 +19,8 @@
       "config_file": "config_bus.json",
       "config_copied_from": "configs\\runtime.json",
       "config_mode": "verbatim_copy",
-      "profile_file": "nilm/profile_bus_profile_device_20261030_011244.json",
-      "profile_copied_from": "output\\nilm\\profile_device_20261030_011244.json"
+      "profile_file": "nilm/profile_bus_profile_device_20261030_020116.json",
+      "profile_copied_from": "output\\nilm\\profile_device_20261030_020116.json"
     },
     "branch": {
       "source_kind": "csv_file",
@@ -29,8 +29,8 @@
       "config_file": "config_branch.json",
       "config_copied_from": "configs\\branch_runtime.json",
       "config_mode": "verbatim_copy",
-      "profile_file": "nilm/profile_branch_profile_device_20261030_011244.json",
-      "profile_copied_from": "output\\nilm\\profile_device_20261030_011244.json"
+      "profile_file": "nilm/profile_branch_profile_device_20261030_020116.json",
+      "profile_copied_from": "output\\nilm\\profile_device_20261030_020116.json"
     }
   }
 }
