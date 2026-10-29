@@ -4646,6 +4646,7 @@ function npRender(d) {
   const f = x => (typeof x === 'number' ? (Number.isInteger(x) ? String(x) : (+x.toPrecision(4)).toString()) : String(x));
   const FN = { d_ia: 'ΔIa (A)', d_ib: 'ΔIb (A)', d_ic: 'ΔIc (A)', d_p: 'ΔP (W)', d_q: 'ΔQ (var)', peak_ratio: '峰值比', dur_cycles: '持续 (周波)' };
   // v0.99.19：行列交换（用户要求）——特征为列（ΔIa/ΔIb/ΔIc/ΔP/ΔQ/峰值比/持续），「均值 μ」「标准差 σ」与各次事件为行；
+  //   v0.99.21：μ/σ 行 / 单元格类名改为 np-stat——原类名 stat 与顶部状态栏全局规则 .stat{display:flex;flex-direction:column;min-width:78px} 冲突，7 个数值格被拉成竖排 flex 块、右对齐与列宽失效
   //   μ/σ 两行高亮并置于表头之下、事件行按时刻列出；启动 / 停止画像各一张表（首列与表头吸附，横向可滚）
   let h = '';
   [['startup', '启动画像'], ['shutdown', '停止画像']].forEach(([k, name]) => {
@@ -4654,8 +4655,8 @@ function npRender(d) {
     if (!g) return;
     const evs = g.events || [];
     h += `<table class="np-tbl"><thead><tr><th>统计 / 事件</th>${F.map(x => `<th class="n">${esc(FN[x] || x)}</th>`).join('')}</tr></thead><tbody>`
-       + `<tr class="stat"><td class="stat">均值 μ</td>${g.mu.map(x => `<td class="n stat">${f(x)}</td>`).join('')}</tr>`
-       + `<tr class="stat"><td class="stat">标准差 σ</td>${g.sigma.map(x => `<td class="n stat">${f(x)}</td>`).join('')}</tr>`
+       + `<tr class="np-stat"><td class="np-stat">均值 μ</td>${g.mu.map(x => `<td class="n np-stat">${f(x)}</td>`).join('')}</tr>`
+       + `<tr class="np-stat"><td class="np-stat">标准差 σ</td>${g.sigma.map(x => `<td class="n np-stat">${f(x)}</td>`).join('')}</tr>`
        + evs.map((e, j) => `<tr><td title="${esc(e.source || '')}">事件 ${j + 1} <span class="src">${esc((e.t_start_local || '').slice(11) || e.t_start_local || '')}</span></td>${F.map(x => `<td class="n">${f(e.vec[x])}</td>`).join('')}</tr>`).join('')
        + '</tbody></table>';
     if (evs.length) h += `<div class="mut np-evsrc">事件来源：${esc([...new Set(evs.map(e => e.source || ''))].filter(Boolean).join('；') || '—')}；事件行显示时刻（时:分:秒），悬停看文件</div>`;

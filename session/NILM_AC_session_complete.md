@@ -441,3 +441,10 @@
 - 第 160 轮 v0.99.18：画像结果表转置（特征为行、μ/σ/事件为列）。
 - 第 161 轮 v0.99.19：画像表行列交换；第二次实录复盘——6 算法报的是其它负荷真实投切（限速饱和）；画像被拒根因＝多尺度特征几何与画像不一致（v0.99.15 回归），已修正并加回归测试；轨迹散布下限 0.25。
 - 第 162 轮 v0.99.20：运行目录复制 profile JSON；画像候选诊断落盘 nilm_profile_candidates_{日期}.csv；test_r162。
+
+
+## 第 163 轮（v0.99.21）画像提取结果表 μ/σ 行布局异常
+
+- 现象：μ / σ 两行下 7 个数值格错位。根因：`<td class="n stat">` 命中全局 `.stat{display:flex;flex-direction:column;min-width:78px}`（顶部状态栏样式），单元格失去 table-cell 语义。
+- 修复：类名改 `np-stat`，CSS 对应改名并显式 `display:table-cell;min-width:0`；新增静态回归测试 `tests/test_r163_np_table_stat_class.py`。全量 pytest 462+2 passed。
+- 缺口：沙箱无浏览器，未做像素级截图验证；若仍异常请提供截图。

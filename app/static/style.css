@@ -331,7 +331,7 @@ label.chk>.lbl>.note{color:var(--mut);opacity:.85;font-size:11.5px;line-height:1
 .np-tbl th:first-child,.np-tbl td:first-child{text-align:left}
 .np-tbl th.cap{text-align:left;color:var(--fg);font-size:13px;padding-top:8px}
 .np-tbl td.n{text-align:right;font-variant-numeric:tabular-nums}
-.np-tbl tr.stat td{font-weight:600}
+.np-tbl tr.np-stat td{font-weight:600}
 .np-tbl td .src{color:var(--mut);font-size:11px;margin-left:6px;display:inline}
 /* v0.99.16：画像提取结果表布局修正——
    ① 全局 th 为 position:sticky;top:0，分组标题行（th.cap「启动画像 / 停止画像」）也被吸顶，滚动时与列头行、彼此重叠 ⇒ 分组行改 static；
@@ -343,7 +343,7 @@ label.chk>.lbl>.note{color:var(--mut);opacity:.85;font-size:11.5px;line-height:1
 .np-tbl th:first-child,.np-tbl td:first-child{position:sticky;left:0;z-index:2;background:var(--panel)}
 .np-tbl thead th:first-child{z-index:4;background:#141b2b}
 .np-tbl th.cap:first-child{position:static}
-.np-tbl tr.stat td:first-child{background:var(--panel)}
+.np-tbl tr.np-stat td:first-child{background:var(--panel)}
 .np-tbl td:first-child{padding-right:14px;box-shadow:2px 0 0 #1e2740}
 
 /* v0.99：工具条 / 行内容器里的对齐标签：标签列按内容宽、不强占 34% */
@@ -366,8 +366,9 @@ input.flash{animation:ntflash 1.5s ease-out}
 #nt-common #nt-base{margin-top:6px;border-style:dashed}
 /* v0.99.18：画像结果表改为特征为行、μ/σ/事件为列 */
 .np-cap{margin-top:10px;font-weight:600;font-size:13px}
-.np-tbl td.stat,.np-tbl th.stat{font-weight:600;background:rgba(99,230,190,.06)}
+/* v0.99.21：类名 stat→np-stat，避开顶部状态栏全局 .stat{display:flex;flex-direction:column} 规则（曾把 μ/σ 行 7 个数值格挤成竖排块） */
+.np-tbl td.np-stat,.np-tbl th.np-stat{font-weight:600;background:rgba(99,230,190,.06);display:table-cell;min-width:0}
 .np-tbl th.ev{font-weight:500;line-height:1.25}
 .np-tbl th.ev .src{display:block;color:var(--mut);font-size:11px;font-weight:400}
 .np-evsrc{margin-top:4px;font-size:11.5px}
-.np-tbl tr.stat td.stat:first-child{background:#17251f}
+.np-tbl tr.np-stat td.np-stat:first-child{background:#17251f}
