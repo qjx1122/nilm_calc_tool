@@ -468,3 +468,12 @@
 - 用户要求：去掉界面所有「启用 PT/CT 变换」，只留 PT/CT 输入，默认 1。实现：index.html 五处复选框改 hidden+checked，ptctSync 恒放开输入框；configs/default.json、branch.json PT=CT=1 enabled=true；`TransformConfig.__post_init__/validate` 旧 enabled=false ⇒ 1/1；`make_base` pt_ct_enabled=0 ⇒ 1/1；`load_profile` 旧画像同理；nilm.py 口径检查改为变比不同仅提示。代码级 dataclass 缺省仍 100/15（库/测试用），conftest `copy_default_ptct_on` 显式写 100/15。
 - 测试：新增 `tests/test_r165_transition_end_and_ptct_always_on.py`（5 项）；改 conftest、test_r9/r12/r61/r90/r92/r156/r164 断言到新语义。全量 pytest 469 passed。
 - 缺口：画像需用 v0.99.23 重提（dur 定义变）；两侧文件时间戳仍差 ~74 s；浏览器端未截图验证。
+
+
+## 第 166 轮：v0.99.23 重跑结果评估（总线侧首次 confirmed）
+
+- 结果：总线侧 14:38:16.9 STOP confirmed conf 0.748、D²/维 0.58、margin 178；分路侧 14:39:31.6 STOP confirmed 0.983。D² 分解：ΔIa 0.15、ΔIb 1.56、ΔIc 1.33、ΔP 0.36、ΔQ 0.00、峰值比 0.01、dur 0.67（430 vs 305±152）——各维均在 1σ 量级，正常。
+- 正确拒绝：14:48:22 START 候选（他负荷 +25/+26/+22 A，ΔP −16.5 kW）D²/维 6.24（<9）、conf 0.044（<0.3）⇒ rejected；靠 ΔQ（贡献 22.5）与 ΔIc（9.8）区分，**边际不厚**。
+- 两侧时间戳差 74.7 s（录波器时钟），需现场确认。两侧 ΔP 均为负（两侧 CT 极性同向接反或工具符号约定），对匹配无影响。
+- 设备文件 30 min（含 15:00:50 启动，25 s 斜坡，dur 1271），但总线文件只到 14:53:18 ⇒ **启动画像在总线侧未验证**。
+- 普适性结论见交付说明：方法与设备无关，但当前一次只能加载一个画像（nilm.profile_path 单路径），且本次仅 1 台设备 1 次停机 1 个样本验证。
