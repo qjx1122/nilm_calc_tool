@@ -1808,7 +1808,12 @@ async def nilm_tune_apply(payload: Dict[str, Any]) -> Any:
             RUNNER.set_cfg(cfg)
             if bool(payload.get("persist", False)) and os.environ.get("ELEC_TOOL_PERSIST_CONFIG", "1") == "1":
                 _persist(cfg, {"nilm": _dict_diff(before.get("nilm", {}), cfg.to_dict().get("nilm", {}))}); persisted = True
-        return {"ok": True, "side": side, "saved_to": _display_path(path), "changes": notes, "hot": hot,
+        # v0.99.13：目标侧启用自适应算法参数时，套用的 6 种算法数值参数在检测时不参与（被窗内推导覆盖），明确告知
+        auto_on = bool(getattr(cfg.nilm, "auto_params", False))
+        warn = ("目标侧已启用「自适应算法参数」：本次套用的算法数值参数（min_delta / settle_tol / drift / threshold / noise / k_sigma 等）"
+                "已写入配置但检测时不参与——运行时每个周波窗由数据自身推导并覆盖；要让调参结果生效，请在负荷辨识页取消勾选「是否启用自适应算法参数」"
+                ) if auto_on else ""
+        return {"ok": True, "side": side, "saved_to": _display_path(path), "changes": notes, "hot": hot, "auto_params": auto_on, "warning": warn,
                 "config_file_updated": persisted, "config": (RUNNER.cfg if hot else cfg).to_dict()}
     except ConfigError as exc:
         return JSONResponse(status_code=400, content={"ok": False, "error": str(exc)})

@@ -4184,12 +4184,15 @@ async function ntApply() {
   if (!NT.last) return;
   const sel = $('#nt-apply-side');
   const side = (sel && sel.value) || NT.side || 'bus';          // v0.72：套用目标侧由「套用目标」下拉决定，与基准配置无关
+  const curCfg = side === 'branch' ? (BRD.state && BRD.state.config) : (S.state && S.state.config);
+  if (curCfg && curCfg.nilm && curCfg.nilm.auto_params && !confirm('目标侧已启用「自适应算法参数」：套用后 6 种算法的数值参数会被每个周波窗的自动推导覆盖，调参结果不会参与检测。\n\n仍然套用吗？（要让调参结果生效，请先在负荷辨识页取消「是否启用自适应算法参数」）')) return;
   try {
     const d = await api('/api/nilm/tune/apply', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ params: NT.last, hot: true, persist: false }) }, side);
     if (d && d.config) {
       if (side === 'branch') { if (BRD.state) BRD.state.config = d.config; BR.loaded = false; } else if (S.state) S.state.config = d.config;
       if (NLs(side).formBuilt) fillNilmForm(d.config.nilm, side);
     }
+    if (d.warning) { $('#nt-status').insertAdjacentHTML('beforeend', `<div class="err">⚠ ${esc(d.warning)}</div>`); const n3 = $('#nt-step3-note'); if (n3) n3.innerHTML = `<span class="err">⚠ 目标侧自适应参数已启用，套用值不参与检测</span>`; toast('目标侧自适应参数已启用：套用值不参与检测', 'err'); }
     $('#nt-status').insertAdjacentHTML('beforeend', `<div>已套用 ${d.changes.length} 项到${side === 'branch' ? '分路侧' : '总线侧'}运行配置并热生效，更新后的完整配置保存到 <code>${esc(d.saved_to)}</code>（配置文件未改动）</div>`);
     toast('已套用到' + (side === 'branch' ? '分路侧' : '总线侧') + '运行配置', 'ok');
   } catch (e) { toast('套用失败：' + e.message, 'err'); }

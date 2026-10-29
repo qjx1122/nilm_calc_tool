@@ -1095,6 +1095,7 @@
                 <label class="f" title="「套用到运行配置」的目标侧（与基准配置无关；基准配置独立时也可套用到任一侧）"><span class="lbl">套用目标</span><select id="nt-apply-side"><option value="bus">总线侧运行配置</option><option value="branch">分路侧运行配置</option></select></label>
                 <button id="btn-nt-apply" disabled title="把上次结果套用到「套用目标」所选侧正在运行的配置（热生效，更新后的完整配置写 output/nilm/，不写配置文件）">③ 套用到运行配置</button>
                 <span id="nt-step3-note" class="mut">先完成第 ② 步</span>
+                <div class="mut">与「自适应算法参数」的关系：目标侧若勾选了自适应，6 种算法的数值参数每个周波窗由该侧实时数据自动推导并覆盖，这里套用的值不参与检测（二者互斥：手动调参 = 关自适应；自适应 = 无需调参）。</div>
               </div>
             </div>
             <div id="nt-hint" class="notes">
