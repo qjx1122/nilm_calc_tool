@@ -175,57 +175,51 @@
         <div class="panel col-bus">
           <h3><span class="sidename bus">总线侧</span> 数据源</h3>
           <div class="form">
-            <label>输入方式
-              <select id="src-kind">
+            <label class="f"><span class="lbl">输入方式</span><select id="src-kind">
                 <option value="csv_file">离线文件（csv_file）</option>
                 <option value="csv_tail">实时·文件追加（csv_tail）</option>
                 <option value="tcp">实时·TCP 流（tcp）</option>
                 <option value="simulator">实时·内置模拟器（simulator）</option>
-              </select>
-            </label>
+              </select></label>
             <div id="src-hint" class="notes"></div>
             <div id="src-formnote" class="notes"></div>
-            <label>CSV 路径 / 目录 <input id="src-path" placeholder="data/xxx.csv"></label>
+            <label class="f"><span class="lbl">CSV 路径 / 目录</span><input id="src-path" placeholder="data/xxx.csv"></label>
             <div class="row"><button id="btn-probe">探查数据</button><button id="btn-listfiles">列出 data 目录</button></div>
             <div id="probe-out" class="notes"></div>
             <div id="files-out" class="notes"></div>
-            <label>TCP 主机 <input id="src-host" placeholder="127.0.0.1"></label>
-            <label>TCP 端口 <input id="src-port" type="number" value="9000"></label>
-            <label>TCP 帧格式
-              <select id="src-frame"><option value="text_csv">text_csv（每行一条 CSV）</option><option value="binary">binary（struct 定长帧）</option></select>
-            </label>
-            <label>binary 帧 struct 格式 <input id="src-fmt" placeholder="<7d" title="Python struct 格式串，默认 <7d＝7 个 double 小端"></label>
-            <label>binary 帧字段顺序 <input id="src-fields" placeholder="t,ua,ia,ub,ib,uc,ic" title="与 struct 格式逐项对应"></label>
+            <label class="f"><span class="lbl">TCP 主机</span><input id="src-host" placeholder="127.0.0.1"></label>
+            <label class="f"><span class="lbl">TCP 端口</span><input id="src-port" type="number" value="9000"></label>
+            <label class="f"><span class="lbl">TCP 帧格式</span><select id="src-frame"><option value="text_csv">text_csv（每行一条 CSV）</option><option value="binary">binary（struct 定长帧）</option></select></label>
+            <label class="f"><span class="lbl">binary 帧 struct 格式</span><input id="src-fmt" placeholder="<7d" title="Python struct 格式串，默认 <7d＝7 个 double 小端"></label>
+            <label class="f"><span class="lbl">binary 帧字段顺序</span><input id="src-fields" placeholder="t,ua,ia,ub,ib,uc,ic" title="与 struct 格式逐项对应"></label>
             <label class="chk"><input id="src-customtime" type="checkbox">
               csv_file：自定义播放时间（时间轴＝起始时间＋样本序号/采样率；不勾选＝按文件内时间戳播放）</label>
             <label class="chk"><input id="src-utc" type="checkbox">
               csv_file / csv_tail：文件时标按 UTC 解释（不勾选＝曲线上的数据时间与文件中的数据时间一致；勾选＝视为 UTC 并换算成本地时间显示；仅对日期时间 / 0/00/00 文本时标有效，epoch 数字不受影响）</label>
-            <label>自定义起始时间 <input id="src-customstart" placeholder="留空＝文件第 1 条数据时间；或 2026-10-12 08:00:00 / epoch 秒"
+            <label class="f"><span class="lbl">自定义起始时间</span><input id="src-customstart" placeholder="留空＝文件第 1 条数据时间；或 2026-10-12 08:00:00 / epoch 秒"
               title="启用自定义播放时间后生效：留空用文件第 1 条数据的时间作为起点"></label>
-            <label>csv_file：播放起点
-              <select id="src-playmode" title="离线文件从指定位置开始播放；之前的数据直接跳过（不参与计算）">
+            <label class="f"><span class="lbl">csv_file：播放起点</span><select id="src-playmode" title="离线文件从指定位置开始播放；之前的数据直接跳过（不参与计算）">
                 <option value="begin">文件开头（默认）</option>
                 <option value="row">第 N 条数据行</option>
                 <option value="seconds">跳过开头 N 秒</option>
                 <option value="percent">文件 N% 处</option>
                 <option value="time">指定时刻（文件时标 ≥ 该时刻）</option>
               </select></label>
-            <label>播放起点取值 <input id="src-playvalue" placeholder="按左侧模式填：120001 / 30 / 50 / 2026-10-12 08:00:00 或 08:00:00"
+            <label class="f"><span class="lbl">播放起点取值</span><input id="src-playvalue" placeholder="按左侧模式填：120001 / 30 / 50 / 2026-10-12 08:00:00 或 08:00:00"
               title="row：第几行（1 起算，不含表头）；seconds：秒；percent：0~100；time：完整日期时间，或只填 HH:MM:SS（与文件时标的当天时刻比较，适合 0/00/00 写法）"></label>
             <label class="chk"><input id="src-window" type="checkbox">
               csv_file：指定时间段播放（默认不启用；起始留空＝从数据起点，结束留空＝播到数据终点；两侧都是离线文件且启用「公共时间段」时以公共时间段为准）</label>
             <div class="row2">
-              <label>时间段起始 <input id="src-winstart" placeholder="2026-10-12 08:00:00 / epoch 秒 / 08:00:00"></label>
-              <label>时间段结束 <input id="src-winend" placeholder="2026-10-12 08:10:00 / epoch 秒 / 08:10:00"></label>
+              <label class="f"><span class="lbl">时间段起始</span><input id="src-winstart" placeholder="2026-10-12 08:00:00 / epoch 秒 / 08:00:00"></label>
+              <label class="f"><span class="lbl">时间段结束</span><input id="src-winend" placeholder="2026-10-12 08:10:00 / epoch 秒 / 08:10:00"></label>
             </div>
             <label class="chk"><input id="src-tailend" type="checkbox">
               csv_tail：从文件末尾开始（只算新写入数据，不补算历史）</label>
             <label class="chk"><input id="src-newest" type="checkbox">
               csv_tail：路径给目录时自动跟最新 CSV（采集器换文件时用）</label>
-            <label>每块样本数 <input id="src-block" type="number" value="640"></label>
-            <label>模拟器速率倍数 <input id="src-speed" type="number" step="0.1" value="1"></label>
-            <label title="离线文件播放倍速：1＝按数据真实时间速率播放（可随时暂停/恢复）；2＝两倍速；0＝不限速（能算多快播多快，几秒钟就播完）">
-              离线文件播放倍速 <select id="src-file-speed">
+            <label class="f"><span class="lbl">每块样本数</span><input id="src-block" type="number" value="640"></label>
+            <label class="f"><span class="lbl">模拟器速率倍数</span><input id="src-speed" type="number" step="0.1" value="1"></label>
+            <label class="f" title="离线文件播放倍速：1＝按数据真实时间速率播放（可随时暂停/恢复）；2＝两倍速；0＝不限速（能算多快播多快，几秒钟就播完）"><span class="lbl">离线文件播放倍速</span><select id="src-file-speed">
                 <option value="1">1×（真实速率）</option><option value="2">2×</option><option value="5">5×</option>
                 <option value="10">10×</option><option value="0.5">0.5×</option><option value="0">不限速（最快）</option>
               </select></label>
@@ -238,7 +232,7 @@
             </div>
             <div id="src-loaded-last" class="notes" style="display:none"></div>
             <div class="row" title="v0.81：从指定路径的 JSON 配置文件加载总线侧配置并热更新（数据源 / 量纲口径 / 列映射 / 事件阈值 / 负荷辨识等全部项）；路径留空＝总线侧现有配置文件（configs/runtime.json，不存在时为启动加载的文件）；相对路径相对仓库根。默认只加载到运行配置、不写配置文件，勾选「同时写入」才以现有配置文件为基准只写差异项">
-              <label style="flex:1 1 260px">总线侧配置文件路径 <input id="src-cfgload-path" type="text" placeholder="空＝现有路径（configs/runtime.json）"></label>
+              <label class="f" style="flex:1 1 260px"><span class="lbl">总线侧配置文件路径</span><input id="src-cfgload-path" type="text" placeholder="空＝现有路径（configs/runtime.json）"></label>
               <button id="btn-src-cfgload" title="从左侧路径加载总线侧配置（空＝现有路径）">从文件加载总线侧配置</button>
               <label class="chk" title="加载后以总线侧现有配置文件为基准只写入与其不同的项"><input id="src-cfgload-persist" type="checkbox"> 同时写入总线侧配置文件</label>
             </div>
@@ -251,57 +245,51 @@
         <div class="panel col-br" id="branch-panel">
           <h3><span class="sidename branch">分路侧</span> 数据源</h3>
           <div class="form" id="br-src-form">
-            <label>输入方式
-              <select id="br-kind">
+            <label class="f"><span class="lbl">输入方式</span><select id="br-kind">
                 <option value="csv_file">离线文件（csv_file）</option>
                 <option value="csv_tail">实时·文件追加（csv_tail）</option>
                 <option value="tcp">实时·TCP 流（tcp）</option>
                 <option value="simulator">实时·内置模拟器（simulator）</option>
-              </select>
-            </label>
+              </select></label>
             <div id="br-hint" class="notes"></div>
             <div id="br-formnote" class="notes"></div>
-            <label>CSV 路径 / 目录 <input id="br-path" placeholder="data/branch.csv（相对仓库根或绝对路径）"></label>
+            <label class="f"><span class="lbl">CSV 路径 / 目录</span><input id="br-path" placeholder="data/branch.csv（相对仓库根或绝对路径）"></label>
             <div class="row"><button id="btn-br-probe">探查数据</button><button id="btn-br-pick">列出 data 目录</button></div>
             <div id="br-probe-out" class="notes"></div>
             <div id="br-files-out" class="notes"></div>
-            <label>TCP 主机 <input id="br-host" placeholder="127.0.0.1"></label>
-            <label>TCP 端口 <input id="br-port" type="number" value="9001"></label>
-            <label>TCP 帧格式
-              <select id="br-frame"><option value="text_csv">text_csv（每行一条 CSV）</option><option value="binary">binary（struct 定长帧）</option></select>
-            </label>
-            <label>binary 帧 struct 格式 <input id="br-fmt" placeholder="<7d"></label>
-            <label>binary 帧字段顺序 <input id="br-fields" placeholder="t,ua,ia,ub,ib,uc,ic"></label>
+            <label class="f"><span class="lbl">TCP 主机</span><input id="br-host" placeholder="127.0.0.1"></label>
+            <label class="f"><span class="lbl">TCP 端口</span><input id="br-port" type="number" value="9001"></label>
+            <label class="f"><span class="lbl">TCP 帧格式</span><select id="br-frame"><option value="text_csv">text_csv（每行一条 CSV）</option><option value="binary">binary（struct 定长帧）</option></select></label>
+            <label class="f"><span class="lbl">binary 帧 struct 格式</span><input id="br-fmt" placeholder="<7d"></label>
+            <label class="f"><span class="lbl">binary 帧字段顺序</span><input id="br-fields" placeholder="t,ua,ia,ub,ib,uc,ic"></label>
             <label class="chk"><input id="br-customtime" type="checkbox">
               csv_file：自定义播放时间（时间轴＝起始时间＋样本序号/采样率；不勾选＝按文件内时间戳播放）</label>
             <label class="chk"><input id="br-utc" type="checkbox">
               csv_file / csv_tail：文件时标按 UTC 解释（默认按本地时间）</label>
-            <label>自定义起始时间 <input id="br-customstart" placeholder="留空＝文件第 1 条数据时间；或 2026-10-14 08:00:00 / epoch 秒"></label>
-            <label>csv_file：播放起点
-              <select id="br-playmode">
+            <label class="f"><span class="lbl">自定义起始时间</span><input id="br-customstart" placeholder="留空＝文件第 1 条数据时间；或 2026-10-14 08:00:00 / epoch 秒"></label>
+            <label class="f"><span class="lbl">csv_file：播放起点</span><select id="br-playmode">
                 <option value="begin">文件开头（默认）</option>
                 <option value="row">第 N 条数据行</option>
                 <option value="seconds">跳过开头 N 秒</option>
                 <option value="percent">文件 N% 处</option>
                 <option value="time">指定时刻（文件时标 ≥ 该时刻）</option>
               </select></label>
-            <label>播放起点取值 <input id="br-playvalue" placeholder="按左侧模式填：120001 / 30 / 50 / 2026-10-12 08:00:00 或 08:00:00"></label>
+            <label class="f"><span class="lbl">播放起点取值</span><input id="br-playvalue" placeholder="按左侧模式填：120001 / 30 / 50 / 2026-10-12 08:00:00 或 08:00:00"></label>
             <label class="chk"><input id="br-window" type="checkbox">
               csv_file：指定时间段播放（默认不启用；起始留空＝从数据起点，结束留空＝播到数据终点；两侧都是离线文件且启用「公共时间段」时以公共时间段为准）</label>
             <div class="row2">
-              <label>时间段起始 <input id="br-winstart" placeholder="2026-10-12 08:00:00 / epoch 秒 / 08:00:00"></label>
-              <label>时间段结束 <input id="br-winend" placeholder="2026-10-12 08:10:00 / epoch 秒 / 08:10:00"></label>
+              <label class="f"><span class="lbl">时间段起始</span><input id="br-winstart" placeholder="2026-10-12 08:00:00 / epoch 秒 / 08:00:00"></label>
+              <label class="f"><span class="lbl">时间段结束</span><input id="br-winend" placeholder="2026-10-12 08:10:00 / epoch 秒 / 08:10:00"></label>
             </div>
             <label class="chk"><input id="br-tailend" type="checkbox">
               csv_tail：从文件末尾开始（只算新写入数据，不补算历史）</label>
             <label class="chk"><input id="br-newest" type="checkbox">
               csv_tail：路径给目录时自动跟最新 CSV</label>
-            <label>每块样本数 <input id="br-block" type="number" value="640"></label>
-            <label>模拟器速率倍数 <input id="br-speed" type="number" step="0.1" value="1"></label>
+            <label class="f"><span class="lbl">每块样本数</span><input id="br-block" type="number" value="640"></label>
+            <label class="f"><span class="lbl">模拟器速率倍数</span><input id="br-speed" type="number" step="0.1" value="1"></label>
             <label class="chk" title="两侧都是离线文件联动启动时：勾选＝分路侧倍速随总线侧（共用节拍钟、严格同步）；取消＝按下方分路侧自己的倍速独立播放"><input id="br-file-speed-follow" type="checkbox" checked>
               离线文件播放倍速随总线侧（默认）</label>
-            <label title="分路侧自己的离线文件播放倍速：取消「随总线侧」、分路侧单独启动、或总线侧不是离线文件时生效">
-              离线文件播放倍速 <select id="br-file-speed">
+            <label class="f" title="分路侧自己的离线文件播放倍速：取消「随总线侧」、分路侧单独启动、或总线侧不是离线文件时生效"><span class="lbl">离线文件播放倍速</span><select id="br-file-speed">
                 <option value="1">1×（真实速率）</option><option value="2">2×</option><option value="5">5×</option>
                 <option value="10">10×</option><option value="0.5">0.5×</option><option value="0">不限速（最快）</option>
               </select></label>
@@ -313,7 +301,7 @@
               <button id="btn-br-stop" class="danger">停止分路侧</button>
             </div>
             <div class="row" title="v0.81：从指定路径的 JSON 配置文件加载分路侧配置并热更新；路径留空＝分路侧现有配置文件（configs/branch_runtime.json，不存在时为启动加载的文件）；相对路径相对仓库根。默认只加载到运行配置、不写配置文件，勾选「同时写入」才以现有配置文件为基准只写差异项">
-              <label style="flex:1 1 260px">分路侧配置文件路径 <input id="br-cfgload-path" type="text" placeholder="空＝现有路径（configs/branch_runtime.json）"></label>
+              <label class="f" style="flex:1 1 260px"><span class="lbl">分路侧配置文件路径</span><input id="br-cfgload-path" type="text" placeholder="空＝现有路径（configs/branch_runtime.json）"></label>
               <button id="btn-br-cfgload" title="从左侧路径加载分路侧配置（空＝现有路径）">从文件加载分路侧配置</button>
               <label class="chk" title="加载后以分路侧现有配置文件为基准只写入与其不同的项"><input id="br-cfgload-persist" type="checkbox"> 同时写入分路侧配置文件</label>
             </div>
@@ -325,11 +313,11 @@
         <div class="panel col-bus">
           <h3 class="curvehdr"><span><span class="sidename bus">总线侧</span> 导出指定时间段的原始数据</span><span class="navhint" id="raw-exp-range"></span></h3>
           <div class="row">
-            <label>开始时间 <input type="text" id="raw-exp-from" placeholder="2026-10-15 14:14:20.5 ｜ 14:14:20.5000 ｜ epoch 秒" style="width:230px"></label>
-            <label>结束时间 <input type="text" id="raw-exp-to" placeholder="2026-10-15 14:14:25 ｜ 14:14:25" style="width:200px"></label>
+            <label class="f"><span class="lbl">开始时间</span><input type="text" id="raw-exp-from" placeholder="2026-10-15 14:14:20.5 ｜ 14:14:20.5000 ｜ epoch 秒" style="width:230px"></label>
+            <label class="f"><span class="lbl">结束时间</span><input type="text" id="raw-exp-to" placeholder="2026-10-15 14:14:25 ｜ 14:14:25" style="width:200px"></label>
           </div>
           <div class="row">
-            <label>文件名（可空）<input type="text" id="raw-exp-name" placeholder="raw_&lt;起&gt;_&lt;止&gt;_src0.csv" style="width:200px"></label>
+            <label class="f"><span class="lbl">文件名（可空）</span><input type="text" id="raw-exp-name" placeholder="raw_&lt;起&gt;_&lt;止&gt;_src0.csv" style="width:200px"></label>
             <button id="btn-raw-exp-fill" title="把本侧离线文件的时间范围填入">填入文件时间范围</button>
             <button id="btn-raw-export" class="primary">导出到新 CSV</button>
           </div>
@@ -338,11 +326,11 @@
         <div class="panel col-br">
           <h3 class="curvehdr"><span><span class="sidename branch">分路侧</span> 导出指定时间段的原始数据</span><span class="navhint" id="br-raw-exp-range"></span></h3>
           <div class="row">
-            <label>开始时间 <input type="text" id="br-raw-exp-from" placeholder="2026-10-15 14:14:20.5 ｜ 14:14:20.5000 ｜ epoch 秒" style="width:230px"></label>
-            <label>结束时间 <input type="text" id="br-raw-exp-to" placeholder="2026-10-15 14:14:25 ｜ 14:14:25" style="width:200px"></label>
+            <label class="f"><span class="lbl">开始时间</span><input type="text" id="br-raw-exp-from" placeholder="2026-10-15 14:14:20.5 ｜ 14:14:20.5000 ｜ epoch 秒" style="width:230px"></label>
+            <label class="f"><span class="lbl">结束时间</span><input type="text" id="br-raw-exp-to" placeholder="2026-10-15 14:14:25 ｜ 14:14:25" style="width:200px"></label>
           </div>
           <div class="row">
-            <label>文件名（可空）<input type="text" id="br-raw-exp-name" placeholder="raw_&lt;起&gt;_&lt;止&gt;_src1.csv" style="width:200px"></label>
+            <label class="f"><span class="lbl">文件名（可空）</span><input type="text" id="br-raw-exp-name" placeholder="raw_&lt;起&gt;_&lt;止&gt;_src1.csv" style="width:200px"></label>
             <button id="br-btn-raw-exp-fill" title="把本侧离线文件的时间范围填入">填入文件时间范围</button>
             <button id="br-btn-raw-export" class="primary">导出到新 CSV</button>
           </div>
@@ -354,36 +342,30 @@
           <h3><span class="sidename bus">总线侧</span> 量纲与口径</h3>
           <div class="form">
             <div class="row2">
-              <label>PT 电压变比 <input id="cfg-pt" type="number" step="0.1"></label>
-              <label>CT 电流变比 <input id="cfg-ct" type="number" step="0.1"></label>
+              <label class="f"><span class="lbl">PT 电压变比</span><input id="cfg-pt" type="number" step="0.1"></label>
+              <label class="f"><span class="lbl">CT 电流变比</span><input id="cfg-ct" type="number" step="0.1"></label>
             </div>
             <div class="row2">
               <label class="chk"><input id="cfg-inv" type="checkbox"> 电流极性反转（CT 接反 / 有功为负时勾选，三相同时取反；不依赖 PT/CT 启用）</label>
             </div>
             <div class="row2">
-              <label>接线方式 <select id="cfg-wiring"><option value="3p4w">三相四线（三 CT）</option><option value="3p3w">三相三线两表法（B 相无 CT，Pb≡0）</option></select></label>
+              <label class="f"><span class="lbl">接线方式</span><select id="cfg-wiring"><option value="3p4w">三相四线（三 CT）</option><option value="3p3w">三相三线两表法（B 相无 CT，Pb≡0）</option></select></label>
               <label class="chk"><input id="cfg-recon3w" type="checkbox"> 3P3W 虚拟中性点重构（Ib=−(Ia+Ic)，相电压由 Uab/Ucb 重构；分相量与四线同口径）</label>
-              <label>分相电流极性反转 <span class="chk"><input id="cfg-inv-a" type="checkbox"> A <input id="cfg-inv-b" type="checkbox"> B <input id="cfg-inv-c" type="checkbox"> C</span></label>
+              <label class="f"><span class="lbl">分相电流极性反转</span><span class="chk"><input id="cfg-inv-a" type="checkbox"> A <input id="cfg-inv-b" type="checkbox"> B <input id="cfg-inv-c" type="checkbox"> C</span></label>
             </div>
             <div class="row2">
-              <label>采样率 fs (Hz) <input id="cfg-fs" type="number" step="1"></label>
-              <label>额定频率 (Hz) <input id="cfg-fnom" type="number" step="0.1"></label>
+              <label class="f"><span class="lbl">采样率 fs (Hz)</span><input id="cfg-fs" type="number" step="1"></label>
+              <label class="f"><span class="lbl">额定频率 (Hz)</span><input id="cfg-fnom" type="number" step="0.1"></label>
             </div>
             <label class="check"><input id="cfg-adaptive" type="checkbox"> 频率自适应（估频后整周期截断，抗泄漏）</label>
             <label class="check"><input id="cfg-scale" type="checkbox"> 启用 PT/CT 变换（取消勾选＝直接看二次值）</label>
             <div class="row2">
-              <label>电压列含义
-                <select id="cfg-uin"><option value="phase">相电压</option><option value="line">线电压</option></select>
-              </label>
-              <label>最高谐波次数 <input id="cfg-hmax" type="number" min="2" max="63"></label>
+              <label class="f"><span class="lbl">电压列含义</span><select id="cfg-uin"><option value="phase">相电压</option><option value="line">线电压</option></select></label>
+              <label class="f"><span class="lbl">最高谐波次数</span><input id="cfg-hmax" type="number" min="2" max="63"></label>
             </div>
             <div class="row2">
-              <label>视在功率口径
-                <select id="cfg-apparent"><option value="arithmetic">算术 S=ΣU·I</option><option value="vector">几何 S=√(P²+Q²)</option></select>
-              </label>
-              <label>无功口径
-                <select id="cfg-reactive"><option value="harmonic_sum">Σ UₕIₕsinφₕ（严格）</option><option value="quadrature">√(S²−P²)（等效）</option></select>
-              </label>
+              <label class="f"><span class="lbl">视在功率口径</span><select id="cfg-apparent"><option value="arithmetic">算术 S=ΣU·I</option><option value="vector">几何 S=√(P²+Q²)</option></select></label>
+              <label class="f"><span class="lbl">无功口径</span><select id="cfg-reactive"><option value="harmonic_sum">Σ UₕIₕsinφₕ（严格）</option><option value="quadrature">√(S²−P²)（等效）</option></select></label>
             </div>
             <button id="btn-savecfg" class="primary" title="保存总线侧口径 / 变比等配置并热更新（原「保存配置（热更新）」）">保存总线侧配置</button>
             <div id="cfg-out" class="notes"></div>
@@ -393,30 +375,30 @@
           <h3><span class="sidename branch">分路侧</span> 量纲与口径 <span class="navhint">独立于总线侧，随「保存分路侧配置」保存</span></h3>
           <div class="form">
             <div class="row2">
-              <label>PT 电压变比 <input id="br-pt" type="number" step="0.1"></label>
-              <label>CT 电流变比 <input id="br-ct" type="number" step="0.1"></label>
+              <label class="f"><span class="lbl">PT 电压变比</span><input id="br-pt" type="number" step="0.1"></label>
+              <label class="f"><span class="lbl">CT 电流变比</span><input id="br-ct" type="number" step="0.1"></label>
             </div>
             <div class="row2">
               <label class="chk"><input id="br-inv" type="checkbox"> 电流极性反转（CT 接反 / 有功为负时勾选，三相同时取反）</label>
             </div>
             <div class="row2">
-              <label>接线方式 <select id="br-wiring"><option value="3p4w">三相四线（三 CT）</option><option value="3p3w">三相三线两表法（B 相无 CT）</option></select></label>
+              <label class="f"><span class="lbl">接线方式</span><select id="br-wiring"><option value="3p4w">三相四线（三 CT）</option><option value="3p3w">三相三线两表法（B 相无 CT）</option></select></label>
               <label class="chk"><input id="br-recon3w" type="checkbox"> 3P3W 虚拟中性点重构（Ib=−(Ia+Ic)，相电压由线电压重构）</label>
-              <label>分相电流极性反转 <span class="chk"><input id="br-inv-a" type="checkbox"> A <input id="br-inv-b" type="checkbox"> B <input id="br-inv-c" type="checkbox"> C</span></label>
+              <label class="f"><span class="lbl">分相电流极性反转</span><span class="chk"><input id="br-inv-a" type="checkbox"> A <input id="br-inv-b" type="checkbox"> B <input id="br-inv-c" type="checkbox"> C</span></label>
             </div>
             <div class="row2">
-              <label>采样率 fs (Hz) <input id="br-fs" type="number" step="1"></label>
-              <label>额定频率 (Hz) <input id="br-fnom" type="number" step="0.1"></label>
+              <label class="f"><span class="lbl">采样率 fs (Hz)</span><input id="br-fs" type="number" step="1"></label>
+              <label class="f"><span class="lbl">额定频率 (Hz)</span><input id="br-fnom" type="number" step="0.1"></label>
             </div>
             <label class="check"><input id="br-adaptive" type="checkbox"> 频率自适应（估频后整周期截断）</label>
             <label class="check"><input id="br-scale" type="checkbox"> 启用 PT/CT 变换（取消＝直接看二次值）</label>
             <div class="row2">
-              <label>电压列含义 <select id="br-uin"><option value="phase">相电压</option><option value="line">线电压</option></select></label>
-              <label>最高谐波次数 <input id="br-hmax" type="number" min="2" max="63"></label>
+              <label class="f"><span class="lbl">电压列含义</span><select id="br-uin"><option value="phase">相电压</option><option value="line">线电压</option></select></label>
+              <label class="f"><span class="lbl">最高谐波次数</span><input id="br-hmax" type="number" min="2" max="63"></label>
             </div>
             <div class="row2">
-              <label>视在功率口径 <select id="br-apparent"><option value="arithmetic">算术 S=ΣU·I</option><option value="vector">几何 S=√(P²+Q²)</option></select></label>
-              <label>无功口径 <select id="br-reactive"><option value="harmonic_sum">Σ UₕIₕsinφₕ（严格）</option><option value="quadrature">√(S²−P²)（等效）</option></select></label>
+              <label class="f"><span class="lbl">视在功率口径</span><select id="br-apparent"><option value="arithmetic">算术 S=ΣU·I</option><option value="vector">几何 S=√(P²+Q²)</option></select></label>
+              <label class="f"><span class="lbl">无功口径</span><select id="br-reactive"><option value="harmonic_sum">Σ UₕIₕsinφₕ（严格）</option><option value="quadrature">√(S²−P²)（等效）</option></select></label>
             </div>
             <button id="btn-br-savecfg" class="primary">保存分路侧配置</button>
             <div class="notes" id="br-cfg-out"></div>
@@ -429,13 +411,13 @@
           <div class="form" id="colmap-bus">
             <label class="check"><input id="cfg-mapen" type="checkbox"> 启用列映射（不勾选＝默认列序：时间, A相电压, A相电流, B相电压, B相电流, C相电压, C相电流；有可识别表头时按表头取列）</label>
             <div class="row2" id="colmap-grid">
-              <label>时间 <input id="cfg-map-timestamp" placeholder="列号(从1起) 或 表头列名；留空＝不映射→按配置 fs 合成时间轴"></label>
-              <label>A相电压 <input id="cfg-map-ua" placeholder="如 2 或 Ua"></label>
-              <label>A相电流 <input id="cfg-map-ia" placeholder="如 3 或 Ia"></label>
-              <label>B相电压 <input id="cfg-map-ub" placeholder="留空＝该通道不播放（按 0）"></label>
-              <label>B相电流 <input id="cfg-map-ib" placeholder="留空＝该通道不播放（按 0）"></label>
-              <label>C相电压 <input id="cfg-map-uc" placeholder="留空＝该通道不播放（按 0）"></label>
-              <label>C相电流 <input id="cfg-map-ic" placeholder="留空＝该通道不播放（按 0）"></label>
+              <label class="f"><span class="lbl">时间</span><input id="cfg-map-timestamp" placeholder="列号(从1起) 或 表头列名；留空＝不映射→按配置 fs 合成时间轴"></label>
+              <label class="f"><span class="lbl">A相电压</span><input id="cfg-map-ua" placeholder="如 2 或 Ua"></label>
+              <label class="f"><span class="lbl">A相电流</span><input id="cfg-map-ia" placeholder="如 3 或 Ia"></label>
+              <label class="f"><span class="lbl">B相电压</span><input id="cfg-map-ub" placeholder="留空＝该通道不播放（按 0）"></label>
+              <label class="f"><span class="lbl">B相电流</span><input id="cfg-map-ib" placeholder="留空＝该通道不播放（按 0）"></label>
+              <label class="f"><span class="lbl">C相电压</span><input id="cfg-map-uc" placeholder="留空＝该通道不播放（按 0）"></label>
+              <label class="f"><span class="lbl">C相电流</span><input id="cfg-map-ic" placeholder="留空＝该通道不播放（按 0）"></label>
             </div>
             <div class="row">
               <button id="btn-map-default">填入默认列序 1~7</button>
@@ -450,13 +432,13 @@
           <div class="form" id="colmap-branch">
             <label class="check"><input id="br-mapen" type="checkbox"> 启用分路侧列映射（不勾选＝默认列序 / 按表头取列）</label>
             <div class="row2" id="br-colmap-grid">
-              <label>时间 <input id="br-map-timestamp" placeholder="列号(从1起) 或 表头列名；留空＝按 fs 合成时间轴"></label>
-              <label>A相电压 <input id="br-map-ua" placeholder="如 2 或 Ua"></label>
-              <label>A相电流 <input id="br-map-ia" placeholder="如 3 或 Ia"></label>
-              <label>B相电压 <input id="br-map-ub" placeholder="留空＝不播放（按 0）"></label>
-              <label>B相电流 <input id="br-map-ib" placeholder="留空＝不播放（按 0）"></label>
-              <label>C相电压 <input id="br-map-uc" placeholder="留空＝不播放（按 0）"></label>
-              <label>C相电流 <input id="br-map-ic" placeholder="留空＝不播放（按 0）"></label>
+              <label class="f"><span class="lbl">时间</span><input id="br-map-timestamp" placeholder="列号(从1起) 或 表头列名；留空＝按 fs 合成时间轴"></label>
+              <label class="f"><span class="lbl">A相电压</span><input id="br-map-ua" placeholder="如 2 或 Ua"></label>
+              <label class="f"><span class="lbl">A相电流</span><input id="br-map-ia" placeholder="如 3 或 Ia"></label>
+              <label class="f"><span class="lbl">B相电压</span><input id="br-map-ub" placeholder="留空＝不播放（按 0）"></label>
+              <label class="f"><span class="lbl">B相电流</span><input id="br-map-ib" placeholder="留空＝不播放（按 0）"></label>
+              <label class="f"><span class="lbl">C相电压</span><input id="br-map-uc" placeholder="留空＝不播放（按 0）"></label>
+              <label class="f"><span class="lbl">C相电流</span><input id="br-map-ic" placeholder="留空＝不播放（按 0）"></label>
             </div>
             <div class="row">
               <button id="btn-br-map-default">填入默认列序 1~7</button>
@@ -729,7 +711,7 @@
       <div class="panel">
         <h3 class="curvehdr"><span>事件历史（最近 <span id="ev-total">0</span> 条，起止时刻均为数据时间）</span>
           <span class="toggle">
-            <label>类型 <select id="ev-filter">
+            <label class="f"><span class="lbl">类型</span><select id="ev-filter">
               <option value="">全部</option>
               <option value="fund_phasor">基波相量超限</option>
               <option value="harm_phasor">谐波相量超限</option>
@@ -749,27 +731,27 @@
         <div class="row2" id="ev-form">
           <label class="check"><input type="checkbox" id="ev-enabled"> 启用事件检测</label>
           <label class="check"><input type="checkbox" id="ev-save"> 事件落盘 CSV（output/events/events_&lt;日期&gt;.csv）</label>
-          <label>复归滞回系数（越上限事件回到 limit×系数 以下才结束）<input type="number" step="0.01" min="0.5" max="1" id="ev-hysteresis"></label>
+          <label class="f"><span class="lbl">复归滞回系数（越上限事件回到 limit×系数 以下才结束）</span><input type="number" step="0.01" min="0.5" max="1" id="ev-hysteresis"></label>
           <label class="check"><input type="checkbox" id="ev-limits_secondary"> U_nom / I1 上限按二次侧填写（启用 PT/CT 时自动折算到一次侧）</label>
-          <label>额定相电压 U_nom (V)<input type="number" step="0.01" id="ev-u_nom"></label>
-          <label>基波电压上限 (% U_nom)<input type="number" step="0.1" id="ev-u1_high_pct"></label>
-          <label>基波电压下限 (% U_nom)<input type="number" step="0.1" id="ev-u1_low_pct"></label>
-          <label>基波电流上限 (A)<input type="number" step="0.1" id="ev-i1_high"></label>
-          <label>单次谐波电压含有率上限 HR_U (%)<input type="number" step="0.1" id="ev-hr_u_limit_pct"></label>
-          <label>单次谐波电流含有率上限 HR_I (%)<input type="number" step="0.1" id="ev-hr_i_limit_pct"></label>
-          <label>THD_U 上限 (%)<input type="number" step="0.1" id="ev-thd_u_limit_pct"></label>
-          <label>THD_I 上限 (%)<input type="number" step="0.1" id="ev-thd_i_limit_pct"></label>
-          <label>间谐波组电压含有率上限 (% U1)<input type="number" step="0.1" id="ev-ih_u_limit_pct"></label>
-          <label>间谐波组电流含有率上限 (% I1)<input type="number" step="0.1" id="ev-ih_i_limit_pct"></label>
-          <label>频率下限 (Hz)<input type="number" step="0.01" id="ev-f_low"></label>
-          <label>频率上限 (Hz)<input type="number" step="0.01" id="ev-f_high"></label>
-          <label>频率变化率上限 |df/dt| (Hz/s)<input type="number" step="0.1" id="ev-rocof_limit"></label>
-          <label>功率振荡评估窗 (s)<input type="number" step="1" min="2" id="ev-osc_window_s"></label>
-          <label>功率振荡频带下限 (Hz)<input type="number" step="0.05" id="ev-osc_f_min"></label>
-          <label>功率振荡频带上限 (Hz)<input type="number" step="0.05" id="ev-osc_f_max"></label>
-          <label>功率振荡幅度门槛（峰峰值 % |P̄|）<input type="number" step="0.5" id="ev-osc_limit_pct"></label>
-          <label>功率振荡绝对门槛（峰峰值 W）<input type="number" step="0.5" id="ev-osc_min_w"></label>
-          <label>功率振荡最少点数<input type="number" step="1" min="4" id="ev-osc_min_points"></label>
+          <label class="f"><span class="lbl">额定相电压 U_nom (V)</span><input type="number" step="0.01" id="ev-u_nom"></label>
+          <label class="f"><span class="lbl">基波电压上限 (% U_nom)</span><input type="number" step="0.1" id="ev-u1_high_pct"></label>
+          <label class="f"><span class="lbl">基波电压下限 (% U_nom)</span><input type="number" step="0.1" id="ev-u1_low_pct"></label>
+          <label class="f"><span class="lbl">基波电流上限 (A)</span><input type="number" step="0.1" id="ev-i1_high"></label>
+          <label class="f"><span class="lbl">单次谐波电压含有率上限 HR_U (%)</span><input type="number" step="0.1" id="ev-hr_u_limit_pct"></label>
+          <label class="f"><span class="lbl">单次谐波电流含有率上限 HR_I (%)</span><input type="number" step="0.1" id="ev-hr_i_limit_pct"></label>
+          <label class="f"><span class="lbl">THD_U 上限 (%)</span><input type="number" step="0.1" id="ev-thd_u_limit_pct"></label>
+          <label class="f"><span class="lbl">THD_I 上限 (%)</span><input type="number" step="0.1" id="ev-thd_i_limit_pct"></label>
+          <label class="f"><span class="lbl">间谐波组电压含有率上限 (% U1)</span><input type="number" step="0.1" id="ev-ih_u_limit_pct"></label>
+          <label class="f"><span class="lbl">间谐波组电流含有率上限 (% I1)</span><input type="number" step="0.1" id="ev-ih_i_limit_pct"></label>
+          <label class="f"><span class="lbl">频率下限 (Hz)</span><input type="number" step="0.01" id="ev-f_low"></label>
+          <label class="f"><span class="lbl">频率上限 (Hz)</span><input type="number" step="0.01" id="ev-f_high"></label>
+          <label class="f"><span class="lbl">频率变化率上限 |df/dt| (Hz/s)</span><input type="number" step="0.1" id="ev-rocof_limit"></label>
+          <label class="f"><span class="lbl">功率振荡评估窗 (s)</span><input type="number" step="1" min="2" id="ev-osc_window_s"></label>
+          <label class="f"><span class="lbl">功率振荡频带下限 (Hz)</span><input type="number" step="0.05" id="ev-osc_f_min"></label>
+          <label class="f"><span class="lbl">功率振荡频带上限 (Hz)</span><input type="number" step="0.05" id="ev-osc_f_max"></label>
+          <label class="f"><span class="lbl">功率振荡幅度门槛（峰峰值 % |P̄|）</span><input type="number" step="0.5" id="ev-osc_limit_pct"></label>
+          <label class="f"><span class="lbl">功率振荡绝对门槛（峰峰值 W）</span><input type="number" step="0.5" id="ev-osc_min_w"></label>
+          <label class="f"><span class="lbl">功率振荡最少点数</span><input type="number" step="1" min="4" id="ev-osc_min_points"></label>
         </div>
         <div class="row" style="margin-top:10px"><button id="btn-ev-save" class="savecfg-side" title="保存本侧事件阈值到配置">保存总线侧配置</button><span id="ev-form-note" class="mut"></span></div>
         <div id="ev-notes" class="notes"></div>
@@ -783,8 +765,8 @@
       <div class="panel">
         <h3 class="curvehdr nilm-hdr"><span><span id="nilm-pqs-title">P / Q / S 趋势</span><small class="hdrhint" title="竖线＝各算法检测到的负荷事件起点，颜色＝算法">（竖线＝各算法检测到的负荷事件起点，颜色＝算法，图内 <span id="nilm-pqs-n">0</span> 条，标注范围：<span id="nilm-pqs-pool">最近 1000 条</span>）<span class="curvespan" data-curve="power"></span></small></span>
           <span class="toggle">
-            <label title="v0.39：趋势曲线——auto：按当前检测量（P 口径画 P/Q/S，I 口径画三相电流）；显示哪几相用曲线下方的图例勾选">曲线 <select id="nilm-pqs-kind"><option value="auto">自动</option><option value="pqs">P / Q / S</option><option value="i">电流 I</option></select></label>
-            <label>对象 <select id="nilm-pqs-ch"><option value="">全部</option><option value="total">三相总</option><option value="A">A 相</option><option value="B">B 相</option><option value="C">C 相</option></select></label>
+            <label class="f" title="v0.39：趋势曲线——auto：按当前检测量（P 口径画 P/Q/S，I 口径画三相电流）；显示哪几相用曲线下方的图例勾选"><span class="lbl">曲线</span><select id="nilm-pqs-kind"><option value="auto">自动</option><option value="pqs">P / Q / S</option><option value="i">电流 I</option></select></label>
+            <label class="f"><span class="lbl">对象</span><select id="nilm-pqs-ch"><option value="">全部</option><option value="total">三相总</option><option value="A">A 相</option><option value="B">B 相</option><option value="C">C 相</option></select></label>
             <span class="toggle" id="nilm-pqs-algos" title="只标注勾选算法检测到的事件（默认全部）"></span>
             <label class="check" id="nilm-mark-all-lbl" title="v0.89：曲线（趋势图与周波窗）上标注的事件条数限制：默认不勾选＝只标注最近 1000 条事件；勾选＝标注全部事件（拉取本侧内存中的全部事件，上限为 nilm.max_log）。事件列表与累计计数不受影响"><input type="checkbox" id="nilm-mark-all"> 标注全部事件</label>
           </span></h3>
@@ -793,13 +775,13 @@
       <div class="panel">
         <h3 class="curvehdr nilm-hdr"><span>周波窗<small class="hdrhint" title="最近 N 个周波，竖线＝检测到的事件起点">（最近 <span id="nilm-win-n">0</span> 个周波，竖线＝检测到的事件起点）</small></span>
           <span class="toggle">
-            <label>对象 <select id="nilm-ch"><option value="total">三相总</option><option value="A">A 相</option><option value="B">B 相</option><option value="C">C 相</option></select></label>
-            <label>量 <select id="nilm-qty"><option value="p">有功 P</option><option value="q">无功 Q</option><option value="i">电流 I</option></select></label>
-            <label>标注算法 <select id="nilm-mark"><option value="">全部</option></select></label>
+            <label class="f"><span class="lbl">对象</span><select id="nilm-ch"><option value="total">三相总</option><option value="A">A 相</option><option value="B">B 相</option><option value="C">C 相</option></select></label>
+            <label class="f"><span class="lbl">量</span><select id="nilm-qty"><option value="p">有功 P</option><option value="q">无功 Q</option><option value="i">电流 I</option></select></label>
+            <label class="f"><span class="lbl">标注算法</span><select id="nilm-mark"><option value="">全部</option></select></label>
           </span></h3>
         <div class="row nilm-winload" title="v0.46：非运行状态下从当前侧配置的离线文件手动装载一段周波数据：时刻留空＝数据起始时刻起 N 个周波；填时刻＝以该时刻为中心的 N 个周波（也可在上方趋势曲线上右键「显示周波窗」）">
-          <label>装载时刻 <input type="text" id="nilm-win-t" placeholder="留空＝数据起点；或 2026-10-13 08:00:02.000" style="width:220px"></label>
-          <label>周波数 <input type="number" id="nilm-win-count" min="1" max="20000" step="1" value="300" style="width:80px"></label>
+          <label class="f"><span class="lbl">装载时刻</span><input type="text" id="nilm-win-t" placeholder="留空＝数据起点；或 2026-10-13 08:00:02.000" style="width:220px"></label>
+          <label class="f"><span class="lbl">周波数</span><input type="number" id="nilm-win-count" min="1" max="20000" step="1" value="300" style="width:80px"></label>
           <button id="btn-nilm-win-load">装载周波窗</button>
           <button id="btn-nilm-win-live" title="清除手动装载的数据，恢复显示引擎的实时周波窗">清除</button>
           <span id="nilm-win-src" class="mut"></span>
@@ -814,8 +796,8 @@
       <div class="panel">
         <h3 class="curvehdr nilm-hdr"><span>事件列表<small class="hdrhint" title="时刻＝数据时间，方向 ↑投入 / ↓切除，幅值＝事件后稳态 − 事件前稳态">（最近 <span id="nilm-total">0</span> 条；时刻＝数据时间，方向 ↑投入 / ↓切除，幅值＝事件后稳态 − 事件前稳态）</small></span>
           <span class="toggle">
-            <label>算法 <select id="nilm-filter"><option value="">全部</option></select></label>
-            <label>对象 <select id="nilm-chfilter"><option value="">全部</option><option value="total">三相总</option><option value="A">A</option><option value="B">B</option><option value="C">C</option></select></label>
+            <label class="f"><span class="lbl">算法</span><select id="nilm-filter"><option value="">全部</option></select></label>
+            <label class="f"><span class="lbl">对象</span><select id="nilm-chfilter"><option value="">全部</option><option value="total">三相总</option><option value="A">A</option><option value="B">B</option><option value="C">C</option></select></label>
             <button id="btn-nilm-refresh">刷新</button>
             <button id="btn-nilm-clear" title="清空内存中的事件列表（不删除已落盘的 CSV）">清空</button>
           </span></h3>
@@ -831,23 +813,22 @@
             <label><input type="checkbox" id="nilm-ch-A"> A 相</label>
             <label><input type="checkbox" id="nilm-ch-B"> B 相</label>
             <label><input type="checkbox" id="nilm-ch-C"> C 相</label></span></label>
-          <label>检测量（v0.36）
-            <select id="nilm-quantity">
+          <label class="f"><span class="lbl">检测量（v0.36）</span><select id="nilm-quantity">
               <option value="auto">auto 自动：有电压用有功 P，数据源无电压时用电流有效值 I</option>
               <option value="p">p 有功功率（需电压 + 电流）</option>
               <option value="i">i 电流有效值（只需电流；绝对 W 阈值不生效，只用相对门槛）</option>
             </select></label>
-          <label>周波窗长（周波数，≥30）<input type="number" step="1" min="30" id="nilm-window_cycles"></label>
-          <label>同算法同对象最小事件间隔（周波）<input type="number" step="1" min="0" id="nilm-min_gap_cycles"></label>
+          <label class="f"><span class="lbl">周波窗长（周波数，≥30）</span><input type="number" step="1" min="30" id="nilm-window_cycles"></label>
+          <label class="f"><span class="lbl">同算法同对象最小事件间隔（周波）</span><input type="number" step="1" min="0" id="nilm-min_gap_cycles"></label>
           <label class="check" id="nilm-auto_params-lbl" title="v0.87/v0.88：总线侧、分路侧均可启用。勾选后各算法全部数值参数在运行时由当前周波窗数据自动推导（噪声 σ=差分 MAD、稳定周波=3τ+2、最短稳态=Allan 拐点、暂态时长=超限游程最长、显著性倍数 k=√(2·ln 一天周波数)、最小幅值=max(1.5kσ√(2/最短稳态), 4σ)；逐位重复数据自动识别保持长度），无需用调参工具计算后手填；下方各算法数值与相对门槛不参与，算法启停仍按勾选；两侧各自独立勾选"><input type="checkbox" id="nilm-auto_params"> 启用自适应算法参数（运行时按本侧周波窗数据自动计算各算法参数，无需手动填写；总线侧 / 分路侧均可启用）</label>
-          <label>相对容差 rel_tol_pct（% 窗内 |P| 中位数；作用于容差/漂移/噪声类参数）<input type="number" step="0.1" min="0" max="50" id="nilm-rel_tol_pct"></label>
-          <label>相对最小幅值 min_delta_pct（% 窗内 |P| 中位数；0＝只用各算法绝对值）<input type="number" step="0.1" min="0" max="100" id="nilm-min_delta_pct"></label>
+          <label class="f"><span class="lbl">相对容差 rel_tol_pct（% 窗内 |P| 中位数；作用于容差/漂移/噪声类参数）</span><input type="number" step="0.1" min="0" max="50" id="nilm-rel_tol_pct"></label>
+          <label class="f"><span class="lbl">相对最小幅值 min_delta_pct（% 窗内 |P| 中位数；0＝只用各算法绝对值）</span><input type="number" step="0.1" min="0" max="100" id="nilm-min_delta_pct"></label>
         </div>
         <div id="nilm-auto-out" class="notes" style="display:none"></div>
         <div id="nilm-algos"></div>
         <div class="row" style="margin-top:10px"><button id="btn-nilm-save" class="savecfg-side" title="保存本侧负荷辨识算法参数到配置">保存总线侧配置</button><span id="nilm-form-note" class="mut"></span></div>
         <div class="row nilm-tune" style="margin-top:6px" title="v0.50：把 tools/nilm_tune.py --json 的输出叠加到当前运行配置：只改 nilm.quantity / rel_tol_pct / min_delta_pct 和各算法参数，其余不动；更新后的完整配置写到 output/nilm/nilm_tuned_config_<侧>_<时间戳>.json，默认不写配置文件">
-          <label>套用 nilm_tune 结果 <input type="file" id="nilm-tune-file" accept=".json,application/json"></label>
+          <label class="f"><span class="lbl">套用 nilm_tune 结果</span><input type="file" id="nilm-tune-file" accept=".json,application/json"></label>
           <button id="btn-nilm-tune-apply">套用到当前配置</button>
           <label class="check" title="默认只热生效并写到输出目录；勾选后同时回写运行配置文件（configs/runtime.json）"><input type="checkbox" id="nilm-tune-persist"> 同时写入配置文件</label>
           <span id="nilm-tune-note" class="mut"></span>
@@ -943,28 +924,23 @@
         <div class="panel">
           <h3>重采样参数</h3>
           <div class="form">
-            <label>源文件（data 目录下拉或手填路径）
-              <select id="rs-files"><option value="">— 选择 data/ 下的 CSV —</option></select>
-            </label>
-            <label>源文件路径 <input id="rs-path" placeholder="data/波形_农业排灌_大水泵_80_1.csv 或绝对路径"></label>
+            <label class="f"><span class="lbl">源文件（data 目录下拉或手填路径）</span><select id="rs-files"><option value="">— 选择 data/ 下的 CSV —</option></select></label>
+            <label class="f"><span class="lbl">源文件路径</span><input id="rs-path" placeholder="data/波形_农业排灌_大水泵_80_1.csv 或绝对路径"></label>
             <div class="row2">
-              <label>目标采样率 (Hz) <input id="rs-fs" type="number" min="1" step="1" value="6400"></label>
-              <label>原采样率 (Hz，留空＝由时间戳自动推算) <input id="rs-fssrc" type="number" min="1" step="1" placeholder="自动"></label>
+              <label class="f"><span class="lbl">目标采样率 (Hz)</span><input id="rs-fs" type="number" min="1" step="1" value="6400"></label>
+              <label class="f"><span class="lbl">原采样率 (Hz，留空＝由时间戳自动推算)</span><input id="rs-fssrc" type="number" min="1" step="1" placeholder="自动"></label>
             </div>
             <div class="row2">
-              <label>插值方法
-                <select id="rs-method">
+              <label class="f"><span class="lbl">插值方法</span><select id="rs-method">
                   <option value="linear">linear 线性插值（流式，默认）</option>
                   <option value="nearest">nearest 最近邻</option>
                   <option value="fft">fft 频域（抗混叠，整文件载入）</option>
-                </select>
-              </label>
+                </select></label>
               <label class="check"><input id="rs-overwrite" type="checkbox"> 输出已存在时覆盖（不勾选且要算误差：已存在则跳过重采样只算误差）</label>
             </div>
             <div class="row2">
               <label class="check"><input id="rs-err" type="checkbox" checked> 计算重采样前后相对误差（写 <code>_err.csv</code>）</label>
-              <label>误差统计时间窗 (s，可配，保存到配置 processing.error_window_s)
-                <input id="rs-errwin" type="number" min="0.001" step="0.1" value="1"></label>
+              <label class="f"><span class="lbl">误差统计时间窗 (s，可配，保存到配置 processing.error_window_s)</span><input id="rs-errwin" type="number" min="0.001" step="0.1" value="1"></label>
             </div>
             <div class="colmap-blk" id="rs-cm-blk" title="离线文件列映射：不启用＝各列依次为 时间, A相电压, A相电流, B相电压, B相电流, C相电压, C相电流（表头可识别时按表头）；启用＝只按下面填写的列号取列">
               <label class="chk"><input id="rs-cm-on" type="checkbox"><span>启用离线文件列映射<small class="note">默认不启用：各列依次为 时间, A相电压, A相电流, B相电压, B相电流, C相电压, C相电流（表头可识别时按表头）；启用后只按下面的列号取列（从 1 起）</small></span></label>
@@ -1010,55 +986,53 @@
         <div class="panel">
           <h3>调参参数（与 <code>tools/nilm_tune.py</code> 同一实现）</h3>
           <div class="form" id="nt-form">
-            <label>波形文件（data 目录下拉或手填路径）
-              <select id="nt-files"><option value="">— 选择 data/ 下的 CSV —</option></select>
-            </label>
-            <label>波形文件路径 <input id="nt-path" placeholder="data/bus_bg.csv 或绝对路径"></label>
+            <label class="f"><span class="lbl">波形文件（data 目录下拉或手填路径）</span><select id="nt-files"><option value="">— 选择 data/ 下的 CSV —</option></select></label>
+            <label class="f"><span class="lbl">波形文件路径</span><input id="nt-path" placeholder="data/bus_bg.csv 或绝对路径"></label>
             <div class="row2">
-              <label title="分析起始时间；空＝文件开头。写法同播放时间段：2026-10-13 08:00:02.5 / 08:00:02.5（与文件时标当天时刻比较）/ epoch 秒">起始时间（空＝文件开头） <input id="nt-tstart" placeholder="2026-10-13 08:00:02.000"></label>
-              <label title="分析结束时间；空＝文件结尾（或由时长决定）">结束时间（空＝文件结尾） <input id="nt-tend" placeholder="2026-10-13 08:00:32.000"></label>
+              <label class="f" title="分析起始时间；空＝文件开头。写法同播放时间段：2026-10-13 08:00:02.5 / 08:00:02.5（与文件时标当天时刻比较）/ epoch 秒"><span class="lbl">起始时间（空＝文件开头）</span><input id="nt-tstart" placeholder="2026-10-13 08:00:02.000"></label>
+              <label class="f" title="分析结束时间；空＝文件结尾（或由时长决定）"><span class="lbl">结束时间（空＝文件结尾）</span><input id="nt-tend" placeholder="2026-10-13 08:00:32.000"></label>
             </div>
             <div class="row2">
               <label class="check" title="v0.73：与波形预览同一套自定义时间——勾选＝不用文件内时标，时间轴＝自定义起始时间 + 行号 / 采样率，文件时长＝数据点数 / 采样率；上方起始 / 结束时间按这条时间轴解释（写法同波形预览：2026-10-12 08:00:00 / epoch 秒 / 08:00:00），都留空＝整个文件（时长＝点数 / 采样率）"><input id="nt-custom" type="checkbox"> 启用自定义时间（时长＝数据点数 / 采样率）</label>
               <span id="nt-custom-note" class="mut" style="align-self:flex-end">未启用：按文件内数据时间</span>
             </div>
             <div class="row2" id="nt-custom-row" style="display:none">
-              <label title="空＝文件数据起始时间（文件第 1 条数据的时标）；写法 2026-10-13 08:00:00[.fff] / epoch 秒">自定义起始时间（空＝文件数据起始时间） <input id="nt-cstart" placeholder="空＝文件数据起始时间"></label>
-              <label title="空＝起始时间 + 点数 / 采样率（按采样率计算的文件数据结束时间）；填写则作为结束时间为空时的缺省终点">自定义结束时间（空＝按采样率计算） <input id="nt-cend" placeholder="空＝起始 + 点数/fs"></label>
+              <label class="f" title="空＝文件数据起始时间（文件第 1 条数据的时标）；写法 2026-10-13 08:00:00[.fff] / epoch 秒"><span class="lbl">自定义起始时间（空＝文件数据起始时间）</span><input id="nt-cstart" placeholder="空＝文件数据起始时间"></label>
+              <label class="f" title="空＝起始时间 + 点数 / 采样率（按采样率计算的文件数据结束时间）；填写则作为结束时间为空时的缺省终点"><span class="lbl">自定义结束时间（空＝按采样率计算）</span><input id="nt-cend" placeholder="空＝起始 + 点数/fs"></label>
             </div>
             <div class="row2">
-              <label title="从起始时间（或文件开头）起分析的时长；与结束时间同时填时取先到者">或 时长 (s，空＝到结束时间/文件结尾) <input id="nt-duration" type="number" min="0.02" step="0.1" placeholder="空"></label>
-              <label title="v0.72：默认「独立基准配置」——出厂配置 + 下方各项（fs / f_nom / PT·CT / 时标 UTC），与总线侧、分路侧运行配置互不关联，可单独修改（保存在浏览器本地，并随每次调参写到 output/nilm/nilm_tune_base.json 供等价命令复现）；也可改选沿用某一侧当前运行配置（旧行为）">基准配置 <select id="nt-side"><option value="custom">独立基准配置（本页，默认）</option><option value="bus">沿用总线侧运行配置</option><option value="branch">沿用分路侧运行配置</option></select></label>
+              <label class="f" title="从起始时间（或文件开头）起分析的时长；与结束时间同时填时取先到者"><span class="lbl">或 时长 (s，空＝到结束时间/文件结尾)</span><input id="nt-duration" type="number" min="0.02" step="0.1" placeholder="空"></label>
+              <label class="f" title="v0.72：默认「独立基准配置」——出厂配置 + 下方各项（fs / f_nom / PT·CT / 时标 UTC），与总线侧、分路侧运行配置互不关联，可单独修改（保存在浏览器本地，并随每次调参写到 output/nilm/nilm_tune_base.json 供等价命令复现）；也可改选沿用某一侧当前运行配置（旧行为）"><span class="lbl">基准配置</span><select id="nt-side"><option value="custom">独立基准配置（本页，默认）</option><option value="bus">沿用总线侧运行配置</option><option value="branch">沿用分路侧运行配置</option></select></label>
             </div>
             <div class="wp-group" id="nt-base" title="基准配置：独立时只影响本页调参、可单独修改；沿用某侧运行配置时只显示该侧值、不可修改；都不改动两侧运行配置">
               <div class="wp-group-title" id="nt-base-title">独立基准配置（与两侧运行配置互不关联，可单独修改）</div>
               <div class="row2">
-                <label title="采样率：每周波点数 = fs / f_nom；文件有时标时源层仍按时标校核">采样率 fs (Hz) <input id="nt-base-fs" type="number" min="1" step="any"></label>
-                <label title="额定频率">额定频率 f_nom (Hz) <input id="nt-base-fnom" type="number" min="1" step="any"></label>
+                <label class="f" title="采样率：每周波点数 = fs / f_nom；文件有时标时源层仍按时标校核"><span class="lbl">采样率 fs (Hz)</span><input id="nt-base-fs" type="number" min="1" step="any"></label>
+                <label class="f" title="额定频率"><span class="lbl">额定频率 f_nom (Hz)</span><input id="nt-base-fnom" type="number" min="1" step="any"></label>
               </div>
               <div class="row2">
                 <label class="check" title="勾选＝数值换算为一次侧（电压 × PT、电流 × CT），最小关心负荷与结果同为一次侧口径"><input id="nt-base-ptct" type="checkbox"> 启用 PT/CT（一次侧口径）</label>
                 <label class="check" title="文件时标按 UTC 解释"><input id="nt-base-utc" type="checkbox"> 文件时标为 UTC</label>
               </div>
               <div class="row2">
-                <label>PT 变比 <input id="nt-base-pt" type="number" min="0.000001" step="any"></label>
-                <label>CT 变比 <input id="nt-base-ct" type="number" min="0.000001" step="any"></label>
+                <label class="f"><span class="lbl">PT 变比</span><input id="nt-base-pt" type="number" min="0.000001" step="any"></label>
+                <label class="f"><span class="lbl">CT 变比</span><input id="nt-base-ct" type="number" min="0.000001" step="any"></label>
               </div>
               <div class="row2" title="v0.95：接线方式 / CT 极性（与运行配置「量纲与口径」同名项同义；调参、画像提取按此换算后再分析）">
-                <label>接线方式 <select id="nt-base-wiring"><option value="3p4w">三相四线（三 CT）</option><option value="3p3w">三相三线两表法（B 相无 CT）</option></select></label>
+                <label class="f"><span class="lbl">接线方式</span><select id="nt-base-wiring"><option value="3p4w">三相四线（三 CT）</option><option value="3p3w">三相三线两表法（B 相无 CT）</option></select></label>
                 <label class="check"><input id="nt-base-recon3w" type="checkbox"> 3P3W 虚拟中性点重构（Ib=−(Ia+Ic)，相电压由 Uab/Ucb 重构）</label>
               </div>
               <div class="row2">
                 <label class="check"><input id="nt-base-inv" type="checkbox"> 电流极性反转（三相同时取反）</label>
-                <label>分相电流极性反转 <span class="chk"><input id="nt-base-inv-a" type="checkbox"> A <input id="nt-base-inv-b" type="checkbox"> B <input id="nt-base-inv-c" type="checkbox"> C</span></label>
+                <label class="f"><span class="lbl">分相电流极性反转</span><span class="chk"><input id="nt-base-inv-a" type="checkbox"> A <input id="nt-base-inv-b" type="checkbox"> B <input id="nt-base-inv-c" type="checkbox"> C</span></label>
               </div>
             <div class="colmap-blk" id="nt-cm-blk" title="离线文件列映射：不启用＝各列依次为 时间, A相电压, A相电流, B相电压, B相电流, C相电压, C相电流（表头可识别时按表头）；启用＝只按下面填写的列号取列">
               <label class="chk"><input id="nt-cm-on" type="checkbox"><span>启用离线文件列映射<small class="note">默认不启用：各列依次为 时间, A相电压, A相电流, B相电压, B相电流, C相电压, C相电流（表头可识别时按表头）；启用后只按下面的列号取列（从 1 起）</small></span></label>
               <div class="colmap-row" id="nt-cm-row" style="display:none"><label title="时间所在列号（从 1 起；空＝不映射）">时间 <input id="nt-cm-ts" type="number" min="1" step="1" value="1"></label><label title="A相电压所在列号（从 1 起；空＝不映射）">A相电压 <input id="nt-cm-ua" type="number" min="1" step="1" value="2"></label><label title="A相电流所在列号（从 1 起；空＝不映射）">A相电流 <input id="nt-cm-ia" type="number" min="1" step="1" value="3"></label><label title="B相电压所在列号（从 1 起；空＝不映射）">B相电压 <input id="nt-cm-ub" type="number" min="1" step="1" value="4"></label><label title="B相电流所在列号（从 1 起；空＝不映射）">B相电流 <input id="nt-cm-ib" type="number" min="1" step="1" value="5"></label><label title="C相电压所在列号（从 1 起；空＝不映射）">C相电压 <input id="nt-cm-uc" type="number" min="1" step="1" value="6"></label><label title="C相电流所在列号（从 1 起；空＝不映射）">C相电流 <input id="nt-cm-ic" type="number" min="1" step="1" value="7"></label></div>
             </div>
               <div class="row2">
-                <label title="独立基准配置：可单独选择；沿用总线侧 / 分路侧运行配置：随该侧 nilm.quantity，不可修改">检测量 <select id="nt-quantity"><option value="" id="nt-quantity-follow">默认（出厂缺省 auto：无电压→I）</option><option value="auto">auto（无电压→I）</option><option value="p">p 有功</option><option value="i">i 电流有效值</option></select></label>
-                <label title="独立基准配置：可单独选择；沿用总线侧 / 分路侧运行配置：随该侧 nilm.channels 的第一个检测对象，不可修改">检测对象 <select id="nt-channel"><option value="">默认（P→三相总，I→A 相）</option><option value="total">三相总</option><option value="A">A 相</option><option value="B">B 相</option><option value="C">C 相</option></select></label>
+                <label class="f" title="独立基准配置：可单独选择；沿用总线侧 / 分路侧运行配置：随该侧 nilm.quantity，不可修改"><span class="lbl">检测量</span><select id="nt-quantity"><option value="" id="nt-quantity-follow">默认（出厂缺省 auto：无电压→I）</option><option value="auto">auto（无电压→I）</option><option value="p">p 有功</option><option value="i">i 电流有效值</option></select></label>
+                <label class="f" title="独立基准配置：可单独选择；沿用总线侧 / 分路侧运行配置：随该侧 nilm.channels 的第一个检测对象，不可修改"><span class="lbl">检测对象</span><select id="nt-channel"><option value="">默认（P→三相总，I→A 相）</option><option value="total">三相总</option><option value="A">A 相</option><option value="B">B 相</option><option value="C">C 相</option></select></label>
               </div>
               <div class="row2">
                 <span class="mut" style="align-self:flex-end">独立基准配置下以上各项可单独修改；沿用某侧运行配置时全部随该侧配置显示、不可修改</span>
@@ -1071,20 +1045,20 @@
               <div id="nt-base-note" class="mut"></div>
             </div>
             <div class="row2">
-              <label>最小关心负荷 (W，P 口径) <input id="nt-minw" type="number" min="0" step="any" placeholder="空＝max(6σ, 2%×基荷)"></label>
-              <label>最小关心负荷电流 (A，I 口径) <input id="nt-mina" type="number" min="0" step="any" placeholder="空＝max(6σ, 2%×基荷)"></label>
+              <label class="f"><span class="lbl">最小关心负荷 (W，P 口径)</span><input id="nt-minw" type="number" min="0" step="any" placeholder="空＝max(6σ, 2%×基荷)"></label>
+              <label class="f"><span class="lbl">最小关心负荷电流 (A，I 口径)</span><input id="nt-mina" type="number" min="0" step="any" placeholder="空＝max(6σ, 2%×基荷)"></label>
             </div>
             <div class="row2">
               <label class="check" title="v0.55：未手填最小关心负荷时，从文件中的投切台阶估计（相邻稳态台阶最小间距 / 最小跳变幅值）。只对分路侧单设备、含启停的录波有效；纯背景文件或总线侧多设备文件估计不可靠时按未指定处理。估计值是上界候选，现场不关心二级负荷请手工改大"><input id="nt-minauto" type="checkbox"> 从文件投切台阶估计最小关心负荷（分路侧含启停录波）</label>
             </div>
             <div class="row2">
               <label class="check" title="默认不保存；勾选后以所选侧的原配置文件（configs/runtime.json 或 branch_runtime.json）为基准，只更新算法参数、其它参数不变，把更新后的完整配置写到 output/nilm/ 下（原配置文件不改动；可直接作 --config / 回放配置使用）"><input id="nt-save" type="checkbox"> 保存为配置文件（原配置基础上更新算法参数）</label>
-              <label>文件名（留空＝tune_{时间}.json） <input id="nt-name" placeholder="tune_{时间}.json"></label>
+              <label class="f"><span class="lbl">文件名（留空＝tune_{时间}.json）</span><input id="nt-name" placeholder="tune_{时间}.json"></label>
             </div>
             <div class="btnrow">
               <button id="btn-nt-run" class="primary">量噪声并给出参数</button>
               <button id="btn-nt-refresh">刷新文件列表</button>
-              <label title="「套用到运行配置」的目标侧（与基准配置无关；基准配置独立时也可套用到任一侧）">套用目标 <select id="nt-apply-side"><option value="bus">总线侧运行配置</option><option value="branch">分路侧运行配置</option></select></label>
+              <label class="f" title="「套用到运行配置」的目标侧（与基准配置无关；基准配置独立时也可套用到任一侧）"><span class="lbl">套用目标</span><select id="nt-apply-side"><option value="bus">总线侧运行配置</option><option value="branch">分路侧运行配置</option></select></label>
               <button id="btn-nt-apply" disabled title="把上次结果套用到「套用目标」所选侧正在运行的配置（热生效，更新后的完整配置写 output/nilm/，不写配置文件）">套用到运行配置</button>
             </div>
             <div id="nt-hint" class="notes">
@@ -1163,29 +1137,27 @@
             <!-- ① 公共配置（v0.65：波形曲线与有效值曲线共用；v0.67：波形/有效值配置移到各自曲线左侧） -->
             <div class="wp-group wp-common" id="wp-sec-common">
               <div class="wp-group-title"><span class="wp-tag">公共配置</span> 波形曲线与有效值曲线<b>共用</b>：文件、基准配置、自定义时间（独立于总线 / 分路侧运行配置；改动保存在浏览器本地）</div>
-              <label>波形文件（data 目录下拉或手填路径）
-                <select id="wp-files"><option value="">— 选择 data/ 下的 CSV —</option></select>
-              </label>
-              <label>波形文件路径 <input id="wp-path" placeholder="data/bus_bg.csv 或绝对路径"></label>
+              <label class="f"><span class="lbl">波形文件（data 目录下拉或手填路径）</span><select id="wp-files"><option value="">— 选择 data/ 下的 CSV —</option></select></label>
+              <label class="f"><span class="lbl">波形文件路径</span><input id="wp-path" placeholder="data/bus_bg.csv 或绝对路径"></label>
               <div class="row2" id="wp-base">
-                <label title="采样率由文件数据时间（时标）推算得到，不可修改；「获取文件信息」后显示。文件没有时标时按出厂配置">采样率 fs (Hz，按文件数据时间计算，不可改) <input id="wp-base-fs" type="text" readonly placeholder="获取文件信息后显示" title="由文件时标推算，不可修改"></label>
-                <label title="额定频率：每周波点数 = fs / f_nom">额定频率 f_nom (Hz) <input id="wp-base-fnom" type="number" min="1" step="any"></label>
+                <label class="f" title="采样率由文件数据时间（时标）推算得到，不可修改；「获取文件信息」后显示。文件没有时标时按出厂配置"><span class="lbl">采样率 fs (Hz，按文件数据时间计算，不可改)</span><input id="wp-base-fs" type="text" readonly placeholder="获取文件信息后显示" title="由文件时标推算，不可修改"></label>
+                <label class="f" title="额定频率：每周波点数 = fs / f_nom"><span class="lbl">额定频率 f_nom (Hz)</span><input id="wp-base-fnom" type="number" min="1" step="any"></label>
               </div>
               <div class="row2">
                 <label class="chk" title="勾选＝数值换算为一次侧（电压 × PT、电流 × CT）"><input id="wp-base-ptct" type="checkbox"> 启用 PT/CT（一次侧口径）</label>
                 <label class="chk" title="文件时标按 UTC 解释（显示时换算为本地时间）"><input id="wp-base-utc" type="checkbox"> 文件时标为 UTC</label>
               </div>
               <div class="row2">
-                <label>PT 变比 <input id="wp-base-pt" type="number" min="0.000001" step="any"></label>
-                <label>CT 变比 <input id="wp-base-ct" type="number" min="0.000001" step="any"></label>
+                <label class="f"><span class="lbl">PT 变比</span><input id="wp-base-pt" type="number" min="0.000001" step="any"></label>
+                <label class="f"><span class="lbl">CT 变比</span><input id="wp-base-ct" type="number" min="0.000001" step="any"></label>
               </div>
               <div class="row2" title="v0.95：接线方式 / CT 极性（与运行配置「量纲与口径」同名项同义；曲线按此换算后显示）">
-                <label>接线方式 <select id="wp-base-wiring"><option value="3p4w">三相四线（三 CT）</option><option value="3p3w">三相三线两表法（B 相无 CT）</option></select></label>
+                <label class="f"><span class="lbl">接线方式</span><select id="wp-base-wiring"><option value="3p4w">三相四线（三 CT）</option><option value="3p3w">三相三线两表法（B 相无 CT）</option></select></label>
                 <label class="chk"><input id="wp-base-recon3w" type="checkbox"> 3P3W 虚拟中性点重构（Ib=−(Ia+Ic)，相电压由 Uab/Ucb 重构）</label>
               </div>
               <div class="row2">
                 <label class="chk"><input id="wp-base-inv" type="checkbox"> 电流极性反转（三相同时取反）</label>
-                <label>分相电流极性反转 <span class="chk"><input id="wp-base-inv-a" type="checkbox"> A <input id="wp-base-inv-b" type="checkbox"> B <input id="wp-base-inv-c" type="checkbox"> C</span></label>
+                <label class="f"><span class="lbl">分相电流极性反转</span><span class="chk"><input id="wp-base-inv-a" type="checkbox"> A <input id="wp-base-inv-b" type="checkbox"> B <input id="wp-base-inv-c" type="checkbox"> C</span></label>
               </div>
             <div class="colmap-blk" id="wp-cm-blk" title="离线文件列映射：不启用＝各列依次为 时间, A相电压, A相电流, B相电压, B相电流, C相电压, C相电流（表头可识别时按表头）；启用＝只按下面填写的列号取列">
               <label class="chk"><input id="wp-cm-on" type="checkbox"><span>启用离线文件列映射<small class="note">默认不启用：各列依次为 时间, A相电压, A相电流, B相电压, B相电流, C相电压, C相电流（表头可识别时按表头）；启用后只按下面的列号取列（从 1 起）</small></span></label>
@@ -1196,8 +1168,8 @@
                 <span></span>
               </div>
               <div class="row2" id="wp-custom-row" style="display:none">
-                <label title="空＝文件数据起始时间（文件第 1 条数据的时标）；写法 2026-10-13 08:00:00[.fff] / epoch 秒">自定义起始时间（空＝文件数据起始时间） <input id="wp-base-cstart" placeholder="空＝文件数据起始时间"></label>
-                <label title="空＝起始时间 + (行数−1) / 采样率（按采样率计算的文件数据结束时间）；填写则只取到该时刻">自定义结束时间（空＝按采样率计算） <input id="wp-base-cend" placeholder="空＝起始 + (行数−1)/fs"></label>
+                <label class="f" title="空＝文件数据起始时间（文件第 1 条数据的时标）；写法 2026-10-13 08:00:00[.fff] / epoch 秒"><span class="lbl">自定义起始时间（空＝文件数据起始时间）</span><input id="wp-base-cstart" placeholder="空＝文件数据起始时间"></label>
+                <label class="f" title="空＝起始时间 + (行数−1) / 采样率（按采样率计算的文件数据结束时间）；填写则只取到该时刻"><span class="lbl">自定义结束时间（空＝按采样率计算）</span><input id="wp-base-cend" placeholder="空＝起始 + (行数−1)/fs"></label>
               </div>
               <div class="btnrow">
                 <button id="btn-wp-info" class="primary">获取文件信息</button>
@@ -1227,18 +1199,16 @@
           <div class="wp-group wp-wave" id="wp-sec-wave">
             <div class="wp-group-title">重采样、起止时刻、周波数、通道、最多点数（数据按上方公共配置解释）</div>
             <div class="row2">
-              <label>重采样率 (Hz，空＝原始采样率) <input id="wp-fs" type="number" min="1" step="any" placeholder="原始采样率"></label>
-              <label title="与「重采样」功能同一组方法：linear 线性插值 / nearest 最近邻 / fft 频域（降采样自带抗混叠）">重采样方式
-                <select id="wp-method"><option value="linear">linear 线性插值</option><option value="nearest">nearest 最近邻</option><option value="fft">fft 频域（抗混叠）</option></select>
-              </label>
+              <label class="f"><span class="lbl">重采样率 (Hz，空＝原始采样率)</span><input id="wp-fs" type="number" min="1" step="any" placeholder="原始采样率"></label>
+              <label class="f" title="与「重采样」功能同一组方法：linear 线性插值 / nearest 最近邻 / fft 频域（降采样自带抗混叠）"><span class="lbl">重采样方式</span><select id="wp-method"><option value="linear">linear 线性插值</option><option value="nearest">nearest 最近邻</option><option value="fft">fft 频域（抗混叠）</option></select></label>
             </div>
             <div class="row2">
-              <label title="空＝文件数据起始时间（自定义时间启用时＝自定义起始时间）。写法与数据源页「指定时间段播放」一致：2026-10-12 08:00:00[.fff] / epoch 秒 / 只写 08:00:00（当天时刻）">起始时刻（空＝数据起始时间） <input id="wp-tstart" placeholder="2026-10-12 08:00:00 / epoch 秒 / 08:00:00"></label>
-              <label title="空＝文件数据结束时间（按采样率计算；自定义结束时间填了则＝它）；与周波数同时给出时取先到者。写法同起始时刻：2026-10-12 08:10:00 / epoch 秒 / 08:10:00">结束时刻（空＝数据结束时间） <input id="wp-tend" placeholder="2026-10-12 08:10:00 / epoch 秒 / 08:10:00"></label>
+              <label class="f" title="空＝文件数据起始时间（自定义时间启用时＝自定义起始时间）。写法与数据源页「指定时间段播放」一致：2026-10-12 08:00:00[.fff] / epoch 秒 / 只写 08:00:00（当天时刻）"><span class="lbl">起始时刻（空＝数据起始时间）</span><input id="wp-tstart" placeholder="2026-10-12 08:00:00 / epoch 秒 / 08:00:00"></label>
+              <label class="f" title="空＝文件数据结束时间（按采样率计算；自定义结束时间填了则＝它）；与周波数同时给出时取先到者。写法同起始时刻：2026-10-12 08:10:00 / epoch 秒 / 08:10:00"><span class="lbl">结束时刻（空＝数据结束时间）</span><input id="wp-tend" placeholder="2026-10-12 08:10:00 / epoch 秒 / 08:10:00"></label>
             </div>
             <div class="row2">
-              <label title="从起始时刻起加载的周波数（点数 = 周波数 × 每周波点数，按重采样率计）；空＝起止时刻之间全部（受「最多加载点数」限制，默认 2000 万）">加载周波数（空＝整段） <input id="wp-ncyc" type="number" min="1" step="1" value="300"></label>
-              <label title="单次加载波形最多返回的点数（每通道）；默认 20000000；超出则截断并提示">最多加载点数 <input id="wp-maxpts" type="number" min="1" step="1" value="20000000"></label>
+              <label class="f" title="从起始时刻起加载的周波数（点数 = 周波数 × 每周波点数，按重采样率计）；空＝起止时刻之间全部（受「最多加载点数」限制，默认 2000 万）"><span class="lbl">加载周波数（空＝整段）</span><input id="wp-ncyc" type="number" min="1" step="1" value="300"></label>
+              <label class="f" title="单次加载波形最多返回的点数（每通道）；默认 20000000；超出则截断并提示"><span class="lbl">最多加载点数</span><input id="wp-maxpts" type="number" min="1" step="1" value="20000000"></label>
             </div>
             <div class="row2">
               <label>通道（默认全部）
@@ -1272,15 +1242,15 @@
           <div class="wp-group wp-rmsg" id="wp-sec-rms">
             <div class="wp-group-title">起止时刻 / 时长、统计窗、右键周波窗周波数（数据按上方公共配置解释，通道随波形曲线的勾选）</div>
             <div class="row2">
-              <label title="空＝文件数据起始时间（自定义时间启用时＝自定义起始时间）。写法与数据源页「指定时间段播放」一致：2026-10-12 08:00:00[.fff] / epoch 秒 / 只写 08:00:00（当天时刻）">起始时刻（空＝数据起始时间） <input id="wp-rms-tstart" placeholder="2026-10-12 08:00:00 / epoch 秒 / 08:00:00"></label>
-              <label title="空＝文件数据结束时间（或由时长决定）。写法同起始时刻：2026-10-12 08:10:00 / epoch 秒 / 08:10:00">结束时刻（空＝数据结束时间） <input id="wp-rms-tend" placeholder="2026-10-12 08:10:00 / epoch 秒 / 08:10:00"></label>
+              <label class="f" title="空＝文件数据起始时间（自定义时间启用时＝自定义起始时间）。写法与数据源页「指定时间段播放」一致：2026-10-12 08:00:00[.fff] / epoch 秒 / 只写 08:00:00（当天时刻）"><span class="lbl">起始时刻（空＝数据起始时间）</span><input id="wp-rms-tstart" placeholder="2026-10-12 08:00:00 / epoch 秒 / 08:00:00"></label>
+              <label class="f" title="空＝文件数据结束时间（或由时长决定）。写法同起始时刻：2026-10-12 08:10:00 / epoch 秒 / 08:10:00"><span class="lbl">结束时刻（空＝数据结束时间）</span><input id="wp-rms-tend" placeholder="2026-10-12 08:10:00 / epoch 秒 / 08:10:00"></label>
             </div>
             <div class="row2">
-              <label title="从起始时刻起统计的时长；与结束时刻同时填时取先到者">或 时长 (s) <input id="wp-rms-dur" type="number" min="0.02" step="0.1" placeholder="空"></label>
-              <label title="每个点合并的周波数（1＝逐周波）；点数超过 20 万时自动加大">统计窗（周波/点） <input id="wp-rms-agg" type="number" min="1" step="1" value="1"></label>
+              <label class="f" title="从起始时刻起统计的时长；与结束时刻同时填时取先到者"><span class="lbl">或 时长 (s)</span><input id="wp-rms-dur" type="number" min="0.02" step="0.1" placeholder="空"></label>
+              <label class="f" title="每个点合并的周波数（1＝逐周波）；点数超过 20 万时自动加大"><span class="lbl">统计窗（周波/点）</span><input id="wp-rms-agg" type="number" min="1" step="1" value="1"></label>
             </div>
             <div class="row2">
-              <label title="右键逐周波 RMS 曲线「显示周波窗」/「显示周波窗 2」时，以鼠标所指时刻为中心加载的周波数">周波窗周波数（右键用） <input id="wp-cyc-n" type="number" min="1" max="20000" step="1" value="300"></label>
+              <label class="f" title="右键逐周波 RMS 曲线「显示周波窗」/「显示周波窗 2」时，以鼠标所指时刻为中心加载的周波数"><span class="lbl">周波窗周波数（右键用）</span><input id="wp-cyc-n" type="number" min="1" max="20000" step="1" value="300"></label>
               <span></span>
             </div>
             <div class="btnrow">
@@ -1308,7 +1278,7 @@
       </div>
       <!-- v0.96 / v0.97：估计 CT -->
       <h2 style="margin-top:18px">数据处理 · 估计 CT（同一次设备启停在两侧的电流台阶之比 → 估计未知一侧 CT 变比）</h2>
-      <div class="notes p">原理：同一台设备的一次启停在总线侧与分路侧造成的<b>一次侧</b>电流台阶相同：ΔI<sub>总线·二次</sub> × CT<sub>总线</sub> = ΔI<sub>分路·二次</sub> × CT<sub>分路</sub>。两侧分别指定文件、同一次动作的<b>事件类型</b>（启动 / 停机）与<b>事件时间段</b>（开始 / 结束时刻）、所用单相电流、接线方式与 CT 极性；事件前稳态＝开始时刻前 N 个周波有效值中位数、事件后稳态＝结束时刻后 N 个周波中位数（N＝计算周波数，默认 50）。PT/CT 变换在此强制关闭（直接量二次侧安培）；离线文件列映射沿用上方「波形预览」公共配置。粗估：其它负荷同时动作、两侧相别对应错、总线背景负荷与设备功率因数差异大时有偏差。</div>
+      <div class="notes p">原理：同一台设备的一次启停在总线侧与分路侧造成的<b>一次侧</b>电流台阶相同：ΔI<sub>总线·二次</sub> × CT<sub>总线</sub> = ΔI<sub>分路·二次</sub> × CT<sub>分路</sub>。两侧分别指定文件、同一次动作的<b>事件类型</b>（启动 / 停机）与<b>事件时间段</b>（开始 / 结束时刻）、所用单相电流、接线方式与 CT 极性；事件前稳态＝开始时刻前 N 个周波有效值中位数、事件后稳态＝结束时刻后 N 个周波中位数（N＝计算周波数，默认 50）。PT/CT 变换在此强制关闭（直接量二次侧安培）；两侧各自可「启用离线文件列映射」（不勾选＝默认列序：时间, A相电压, A相电流, B相电压, B相电流, C相电压, C相电流）。粗估：其它负荷同时动作、两侧相别对应错、总线背景负荷与设备功率因数差异大时有偏差。</div>
       <div class="grid2">
         <div class="panel col-bus">
           <h3><span class="sidename bus">总线侧</span> 文件 · 事件 · 接线 / 极性 · CT</h3>
@@ -1320,6 +1290,10 @@
               <div class="row2">
                 <label class="f"><span class="lbl">曲线起始</span><input id="ct-bus-cstart" placeholder="空＝文件起点；14:39:00 / epoch 秒"></label>
                 <label class="f"><span class="lbl">曲线结束</span><input id="ct-bus-cend" placeholder="空＝文件终点"></label>
+              </div>
+              <div class="colmap-blk" id="ct-bus-cm-blk" title="离线文件列映射：不启用＝各列依次为 时间, A相电压, A相电流, B相电压, B相电流, C相电压, C相电流（表头可识别时按表头）；启用＝只按下面填写的列号取列">
+                <label class="chk"><input id="ct-bus-cm-on" type="checkbox"><span>启用离线文件列映射<small class="note">默认不启用：各列依次为 时间, A相电压, A相电流, B相电压, B相电流, C相电压, C相电流（表头可识别时按表头）；启用后只按下面的列号取列（从 1 起）</small></span></label>
+                <div class="colmap-row" id="ct-bus-cm-row" style="display:none"><label title="时间所在列号（从 1 起；空＝不映射）">时间 <input id="ct-bus-cm-ts" type="number" min="1" step="1" value="1"></label><label title="A相电压所在列号（从 1 起；空＝不映射）">A相电压 <input id="ct-bus-cm-ua" type="number" min="1" step="1" value="2"></label><label title="A相电流所在列号（从 1 起；空＝不映射）">A相电流 <input id="ct-bus-cm-ia" type="number" min="1" step="1" value="3"></label><label title="B相电压所在列号（从 1 起；空＝不映射）">B相电压 <input id="ct-bus-cm-ub" type="number" min="1" step="1" value="4"></label><label title="B相电流所在列号（从 1 起；空＝不映射）">B相电流 <input id="ct-bus-cm-ib" type="number" min="1" step="1" value="5"></label><label title="C相电压所在列号（从 1 起；空＝不映射）">C相电压 <input id="ct-bus-cm-uc" type="number" min="1" step="1" value="6"></label><label title="C相电流所在列号（从 1 起；空＝不映射）">C相电流 <input id="ct-bus-cm-ic" type="number" min="1" step="1" value="7"></label></div>
               </div>
               <div class="row2">
                 <label class="f" title="N：曲线每个点＝N 个周波的有效值；估计时事件前稳态＝开始时刻前 N 个周波、事件后稳态＝结束时刻后 N 个周波的有效值中位数"><span class="lbl">计算周波数 N</span><input id="ct-bus-win" type="number" min="3" step="1" value="50"></label>
@@ -1366,6 +1340,10 @@
               <div class="row2">
                 <label class="f"><span class="lbl">曲线起始</span><input id="ct-br-cstart" placeholder="空＝文件起点；14:39:00 / epoch 秒"></label>
                 <label class="f"><span class="lbl">曲线结束</span><input id="ct-br-cend" placeholder="空＝文件终点"></label>
+              </div>
+              <div class="colmap-blk" id="ct-br-cm-blk" title="离线文件列映射：不启用＝各列依次为 时间, A相电压, A相电流, B相电压, B相电流, C相电压, C相电流（表头可识别时按表头）；启用＝只按下面填写的列号取列">
+                <label class="chk"><input id="ct-br-cm-on" type="checkbox"><span>启用离线文件列映射<small class="note">默认不启用：各列依次为 时间, A相电压, A相电流, B相电压, B相电流, C相电压, C相电流（表头可识别时按表头）；启用后只按下面的列号取列（从 1 起）</small></span></label>
+                <div class="colmap-row" id="ct-br-cm-row" style="display:none"><label title="时间所在列号（从 1 起；空＝不映射）">时间 <input id="ct-br-cm-ts" type="number" min="1" step="1" value="1"></label><label title="A相电压所在列号（从 1 起；空＝不映射）">A相电压 <input id="ct-br-cm-ua" type="number" min="1" step="1" value="2"></label><label title="A相电流所在列号（从 1 起；空＝不映射）">A相电流 <input id="ct-br-cm-ia" type="number" min="1" step="1" value="3"></label><label title="B相电压所在列号（从 1 起；空＝不映射）">B相电压 <input id="ct-br-cm-ub" type="number" min="1" step="1" value="4"></label><label title="B相电流所在列号（从 1 起；空＝不映射）">B相电流 <input id="ct-br-cm-ib" type="number" min="1" step="1" value="5"></label><label title="C相电压所在列号（从 1 起；空＝不映射）">C相电压 <input id="ct-br-cm-uc" type="number" min="1" step="1" value="6"></label><label title="C相电流所在列号（从 1 起；空＝不映射）">C相电流 <input id="ct-br-cm-ic" type="number" min="1" step="1" value="7"></label></div>
               </div>
               <div class="row2">
                 <label class="f" title="N：曲线每个点＝N 个周波的有效值；估计时事件前稳态＝开始时刻前 N 个周波、事件后稳态＝结束时刻后 N 个周波的有效值中位数"><span class="lbl">计算周波数 N</span><input id="ct-br-win" type="number" min="3" step="1" value="50"></label>

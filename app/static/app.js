@@ -4385,7 +4385,7 @@ function ctV(id) { const el = $('#' + id); return el ? String(el.value || '').tr
 function ctC(id) { const el = $('#' + id); return (el && el.checked) ? '1' : '0'; }
 function ctBase(pre) {   // 本侧接线 / 极性（PT/CT 关闭，量二次侧）+ 波形预览公共列映射
   return { pt_ct_enabled: '0', wiring: ctV(pre + '-wiring') || '3p4w', reconstruct_3w: ctC(pre + '-recon3w'), invert_current: ctC(pre + '-inv'),
-           invert_phases: getInvPhases(pre), ...cmQuery('wp-cm') };
+           invert_phases: getInvPhases(pre), ...cmQuery(pre + '-cm') };   // v0.99：本侧列映射（与其它功能同一套 cm-* 控件）
 }
 function ctSide(pre) {
   return { path: ctV(pre + '-path') || ctV(pre + '-files'), event: ctV(pre + '-event') || 'start', t_begin: ctV(pre + '-tbegin'), t_end: ctV(pre + '-tend'),
@@ -4485,6 +4485,7 @@ function initCtEstimate() {
     ['-event', '-tbegin', '-tend'].forEach(sfx => $('#' + pre + sfx).addEventListener('change', () => ctDrawRms(pre)));
     ['-phase', '-wiring', '-recon3w', '-inv', '-inv-a', '-inv-b', '-inv-c'].forEach(sfx => $('#' + pre + sfx).addEventListener('change', () => { CT.rms[pre] = null; ctDrawRms(pre); }));
     $('#' + pre + '-win').addEventListener('change', () => { if (CT.rms[pre]) ctLoadRms(pre); });   // 计算周波数改了 → 按新周波数重算曲线
+    cmBind(pre + '-cm', () => { CT.rms[pre] = null; ctDrawRms(pre); });   // v0.99：离线文件列映射（本侧）
     $('#' + pre + '-known').addEventListener('change', () => { const on = $('#' + pre + '-known').checked; $('#' + pre + '-ct').style.opacity = on ? '' : '.6'; });
     ctDrawRms(pre);
   });
