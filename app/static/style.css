@@ -27,8 +27,15 @@ button:hover,.btnlink:hover{border-color:var(--acc)}
 button.primary{background:#1d4ed8;border-color:#2563eb}
 button.danger{background:#7f1d1d;border-color:#991b1b}
 button:disabled{opacity:.5;cursor:not-allowed}
-#layout{display:flex;min-height:calc(100vh - 57px)}
-#navbar{width:224px;flex:0 0 224px;border-right:1px solid var(--line);padding:12px 8px;background:#121826;position:sticky;top:57px;height:calc(100vh - 57px);overflow:auto}
+:root{--topbar-h:57px}   /* v0.99.9：顶栏实际高度由 JS 量测写入（顶栏含总线/分路两行状态，远高于 57px；原硬编码导致导航条顶部被顶栏遮住、底部超出视口、滚动条被截断） */
+#layout{display:flex;min-height:calc(100vh - var(--topbar-h))}
+#navbar{width:224px;flex:0 0 224px;border-right:1px solid var(--line);padding:12px 8px;background:#121826;position:sticky;top:var(--topbar-h);height:calc(100vh - var(--topbar-h));overflow-y:auto;overflow-x:hidden;overscroll-behavior:contain;scrollbar-width:thin;scrollbar-color:#2b3a5c transparent}
+#navbar::-webkit-scrollbar{width:8px}
+#navbar::-webkit-scrollbar-thumb{background:#2b3a5c;border-radius:4px}
+#navbar::-webkit-scrollbar-track{background:transparent}
+#content::-webkit-scrollbar,body::-webkit-scrollbar{width:10px;height:10px}
+body::-webkit-scrollbar-thumb,#content::-webkit-scrollbar-thumb{background:#2b3a5c;border-radius:5px}
+html{scrollbar-color:#2b3a5c #0f1420;scrollbar-width:thin}
 .navgroup{color:#5f6f92;font-size:11px;padding:10px 8px 4px;letter-spacing:.08em}
 .navitem{display:block;width:100%;text-align:left;background:transparent;border:1px solid transparent;padding:8px 10px;margin:2px 0;border-radius:6px;color:var(--fg);font-size:13px}
 .navitem:hover{background:#182034}

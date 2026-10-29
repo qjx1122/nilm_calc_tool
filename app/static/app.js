@@ -1039,9 +1039,10 @@ async function switchView(v, side) {
   // 导航分组决定侧别：总览/数据源与控制/工具 → 总线侧；「总线侧」「分路侧」分组下的子界面 → 对应侧
   const want = side || 'bus';
   if (want !== S.side) await setSide(want, { silent: true });
-  S.view = v;
+  const prevView = S.view; S.view = v;
   $$('.navitem').forEach(b => b.classList.toggle('active', b.dataset.view === v && (b.dataset.side || 'bus') === S.side));
   $$('.view').forEach(s => s.classList.toggle('active', s.id === 'view-' + v));
+  if (prevView !== v) window.scrollTo(0, 0);                                  // v0.99.9：切换页面回到顶部（原来保留上一页的滚动位置，短页面会看到空白）
   render();
   if (['overview', 'power_factor', 'fundamental', 'harmonic', 'interharmonic', 'dc', 'nilm'].includes(v)) refreshHistory();
   if (v === 'events') refreshEvents('bus');
@@ -4745,6 +4746,12 @@ async function init() {
   normalizeConfigForms();
   buildDualViews();
   bind();
+  // v0.99.9：顶栏高度 → CSS 变量 --topbar-h（导航条 sticky top / 高度随之变化；窗口缩放、状态行换行时实时更新）
+  const syncTopbar = () => { const tb = $('#topbar'); if (tb) document.documentElement.style.setProperty('--topbar-h', Math.ceil(tb.getBoundingClientRect().height) + 'px'); };
+  syncTopbar(); window.addEventListener('resize', syncTopbar);
+  if (window.ResizeObserver && $('#topbar')) new ResizeObserver(syncTopbar).observe($('#topbar'));
+  // 导航条：切换页面后把当前激活项滚入可视区（导航项多于视口高度时）
+  document.querySelectorAll('#navbar .navitem').forEach(b => b.addEventListener('click', () => { try { b.scrollIntoView({ block: 'nearest' }); } catch (e) { /* 老浏览器 */ } }));
   // v0.99.8：PT/CT 门控 + 3P3W 门控（数据源两侧 / 调参 / 画像 / 波形预览 / 估计 CT）
   ptctGate('cfg-scale', 'cfg-pt', 'cfg-ct'); ptctGate('br-scale', 'br-pt', 'br-ct');
   ptctGate('nt-base-ptct', 'nt-base-pt', 'nt-base-ct', () => ntSaveBase('nt')); ptctGate('np-base-ptct', 'np-base-pt', 'np-base-ct', () => ntSaveBase('np'));
