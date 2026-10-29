@@ -73,7 +73,7 @@ def test_single_scale_misses_slow_ramp_multiscale_finds_it():
     assert r["scale"] > 1 and abs(r["onset"] - 1500) <= 60
     v = r["feat"]["vec"]
     assert v["d_ia"] < -20 and r["match"]["direction"] == "STOP"   # 后窗落在过渡后，ΔIa 接近全幅
-    assert r["post_wait"] == 50 * r["scale"]
+    assert r["post_wait"] == 50 and 8 in r["scales_hit"]        # v0.99.19：特征窗口＝画像 post（几何一致），尺度只用于找候选
 
 
 def test_multiscale_merges_fast_step_into_one_candidate():
@@ -82,3 +82,23 @@ def test_multiscale_merges_fast_step_into_one_candidate():
     p4, q4, i4 = _bus_slow_stop(fast_s=0.1, tail_tau_s=0.1)
     res = detect_profile(p4, q4, i4, prof, {"max_scale": 8, "k_sigma": 4.0, "d2_max": 1e9, "min_confidence": 0.0, "state_check": 0}, use_p=False)
     assert len(res) == 1 and abs(res[0]["onset"] - 1500) <= 15
+
+
+def test_v09919_features_use_profile_geometry_not_coarse_scale():
+    """v0.99.19 回归：设备侧按 post=50 提取（慢停机只量到快降段的部分幅值），总线侧同样形态的停机必须按同一几何量特征才能匹配通过；
+    若按最大尺度 post 窗量（v0.99.15 行为）会量到接近全幅、D² 爆掉被拒。"""
+    L = 600
+    i4 = np.zeros((4, L)); p4 = np.zeros((4, L)); q4 = np.zeros((4, L))
+    t = np.arange(L) / 50.0
+    for k, a in enumerate((37.0, 32.5, 43.6), start=1):
+        tt = t - t[300]
+        shape = np.where(tt >= 0, np.clip(tt / 3.0, 0, 1) * 0.6 + np.where(tt > 3.0, 0.4 * (1 - np.exp(-(tt - 3.0) / 6.0)), 0.0), 0.0)
+        i4[k] = a - a * shape + 0.3; p4[k] = 220 * i4[k]
+    i4[0] = np.sqrt((i4[1:] ** 2).sum(axis=0)); p4[0] = p4[1:].sum(axis=0)
+    f = event_features(p4, q4, i4, 300, 399, 10, 50)                      # 设备侧提取：稳态分段终点约 2 s 后，post=50
+    g = fit_group([{"vec": f["vec"], "template": f["template"]}])
+    prof = {"quantity": "i", "unit": "A", "pre_cycles": 10, "post_cycles": 50, "shutdown": g, "startup": None}
+    p4b, q4b, i4b = _bus_slow_stop(step_i=(37.0, 32.5, 43.6), fast_s=3.0, tail_tau_s=6.0, seed=7)
+    res = detect_profile(p4b, q4b, i4b, prof, {"max_scale": 8, "k_sigma": 4.0, "state_check": 0}, use_p=False)
+    acc = [r for r in res if r["accepted"]]
+    assert acc and acc[0]["match"]["direction"] == "STOP" and abs(acc[0]["onset"] - 1500) <= 60

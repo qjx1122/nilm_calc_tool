@@ -332,7 +332,7 @@ label.chk>.lbl>.note{color:var(--mut);opacity:.85;font-size:11.5px;line-height:1
 .np-tbl th.cap{text-align:left;color:var(--fg);font-size:13px;padding-top:8px}
 .np-tbl td.n{text-align:right;font-variant-numeric:tabular-nums}
 .np-tbl tr.stat td{font-weight:600}
-.np-tbl td .src{color:var(--mut);font-size:11px;margin-left:0;display:block;max-width:260px;overflow:hidden;text-overflow:ellipsis}
+.np-tbl td .src{color:var(--mut);font-size:11px;margin-left:6px;display:inline}
 /* v0.99.16：画像提取结果表布局修正——
    ① 全局 th 为 position:sticky;top:0，分组标题行（th.cap「启动画像 / 停止画像」）也被吸顶，滚动时与列头行、彼此重叠 ⇒ 分组行改 static；
    ② 结果容器无 max-height ⇒ 吸顶相对视口、被顶栏盖住；事件多时面板无限拉长 ⇒ 容器限高 + 自身滚动，列头在容器内吸顶；
@@ -370,3 +370,4 @@ input.flash{animation:ntflash 1.5s ease-out}
 .np-tbl th.ev{font-weight:500;line-height:1.25}
 .np-tbl th.ev .src{display:block;color:var(--mut);font-size:11px;font-weight:400}
 .np-evsrc{margin-top:4px;font-size:11.5px}
+.np-tbl tr.stat td.stat:first-child{background:#17251f}
