@@ -4424,9 +4424,12 @@ function ctDrawRms(pre) {
   const sub = $('#' + pre + '-rms-sub'); const d = CT.rms[pre];
   if (!d || !d.t || !d.t.length) { drawLine(cv, [], { empty: '点「加载逐周波 RMS 曲线」后显示；右键曲线可设置启动 / 停机的开始、结束时刻', height: 240 }); if (sub) sub.textContent = '（未加载）'; return; }
   const t0 = d.t[0], span = d.t[d.t.length - 1] - t0; const ch = Object.keys(d.channels || {})[0];
-  drawLine(cv, [{ name: `${ch} RMS (A·二次)`, color: WP_COLORS[ch] || '#4ea1ff', data: d.t.map((x, i) => [x - t0, d.channels[ch][i]]) }],
+  const side = d.ct_scaled ? `A·一次(CT ${d.ct_ratio_used})` : 'A·二次';
+  drawLine(cv, [{ name: `${ch} RMS (${side})`, color: WP_COLORS[ch] || '#4ea1ff', data: d.t.map((x, i) => [x - t0, d.channels[ch][i]]) }],
     { ylabel: 'A', fmtX: x => tsX(x + t0, span), fmtTip: x => fmtLocalInput(x + t0), tbase: t0, height: 240, marks: ctMarks(pre), force: true });
-  if (sub) sub.textContent = `（${ch} · ${d.n} 点 · 每点＝${d.agg_cycles} 个周波的有效值${d.agg_cycles !== parseInt(ctV(pre + '-win') || '50', 10) ? '（计算周波数已改，请重新加载）' : ''} · ${wpFmtT(t0)} → ${wpFmtT(d.t[d.t.length - 1])}，${fmtDur(span)}；右键曲线设置事件时刻）`;
+  const ctNow = (ctC(pre + '-known') === '1' && parseFloat(ctV(pre + '-ct')) > 0) ? parseFloat(ctV(pre + '-ct')) : null;
+  const ctStale = (d.ct_scaled ? d.ct_ratio_used : null) !== ctNow;
+  if (sub) sub.textContent = `（${ch} · ${d.ct_scaled ? `一次侧安培，已按 CT ${d.ct_ratio_used} 换算` : '二次侧安培（CT 未知 / 未启用）'}${ctStale ? '（CT 设置已改，请重新加载）' : ''} · ${d.n} 点 · 每点＝${d.agg_cycles} 个周波的有效值${d.agg_cycles !== parseInt(ctV(pre + '-win') || '50', 10) ? '（计算周波数已改，请重新加载）' : ''} · ${wpFmtT(t0)} → ${wpFmtT(d.t[d.t.length - 1])}，${fmtDur(span)}；右键曲线设置事件时刻）`;
   bindCtxMenu(cv, (xEpoch) => {
     const noX = !isNum(xEpoch); const tTxt = noX ? '暂无曲线' : fmtLocalInput(xEpoch);
     const set = (ev, which) => () => { $('#' + pre + '-event').value = ev; $('#' + pre + (which === 'begin' ? '-tbegin' : '-tend')).value = fmtLocalInput(xEpoch); ctDrawRms(pre); toast(`${ev === 'start' ? '启动' : '停机'}${which === 'begin' ? '开始' : '结束'}时刻 → ${fmtLocalInput(xEpoch)}`); };
@@ -4449,9 +4452,14 @@ async function ctLoadRms(pre) {
   if ((ctV(pre + '-wiring') === '3p3w') && phase === 'B' && ctC(pre + '-recon3w') !== '1') { toast('三相三线没有 B 相电流：请改选 A / C 相或勾选 3P3W 重构', 'err'); return; }
   const win = Math.max(1, parseInt(ctV(pre + '-win') || '50', 10) || 50);   // v0.98.1：曲线每点＝「计算周波数」个周波的有效值
   const params = Object.assign({ path, t_start: ctV(pre + '-cstart'), t_end: ctV(pre + '-cend'), agg_cycles: win, channels: 'I' + phase.toLowerCase() }, ctBase(pre));
+  // v0.99.2：本侧「CT 已知」且 CT>0 → 曲线按该 CT 换算为一次侧安培（PT 置 1，只量电流）；否则仍为二次侧。估计本身仍强制二次侧（后端固定关闭 PT/CT）
+  const ctKnown = ctC(pre + '-known') === '1', ctVal = parseFloat(ctV(pre + '-ct'));
+  const useCt = ctKnown && isNum(ctVal) && ctVal > 0;
+  if (useCt) Object.assign(params, { pt_ct_enabled: '1', pt_ratio: '1', ct_ratio: String(ctVal) });
   const btn = $('#' + pre + '-btn-rms'); if (btn) btn.disabled = true;
   try {
     const d = await api('/api/process/wave/rms?' + wpQuery(params), undefined, 'bus');
+    d.ct_scaled = useCt; d.ct_ratio_used = useCt ? ctVal : null;
     CT.rms[pre] = d; zoomReset($('#' + pre + '-rms')); ctDrawRms(pre);
   } catch (e) { toast('加载逐周波 RMS 曲线失败：' + e.message, 'err'); }
   finally { if (btn) btn.disabled = false; }
@@ -4486,7 +4494,8 @@ function initCtEstimate() {
     ['-phase', '-wiring', '-recon3w', '-inv', '-inv-a', '-inv-b', '-inv-c'].forEach(sfx => $('#' + pre + sfx).addEventListener('change', () => { CT.rms[pre] = null; ctDrawRms(pre); }));
     $('#' + pre + '-win').addEventListener('change', () => { if (CT.rms[pre]) ctLoadRms(pre); });   // 计算周波数改了 → 按新周波数重算曲线
     cmBind(pre + '-cm', () => { CT.rms[pre] = null; ctDrawRms(pre); });   // v0.99：离线文件列映射（本侧）
-    $('#' + pre + '-known').addEventListener('change', () => { const on = $('#' + pre + '-known').checked; $('#' + pre + '-ct').style.opacity = on ? '' : '.6'; });
+    $('#' + pre + '-known').addEventListener('change', () => { const on = $('#' + pre + '-known').checked; $('#' + pre + '-ct').style.opacity = on ? '' : '.6'; if (CT.rms[pre]) ctLoadRms(pre); });   // v0.99.2：CT 已知状态改 → 重算曲线口径
+    $('#' + pre + '-ct').addEventListener('change', () => { if (CT.rms[pre] && ctC(pre + '-known') === '1') ctLoadRms(pre); });   // v0.99.2：CT 值改 → 重算曲线
     ctDrawRms(pre);
   });
   ctListFiles(); ctFillDefaults();

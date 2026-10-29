@@ -1135,6 +1135,7 @@ U10-4 B/C 相为 0：____  U10-5 列号交换：Ia≈____  U10-6 无时间戳：
 - v0.92.2（2026-10-28）：用用户给的画像 JSON + 合成"设备1"（fs 10000、P<0、23.6 kW/36 A、启动 82 周波斜坡、7 A 小负荷）按用户分路侧 nilm 配置回放：画像/数据一致时 2/2 命中（STOP D²/维 0.07，START 1.5）；ΔQ 符号与画像不一致时全部 `d2_exceeds`（d_q 贡献 112/274）；PT/CT 不一致时给出错误。test_r92 第 5 项覆盖首 gap 与 PT/CT；全量 439 passed。
 - v0.92.3（2026-10-28）：用户回放输出（口径一次侧、6 算法全开、profile 关、profile_path 空）与其配置文件矛盾 ⇒ 路径 `config/branch_runtime.json` 不存在被静默回退。修复后 `--config config/zz.json` 退出码 2 并提示 `configs/zz.json`。test_tools/config/r9x 65 passed。
 - v0.92.4（2026-10-28）：用户回放"全程没有候选"根因＝画像前后窗 3000/3000 > window_cycles 300（`_two_window_candidates` 需 L ≥ pre+post+2）。修复后提示「需要约 9092 周波的检测窗…已自动缓存」。
+- v0.99.2（2026-10-29）：TestClient 复核 `/api/process/wave/rms` 对 1 A 二次电流：pt_ct 关 → 1.0；`pt_ct_enabled=1,pt_ratio=1,ct_ratio=40` → 39.99999；server/ct_estimate 测试通过。
 - v0.99（2026-10-29）：HTML 自动转换 190 处标签，id 集合与 label 配对数前后一致；JS 语法校验；全量 pytest 448 passed。
 - v0.98（2026-10-29）：仅前端 HTML/CSS/JS；控件 id 全部保留（npPayload 不变），JS 语法校验通过，server / profile 测试通过。
 - v0.97（2026-10-29）：事件时间段口径：停机 5.5→6.5 s、N=50：总线 CT 估计 39.98（真值 40）、n_pre/n_post=50/50；两侧都勾（42/15）→ 互估 40.0 / 15.76 并给偏差 4.8%/5.1%；都不勾 → 仅比值 2.665；事件类型填反 → 「方向不符」提示；N=20 生效；曲线 GET /wave/rms 带 3p3w+A 反返回 600 周波正确幅值；CLI --json；全量 pytest 448 passed。界面未做浏览器截图（沙箱无浏览器），布局沿用现有 label.f 网格样式。
