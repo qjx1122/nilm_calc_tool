@@ -1083,9 +1083,66 @@
       <h2 style="margin-top:18px">数据处理 · 设备画像提取（设备侧启停录波 → 设备画像 JSON → 总线侧「设备画像匹配」）</h2>
       <div class="grid2">
         <div class="panel">
-          <h3>画像参数（与 <code>tools/nilm_profile.py</code> 同一实现）<span class="navhint">文件 / 时间段 / 自定义时间 / 基准配置 / 列映射沿用上方「负荷辨识调参」的公共配置</span></h3>
+          <h3>画像参数（与 <code>tools/nilm_profile.py</code> 同一实现）<span class="navhint">文件 / 时间段 / 自定义时间 / 基准配置 / 列映射均为本区独立配置（v0.99.5，与负荷辨识调参剥离）</span></h3>
           <div class="form" id="np-form">
-            <div class="notes p" id="np-common-note">波形文件、起止时间、自定义时间、基准配置（fs / f_nom / PT·CT / 接线 / 极性 / 时标 / 检测量）与列映射<b>沿用上方负荷辨识调参区的当前填写值</b>；请先在上方选好设备侧（分路侧）含启停过程的文件。</div>
+            <div class="notes p" id="np-common-note">画像提取使用<b>本区独立的</b>波形文件、起止时间、自定义时间、基准配置（fs / f_nom / PT·CT / 接线 / 极性 / 时标 / 检测量）与列映射，与上方「负荷辨识调参」互不影响；请选设备侧（分路侧）含完整启停过程的录波文件。</div>
+            <label class="f"><span class="lbl">波形文件（data 目录下拉或手填路径）</span><select id="np-files"><option value="">— 选择 data/ 下的 CSV —</option></select></label>
+            <label class="f"><span class="lbl">波形文件路径</span><input id="np-path" placeholder="data/bus_bg.csv 或绝对路径"></label>
+            <div class="row2">
+              <label class="f" title="分析起始时间；空＝文件开头。写法同播放时间段：2026-10-13 08:00:02.5 / 08:00:02.5（与文件时标当天时刻比较）/ epoch 秒"><span class="lbl">起始时间（空＝文件开头）</span><input id="np-tstart" placeholder="2026-10-13 08:00:02.000"></label>
+              <label class="f" title="分析结束时间；空＝文件结尾（或由时长决定）"><span class="lbl">结束时间（空＝文件结尾）</span><input id="np-tend" placeholder="2026-10-13 08:00:32.000"></label>
+            </div>
+            <div class="row2">
+              <label class="check" title="v0.73：与波形预览同一套自定义时间——勾选＝不用文件内时标，时间轴＝自定义起始时间 + 行号 / 采样率，文件时长＝数据点数 / 采样率；上方起始 / 结束时间按这条时间轴解释（写法同波形预览：2026-10-12 08:00:00 / epoch 秒 / 08:00:00），都留空＝整个文件（时长＝点数 / 采样率）"><input id="np-custom" type="checkbox"> 启用自定义时间（时长＝数据点数 / 采样率）</label>
+              <span id="np-custom-note" class="mut" style="align-self:flex-end">未启用：按文件内数据时间</span>
+            </div>
+            <div class="row2" id="np-custom-row" style="display:none">
+              <label class="f" title="空＝文件数据起始时间（文件第 1 条数据的时标）；写法 2026-10-13 08:00:00[.fff] / epoch 秒"><span class="lbl">自定义起始时间（空＝文件数据起始时间）</span><input id="np-cstart" placeholder="空＝文件数据起始时间"></label>
+              <label class="f" title="空＝起始时间 + 点数 / 采样率（按采样率计算的文件数据结束时间）；填写则作为结束时间为空时的缺省终点"><span class="lbl">自定义结束时间（空＝按采样率计算）</span><input id="np-cend" placeholder="空＝起始 + 点数/fs"></label>
+            </div>
+            <div class="row2">
+              <label class="f" title="v0.72：默认「独立基准配置」——出厂配置 + 下方各项（fs / f_nom / PT·CT / 时标 UTC），与总线侧、分路侧运行配置互不关联，可单独修改（保存在浏览器本地，并随每次提取写到画像 JSON 供等价命令复现）；也可改选沿用某一侧当前运行配置（旧行为）"><span class="lbl">基准配置</span><select id="np-side"><option value="custom">独立基准配置（本页，默认）</option><option value="bus">沿用总线侧运行配置</option><option value="branch">沿用分路侧运行配置</option></select></label>
+            </div>
+            <div class="wp-group" id="np-base" title="基准配置：独立时只影响本页画像提取、可单独修改；沿用某侧运行配置时只显示该侧值、不可修改；都不改动两侧运行配置">
+              <div class="wp-group-title" id="np-base-title">独立基准配置（与两侧运行配置互不关联，可单独修改）</div>
+              <div class="row2">
+                <label class="f" title="采样率：每周波点数 = fs / f_nom；文件有时标时源层仍按时标校核"><span class="lbl">采样率 fs (Hz)</span><input id="np-base-fs" type="number" min="1" step="any"></label>
+                <label class="f" title="额定频率"><span class="lbl">额定频率 f_nom (Hz)</span><input id="np-base-fnom" type="number" min="1" step="any"></label>
+              </div>
+              <div class="row2">
+                <label class="check" title="勾选＝数值换算为一次侧（电压 × PT、电流 × CT），最小关心负荷与结果同为一次侧口径"><input id="np-base-ptct" type="checkbox"> 启用 PT/CT（一次侧口径）</label>
+                <label class="check" title="文件时标按 UTC 解释"><input id="np-base-utc" type="checkbox"> 文件时标为 UTC</label>
+              </div>
+              <div class="row2">
+                <label class="f"><span class="lbl">PT 变比</span><input id="np-base-pt" type="number" min="0.000001" step="any"></label>
+                <label class="f"><span class="lbl">CT 变比</span><input id="np-base-ct" type="number" min="0.000001" step="any"></label>
+              </div>
+              <div class="row2" title="v0.95：接线方式 / CT 极性（与运行配置「量纲与口径」同名项同义；画像提取按此换算后再分析）">
+                <label class="f"><span class="lbl">接线方式</span><select id="np-base-wiring"><option value="3p4w">三相四线（三 CT）</option><option value="3p3w">三相三线两表法（B 相无 CT）</option></select></label>
+                <label class="check"><input id="np-base-recon3w" type="checkbox"> 3P3W 虚拟中性点重构（Ib=−(Ia+Ic)，相电压由 Uab/Ucb 重构）</label>
+              </div>
+              <div class="row2">
+                <label class="check"><input id="np-base-inv" type="checkbox"> 电流极性反转（三相同时取反）</label>
+                <label class="f"><span class="lbl">分相电流极性反转</span><span class="chk"><input id="np-base-inv-a" type="checkbox"> A <input id="np-base-inv-b" type="checkbox"> B <input id="np-base-inv-c" type="checkbox"> C</span></label>
+              </div>
+            <div class="colmap-blk" id="np-cm-blk" title="离线文件列映射：不启用＝各列依次为 时间, A相电压, A相电流, B相电压, B相电流, C相电压, C相电流（表头可识别时按表头）；启用＝只按下面填写的列号取列">
+              <label class="chk"><input id="np-cm-on" type="checkbox"><span>启用离线文件列映射<small class="note">默认不启用：各列依次为 时间, A相电压, A相电流, B相电压, B相电流, C相电压, C相电流（表头可识别时按表头）；启用后只按下面的列号取列（从 1 起）</small></span></label>
+              <div class="colmap-row" id="np-cm-row" style="display:none"><label title="时间所在列号（从 1 起；空＝不映射）">时间 <input id="np-cm-ts" type="number" min="1" step="1" value="1"></label><label title="A相电压所在列号（从 1 起；空＝不映射）">A相电压 <input id="np-cm-ua" type="number" min="1" step="1" value="2"></label><label title="A相电流所在列号（从 1 起；空＝不映射）">A相电流 <input id="np-cm-ia" type="number" min="1" step="1" value="3"></label><label title="B相电压所在列号（从 1 起；空＝不映射）">B相电压 <input id="np-cm-ub" type="number" min="1" step="1" value="4"></label><label title="B相电流所在列号（从 1 起；空＝不映射）">B相电流 <input id="np-cm-ib" type="number" min="1" step="1" value="5"></label><label title="C相电压所在列号（从 1 起；空＝不映射）">C相电压 <input id="np-cm-uc" type="number" min="1" step="1" value="6"></label><label title="C相电流所在列号（从 1 起；空＝不映射）">C相电流 <input id="np-cm-ic" type="number" min="1" step="1" value="7"></label></div>
+            </div>
+              <div class="row2">
+                <label class="f" title="独立基准配置：可单独选择；沿用总线侧 / 分路侧运行配置：随该侧 nilm.quantity，不可修改；写入画像文件，匹配侧口径须与之一致"><span class="lbl">检测量</span><select id="np-quantity"><option value="" id="np-quantity-follow">默认（出厂缺省 auto：无电压→I）</option><option value="auto">auto（无电压→I）</option><option value="p">p 有功</option><option value="i">i 电流有效值</option></select></label>
+                <label class="f nilm-fixed" title="画像特征＝ΔIa/ΔIb/ΔIc/ΔP/ΔQ 三相联合向量，候选按三相合成量（P 口径＝ΣP，I 口径＝三相电流合成）定位，匹配时事件对象固定为 total"><span class="lbl">检测对象（固定）</span><input type="text" value="三相总 total（固定，不可选）" disabled></label>
+              </div>
+              <div class="row2">
+                <span class="mut" style="align-self:flex-end">独立基准配置下以上各项可单独修改；沿用某侧运行配置时全部随该侧配置显示、不可修改</span>
+                <span class="btnrow" style="align-items:flex-end">
+                  <button id="btn-np-base-default" type="button" title="恢复为出厂配置 configs/default.json 的值">恢复出厂</button>
+                  <button id="btn-np-base-bus" type="button" title="把总线侧当前运行配置的对应项填入（之后可再改，不影响总线侧）">填入总线侧值</button>
+                  <button id="btn-np-base-branch" type="button" title="把分路侧当前运行配置的对应项填入（之后可再改，不影响分路侧）">填入分路侧值</button>
+                </span>
+              </div>
+              <div id="np-base-note" class="mut"></div>
+            </div>
             <div class="wp-group">
               <div class="wp-group-title">① 设备与输出</div>
               <div class="row2">
@@ -1102,12 +1159,7 @@
               </div>
             </div>
             <div class="wp-group">
-              <div class="wp-group-title">③ 检测对象与检测量 <small class="note">（画像匹配算法按三相合成量工作：检测对象不可指定；检测量在上方「负荷辨识调参 · 基准配置」的「检测量」里选择并写入画像文件，匹配时必须与运行侧口径一致）</small></div>
-              <div class="row2">
-                <label class="f nilm-fixed" title="画像特征＝ΔIa/ΔIb/ΔIc/ΔP/ΔQ 三相联合向量，候选按三相合成量（P 口径＝ΣP，I 口径＝三相电流合成）定位，匹配时事件对象固定为 total；上方基准配置区的「检测对象」对画像提取不生效"><span class="lbl">检测对象（固定）</span><input type="text" value="三相总 total（固定，不可选）" disabled></label>
-                <label class="f nilm-fixed" title="由上方基准配置区「检测量」决定（独立基准配置可选 auto / p / i；沿用某侧运行配置时随该侧 nilm.quantity）；此处只读显示实际生效值"><span class="lbl">检测量（随基准配置）</span><input type="text" id="np-qty-show" value="—" disabled><span class="note">在上方「基准配置 · 检测量」修改；写入画像文件后匹配侧口径须与之一致</span></label>
-              </div>
-              <div class="wp-group-title">④ 事件前后窗</div>
+              <div class="wp-group-title">③ 事件前后窗</div>
               <div class="row2">
                 <label class="f" title="事件前窗周波数（取稳态前值）"><span class="lbl">前窗 (周波)</span><input id="np-pre" type="number" min="3" step="1" value="10"></label>
                 <label class="f" title="事件后窗周波数：应 ≥ 设备启动过程（冲击 / 爬升）时长；总线侧确认事件也要等这么多周波"><span class="lbl">后窗 (周波)</span><input id="np-post" type="number" min="3" step="1" value="50"></label>
@@ -1115,6 +1167,7 @@
             </div>
             <div class="btnrow">
               <button id="btn-np-run" class="primary">提取设备画像</button>
+              <button id="btn-np-refresh">刷新文件列表</button>
               <button id="btn-np-fill-bus" disabled title="把本次画像路径填入总线侧负荷辨识表单的「画像文件路径」（需到负荷辨识页勾选「设备画像匹配」并保存总线侧配置）">填入总线侧画像路径</button>
               <button id="btn-np-fill-branch" disabled title="把本次画像路径填入分路侧负荷辨识表单的「画像文件路径」">填入分路侧画像路径</button>
             </div>

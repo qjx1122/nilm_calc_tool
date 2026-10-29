@@ -3920,8 +3920,11 @@ function rsUseAsSource() {
 
 /* v0.52：数据处理 · 负荷辨识调参（POST /api/process/nilm_tune） */
 const NT = { last: null, side: 'bus', command: '', est: null, userBase: null, runningQC: null };
-async function ntListFiles() {
-  const sel = $('#nt-files'); if (!sel) return;
+/* v0.99.5：调参（nt）与画像提取（np）各自独立一套公共配置（文件 / 起止 / 自定义时间 / 基准配置 / 列映射 / 检测量）；下列函数按前缀 P 工作 */
+const NTS = { nt: NT, np: { userBase: null, runningQC: null } };
+const NT_BASE_KEYS = { nt: 'elec_tool.nilm_tune.base', np: 'elec_tool.nilm_profile.base' };
+async function ntListFiles(P = 'nt') {
+  const sel = $('#' + P + '-files'); if (!sel) return;
   try {
     const r = await api('/api/files?sub=data');
     const files = (r.files || []).filter(f => !f.dir && f.name.toLowerCase().endsWith('.csv'));
@@ -3931,99 +3934,100 @@ async function ntListFiles() {
   } catch (e) { toast('读取文件列表失败：' + e.message, 'err'); }
 }
 /* v0.72：负荷辨识调参「独立基准配置」——出厂配置 + 本页各项，与两侧运行配置互不关联；存浏览器本地 */
-const NT_BASE_KEY = 'elec_tool.nilm_tune.base';
-function ntBaseMode() { const el = $('#nt-side'); return (el && el.value) || 'custom'; }
-function ntBase() {
+function ntBaseMode(P = 'nt') { const el = $('#' + P + '-side'); return (el && el.value) || 'custom'; }
+function ntBase(P = 'nt') {
   const v = id => { const el = $('#' + id); return el ? (el.value || '').trim() : ''; };
   const c = id => { const el = $('#' + id); return el && el.checked ? '1' : '0'; };
-  return { fs: v('nt-base-fs'), f_nom: v('nt-base-fnom'), pt_ct_enabled: c('nt-base-ptct'), pt_ratio: v('nt-base-pt'),
-           ct_ratio: v('nt-base-ct'), file_time_utc: c('nt-base-utc'),   // 检测量只在「检测量」下拉填一处（v0.72.1 去重）
-           wiring: v('nt-base-wiring') || '3p4w', reconstruct_3w: c('nt-base-recon3w'), invert_current: c('nt-base-inv'), invert_phases: getInvPhases('nt-base'),   // v0.95
-           col_map_enabled: cmEnabled('nt-cm'), col_map: cmMap('nt-cm') };   // v0.86：列映射随基准配置存浏览器本地（服务端按顶层 col_map* 读取）
+  return { fs: v(P + '-base-fs'), f_nom: v(P + '-base-fnom'), pt_ct_enabled: c(P + '-base-ptct'), pt_ratio: v(P + '-base-pt'),
+           ct_ratio: v(P + '-base-ct'), file_time_utc: c(P + '-base-utc'),   // 检测量只在「检测量」下拉填一处（v0.72.1 去重）
+           wiring: v(P + '-base-wiring') || '3p4w', reconstruct_3w: c(P + '-base-recon3w'), invert_current: c(P + '-base-inv'), invert_phases: getInvPhases(P + '-base'),   // v0.95
+           col_map_enabled: cmEnabled(P + '-cm'), col_map: cmMap(P + '-cm') };   // v0.86：列映射随基准配置存浏览器本地（服务端按顶层 col_map* 读取）
 }
-function ntSetBase(b) {
+function ntSetBase(b, P = 'nt') {
   if (!b || typeof b !== 'object') return;
   const set = (id, val) => { const el = $('#' + id); if (el && val !== undefined && val !== null) el.value = String(val); };
   const on = x => (x === true || x === '1' || x === 1 || x === 'true');
-  set('nt-base-fs', b.fs); set('nt-base-fnom', b.f_nom); set('nt-base-pt', b.pt_ratio); set('nt-base-ct', b.ct_ratio);
-  if ($('#nt-base-ptct') && b.pt_ct_enabled !== undefined) $('#nt-base-ptct').checked = on(b.pt_ct_enabled);
-  if ($('#nt-base-utc') && b.file_time_utc !== undefined) $('#nt-base-utc').checked = on(b.file_time_utc);
-  if (b.wiring !== undefined) set('nt-base-wiring', b.wiring || '3p4w');
-  if ($('#nt-base-recon3w') && b.reconstruct_3w !== undefined) $('#nt-base-recon3w').checked = on(b.reconstruct_3w);
-  if ($('#nt-base-inv') && b.invert_current !== undefined) $('#nt-base-inv').checked = on(b.invert_current);
-  if (b.invert_phases !== undefined) setInvPhases('nt-base', b.invert_phases);
-  if (b.col_map_enabled !== undefined) cmSet('nt-cm', on(b.col_map_enabled), b.col_map);
+  set(P + '-base-fs', b.fs); set(P + '-base-fnom', b.f_nom); set(P + '-base-pt', b.pt_ratio); set(P + '-base-ct', b.ct_ratio);
+  if ($('#' + P + '-base-ptct') && b.pt_ct_enabled !== undefined) $('#' + P + '-base-ptct').checked = on(b.pt_ct_enabled);
+  if ($('#' + P + '-base-utc') && b.file_time_utc !== undefined) $('#' + P + '-base-utc').checked = on(b.file_time_utc);
+  if (b.wiring !== undefined) set(P + '-base-wiring', b.wiring || '3p4w');
+  if ($('#' + P + '-base-recon3w') && b.reconstruct_3w !== undefined) $('#' + P + '-base-recon3w').checked = on(b.reconstruct_3w);
+  if ($('#' + P + '-base-inv') && b.invert_current !== undefined) $('#' + P + '-base-inv').checked = on(b.invert_current);
+  if (b.invert_phases !== undefined) setInvPhases(P + '-base', b.invert_phases);
+  if (b.col_map_enabled !== undefined) cmSet(P + '-cm', on(b.col_map_enabled), b.col_map);
 }
-function ntSaveBase() { if (ntBaseMode() !== 'custom') return; try { localStorage.setItem(NT_BASE_KEY, JSON.stringify(ntBase())); } catch (e) { /* 隐私模式 */ } }
-function ntSyncCustomTime() {
-  const on = !!($('#nt-custom') && $('#nt-custom').checked);
-  const row = $('#nt-custom-row'); if (row) row.style.display = on ? '' : 'none';
+function ntSaveBase(P = 'nt') { if (ntBaseMode(P) !== 'custom') return; try { localStorage.setItem(NT_BASE_KEYS[P], JSON.stringify(ntBase(P))); } catch (e) { /* 隐私模式 */ } }
+function ntSyncCustomTime(P = 'nt') {
+  const on = !!($('#' + P + '-custom') && $('#' + P + '-custom').checked);
+  const row = $('#' + P + '-custom-row'); if (row) row.style.display = on ? '' : 'none';
   const fmtS = '2026-10-12 08:00:00 / epoch 秒 / 08:00:00', fmtE = '2026-10-12 08:10:00 / epoch 秒 / 08:10:00';
-  if ($('#nt-tstart')) $('#nt-tstart').placeholder = (on ? '空＝自定义起始时间' : '空＝文件开头') + '；' + fmtS;
-  if ($('#nt-tend')) $('#nt-tend').placeholder = (on ? '空＝起始 + 点数/采样率' : '空＝文件结尾') + '；' + fmtE;
-  const n = $('#nt-custom-note'); if (n) n.textContent = on ? '已启用：时间轴＝自定义起始时间 + 行号/采样率；起止都空＝整个文件，时长＝数据点数 / 采样率' : '未启用：按文件内数据时间';
+  if ($('#' + P + '-tstart')) $('#' + P + '-tstart').placeholder = (on ? '空＝自定义起始时间' : '空＝文件开头') + '；' + fmtS;
+  if ($('#' + P + '-tend')) $('#' + P + '-tend').placeholder = (on ? '空＝起始 + 点数/采样率' : '空＝文件结尾') + '；' + fmtE;
+  const n = $('#' + P + '-custom-note'); if (n) n.textContent = on ? '已启用：时间轴＝自定义起始时间 + 行号/采样率；起止都空＝整个文件，时长＝数据点数 / 采样率' : '未启用：按文件内数据时间';
 }
-function ntSyncBaseUI() {
-  const custom = ntBaseMode() === 'custom';
-  const sideName = ntBaseMode() === 'branch' ? '分路侧' : '总线侧';
+function ntSyncBaseUI(P = 'nt') {
+  const ST = NTS[P];
+  const custom = ntBaseMode(P) === 'custom';
+  const sideName = ntBaseMode(P) === 'branch' ? '分路侧' : '总线侧';
   // v0.73：基准配置分组始终显示；独立＝可编辑；沿用某侧＝全部字段显示该侧运行配置值并禁用（检测量 / 检测对象也在分组内）
-  const t = $('#nt-base-title'); if (t) t.textContent = custom ? '独立基准配置（与两侧运行配置互不关联，可单独修改）' : `基准配置（沿用${sideName}运行配置，不可修改）`;
-  const fo = $('#nt-quantity-follow'); if (fo) fo.textContent = custom ? '默认（出厂缺省 auto：无电压→I）' : '跟随配置 nilm.quantity';
-  ['nt-base-fs', 'nt-base-fnom', 'nt-base-pt', 'nt-base-ct', 'nt-base-ptct', 'nt-base-utc', 'nt-quantity', 'nt-channel',
-   'nt-base-wiring', 'nt-base-recon3w', 'nt-base-inv', 'nt-base-inv-a', 'nt-base-inv-b', 'nt-base-inv-c'].forEach(id => { const el = $('#' + id); if (el) el.disabled = !custom; });
+  const t = $('#' + P + '-base-title'); if (t) t.textContent = custom ? '独立基准配置（与两侧运行配置互不关联，可单独修改）' : `基准配置（沿用${sideName}运行配置，不可修改）`;
+  const fo = $('#' + P + '-quantity-follow'); if (fo) fo.textContent = custom ? '默认（出厂缺省 auto：无电压→I）' : '跟随配置 nilm.quantity';
+  [P + '-base-fs', P + '-base-fnom', P + '-base-pt', P + '-base-ct', P + '-base-ptct', P + '-base-utc', P + '-quantity', P + '-channel',
+   P + '-base-wiring', P + '-base-recon3w', P + '-base-inv', P + '-base-inv-a', P + '-base-inv-b', P + '-base-inv-c'].forEach(id => { const el = $('#' + id); if (el) el.disabled = !custom; });
   ['btn-nt-base-default', 'btn-nt-base-bus', 'btn-nt-base-branch'].forEach(id => { const el = $('#' + id); if (el) el.style.display = custom ? '' : 'none'; });
-  const q = $('#nt-quantity'), ch = $('#nt-channel');
-  if (q && ch) {
+  const q = $('#' + P + '-quantity'), ch = $('#' + P + '-channel');   // np 无 channel（检测对象固定 total）
+  if (q) {
     if (custom) {
-      if (NT.userBase) { ntSetBase(NT.userBase); q.value = NT.userBase.q; ch.value = NT.userBase.ch; NT.userBase = null; }
+      if (ST.userBase) { ntSetBase(ST.userBase, P); q.value = ST.userBase.q; if (ch) ch.value = ST.userBase.ch; ST.userBase = null; }
     } else {
-      if (!NT.userBase) NT.userBase = Object.assign(ntBase(), { q: q.value, ch: ch.value });   // 记住独立模式下的值，切回时恢复
-      ntFillQCFromRunning(ntBaseMode());
+      if (!ST.userBase) ST.userBase = Object.assign(ntBase(P), { q: q.value, ch: ch ? ch.value : '' });   // 记住独立模式下的值，切回时恢复
+      ntFillQCFromRunning(ntBaseMode(P), P);
     }
   }
-  const n = $('#nt-base-note');
-  if (n) n.textContent = custom ? '独立基准配置只用于本页调参，不改动总线侧 / 分路侧运行配置；修改自动保存在浏览器本地。'
-                                : `基准配置沿用${ntBaseMode() === 'branch' ? '分路侧' : '总线侧'}当前运行配置（PT/CT、列映射、缺省检测量）。`;
+  const n = $('#' + P + '-base-note');
+  if (n) n.textContent = custom ? `独立基准配置只用于本页${P === 'np' ? '画像提取' : '调参'}，不改动总线侧 / 分路侧运行配置；修改自动保存在浏览器本地。`
+                                : `基准配置沿用${ntBaseMode(P) === 'branch' ? '分路侧' : '总线侧'}当前运行配置（PT/CT、列映射、缺省检测量）。`;
 }
-async function ntFillQCFromRunning(side) {
-  const q = $('#nt-quantity'), ch = $('#nt-channel'); if (!q || !ch) return;
+async function ntFillQCFromRunning(side, P = 'nt') {
+  const ST = NTS[P];
+  const q = $('#' + P + '-quantity'), ch = $('#' + P + '-channel'); if (!q) return;
   try {
     const d = await api('/api/process/nilm_tune/base?source=running', undefined, side);
-    if (ntBaseMode() !== side) return;                                   // 期间用户又切换了
-    ntSetBase(d.base);                                                   // 显示该侧 fs / f_nom / PT·CT / UTC（禁用态，不存本地）
+    if (ntBaseMode(P) !== side) return;                                   // 期间用户又切换了
+    ntSetBase(d.base, P);                                                   // 显示该侧 fs / f_nom / PT·CT / UTC（禁用态，不存本地）
     q.value = d.base.quantity || 'auto'; if (q.value !== (d.base.quantity || 'auto')) q.value = '';
-    ch.value = d.base.channel || 'total'; if (ch.value !== (d.base.channel || 'total')) ch.value = '';
-    NT.runningQC = { side, q: d.base.quantity, ch: d.base.channel };
+    if (ch) { ch.value = d.base.channel || 'total'; if (ch.value !== (d.base.channel || 'total')) ch.value = ''; }
+    ST.runningQC = { side, q: d.base.quantity, ch: d.base.channel };
   } catch (e) { /* 服务不可用时保留当前显示 */ }
 }
-async function ntLoadBase(source, side) {
+async function ntLoadBase(source, side, P = 'nt') {
   const d = await api('/api/process/nilm_tune/base?source=' + encodeURIComponent(source), undefined, side || 'bus');
-  ntSetBase(d.base); ntSaveBase();
+  ntSetBase(d.base, P); ntSaveBase(P);
   return d;
 }
-async function ntInitBase() {
-  if (!$('#nt-base')) return;
+async function ntInitBase(P = 'nt') {
+  if (!$('#' + P + '-base')) return;
   try {
     const d = await api('/api/process/nilm_tune/base?source=default', undefined, 'bus');
-    ntSetBase(d.base);                                         // 出厂值
-    let saved = null; try { saved = JSON.parse(localStorage.getItem(NT_BASE_KEY) || 'null'); } catch (e) { saved = null; }
-    if (saved && typeof saved === 'object') ntSetBase(saved);   // 浏览器本地保存的改动优先
+    ntSetBase(d.base, P);                                         // 出厂值
+    let saved = null; try { saved = JSON.parse(localStorage.getItem(NT_BASE_KEYS[P]) || 'null'); } catch (e) { saved = null; }
+    if (saved && typeof saved === 'object') ntSetBase(saved, P);   // 浏览器本地保存的改动优先
   } catch (e) { /* 服务不可用时保留 HTML 默认 */ }
-  ntSyncBaseUI();
+  ntSyncBaseUI(P);
 }
-function ntPayload() {
-  const v = id => ($('#' + id).value || '').trim();
-  const mode = ntBaseMode();
-  return { path: v('nt-path'), t_start: v('nt-tstart'), t_end: v('nt-tend'), duration_s: v('nt-duration') || null,
-           quantity: mode === 'custom' ? (v('nt-quantity') || null) : null,   // v0.72.2：沿用某侧运行配置时随该侧，不单独上送
-           channel: mode === 'custom' ? (v('nt-channel') || null) : null,
-           min_load_w: v('nt-minw') || null, min_load_a: v('nt-mina') || null, min_load_auto: !!$('#nt-minauto').checked,
-           save: !!$('#nt-save').checked, name: v('nt-name'),
-           custom_time: !!($('#nt-custom') && $('#nt-custom').checked),            // v0.73：自定义时间（同波形预览）
-           custom_time_start: ($('#nt-custom') && $('#nt-custom').checked) ? v('nt-cstart') : '',
-           custom_time_end: ($('#nt-custom') && $('#nt-custom').checked) ? v('nt-cend') : '',
-           base_mode: mode === 'custom' ? 'custom' : 'running', base: mode === 'custom' ? ntBase() : undefined,
-           ...cmPayload('nt-cm') };                                                   // v0.86：离线文件列映射
+function ntPayload(P = 'nt') {
+  const v = id => { const el = $('#' + id); return el ? (el.value || '').trim() : ''; };   // v0.99.5：np 无 channel 等控件时取空
+  const mode = ntBaseMode(P);
+  return { path: v(P + '-path'), t_start: v(P + '-tstart'), t_end: v(P + '-tend'), duration_s: (P === 'nt' ? (v(P + '-duration') || null) : null),
+           quantity: mode === 'custom' ? (v(P + '-quantity') || null) : null,   // v0.72.2：沿用某侧运行配置时随该侧，不单独上送
+           channel: mode === 'custom' ? (v(P + '-channel') || null) : null,
+           ...(P === 'nt' ? { min_load_w: v(P + '-minw') || null, min_load_a: v(P + '-mina') || null, min_load_auto: !!$('#' + P + '-minauto').checked,
+                              save: !!$('#' + P + '-save').checked, name: v(P + '-name') } : {}),
+           custom_time: !!($('#' + P + '-custom') && $('#' + P + '-custom').checked),            // v0.73：自定义时间（同波形预览）
+           custom_time_start: ($('#' + P + '-custom') && $('#' + P + '-custom').checked) ? v(P + '-cstart') : '',
+           custom_time_end: ($('#' + P + '-custom') && $('#' + P + '-custom').checked) ? v(P + '-cend') : '',
+           base_mode: mode === 'custom' ? 'custom' : 'running', base: mode === 'custom' ? ntBase(P) : undefined,
+           ...cmPayload(P + '-cm') };                                                   // v0.86：离线文件列映射
 }
 function ntFmt(x) { return (typeof x === 'number') ? (Number.isInteger(x) ? String(x) : (+x.toPrecision(4)).toString()) : String(x); }
 function ntRender(d) {
@@ -4510,7 +4514,7 @@ function initCtEstimate() {
 const NP = { last: null };
 function npPayload() {
   const v = id => ($('#' + id).value || '').trim();
-  const t = ntPayload();
+  const t = ntPayload('np');   // v0.99.5：画像提取独立公共配置
   return { path: t.path, t_start: t.t_start, t_end: t.t_end, quantity: t.quantity, custom_time: t.custom_time,
            custom_time_start: t.custom_time_start, custom_time_end: t.custom_time_end, base_mode: t.base_mode, base: t.base,
            col_map_enabled: t.col_map_enabled, col_map: t.col_map,
@@ -4542,7 +4546,7 @@ function npRender(d) {
 async function npRun() {
   const p = npPayload();
   if (!p.path) { toast('请先在上方负荷辨识调参区填写设备侧波形文件路径', 'err'); return; }
-  const mode = ntBaseMode(); const side = mode === 'custom' ? 'bus' : mode;
+  const mode = ntBaseMode('np'); const side = mode === 'custom' ? 'bus' : mode;
   const btn = $('#btn-np-run'); btn.disabled = true; $('#np-status').textContent = '正在回放设备侧文件并提取画像…';
   try {
     const d = await api('/api/process/nilm_profile', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(p) }, side);
@@ -4569,14 +4573,17 @@ function bindProcess() {
   bindWavePreview();
   if ($('#np-form')) {                                            // v0.90：设备画像提取
     $('#btn-np-run').addEventListener('click', npRun);
-    // v0.99.4：画像提取的检测量只读镜像（随基准配置区 nt-quantity / 基准模式），检测对象固定 total 不可选
-    const npQty = () => { const el = $('#np-qty-show'); if (!el) return; const q = $('#nt-quantity'); const v = q ? q.value : '';
-      const custom = ntBaseMode() === 'custom'; const names = { p: 'p 有功功率 P', i: 'i 电流有效值 I', auto: 'auto 自动（有电压→P，无电压→I）' };
-      el.value = v ? `${names[v] || v}（${custom ? '独立基准配置' : '沿用' + (ntBaseMode() === 'branch' ? '分路侧' : '总线侧') + '运行配置'}）` : (custom ? 'auto 自动（出厂缺省：有电压→P，无电压→I）' : `随${ntBaseMode() === 'branch' ? '分路侧' : '总线侧'}运行配置 nilm.quantity`); };
-    npQty();
-    const q0 = $('#nt-quantity'); if (q0) q0.addEventListener('change', npQty);
-    const side0 = $('#nt-side'); if (side0) side0.addEventListener('change', () => setTimeout(npQty, 300));
-    setInterval(npQty, 2000);   // 基准模式沿用运行配置时值由异步拉取填入，低频同步即可
+    // v0.99.5：画像提取独立公共配置（与调参 nt-* 同构，前缀 np-）
+    $('#np-files').addEventListener('change', () => { if ($('#np-files').value) $('#np-path').value = $('#np-files').value; });
+    if ($('#np-side')) $('#np-side').addEventListener('change', () => ntSyncBaseUI('np'));
+    if ($('#np-custom')) { $('#np-custom').addEventListener('change', () => ntSyncCustomTime('np')); ntSyncCustomTime('np'); }
+    cmBind('np-cm', () => ntSaveBase('np'));
+    ['fs', 'fnom', 'pt', 'ct', 'ptct', 'utc', 'wiring', 'recon3w', 'inv', 'inv-a', 'inv-b', 'inv-c'].forEach(k => { const el = $('#np-base-' + k); if (el) el.addEventListener('change', () => ntSaveBase('np')); });
+    if ($('#btn-np-base-default')) $('#btn-np-base-default').addEventListener('click', async () => { try { await ntLoadBase('default', 'bus', 'np'); toast('画像提取基准配置已恢复为出厂值', 'ok'); } catch (e) { toast(e.message, 'err'); } });
+    if ($('#btn-np-base-bus')) $('#btn-np-base-bus').addEventListener('click', async () => { try { await ntLoadBase('running', 'bus', 'np'); toast('已填入总线侧运行配置的值（可再修改，不影响总线侧）', 'ok'); } catch (e) { toast(e.message, 'err'); } });
+    if ($('#btn-np-base-branch')) $('#btn-np-base-branch').addEventListener('click', async () => { try { await ntLoadBase('running', 'branch', 'np'); toast('已填入分路侧运行配置的值（可再修改，不影响分路侧）', 'ok'); } catch (e) { toast(e.message, 'err'); } });
+    ntInitBase('np'); ntListFiles('np');
+    if ($('#btn-np-refresh')) $('#btn-np-refresh').addEventListener('click', () => ntListFiles('np'));
     $('#btn-np-fill-bus').addEventListener('click', () => npFill('bus'));
     $('#btn-np-fill-branch').addEventListener('click', () => npFill('branch'));
     $('#btn-np-copy').addEventListener('click', () => { navigator.clipboard && navigator.clipboard.writeText($('#np-cmd').textContent || ''); toast('已复制', 'ok'); });
@@ -4585,16 +4592,16 @@ function bindProcess() {
     $('#nt-files').addEventListener('change', () => { if ($('#nt-files').value) $('#nt-path').value = $('#nt-files').value; });
     $('#btn-nt-run').addEventListener('click', ntRun);
     // v0.72：独立基准配置
-    if ($('#nt-side')) $('#nt-side').addEventListener('change', ntSyncBaseUI);
-    if ($('#nt-custom')) { $('#nt-custom').addEventListener('change', ntSyncCustomTime); ntSyncCustomTime(); }
-    cmBind('nt-cm', ntSaveBase);                     // v0.86：离线文件列映射（调参，随基准配置存浏览器本地）
+    if ($('#nt-side')) $('#nt-side').addEventListener('change', () => ntSyncBaseUI('nt'));
+    if ($('#nt-custom')) { $('#nt-custom').addEventListener('change', () => ntSyncCustomTime('nt')); ntSyncCustomTime('nt'); }
+    cmBind('nt-cm', () => ntSaveBase('nt'));                     // v0.86：离线文件列映射（调参，随基准配置存浏览器本地）
     ['nt-base-fs', 'nt-base-fnom', 'nt-base-pt', 'nt-base-ct', 'nt-base-ptct', 'nt-base-utc',
-     'nt-base-wiring', 'nt-base-recon3w', 'nt-base-inv', 'nt-base-inv-a', 'nt-base-inv-b', 'nt-base-inv-c'].forEach(id => { const el = $('#' + id); if (el) el.addEventListener('change', ntSaveBase); });
+     'nt-base-wiring', 'nt-base-recon3w', 'nt-base-inv', 'nt-base-inv-a', 'nt-base-inv-b', 'nt-base-inv-c'].forEach(id => { const el = $('#' + id); if (el) el.addEventListener('change', () => ntSaveBase('nt')); });
     if ($('#btn-nt-base-default')) $('#btn-nt-base-default').addEventListener('click', async () => { try { await ntLoadBase('default'); toast('基准配置已恢复为出厂值', 'ok'); } catch (e) { toast(e.message, 'err'); } });
     if ($('#btn-nt-base-bus')) $('#btn-nt-base-bus').addEventListener('click', async () => { try { await ntLoadBase('running', 'bus'); toast('已填入总线侧运行配置的值（可再修改，不影响总线侧）', 'ok'); } catch (e) { toast(e.message, 'err'); } });
     if ($('#btn-nt-base-branch')) $('#btn-nt-base-branch').addEventListener('click', async () => { try { await ntLoadBase('running', 'branch'); toast('已填入分路侧运行配置的值（可再修改，不影响分路侧）', 'ok'); } catch (e) { toast(e.message, 'err'); } });
     ntInitBase();
-    $('#btn-nt-refresh').addEventListener('click', ntListFiles);
+    $('#btn-nt-refresh').addEventListener('click', () => ntListFiles('nt'));
     $('#btn-nt-apply').addEventListener('click', ntApply);
     $('#btn-nt-est-fill').addEventListener('click', () => {
       if (!NT.est || NT.est.value === null) return;
