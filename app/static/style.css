@@ -309,3 +309,20 @@ label.chk>.lbl>.note{color:var(--mut);opacity:.85;font-size:11.5px;line-height:1
 .form label.f .chk{display:inline-flex;align-items:center;gap:6px;flex-wrap:wrap;color:var(--fg);font-size:12.5px;min-height:26px}
 .form label.f .chk>input{width:14px;height:14px;margin:0}
 .form label.f .btnrow{display:flex;align-items:center;min-height:26px}
+
+/* v0.98：设备画像提取 —— 对齐 */
+.form label.f.np-ta{align-items:start}
+.form label.f.np-ta>textarea{min-width:0;width:100%;resize:vertical;font-family:ui-monospace,Consolas,monospace;font-size:12px}
+.form label.f>.lbl>.note{display:block;width:100%;opacity:.75;font-size:11px}
+.np-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;margin-bottom:8px}
+.np-cards .card{padding:6px 10px;border:1px solid #243050;border-radius:8px;background:rgba(255,255,255,.02);min-width:0}
+.np-cards .card .k{color:var(--mut);font-size:11.5px}
+.np-cards .card .v{font-size:15px;font-weight:600;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-variant-numeric:tabular-nums}
+.np-tbl{width:100%;border-collapse:collapse;font-size:12.5px;margin-top:8px}
+.np-tbl th,.np-tbl td{padding:3px 8px;border-bottom:1px solid #1e2740;white-space:nowrap}
+.np-tbl th{color:var(--mut);font-weight:600;text-align:right}
+.np-tbl th:first-child,.np-tbl td:first-child{text-align:left}
+.np-tbl th.cap{text-align:left;color:var(--fg);font-size:13px;padding-top:8px}
+.np-tbl td.n{text-align:right;font-variant-numeric:tabular-nums}
+.np-tbl tr.stat td{font-weight:600}
+.np-tbl td .src{color:var(--mut);font-size:11px;margin-left:6px}

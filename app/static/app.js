@@ -4502,19 +4502,23 @@ function npPayload() {
 }
 function npRender(d) {
   const p = d.profile || {}; const F = d.features || [];
-  $('#np-status').innerHTML = `<div>画像已写出 <code>${esc(d.saved_to)}</code> · 设备 <b>${esc(p.device_id)}</b> · 口径 ${esc(p.unit)} · 标签方式 ${p.label_mode === 'labels' ? '人工标签' : '自动定位'} · 前后窗 ${p.pre_cycles}/${p.post_cycles} 周波 · 文件 <code>${esc(d.file)}</code></div>`
-    + (d.notes || []).map(n => `<div class="muted">提示：${esc(n)}</div>`).join('');
+  const nS = d.startup ? d.startup.n : 0, nD = d.shutdown ? d.shutdown.n : 0;
+  const cards = [['设备', esc(p.device_id || '—')], ['口径', esc(p.unit || '—')], ['标签方式', p.label_mode === 'labels' ? '人工标签' : '自动定位'],
+                 ['前 / 后窗 (周波)', `${p.pre_cycles} / ${p.post_cycles}`], ['启动 / 停止样本', `${nS} / ${nD}`]];
+  $('#np-summary').innerHTML = cards.map(([k, v]) => `<div class="card"><div class="k">${k}</div><div class="v">${v}</div></div>`).join('');
+  $('#np-status').innerHTML = `<div>画像已写出 <code>${esc(d.saved_to)}</code></div>` + (d.notes || []).map(n => `<div class="warn">提示：${esc(n)}</div>`).join('');
   const cr = $('#np-cmdrow'); cr.style.display = d.command ? '' : 'none'; $('#np-cmd').textContent = d.command || '';
-  const f = x => (typeof x === 'number' ? (+x.toPrecision(4)).toString() : String(x));
-  let h = '';
+  const f = x => (typeof x === 'number' ? (Number.isInteger(x) ? String(x) : (+x.toPrecision(4)).toString()) : String(x));
+  const FN = { d_ia: 'ΔIa (A)', d_ib: 'ΔIb (A)', d_ic: 'ΔIc (A)', d_p: 'ΔP (W)', d_q: 'ΔQ (var)', peak_ratio: '峰值比', dur_cycles: '持续 (周波)' };
+  let h = `<table class="np-tbl"><thead><tr><th>事件 / 统计</th>${F.map(x => `<th>${esc(FN[x] || x)}</th>`).join('')}</tr></thead><tbody>`;
   [['startup', '启动画像'], ['shutdown', '停止画像']].forEach(([k, name]) => {
     const g = d[k];
-    if (!g) { h += `<div class="notes">${name}：无样本</div>`; return; }
-    h += `<table style="margin-top:6px"><thead><tr><th colspan="${F.length + 1}">${name}：${g.n} 次事件 · 持续 ${f(g.dur_cycles.min)}~${f(g.dur_cycles.max)} 周波</th></tr><tr><th></th>${F.map(x => `<th>${esc(x)}</th>`).join('')}</tr></thead><tbody>`
-      + `<tr><td>μ</td>${g.mu.map(x => `<td>${f(x)}</td>`).join('')}</tr><tr><td>σ</td>${g.sigma.map(x => `<td>${f(x)}</td>`).join('')}</tr>`
-      + g.events.map(e => `<tr><td class="mut">${esc(e.t_start_local)}<br><small>${esc(e.source)}</small></td>${F.map(x => `<td>${f(e.vec[x])}</td>`).join('')}</tr>`).join('')
-      + '</tbody></table>';
+    h += `<tr><th class="cap" colspan="${F.length + 1}">${name}${g ? `：${g.n} 次事件 · 持续 ${f(g.dur_cycles.min)}~${f(g.dur_cycles.max)} 周波` : '：无样本'}</th></tr>`;
+    if (!g) return;
+    h += `<tr class="stat"><td>均值 μ</td>${g.mu.map(x => `<td class="n">${f(x)}</td>`).join('')}</tr><tr class="stat"><td>标准差 σ</td>${g.sigma.map(x => `<td class="n">${f(x)}</td>`).join('')}</tr>`
+       + g.events.map(e => `<tr><td>${esc(e.t_start_local)}<span class="src">${esc(e.source)}</span></td>${F.map(x => `<td class="n">${f(e.vec[x])}</td>`).join('')}</tr>`).join('');
   });
+  h += '</tbody></table>';
   $('#np-result').innerHTML = h;
   $('#np-json').textContent = JSON.stringify(d, null, 2);
 }
