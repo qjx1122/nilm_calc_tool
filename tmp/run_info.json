@@ -1,20 +1,20 @@
 {
-  "created_local": "2026-10-30 02:04:22.617",
+  "created_local": "2026-10-30 09:50:13.650",
   "started_side": "bus",
   "starts": [
     {
       "side": "bus",
-      "at_local": "2026-10-30 02:04:22.617"
+      "at_local": "2026-10-30 09:50:13.650"
     },
     {
       "side": "branch",
-      "at_local": "2026-10-30 02:04:22.666"
+      "at_local": "2026-10-30 09:50:14.358"
     }
   ],
   "sides": {
     "bus": {
       "source_kind": "csv_file",
-      "source_path": "D:\\LiteWork\\test1Pycharm\\NILM_2026\\NILM_Web\\nilm_calc_tool\\data\\化工行业-海湾化工-bus-停止.csv",
+      "source_path": "D:\\LiteWork\\test1Pycharm\\NILM_2026\\NILM_Web\\nilm_calc_tool\\data\\化工行业-海湾化工-bus-启动.csv",
       "source_id": 0,
       "config_file": "config_bus.json",
       "config_copied_from": "configs\\runtime.json",
