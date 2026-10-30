@@ -570,3 +570,4 @@
 - **问题②的做法**：`MIN_EVENTS_PER_DIR = 3` + `sample_size_notes()`（`nilm_profile.py` 里唯一一处文字），分发给 `build_profile` 的 notes（CLI `⚠`）、`profile_summary.sample_notes/min_events`（提取结果）、`NilmDetector._load_profiles` 的 slot notes（负荷辨识页画像状态行）。界面：样本卡片标红 + 「（建议各 ≥3）」、结果区加粗「样本量不足…」、状态行样本数标红；提取界面另有静态说明段。只提示、不改匹配；旧 7 维画像同样适用。
 - **验证**：新增 `tests/test_r174_reactive_changepoint.py` 7 项、`tests/test_r174_sample_size_hint.py` 6 项；全量 **506 passed / 1 skipped**（154 s）。
 - **未做**：`quantity='q'`（纯无功检测量）仍未提供；Q 候选的事件幅值仍是 \|ΔI\|（A）/\|ΔP\|（W），没有 var 幅值列；无功份额 10 % 的闸门暂未做成配置项（写在 `Q_CANDIDATE_SHARE_MIN` 常量里）。
+- **live server 实录**（`:8017`）：1/1 画像 ⇒ `profile.sample_notes` 2 条、`notes` 2 条（不重复）；3/3 画像 ⇒ 空；把 1/1 画像挂上并勾选画像匹配后 `GET /api/nilm/events` 的 `summary.profile.profiles[0].notes` 与全局 `notes` 都含样本量提示（前端据此标红）。冒烟后已删 `configs/runtime.json`、`output/nilm/`。

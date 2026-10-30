@@ -1869,3 +1869,14 @@ bus-3 两侧都是 0 候选。注入检验（bus-2 12:45 / bus-3 13:00）仍是 
 2. 候选 CSV 从 31 列变 32 列（末尾 `source`）；`_rotate_if_header_differs` 会自动转表头，旧文件不受影响。
 3. **无功份额 10 % 的闸门**是工程折中（写在 `Q_CANDIDATE_SHARE_MIN` 注释里）：份额低于 10 % 的画像只把无功阶跃当变点、不造候选。本实录的画像 084954 ΔQ 份额 3.8 % ⇒ 不新增候选，只改善窗口——这与"不引入误报"一致。
 4. **仍未做**：`quantity='q'`（纯无功检测量）仍未作为可选的检测量提供；Q 候选的事件幅值仍是 \|ΔI\|（A）或 \|ΔP\|（W），不提供 var 幅值列。
+
+### 四、界面/接口实录（live server，`uvicorn app.server:app :8017`）
+
+| 检查 | 结果 |
+|---|---|
+| `POST /api/process/nilm_profile`（1 次启动 + 1 次停止的合成文件） | `profile.startup.n=1`、`shutdown.n=1`、`min_events=3`、`sample_notes` **2 条**、`notes` 里样本量提示也是 **2 条**（不重复）|
+| 同上（3 次启动 + 3 次停止的 `dev_side.csv`） | `3 / 3`、`sample_notes = []` ⇒ 够样本不提示 |
+| `PUT /api/config`（把 1/1 画像挂到总线侧并勾选「设备画像匹配」）→ `GET /api/nilm/events` | `summary.profile.profiles[0].notes` 含两条「启动 / 停止画像只有 1 次事件（建议每方向 ≥3 次启停）…」，全局 `summary.notes` 同样含 ⇒ 负荷辨识页画像状态行会红字显示 |
+| `GET /` | 200（前端资源正常）|
+
+> 前端渲染（`app.js`）：`nilmProfileState()` 把样本数 <`min_events` 的「n 次」标红并挂 tooltip；`npRender()` 把「启动 / 停止样本」卡片标红 +「（建议各 ≥3）」，并在结果区顶部加一行加粗提示。jsdom 在本沙盒不可用（`node_modules/css-tree` 缺 `data/patch.json`），前端只做了 `node --check` + 关键字符串契约测试。
