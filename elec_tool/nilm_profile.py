@@ -65,8 +65,12 @@ def event_features(p4: np.ndarray, q4: np.ndarray, i4: np.ndarray, onset: int, e
     # v0.99.24：前后窗被相邻变点截断（总线侧其它负荷在 pre/post 窗内投切时，窗取到别的台阶）；截断后长度不足则不截
     if pre_lo is not None and a0 < int(pre_lo) < a1 and (a1 - int(pre_lo)) >= max(10, pre_n // 10):
         a0 = int(pre_lo)
-    if post_hi is not None and b0 < int(post_hi) < b1 and (int(post_hi) - b0) >= max(10, post_n // 10):
+    _fl = max(10, post_n // 20)
+    if post_hi is not None and b0 < int(post_hi) < b1 and (int(post_hi) - b0) >= _fl:
         b1 = int(post_hi)
+    elif post_hi is not None and int(post_hi) <= b0 + _fl and int(post_hi) - onset >= _fl:
+        # v0.99.25：相邻他负荷紧贴终点，[end, post_hi) 没有干净段 ⇒ 改取 post_hi 之前的最后 _fl 周波（宁可短，也不跨过他负荷）
+        b0 = int(post_hi) - _fl; b1 = int(post_hi)
     if b0 >= b1:
         b0, b1 = min(end, L - 1), L
     pre = {"p": _median(p4[0, a0:a1], p4[0, max(0, onset - 1)]), "q": _median(q4[0, a0:a1], q4[0, max(0, onset - 1)]),
@@ -317,10 +321,12 @@ def _two_window_candidates(x: np.ndarray, pre_n: int, post_n: int, min_d: float,
         if not exceed[j]:
             j += 1; continue
         k0 = j
-        while j < idx.size and exceed[j]:
+        sgn0 = delta[k0] >= 0
+        while j < idx.size and exceed[j] and (delta[j] >= 0) == sgn0:   # v0.99.25：同向才算一段
             j += 1
-        if j >= idx.size:
+        if j >= idx.size and (delta.size == 0 or (delta[-1] >= 0) == sgn0):
             break          # v0.92.5：超限游程顶到右边界＝后窗还没装满，峰值位置未定（在线会随新数据右移），等下一块再评估
+        # v0.99.25：符号变了就从这里切开——先发生的同向过渡照样出候选（原来是 |Δ| 游程，后一个更大的反号事件会把前一个吞掉）
         pk = k0 + int(np.argmax(np.abs(delta[k0:j])))
         onset = int(idx[pk])
         # 终点：onset 之后「相对事件后电平的偏差 > 稳态偏差 20%」的最后一个周波的下一周波（过渡结束处），封顶 post_n
@@ -343,19 +349,24 @@ def window_bounds(cps: Sequence[Tuple[int, float]], onset: int, end: int, pre_n:
                   delta: float = 0.0, dur_max: int = 0, peak_max: float = 1.0) -> Tuple[Optional[int], Optional[int]]:
     """候选 (onset,end) 的前窗下界 / 后窗上界：前一个变点（含其过渡）之后、下一个变点之前。
 
-    后窗：onset 之后 1.5×dur_max（画像最长持续）以内的变点，若与候选**同号**（慢斜坡 / 分级启动被短窗切成多个同向变点），或
-    反号但幅值不超过 1.25×max(peak_max−1, 0.25)×|Δ|（启动冲击峰的回落、过冲的回摆——peak_max＝画像峰值比均值），视为候选自身
-    过渡的一部分，不截断；其余变点（反号且幅值大、或超出该范围）都截断。前窗：任何变点都截断。"""
+    后窗：onset 之后 1.5×dur_max（画像最长持续）以内的变点，若与候选**同号**且幅值不超过候选自身的 1.5 倍（慢斜坡 / 分级启动被
+    短窗切成多个同向变点），或反号但幅值不超过 1.25×max(peak_max−1, 0.25)×|Δ|（启动冲击峰的回落、过冲的回摆——peak_max＝画像峰值比
+    均值），视为候选自身过渡的一部分，不截断；其余变点（幅值更大的同号台阶、反号且幅值大、或超出该范围）都截断。前窗：任何变点都截断。
+    v0.99.25：后窗边界以 **onset** 为基准判断（原来的 end 可能已经被污染的后窗中位数拉到下一个事件上，边界跟着失效）。"""
     w = max(10, min(150, post_n // 20))
     before = [c for c, _d in cps if c < onset - w]
     own_until = onset + int(1.5 * max(dur_max, 0)) + w
     decay_lim = 1.25 * max(float(peak_max) - 1.0, 0.25) * abs(float(delta))
 
+    cap = max(1.5 * abs(float(delta)), decay_lim)      # v0.99.25：同号但幅值远大于候选自身过渡 ⇒ 别的设备，照截
+
     def _own(c: int, d: float) -> bool:
         if c > own_until:
             return False
-        return ((d >= 0) == (delta >= 0)) or abs(d) <= decay_lim
-    after = [c for c, d in cps if c > end + w and not _own(c, d)]
+        if abs(d) <= decay_lim:
+            return True                               # 启动冲击峰回落 / 过冲回摆
+        return ((d >= 0) == (delta >= 0)) and abs(d) <= cap
+    after = [c for c, d in cps if c > onset + w and not _own(c, d)]   # v0.99.25：只看 onset 之后（终点本身可能是被污染的目标）
     pre_lo = (max(before) + w) if before else None
     post_hi = (min(after) - w) if after else None
     return pre_lo, post_hi
@@ -408,15 +419,15 @@ def detect_profile(p4: np.ndarray, q4: np.ndarray, i4: np.ndarray, profile: Dict
         for onset, end, delta in _two_window_candidates(x, wp, wq, min_d, k_sig):
             hit = None
             for g in merged:                      # 与已有候选重叠 ⇒ 同一事件；容差按**已有（更细）候选**的尺度，粗尺度游程不吞并相邻细候选
+                if (delta >= 0) != (g["delta"] >= 0):
+                    continue                      # v0.99.25：反号＝两次方向相反的动作，绝不能并成一个候选
                 tol = int(post_n * min(sc, g["scale"]))
                 if g["onset"] - tol <= onset <= g["end"] + tol:
                     hit = g; break
             if hit is None:
                 merged.append({"onset": onset, "end": end, "delta": delta, "scale": sc, "scales_hit": [sc]})
-            else:                                 # 尺度升序扫描：先命中的（更细）保留几何，只记录粗尺度也命中与更大的幅值
-                hit["scales_hit"].append(sc)
-                if abs(delta) > abs(hit["delta"]):
-                    hit["delta"] = delta
+            else:                                 # 尺度升序扫描：先命中的（更细）保留几何与幅值
+                hit["scales_hit"].append(sc)      # v0.99.25：幅值不再被更粗尺度覆盖（粗尺度后窗可能已经吃进下一个反号事件，符号会把整段几何带偏）
     merged.sort(key=lambda g: g["onset"])
     cands = [(g["onset"], g["end"], g["delta"], g["scale"], g["scales_hit"]) for g in merged]
     cps = change_points(x, pre_n, post_n, min_d, k_sig)                     # v0.99.24：相邻变点截断特征窗
@@ -439,6 +450,9 @@ def detect_profile(p4: np.ndarray, q4: np.ndarray, i4: np.ndarray, profile: Dict
             if b1 - onset >= 2 and onset - a0 >= 1:
                 tgt = float(np.median(x[onset:b1])); dl = tgt - float(np.median(x[a0:onset]))
                 end = transition_end(x, onset, post_n, tgt, abs(dl), hi=post_hi)
+        floor_post = max(10, post_n // 20)
+        gap_post = (int(post_hi) - int(end)) if post_hi is not None else post_n
+        crowded = post_hi is not None and gap_post < floor_post                       # 干净后窗偏短：记标志并改用 post_hi 前 floor_post 周波（v0.99.25）
         feat = event_features(p4, q4, i4, onset, end, pre_n, post_n, pre_lo, post_hi)   # v0.99.19：特征窗口与画像提取一致；v0.99.24：相邻变点截断
         m = match_event(profile, feat, lam, skip, pmap)
         flags: List[str] = []
@@ -454,7 +468,12 @@ def detect_profile(p4: np.ndarray, q4: np.ndarray, i4: np.ndarray, profile: Dict
                 flags.append("state_mismatch"); conf *= 0.5
         if m["traj_penalty"] < 1.0:
             flags.append("trajectory_deviates")
-        accepted = ("d2_exceeds" not in flags) and conf >= min_conf
+        d_meas = float(feat["vec"]["d_p"]) if use_p else float(feat["d_it"])       # v0.99.25：量出来的 Δ 与搜索到的 Δ 反号
+        if abs(float(delta)) > 1e-9 and abs(d_meas) > 1e-9 and (float(delta) > 0) != (d_meas > 0):
+            flags.append("sign_flip")                 # ＝前后窗取错了（跨过了相邻的另一次动作），不是本设备的动作
+        if crowded:
+            flags.append("window_crowded")            # 相邻他负荷紧贴终点：后窗只能取很短的一段（仍按这一段量，D²/置信度照常把关）
+        accepted = ("d2_exceeds" not in flags) and ("sign_flip" not in flags) and conf >= min_conf
         status = "confirmed" if accepted and not flags else ("low_confidence" if accepted else "rejected")
         if accepted:
             state = "on" if m["direction"] == "START" else "off"

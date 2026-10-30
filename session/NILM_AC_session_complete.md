@@ -487,3 +487,12 @@
 - 回放结果：15:00:08 START confirmed 0.789（D²/维 0.473，ΔI 34/36/40、ΔP −25571、ΔQ 722、dur 580，scales_hit 0.25/0.5）；+60 A rejected 29.8；带 4 A 噪声仍 0.795。
 - 已知缺口：14:55:33 他负荷两级下跌 −28 A 被判 STOP confirmed 0.46（单样本 σ 15 % 下限、本轮状态机初始未知）。建议 ≥3 样本 / min_confidence 0.5。
 - 验证：pytest 473 passed 1 skipped（新增 `tests/test_r167_sandwiched_start.py` 3 项）；app.js 语法检查通过。
+
+## 第 168 轮：12:08 重跑「设备启动未识别」复盘（v0.99.25）
+
+- 运行目录 `output/20261030_120818`（bus 源=化工行业-海湾化工-bus-启动.csv，分路=dev1.csv，画像 12:06:34 提取后两侧共用）。
+- 候选 CSV（总线）4 行：14:55:32 STOP rejected（5.9）、14:59:08 START rejected（27.7，他负荷 +60 A）、**15:00:08 STOP rejected（544.7）**、15:00:39 STOP rejected（621.3）。分路侧 15:01:22 START confirmed 0.782。
+- 根因：v0.99.24 的细尺度已让设备启动成候选，但**前后特征窗跨过了两个邻居**——前窗取 14:59:08（+60 A 他负荷）之后、后窗取 15:00:39（−70 A 他负荷）之后，量出的 Δ 因此反号（−39 A / +33.5 kW / −15.2 kvar，dur 1356），被匹配成 STOP 后按 `trajectory_deviates` 拒绝。
+- 代码链：`_two_window_candidates` 的 |Δ| 游程不区分符号 → 相邻反号事件共用一段；多尺度合并 `abs(delta)>abs(hit['delta'])` 让粗尺度（后窗更长、已含下一个反号事件）覆盖细尺度幅值 ⇒ 候选 Δ 变负；`window_bounds` 的同号豁免把 −70 A 台阶当成自身过渡（且无幅值上限）⇒ `post_hi=None`；`end` 用被污染的 60 s 中位数定目标 ⇒ 终点落到 15:00:35（正好在 −70 A 之前 4 s），后窗整段落在事件之后。
+- 修复：同号才合并 + 幅值取最细尺度；同号豁免加 ≤1.5|Δ| 上限；后窗边界以 onset 为基准；干净后窗不足 `post/20` 时取 `post_hi` 前 `post/20` 周波并记 `window_crowded`；新增 `sign_flip` 直接拒；超限游程同向才成段。
+- 验证：`tests/test_r168_profile_neighbour_geometry.py`（3 项，旧代码下 Δ 被带成 −91.7/特征 −34.0，新代码 +33.5/+28.3）；全量 pytest 476 passed 1 skipped；实录数据回放（真实 detect_profile + 运行目录 realtime 序列）总线 15:00:08 START confirmed 0.789、分路 0.776；14:55:32 他负荷 −28 A 仍被拒（0.05）。
