@@ -1933,7 +1933,7 @@ bus-3 两侧都是 0 候选。注入检验（bus-2 12:45 / bus-3 13:00）仍是 
 ### 四、分路侧：画像加载了，但检测量口径对不上（唯一原因）
 
 - 配置：`nilm.quantity='auto'`（**这侧和总线侧不一样**）、有电压（Ua≈241.7 V）⇒ `quantity_effective` 返回 **`p`** ⇒ `use_p=True`；而画像 `quantity='i'`（单位 A）。
-- `NilmDetector._evaluate_one_profile()` 的第一段就是守卫：
+- `NilmDetector._evaluate_profile()` 的第一段就是守卫（v0.99.26 起改名 `_evaluate_one_profile`，判断逻辑一字未变；第 171 轮专题已把它记为「第一道硬门槛」）：
   ```python
   use_p = (qty == "p")
   if prof.get("quantity") != ("p" if use_p else "i"):

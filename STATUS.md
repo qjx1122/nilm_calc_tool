@@ -13,7 +13,7 @@
 ## 当前目标
 - **本任务（2026-10-30 第 175 轮，已交付、分析类·沙盒侧✅实录，未改代码）**：用户问题——「使用之前带设备停止的总线波形数据和带设备启动的总线波形数据分别在总线侧和分路侧重新播放，基于设备画像匹配算法两侧均没有识别到启停，详细输出见 tmp 目录下相关文件，请根据输出的数据详细分析原因。」对应运行＝`tmp/run_info.json` 的 **19:23:30.584**（总线 `bus-停止.csv` sid0，1172 s；分路 `bus-启动.csv` sid1，977 s）。
   - **先定版本**：事件 CSV 末列 `quality_flags`（**无 `delta_ih_a`**）、画像 `192047` 是 **7 维**、`profile_error` 是「两条 `;` 串成一串」⇒ 跑的是 **v0.99.25 及更早**；源根 `D:\LiteWork\…\NILM_Web\nilm_calc_tool` 与上次 `D:\Work\…\NILM_Test2026\nilm_calc_tool` 不同 ⇒ 用户有两个代码副本。
-  - **结论**：**两侧的画像匹配一次都没运行**（不是算法、不是漏检）。总线侧 `profile_path` 写了两条 `A;B`，旧版不拆 `;` ⇒ 画像 0 个加载（`self._profile is None` ⇒ `_evaluate_profile` 第一句 return）；分路侧画像加载了，但 `quantity='auto'`→P 与画像 `i` 口径不符 ⇒ `_evaluate_one_profile()` 守卫直接 `return []`。证据：候选 CSV **根本不存在**、`algorithm=profile` 0 行。
+  - **结论**：**两侧的画像匹配一次都没运行**（不是算法、不是漏检）。总线侧 `profile_path` 写了两条 `A;B`，旧版不拆 `;` ⇒ 画像 0 个加载（`self._profile is None` ⇒ `_evaluate_profile` 第一句 return）；分路侧画像加载了，但 `quantity='auto'`→P 与画像 `i` 口径不符 ⇒ `_evaluate_profile()`（v0.99.26 起名 `_evaluate_one_profile`）守卫直接 `return []`。证据：候选 CSV **根本不存在**、`algorithm=profile` 0 行。
   - **第三个坑**：两侧 `transform.invert_phases='A'`（画像无取反）⇒ A 相 ΔI 变号。
   - **反证（本机复算，原函数 `detect_profile`）**：总线 06:38:17 停机 —— 去 A 相取反后 **STOP D² 2.55 / D²/维 0.36 / conf 0.833 confirmed**（ΔI −34.7/−37.1/−38.0、ΔP +24 642、ΔQ −742、dur 239），保留取反则 21.76 / conf 0；分路统一口径＋去取反后 **06:55:33 STOP 0.360、07:00:09 START 0.504 confirmed**，06:59:08 的 −44 kW/1.8 倍幅值负荷仍被正确拒绝。
   - **修法（纯配置/版本）**：① 换到 v0.99.27 的代码副本跑；② 总线侧 `profile_path` 只填一个存在的文件；③ 两侧 `quantity` 统一 `i`；④ 去掉 A 相取反；⑤ `window_cycles=3000` ＜ 画像需求 73 281 周波（1466 s），建议画像改 10/50~10/200；⑥ PT/CT 口径统一（画像 1/1 vs 回放 4/250，本次实测属误报）。
