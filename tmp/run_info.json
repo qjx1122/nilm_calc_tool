@@ -1,14 +1,14 @@
 {
-  "created_local": "2026-10-30 19:23:30.584",
+  "created_local": "2026-10-30 23:38:35.818",
   "started_side": "bus",
   "starts": [
     {
       "side": "bus",
-      "at_local": "2026-10-30 19:23:30.584"
+      "at_local": "2026-10-30 23:38:35.818"
     },
     {
       "side": "branch",
-      "at_local": "2026-10-30 19:23:31.223"
+      "at_local": "2026-10-30 23:38:36.380"
     }
   ],
   "sides": {
@@ -19,8 +19,14 @@
       "config_file": "config_bus.json",
       "config_copied_from": "configs\\runtime.json",
       "config_mode": "verbatim_copy",
-      "profile_file": null,
-      "profile_error": "画像文件不存在：output\\nilm\\profile_device_20261030_120634.json;output\\nilm\\profile_device_20261030_192047.json"
+      "profile_file": "nilm/profile_bus_profile_device_20261030_233706.json",
+      "profile_files": [
+        "nilm/profile_bus_profile_device_20261030_233706.json"
+      ],
+      "profile_copied_from": "output\\nilm\\profile_device_20261030_233706.json",
+      "profile_copied_from_all": [
+        "output\\nilm\\profile_device_20261030_233706.json"
+      ]
     },
     "branch": {
       "source_kind": "csv_file",
@@ -29,8 +35,14 @@
       "config_file": "config_branch.json",
       "config_copied_from": "configs\\branch_runtime.json",
       "config_mode": "verbatim_copy",
-      "profile_file": "nilm/profile_branch_profile_device_20261030_192047.json",
-      "profile_copied_from": "output\\nilm\\profile_device_20261030_192047.json"
+      "profile_file": "nilm/profile_branch_profile_device_20261030_233706.json",
+      "profile_files": [
+        "nilm/profile_branch_profile_device_20261030_233706.json"
+      ],
+      "profile_copied_from": "output\\nilm\\profile_device_20261030_233706.json",
+      "profile_copied_from_all": [
+        "output\\nilm\\profile_device_20261030_233706.json"
+      ]
     }
   }
 }

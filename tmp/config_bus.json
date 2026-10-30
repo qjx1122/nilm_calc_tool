@@ -199,7 +199,9 @@
         "Sc",
         "S",
         "Q",
-        "P"
+        "P",
+        "Ib",
+        "Ic"
       ],
       "p-trend-br": [
         "P",
@@ -365,7 +367,7 @@
       }
     },
     "auto_params": true,
-    "profile_path": "output\\nilm\\profile_device_20261030_120634.json;output\\nilm\\profile_device_20261030_192047.json"
+    "profile_path": "output\\nilm\\profile_device_20261030_233706.json"
   },
   "branch": {
     "enabled": true,
@@ -373,7 +375,7 @@
     "label": "分路侧设备",
     "time_offset_s": 0.0,
     "align_tol_s": 0.0,
-    "common_window": true,
+    "common_window": false,
     "hide_ui": false,
     "common_start": "",
     "common_end": ""

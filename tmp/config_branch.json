@@ -217,7 +217,7 @@
     "min_delta_pct": 0.0,
     "algorithms": {
       "threshold": {
-        "enabled": false,
+        "enabled": true,
         "min_delta_w": 50.0,
         "settle_cycles": 5,
         "settle_tol_w": 20.0,
@@ -264,9 +264,9 @@
         "enabled": true
       }
     },
-    "quantity": "auto",
+    "quantity": "i",
     "auto_params": true,
-    "profile_path": "output\\nilm\\profile_device_20261030_192047.json"
+    "profile_path": "output\\nilm\\profile_device_20261030_233706.json"
   },
   "branch": {
     "enabled": false,
