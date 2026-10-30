@@ -10,10 +10,13 @@
     "fs_tolerance": 0.01
   },
   "transform": {
-    "pt_ratio": 1.0,
-    "ct_ratio": 1,
+    "pt_ratio": 4,
+    "ct_ratio": 250,
     "voltage_input": "phase",
-    "enabled": true
+    "enabled": true,
+    "invert_phases": "A",
+    "wiring": "3p3w",
+    "reconstruct_3w": true
   },
   "harmonic": {
     "order_min": 2,
@@ -39,15 +42,15 @@
     "delimiter": ",",
     "has_header": true,
     "timestamp_unit": "auto",
-    "mapping_enabled": false,
+    "mapping_enabled": true,
     "mapping": {
       "timestamp": "1",
       "ua": "2",
-      "ia": "3",
-      "ub": "4",
-      "ib": "5",
-      "uc": "6",
-      "ic": "7"
+      "ia": "4",
+      "ub": "",
+      "ib": "",
+      "uc": "3",
+      "ic": "5"
     },
     "ALIASES": {
       "timestamp": [
@@ -118,7 +121,7 @@
   },
   "source": {
     "kind": "csv_file",
-    "path": "data\\化工行业-海湾化工-dev1.csv",
+    "path": "data\\化工行业-海湾化工-bus-3-正常.csv",
     "poll_interval_s": 0.05,
     "block_samples": 640,
     "tail_from_end": false,

@@ -121,7 +121,7 @@
   },
   "source": {
     "kind": "csv_file",
-    "path": "data\\化工行业-海湾化工-bus-启动-1.csv",
+    "path": "data\\化工行业-海湾化工-bus-2-启停.csv",
     "poll_interval_s": 0.05,
     "block_samples": 640,
     "tail_from_end": false,
@@ -211,7 +211,8 @@
         "Ib",
         "Pb",
         "Pc",
-        "Pa"
+        "Pa",
+        "Ic"
       ],
       "nilm-pqs-br": [
         "Qa",
