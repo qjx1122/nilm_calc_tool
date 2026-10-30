@@ -537,7 +537,7 @@ def run_tune(base: AppConfig, file: str, *, channel: Optional[str] = None, quant
             if a[0] == b[0] and b[1] <= a[1]:
                 raise TuneError(f"结束时间必须晚于开始时间（{ts_txt} → {te_txt}）")
         cfg.validate()
-    feat = CycleFeatures(cfg.sampling.fs, cfg.sampling.f_nom)
+    feat = CycleFeatures(cfg.sampling.fs, cfg.sampling.f_nom, harmonics=False)   # 调参只用 P/I 序列，不算谐波电流（v0.99.26）
     ps, is_, ts = [], [], []
     u_nonzero = False
     t_first: Optional[float] = None

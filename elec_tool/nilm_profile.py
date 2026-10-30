@@ -768,7 +768,7 @@ def build_profile(cfg, file: str, *, device_id: str = "device", labels: Optional
                       "invert_current": bool(getattr(c.transform, "invert_current", False)), "invert_phases": str(getattr(c.transform, "invert_phases", "") or "")},   # v0.95
            "pre_cycles": pre_n, "post_cycles": post_n, "features": list(FEATURES), "feature_names": dict(FEATURE_NAMES),
            "harmonic": {"orders": [int(k) for k in HARM_ORDERS], "unit": "A", "feature": "d_ih",
-                        "note": "2~13 次谐波电流有效值合量（ΣI_k² 开方，A）；特征是事件前后之差（三相之和）；设备是不是谐波源的指纹，线性负荷≈0"},
+                        "note": "2~13 次谐波电流有效值合量（ΣI_k² 开方，A）；特征是事件前后之差（三相平均＝每相口径，线性可加）；设备是不是谐波源的指纹，线性负荷≈0"},
            "template_points": TEMPLATE_POINTS, "cycles": int(t.size), "t_first": float(t[0]), "t_last": float(t[-1]),
            "steady": {"level_first_window": lv_off}, "startup": startup, "shutdown": shutdown, "notes": notes,
            "calibration": {"bus_mapping": None, "note": "无同步总线侧校准数据：总线侧只输出观测幅值，不估计设备贡献幅值（方案 §4/§7）"}}

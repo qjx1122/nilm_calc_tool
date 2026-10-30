@@ -3327,6 +3327,14 @@ function fillNilmForm(nc, side = sideOf()) {
     if (el.type === 'checkbox') el.checked = !!nc[f]; else el.value = nc[f];
   });
   NILM_CH.forEach(c => { const el = E(side, `nilm-ch-${c}`); if (el) el.checked = (nc.channels || []).includes(c); });
+  // v0.99.26：多画像——输入框显示全部画像（profile_path 的 ; 分隔项 ＋ profile_paths 列表，去重保序，与
+  //   NilmConfig.profile_path_list() 同口径）。手改配置文件写 profile_paths 的也能在界面上看到/删掉。
+  const ppEl = E(side, 'nilm-profile_path');
+  if (ppEl) {
+    const merged = [...new Set([...String(nc.profile_path || '').split(';'), ...((Array.isArray(nc.profile_paths) ? nc.profile_paths : []))]
+      .map(x => String(x || '').trim()).filter(Boolean))];
+    ppEl.value = merged.join(';');
+  }
   const algos = nc.algorithms || {};
   Object.keys(NILM_ALGOS).forEach(a => {
     const prm = algos[a] || {};
@@ -3369,6 +3377,9 @@ function collectNilmPayload(side = sideOf()) {
   const p = { algorithms: {} };
   NILM_FIELDS.forEach(f => { const el = E(side, `nilm-${f}`); if (!el) return; p[f] = el.type === 'checkbox' ? el.checked : ((el.tagName === 'SELECT' || el.type === 'text') ? el.value : +el.value); });
   p.channels = NILM_CH.filter(c => { const el = E(side, `nilm-ch-${c}`); return el && el.checked; });
+  // v0.99.26：多画像——输入框里已经是全部画像（保存时由 fillNilmForm 把 profile_path + profile_paths 合并显示），
+  //   这里清空列表字段，避免"在界面上删掉一个画像、保存后又被 profile_paths 加回来"
+  if (p.profile_path !== undefined) p.profile_paths = [];
   Object.keys(NILM_ALGOS).forEach(a => {
     const prm = { enabled: !!E(side, `nilm-${a}-enabled`).checked };
     Object.keys(NILM_ALGOS[a].params).forEach(k => { const v = parseFloat(E(side, `nilm-${a}-${k}`).value); if (Number.isFinite(v)) prm[k] = v; });
@@ -4652,7 +4663,7 @@ function npRender(d) {
   $('#np-status').innerHTML = `<div>画像已写出 <code>${esc(d.saved_to)}</code></div>` + (d.notes || []).map(n => `<div class="warn">提示：${esc(n)}</div>`).join('');
   const cr = $('#np-cmdrow'); cr.style.display = d.command ? '' : 'none'; $('#np-cmd').textContent = d.command || '';
   const f = x => (typeof x === 'number' ? (Number.isInteger(x) ? String(x) : (+x.toPrecision(4)).toString()) : String(x));
-  const FN = { d_ia: 'ΔIa (A)', d_ib: 'ΔIb (A)', d_ic: 'ΔIc (A)', d_p: 'ΔP (W)', d_q: 'ΔQ (var)', peak_ratio: '峰值比', dur_cycles: '持续 (周波)' };
+  const FN = { d_ia: 'ΔIa (A)', d_ib: 'ΔIb (A)', d_ic: 'ΔIc (A)', d_p: 'ΔP (W)', d_q: 'ΔQ (var)', peak_ratio: '峰值比', dur_cycles: '持续 (周波)', d_ih: 'ΔIh (A)' };   // v0.99.26：第 8 维谐波电流增量
   // v0.99.19：行列交换（用户要求）——特征为列（ΔIa/ΔIb/ΔIc/ΔP/ΔQ/峰值比/持续），「均值 μ」「标准差 σ」与各次事件为行；
   //   v0.99.21：μ/σ 行 / 单元格类名改为 np-stat——原类名 stat 与顶部状态栏全局规则 .stat{display:flex;flex-direction:column;min-width:78px} 冲突，7 个数值格被拉成竖排 flex 块、右对齐与列宽失效
   //   μ/σ 两行高亮并置于表头之下、事件行按时刻列出；启动 / 停止画像各一张表（首列与表头吸附，横向可滚）

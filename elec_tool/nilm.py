@@ -163,7 +163,7 @@ class CycleFeatures:
             if ks:
                 amp = np.abs(spec[:, :, ks]) * (2.0 / n)                # (3, m, K) 各次峰值
                 ih_ph = np.sqrt(np.sum((amp / np.sqrt(2.0)) ** 2, axis=2))   # Σ RMS² 开方
-        # total 行取**三相平均**（不是 RMS 合成）：d_ih 是"事件前后之差"，只有线性可加的合量才能保证
+        # total 行取**三相平均**（不是 RMS 合成、也不是三相求和）：d_ih 是"事件前后之差"，只有线性可加的合量才能保证
         #   Δ(本设备 + 其它负荷) = Δ本设备 + Δ其它；平均而不是求和，是为了让数字与工程习惯的"每相谐波电流"
         #   同口径（与实时 harmonic 文件的 THD_I×I 直接可比）。谐波幅值恒正，各相不会相互抵消。
         ih = np.vstack([np.mean(ih_ph, axis=0), ih_ph])
@@ -954,10 +954,7 @@ class NilmDetector:
             out.append(ev)
             last_end = g_end
         slot["last_end"] = last_end
-        if slot is self._profiles[0]:
-            self._last_end[key] = last_end
-        else:
-            self._last_end[key] = last_end
+        self._last_end[key] = last_end          # (algo, device_id) 去重键：多画像各占一个键，互不压制
         if diag:
             slot["last"] = diag[-20:]
             hist = slot.setdefault("hist", {})
@@ -1161,7 +1158,7 @@ def load_cycles_from_file(cfg: "AppConfig", t_center: Optional[float] = None, n:
     c.validate()
 
     def _read(want: int):
-        feat = CycleFeatures(c.sampling.fs, c.sampling.f_nom)
+        feat = CycleFeatures(c.sampling.fs, c.sampling.f_nom, harmonics=False)   # 界面预览只要 t/p/q/i，不算谐波电流
         ts: List[np.ndarray] = []; ps: List[np.ndarray] = []; qs: List[np.ndarray] = []; is_: List[np.ndarray] = []
         got = 0; eof = False
         with create_source(c) as src:
