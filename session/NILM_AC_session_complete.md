@@ -571,3 +571,23 @@
 - **验证**：新增 `tests/test_r174_reactive_changepoint.py` 7 项、`tests/test_r174_sample_size_hint.py` 6 项；全量 **506 passed / 1 skipped**（154 s）。
 - **未做**：`quantity='q'`（纯无功检测量）仍未提供；Q 候选的事件幅值仍是 \|ΔI\|（A）/\|ΔP\|（W），没有 var 幅值列；无功份额 10 % 的闸门暂未做成配置项（写在 `Q_CANDIDATE_SHARE_MIN` 常量里）。
 - **live server 实录**（`:8017`）：1/1 画像 ⇒ `profile.sample_notes` 2 条、`notes` 2 条（不重复）；3/3 画像 ⇒ 空；把 1/1 画像挂上并勾选画像匹配后 `GET /api/nilm/events` 的 `summary.profile.profiles[0].notes` 与全局 `notes` 都含样本量提示（前端据此标红）。冒烟后已删 `configs/runtime.json`、`output/nilm/`。
+
+## 第 175 轮（2026-10-30）：19:23 那次「bus-停止 / bus-启动」两侧回放都没识别到启停 —— 定量归因（不改代码）
+
+- **本会话角色**：资深电力算法专家（`ROLE.md` v1.4 默认角色）／任务级覆盖：工程实现工程师（本轮为分析类，未落代码）。
+
+**用户问题（原话）**：「使用之前带设备停止的总线波形数据和带设备启动的总线波形数据分别在总线侧和分路侧重新播放，基于设备画像匹配算法两侧均没有识别到启停，详细输出见 tmp 目录下相关文件，请根据输出的数据详细分析原因。」
+
+- **先定版本**：`tmp/nilm/nilm_events_20261030.csv` 表头末列 `quality_flags`、**没有 `delta_ih_a`**；画像 `192047` 是 **7 维**；`profile_error` 是 `画像文件不存在：<整串>`（两条用 `;` 连成一串）⇒ 跑的是 **v0.99.25 及更早**，不是 v0.99.27。源文件根 `D:\LiteWork\…\NILM_Web\nilm_calc_tool` 与上次的 `D:\Work\…\NILM_Test2026\nilm_calc_tool` 不同 ⇒ 用户有两个代码副本，这次跑的是旧的那个。
+- **结论一句话**：**两侧的画像匹配一次都没有真正运行**（不是算法算不动，也不是漏检）。总线侧画像 0 个加载；分路侧口径守卫直接 return。`nilm_profile_candidates_20261030.csv` 文件根本没生成、`algorithm=profile` 的 0 行。
+- **总线侧（`bus-停止.csv`，sid0，1172 s，quantity=i 与画像一致）**：`profile_path` 填了 `…_120634.json;…_192047.json` 两条，v0.99.25 **不拆 `;`**（`_load_profile()` 里 `path = str(profile_path).strip()` 整串当文件名）⇒ run_info 记 `profile_file: null` + `profile_error` ⇒ `self._profile is None` ⇒ 一次 `detect_profile()` 都没调用。
+- **分路侧（`bus-启动.csv`，sid1，977 s）**：画像加载成功（`nilm/profile_branch_profile_device_20261030_192047.json`），但 `quantity='auto'`＋有电压 ⇒ `quantity_effective='p'`，画像 `quantity='i'` ⇒ `_evaluate_one_profile()` 的守卫 `return []` 并在 errors 写「画像按 A 口径构建，本侧检测量为 P：ΔP/ΔI 特征不可比，该画像匹配未运行（请统一 nilm.quantity）」。
+- **第三个坑（两侧都有）**：`transform.invert_phases='A'`，而画像 `invert_phases=''` ⇒ A 相 ΔI 变号。
+- **反证（本机复算，1 s→50 周波展开 + 原函数 `detect_profile`）**：
+  - 总线：手动加载画像、按 I 口径、**去掉 A 相取反** ⇒ 06:38:17 设备停机 **STOP D² 2.55 / D²/维 0.36 / conf 0.833 confirmed**（ΔI −34.7/−37.1/−38.0 A、ΔP +24 642 W、ΔQ −742 var、dur 239）——画像 STOP 是 −36.26/−31.54/−42.23、+23 881、−933.8、305，逐维 1σ 内。**保留 A 相取反则 D²/维 21.76、conf 0**。
+  - 分路：统一到 P（或 I）口径 + 去掉 A 相取反 ⇒ **06:55:33 STOP 2.05/0.360 confirmed、07:00:09 START 1.37/0.504 confirmed**；06:59:08 那条（ΔI +59.1/+59.4/+58.2、ΔP −44 033、ΔQ +9）是画像的 **1.6~1.8 倍**，D²/维 14.73 仍拒（是另一台更大的负荷）。保留 A 相取反 ⇒ 0 accepted。
+- **数据里确实有动作**：bus-停止 06:38:17 起 +24.6 kW / 合成电流 −60 A（12 s 四级下降）；bus-启动 06:59:07→10 −43.6 kW/+98 A、07:00:07→13 再 −21 kW、07:00:39→41 +35 kW/−120 A 切除 ⇒ 不是「数据里没有」。
+- **修法（全在配置/版本层）**：① 用 v0.99.27 那套代码跑（判定：事件 CSV 末列应是 `delta_ih_a`）；② 总线侧 `profile_path` 只填一个存在的文件（升级后才可写 `A;B`）；③ 两侧 `nilm.quantity` 统一成 `i`（画像就是 I 口径）；④ 去掉两侧「A 相电流取反」；⑤ `window_cycles=3000` ＜ 画像需求 73 281 周波（1466 s），建议画像改 10/50~10/200 或加大窗口；⑥ PT/CT 口径统一（画像 1/1、回放 4/250，本次属误报但必须澄清）。
+- **保真度/边界**：沙盒无 `data/`（Windows 路径），只能读 `tmp/` 的 1 s 落盘序列按 50 周波展开；时刻只到秒、`dur`/`peak` 与引擎逐周波有 ~0.6 % 级差异；结论是「有/无」级别，D² 数值仅供排序。
+- **本轮改动**：只追加文档（`REPORT_TEST.md` 第 175 轮专题 + 本节 + `STATUS.md`），**未改任何代码**，`tmp/` 未动。
+- **未决**：是否把「画像未生效」做成负荷辨识页的醒目提示（v0.99.27 的 `summary.profile` 已有 `loaded/error` 字段，可加标记）——待用户确认后立项。
