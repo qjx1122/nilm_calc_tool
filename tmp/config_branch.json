@@ -1,8 +1,8 @@
 {
-  "name": "电力系统电气量计算工具",
+  "name": "分路侧设备电气量",
   "sampling": {
-    "fs": 10000.0,
-    "f_nom": 50.0,
+    "fs": 10000,
+    "f_nom": 50,
     "f_min": 45.0,
     "f_max": 65.0,
     "adaptive_freq": true,
@@ -121,8 +121,8 @@
   },
   "source": {
     "kind": "csv_file",
-    "path": "data\\化工行业-海湾化工-bus-3-正常.csv",
-    "poll_interval_s": 0.05,
+    "path": "data\\化工行业-海湾化工-bus-启动.csv",
+    "poll_interval_s": 0.2,
     "block_samples": 640,
     "tail_from_end": false,
     "watch_dir_newest": true,
@@ -147,8 +147,7 @@
     "custom_time_start": "",
     "file_time_utc": false,
     "play_start_mode": "begin",
-    "file_speed": 1.0,
-    "file_speed_follow": true,
+    "file_speed": 1,
     "play_start_value": "",
     "play_end_time": "",
     "play_window": false,
@@ -156,11 +155,11 @@
     "play_window_end": ""
   },
   "output": {
-    "history_len": 900,
+    "history_len": 600,
     "history_hours": 24.0,
     "history_max_points": 500000,
     "export_dir": "output",
-    "spectrum_max_points": 1200,
+    "spectrum_max_points": 1600,
     "curve_save": {
       "voltage": true,
       "current": true,
@@ -174,7 +173,7 @@
     "realtime_save": true,
     "realtime_dir": "output/realtime",
     "series_hidden": {},
-    "source_id": 0,
+    "source_id": 1,
     "autoload_last": true
   },
   "events": {
@@ -213,37 +212,30 @@
       "A"
     ],
     "window_cycles": 3000,
-    "min_gap_cycles": 500,
+    "min_gap_cycles": 1000,
     "rel_tol_pct": 0,
-    "min_delta_pct": 0,
-    "quantity": "i",
+    "min_delta_pct": 0.0,
     "algorithms": {
       "threshold": {
-        "enabled": true,
+        "enabled": false,
         "min_delta_w": 50.0,
         "settle_cycles": 5,
         "settle_tol_w": 20.0,
-        "max_rise_cycles": 40,
-        "min_delta_a": 0.049,
-        "settle_tol_a": 0.0051
+        "max_rise_cycles": 40
       },
       "two_window": {
         "enabled": true,
         "pre_cycles": 10,
         "post_cycles": 10,
         "min_delta_w": 50.0,
-        "k_sigma": 3.0,
-        "min_delta_a": 0.049
+        "k_sigma": 3.0
       },
       "cusum": {
         "enabled": true,
         "drift_w": 10.0,
         "threshold_w": 200.0,
         "min_delta_w": 50.0,
-        "settle_cycles": 5,
-        "drift_a": 0.013000000000000001,
-        "threshold_a": 0.07200000000000001,
-        "min_delta_a": 0.049
+        "settle_cycles": 5
       },
       "glr": {
         "enabled": true,
@@ -251,18 +243,14 @@
         "threshold": 25.0,
         "min_delta_w": 50.0,
         "noise_w": 10.0,
-        "settle_cycles": 5,
-        "min_delta_a": 0.049,
-        "noise_a": 0.0011
+        "settle_cycles": 5
       },
       "steady_state": {
         "enabled": true,
         "tol_w": 30.0,
         "min_steady_cycles": 10,
         "min_delta_w": 50.0,
-        "max_transient_cycles": 100,
-        "tol_a": 0.006,
-        "min_delta_a": 0.049
+        "max_transient_cycles": 100
       },
       "median_diff": {
         "enabled": true,
@@ -270,16 +258,15 @@
         "min_delta_w": 50.0,
         "settle_cycles": 5,
         "settle_tol_w": 20.0,
-        "max_rise_cycles": 40,
-        "min_delta_a": 0.049,
-        "settle_tol_a": 0.0051
+        "max_rise_cycles": 40
       },
       "profile": {
         "enabled": true
       }
     },
+    "quantity": "auto",
     "auto_params": true,
-    "profile_path": "output\\nilm\\profile_device_20261030_084954.json"
+    "profile_path": "output\\nilm\\profile_device_20261030_192047.json"
   },
   "branch": {
     "enabled": false,
@@ -288,13 +275,8 @@
     "time_offset_s": 0.0,
     "align_tol_s": 0.0,
     "common_window": false,
-    "hide_ui": false,
     "common_start": "",
     "common_end": ""
-  },
-  "processing": {
-    "error_report": true,
-    "error_window_s": 1.0
   },
   "windows": {
     "voltage": {
@@ -369,212 +351,5 @@
       "remove_dc": true,
       "min_cycles": 1
     }
-  },
-  "_tuning": {
-    "generated_at": "2026-10-27 09:00:55",
-    "changes": [
-      "nilm.quantity = i",
-      "nilm.rel_tol_pct = 0.94",
-      "nilm.min_delta_pct = 9.04",
-      "threshold: min_delta_a=0.049  settle_cycles=5  settle_tol_a=0.0051  max_rise_cycles=40",
-      "median_diff: median_cycles=5  min_delta_a=0.049  settle_cycles=5  settle_tol_a=0.0051  max_rise_cycles=40",
-      "two_window: pre_cycles=10  post_cycles=10  min_delta_a=0.049  k_sigma=3",
-      "cusum: drift_a=0.013  threshold_a=0.072  min_delta_a=0.049  settle_cycles=5",
-      "glr: window_cycles=15  threshold=25  min_delta_a=0.049  noise_a=0.0011  settle_cycles=5",
-      "steady_state: tol_a=0.006  min_steady_cycles=10  min_delta_a=0.049  max_transient_cycles=100",
-      "nilm.channels = ['A']",
-      "source.path = data\\玻璃行业-鼎新玻璃_dev_1_1.csv"
-    ],
-    "file": "data\\玻璃行业-鼎新玻璃_dev_1_1.csv",
-    "channel": "A",
-    "quantity": "i",
-    "quantity_requested": "i",
-    "unit": "A",
-    "t_span_s": 599.9800000190735,
-    "min_load_used": 0.09783,
-    "min_load_source": "manual",
-    "min_load_estimate": {
-      "unit": "A",
-      "candidate": 0.09783247070039303,
-      "candidate_from": "step",
-      "min_step": 0.09783247070039303,
-      "min_level_gap": 0.1024256433311343,
-      "levels": [
-        0.4423,
-        0.5447000000000001,
-        0.6836,
-        0.9317000000000001
-      ],
-      "n_steady": 27,
-      "n_events": 6,
-      "reliable": true,
-      "note": "由 27 个稳态段（不动 ≥25 周波）/ 4 个台阶估计：最小跳变 0.09783 A，最大跳变 0.3866 A，最小台阶间距 0.1024 A → 候选 0.09783 A。仅对分路侧单设备录波有效；若现场不关心二级负荷，请手工改大",
-      "max_step": 0.3866162562956714,
-      "step_ratio": 3.9518194064592733,
-      "primary_step": null,
-      "secondary_step": null,
-      "split": false,
-      "n_transients": 26
-    },
-    "notes": [],
-    "t_range": {
-      "start": "",
-      "end": "",
-      "duration_s": null,
-      "t_first": 1605785046.5733,
-      "t_last": 1605785646.5533,
-      "whole_file": true,
-      "custom_time": false
-    },
-    "side": "bus",
-    "base_mode": "custom",
-    "base_config": "独立基准配置（出厂配置 + fs=10000 f_nom=50 PT/CT=关闭 PT=1 CT=80 UTC=否 quantity=auto）",
-    "measure": {
-      "cycles": 30000,
-      "unit": "A",
-      "level": 0.5417809120966637,
-      "sigma_cycle": 0.0010513329194219885,
-      "sigma_cycle_pct": 0.19405130301718923,
-      "sigma_raw": 0.0010513329194219885,
-      "sigma_method": "diff_mad",
-      "sigma_lags": {
-        "1": 0.0010513329194219885,
-        "2": 0.0011027264818870284,
-        "3": 0.0011043512702094565,
-        "5": 0.001124946550888616,
-        "10": 0.0011595856268759035,
-        "20": 0.0011900613114492762,
-        "25": 0.001204172852715383,
-        "50": 0.0012624225864745567,
-        "100": 0.001368392919558551
-      },
-      "repeat_frac": 6.666888896296543e-05,
-      "repeat_run_cycles": 1.0,
-      "repeated_cycles": false,
-      "max_abs_diff": 0.3692851680525375,
-      "has_events_hint": true,
-      "range5_p95": 0.004167194059801524,
-      "range10_p95": 0.004993321020178576,
-      "sigma_mean10": 0.0006539609493652192,
-      "min": 0.4304385366546549,
-      "max": 0.9421546281432935
-    },
-    "suggest": {
-      "note": "min_delta_a = max(最小关心负荷/2, 6σ)",
-      "unit": "A",
-      "quantity": "i",
-      "transient": {
-        "longest": 29,
-        "n_transients": 6,
-        "n_steady": 9,
-        "transients": [
-          {
-            "start": 21259,
-            "end": 21288,
-            "cycles": 29,
-            "delta": 0.3866162562956714
-          },
-          {
-            "start": 27223,
-            "end": 27251,
-            "cycles": 28,
-            "delta": 0.24939298311798896
-          },
-          {
-            "start": 4585,
-            "end": 4612,
-            "cycles": 27,
-            "delta": 0.10107295126786714
-          },
-          {
-            "start": 8777,
-            "end": 8804,
-            "cycles": 27,
-            "delta": -0.10132627546372874
-          },
-          {
-            "start": 18847,
-            "end": 18874,
-            "cycles": 27,
-            "delta": 0.1005793845220202
-          }
-        ],
-        "smooth_cycles": 25,
-        "run_cycles": 1.0,
-        "min_steady_cycles_used": 10,
-        "max_pseudo_steady": 14,
-        "max_transient_cycles": 100
-      },
-      "rel_tol_pct": 0.94,
-      "min_delta_pct": 9.04,
-      "algorithms": {
-        "threshold": {
-          "min_delta_a": 0.049,
-          "settle_cycles": 5,
-          "settle_tol_a": 0.0051,
-          "max_rise_cycles": 40
-        },
-        "median_diff": {
-          "median_cycles": 5,
-          "min_delta_a": 0.049,
-          "settle_cycles": 5,
-          "settle_tol_a": 0.0051,
-          "max_rise_cycles": 40
-        },
-        "two_window": {
-          "pre_cycles": 10,
-          "post_cycles": 10,
-          "min_delta_a": 0.049,
-          "k_sigma": 3.0
-        },
-        "cusum": {
-          "drift_a": 0.013000000000000001,
-          "threshold_a": 0.07200000000000001,
-          "min_delta_a": 0.049,
-          "settle_cycles": 5
-        },
-        "glr": {
-          "window_cycles": 15,
-          "threshold": 25.0,
-          "min_delta_a": 0.049,
-          "noise_a": 0.0011,
-          "settle_cycles": 5
-        },
-        "steady_state": {
-          "tol_a": 0.006,
-          "min_steady_cycles": 10,
-          "min_delta_a": 0.049,
-          "max_transient_cycles": 100
-        }
-      }
-    },
-    "params": {
-      "quantity_requested": "i",
-      "channel": "A",
-      "t_start": "",
-      "t_end": "",
-      "duration_s": null,
-      "max_cycles": 30000,
-      "min_load_w": null,
-      "min_load_a": 0.09783,
-      "min_load_auto": false,
-      "min_load_used": 0.09783,
-      "min_load_source": "manual",
-      "custom_time": false,
-      "custom_time_start": "",
-      "custom_time_end": "",
-      "base": {
-        "fs": 10000.0,
-        "f_nom": 50.0,
-        "pt_ct_enabled": false,
-        "pt_ratio": 1.0,
-        "ct_ratio": 80.0,
-        "file_time_utc": false,
-        "quantity": "auto",
-        "channel": "total"
-      },
-      "base_file": "output\\nilm\\nilm_tune_base.json"
-    },
-    "command": "python tools/nilm_tune.py --file 'data\\玻璃行业-鼎新玻璃_dev_1_1.csv' --config 'output\\nilm\\nilm_tune_base.json' --channel A --quantity i --min-load-a 0.09783 --json --apply --out 'output\\nilm\\tune_20261027_090055.json'"
   }
 }
