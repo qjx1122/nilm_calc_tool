@@ -2813,7 +2813,7 @@ async def process_nilm_profile(payload: Dict[str, Any]) -> Any:
            base_mode?/base?/col_map_enabled?/col_map? 同 /api/process/nilm_tune}
     labels 空＝自动定位（稳态分段 + 自适应参数；幅值为正＝启动、为负＝停止）。返回 {ok, saved_to, profile(summary), events, notes, command}。
     """
-    from elec_tool.nilm_profile import ProfileError, build_profile, profile_summary, save_profile
+    from elec_tool.nilm_profile import ProfileError, build_profile, profile_summary, sample_size_notes, save_profile
     from tools.nilm_profile import build_cli_command as _profile_cmd
     path = str(payload.get("path") or "").strip()
     if not path:
@@ -2885,7 +2885,12 @@ async def process_nilm_profile(payload: Dict[str, Any]) -> Any:
         save_profile(doc, fp)
         summ = profile_summary(doc); summ["path"] = _display_path(fp)
         events = [e for g in ("startup", "shutdown") if doc.get(g) for e in doc[g]["events"]]
-        return {"ok": True, "saved_to": _display_path(fp), "profile": summ, "events": events, "notes": doc.get("notes", []),
+        # v0.99.27：每方向 <3 个启停样本的提示同时进 profile.sample_notes（界面卡片高亮）与 notes（结果区红字）
+        _notes: list = list(doc.get("notes") or [])
+        for _nt in sample_size_notes(doc):
+            if _nt not in _notes:
+                _notes.append(_nt)
+        return {"ok": True, "saved_to": _display_path(fp), "profile": summ, "events": events, "notes": _notes,
                 "command": doc["command"], "file": _display_path(src_abs), "side": doc["side"], "base_config": base_label,
                 "startup": doc.get("startup"), "shutdown": doc.get("shutdown"), "features": doc.get("features")}
     except (ProfileError, ConfigError, ValueError, WaveError, TuneError) as exc:

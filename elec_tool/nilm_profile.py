@@ -166,6 +166,44 @@ def profile_feature_names(profile: Dict[str, Any]) -> List[str]:
     return list(FEATURES)
 
 
+# v0.99.27：无功序列「单独造候选」的画像无功份额下限 |ΔQ| / √(ΔP²+ΔQ²)。
+#   低于它（纯电阻设备，ΔQ≈0）只把无功阶跃当**变点**用于截断前后窗，不造候选——否则任何电容投切都会越过 |ΔQ|/2 的门槛、
+#   被当成这台设备的启停（误报）。1 个画像一条规则适用两侧，不跟 PT/CT、不跟检测量口径（P/I）绑定。
+Q_CANDIDATE_SHARE_MIN = 0.1
+
+# v0.99.27：每方向建议的最少启停样本数（σ 由样本估计；<3 个时只能取经验下限，界面 / CLI 统一提示）
+MIN_EVENTS_PER_DIR = 3
+
+
+def sample_size_notes(doc: Dict[str, Any]) -> List[str]:
+    """v0.99.27：**样本量提示**（界面 / CLI 共用）。
+
+    每方向建议 ≥ ``MIN_EVENTS_PER_DIR`` 次独立启停：
+      * 1 个样本 ⇒ 标准差为 0，σ 完全靠 ``_REL_FLOOR`` / ``_ABS_FLOOR`` 托底（容差固定为 15 %/25 % …）；
+      * 2 个样本 ⇒ σ 只有 1 个自由度，偶然一次差异会被放大成"很宽"或"很窄"的容差；
+      * ≥3 个才有稳定的重复性估计（实测设备通常落到 2~5 %）。
+
+    返回**给用户看的提示文本**（已含方向名），不满足时逐方向一条；两个方向都够则返回空列表。
+    只读 ``doc["startup"/"shutdown"]["n"]``，因此**旧画像（7 维、v0.99.25 及更早）同样适用**。
+    """
+    out: List[str] = []
+    for key, name in (("startup", "启动"), ("shutdown", "停止")):
+        g = doc.get(key) or {}
+        try:
+            n = int(g.get("n") or 0)
+        except (TypeError, ValueError):
+            n = 0
+        if n >= MIN_EVENTS_PER_DIR:
+            continue
+        if n <= 0:
+            out.append(f"没有{name}事件样本（建议每方向 ≥{MIN_EVENTS_PER_DIR} 次启停）：画像只含另一方向，总线侧只能辨识该方向")
+        else:
+            out.append(f"{name}画像只有 {n} 次事件（建议每方向 ≥{MIN_EVENTS_PER_DIR} 次启停）：σ 取经验下限（ΔI/ΔP/ΔIh 15 %、ΔQ 25 % 与绝对下限），"
+                       f"容差偏紧 ⇒ 现场噪声容易判成不匹配、幅值相近的他负荷也更容易被误认成同一设备"
+                       f"（第 167 轮实录：单样本画像把他负荷两级下跌判成 STOP 0.46）；请补录不同日期 / 工况的启停后重新提取（方案 §3.4）")
+    return out
+
+
 def validate_profile(doc: Dict[str, Any]) -> Dict[str, Any]:
     if not isinstance(doc, dict) or doc.get("schema") != PROFILE_SCHEMA:
         raise ProfileError(f"画像文件 schema 不是 {PROFILE_SCHEMA}（当前 {doc.get('schema') if isinstance(doc, dict) else type(doc).__name__!r}）")
@@ -406,21 +444,30 @@ def change_points(x: np.ndarray, pre_n: int, post_n: int, min_d: float, k_sig: f
 
 
 def window_bounds(cps: Sequence[Tuple[int, float]], onset: int, end: int, pre_n: int, post_n: int,
-                  delta: float = 0.0, dur_max: int = 0, peak_max: float = 1.0) -> Tuple[Optional[int], Optional[int]]:
+                  delta: float = 0.0, dur_max: int = 0, peak_max: float = 1.0,
+                  foreign: Sequence[int] = ()) -> Tuple[Optional[int], Optional[int]]:
     """候选 (onset,end) 的前窗下界 / 后窗上界：前一个变点（含其过渡）之后、下一个变点之前。
 
     后窗：onset 之后 1.5×dur_max（画像最长持续）以内的变点，若与候选**同号**且幅值不超过候选自身的 1.5 倍（慢斜坡 / 分级启动被
     短窗切成多个同向变点），或反号但幅值不超过 1.25×max(peak_max−1, 0.25)×|Δ|（启动冲击峰的回落、过冲的回摆——peak_max＝画像峰值比
     均值），视为候选自身过渡的一部分，不截断；其余变点（幅值更大的同号台阶、反号且幅值大、或超出该范围）都截断。前窗：任何变点都截断。
-    v0.99.25：后窗边界以 **onset** 为基准判断（原来的 end 可能已经被污染的后窗中位数拉到下一个事件上，边界跟着失效）。"""
+    v0.99.25：后窗边界以 **onset** 为基准判断（原来的 end 可能已经被污染的后窗中位数拉到下一个事件上，边界跟着失效）。
+    v0.99.27：``foreign``＝**别的量**上的变点位置（如 I 口径下的 |ΔQ| 阶跃＝电容投切）。它们的幅值与候选不同量纲，
+    不能参与"同号 / 幅值不超过 1.5 倍"这套比较（var 与 A 无法比大小）⇒ 只按时间判：超出候选自身过渡窗就截断。"""
     w = max(10, min(150, post_n // 20))
+    fset = {int(c) for c in foreign}
     before = [c for c, _d in cps if c < onset - w]
     own_until = onset + int(1.5 * max(dur_max, 0)) + w
+    # v0.99.27：别的量（无功）上的变点只按"短窗内"算同一次动作——候选自身的无功摆动（电机励磁涌流）只有几周波~几秒，
+    #   不能沿用 dur_max（慢启停设备的 dur 可达 1200+ 周波≈25 s，会把 25 s 内的电容投切全当成"自己"的而不截断）。
+    own_until_f = onset + w
     decay_lim = 1.25 * max(float(peak_max) - 1.0, 0.25) * abs(float(delta))
 
     cap = max(1.5 * abs(float(delta)), decay_lim)      # v0.99.25：同号但幅值远大于候选自身过渡 ⇒ 别的设备，照截
 
     def _own(c: int, d: float) -> bool:
+        if c in fset:
+            return c <= own_until_f                   # v0.99.27：无功变点只看短窗（见 own_until_f）
         if c > own_until:
             return False
         if abs(d) <= decay_lim:
@@ -489,9 +536,54 @@ def detect_profile(p4: np.ndarray, q4: np.ndarray, i4: np.ndarray, profile: Dict
                 merged.append({"onset": onset, "end": end, "delta": delta, "scale": sc, "scales_hit": [sc]})
             else:                                 # 尺度升序扫描：先命中的（更细）保留几何与幅值
                 hit["scales_hit"].append(sc)      # v0.99.25：幅值不再被更粗尺度覆盖（粗尺度后窗可能已经吃进下一个反号事件，符号会把整段几何带偏）
+    # ------------------------------------------------------------------ v0.99.27：无功序列（纯无功阶跃）
+    # **问题**（第 172 轮实录）：`detect_profile` 只对检测量那一条序列（P 口径＝p4[0]、I 口径＝i4[0]）跑候选与 change_points，
+    #   而电容组投切 / SVG 动作是**纯无功阶跃**——它在 P 上几乎不动、在三相合成电流上也只动一点点。后果两条：
+    #   ① 它不成候选 ⇒ 一个无功型设备（电容器、SVG、空压机卸载）的启停在 I 口径下根本看不见；
+    #   ② 它不成"变点"⇒ 候选的前后窗把它整个吃进去（干净窗 ΔQ −0.33 kvar，实际取到 −25.8 kvar，画像 d_q 彻底对不上）。
+    # **改法**：把 q4[0] 作为**第二条搜索序列**并联进来——
+    #   * 变点：Q 上的变点进 `change_points` 结果，参与截断前后窗（与 x 上的变点按时间合并，同位置视为同一次动作）；
+    #   * 候选：Q 上也能出候选（不与 x 候选重叠时），几何按 Q 序列自己的 `transition_end` 定；
+    #   * 两条序列单位不同（W 或 A vs var），**幅值绝不可比**：`window_bounds` 里把它们互为 `foreign`，只按时间截断。
+    #   * 只有画像本身有可观的无功份额（|ΔQ| / √(ΔP²+ΔQ²) ≥ 10 %）才允许 Q 单独造候选——纯电阻设备 ΔQ≈0 时，
+    #     任何电容投切都会越过它 |ΔQ|/2 的门槛，全被当成它的启停，那是误报。
+    iq = FEATURES.index("d_q"); ip_ = FEATURES.index("d_p")
+    p_amp = [abs(float(g["mu"][ip_])) for g in groups if g.get("mu") and len(g["mu"]) > ip_]
+    q_amp = [abs(float(g["mu"][iq])) for g in groups if g.get("mu") and len(g["mu"]) > iq]
+    q_sig: Optional[np.ndarray] = None
+    q_cps: List[Tuple[int, float]] = []
+    min_d_q = _ABS_FLOOR["d_q"]
+    q_use = False
+    if q4 is not None and q4.shape[1] == x.size and float(np.ptp(q4[0])) > 0.0 and q_amp:
+        q_sig = q4[0]
+        # 门槛＝画像 |ΔQ| 的一半；但**不能为 0**：q 很干净时局部方差 → 0，thr=0 会把"零变化"的窗口也判成变点
+        #   （合成例：台阶后第一段平台的 delta 恰为 0，照样 >= 0 ⇒ 冒出一个假变点把候选后窗截短）。用 _ABS_FLOOR 托底。
+        min_d_q = max(0.5 * min(q_amp), _ABS_FLOOR["d_q"])
+        q_cps = change_points(q_sig, pre_n, post_n, min_d_q, k_sig)
+        q_share = max(q_amp) / max(1e-12, math.hypot(max(p_amp) if p_amp else 0.0, max(q_amp)))
+        q_use = q_share >= Q_CANDIDATE_SHARE_MIN     # 无功份额不足 ⇒ 只当"变点"用，不单独造候选
+        if q_use:
+            for sc in scales:
+                wp, wq = max(5, int(round(pre_n * sc))), max(5, int(round(post_n * sc)))
+                for onset, end, delta_q in _two_window_candidates(q_sig, wp, wq, min_d_q, k_sig):
+                    hit = None
+                    for g in merged:                 # 与 x 上的候选重叠 ⇒ 同一次动作：沿用 x 候选（幅值 / 量纲以检测量为准）
+                        tol = int(post_n * min(sc, g["scale"]))
+                        if g["onset"] - tol <= onset <= g["end"] + tol:
+                            hit = g; break
+                    if hit is None:
+                        merged.append({"onset": onset, "end": end, "delta": delta_q, "scale": sc, "scales_hit": [sc], "from_q": True})
     merged.sort(key=lambda g: g["onset"])
-    cands = [(g["onset"], g["end"], g["delta"], g["scale"], g["scales_hit"]) for g in merged]
+    cands = [(g["onset"], g["end"], g["delta"], g["scale"], g["scales_hit"], bool(g.get("from_q"))) for g in merged]
     cps = change_points(x, pre_n, post_n, min_d, k_sig)                     # v0.99.24：相邻变点截断特征窗
+    # 两套量纲的变点各自成"主"列表，另一套的位置作为 foreign（只按时间截断，见 window_bounds）
+    w_cp = max(10, min(150, post_n // 20))
+    x_pos = [c for c, _d in cps]
+    q_pos = [c for c, _d in q_cps]
+    q_only = [int(o) for o in q_pos if not any(abs(o - c) <= w_cp for c in x_pos)]
+    x_only = [int(c) for c in x_pos if not any(abs(o - c) <= w_cp for o in q_pos)]
+    fused_x = sorted(list(cps) + [(o, 0.0) for o in q_only], key=lambda t: t[0])
+    fused_q = sorted(list(q_cps) + [(o, 0.0) for o in x_only], key=lambda t: t[0])
     dur_max = max([int((g.get("dur_cycles") or {}).get("max", 0) or 0) for g in groups] + [0])
     _pk = FEATURES.index("peak_ratio")
     peak_max = max([float(g["mu"][_pk]) for g in groups if g.get("mu")] + [1.0])
@@ -501,16 +593,20 @@ def detect_profile(p4: np.ndarray, q4: np.ndarray, i4: np.ndarray, profile: Dict
     pmap = phase_map_code(prm.get("phase_map", 1))                      # v0.99.6：总线 / 设备侧相序映射
     out: List[Dict[str, Any]] = []
     state = device_state
-    for onset, end, delta, sc, hits in cands:
-        pre_lo, post_hi = window_bounds(cps, onset, end, pre_n, post_n, delta, dur_max, peak_max)
+    for onset, end, delta, sc, hits, from_q in cands:
+        xs = (q_sig if q_sig is not None else x) if from_q else x
+        if from_q and q_sig is not None:
+            pre_lo, post_hi = window_bounds(fused_q, onset, end, pre_n, post_n, delta, dur_max, peak_max, x_only)
+        else:
+            pre_lo, post_hi = window_bounds(fused_x, onset, end, pre_n, post_n, delta, dur_max, peak_max, q_only)
         if sc < 1:
             # v0.99.24：细尺度找到的候选，其终点是按短后窗（post·sc）定的——慢斜坡在短窗里的「目标电平」是坡中值，终点会定在坡的前段；
             #   这里按画像自身 post 几何（并受下一变点截断）重算终点，使 dur / 后窗与画像提取时同一规则
             a0 = max(0, onset - pre_n) if pre_lo is None else max(0, onset - pre_n, int(pre_lo))
             b1 = onset + post_n if post_hi is None else min(onset + post_n, int(post_hi))
             if b1 - onset >= 2 and onset - a0 >= 1:
-                tgt = float(np.median(x[onset:b1])); dl = tgt - float(np.median(x[a0:onset]))
-                end = transition_end(x, onset, post_n, tgt, abs(dl), hi=post_hi)
+                tgt = float(np.median(xs[onset:b1])); dl = tgt - float(np.median(xs[a0:onset]))
+                end = transition_end(xs, onset, post_n, tgt, abs(dl), hi=post_hi)
         floor_post = max(10, post_n // 20)
         gap_post = (int(post_hi) - int(end)) if post_hi is not None else post_n
         crowded = post_hi is not None and gap_post < floor_post                       # 干净后窗偏短：记标志并改用 post_hi 前 floor_post 周波（v0.99.25）
@@ -529,7 +625,8 @@ def detect_profile(p4: np.ndarray, q4: np.ndarray, i4: np.ndarray, profile: Dict
                 flags.append("state_mismatch"); conf *= 0.5
         if m["traj_penalty"] < 1.0:
             flags.append("trajectory_deviates")
-        d_meas = float(feat["vec"]["d_p"]) if use_p else float(feat["d_it"])       # v0.99.25：量出来的 Δ 与搜索到的 Δ 反号
+        # v0.99.25：量出来的 Δ 与搜索到的 Δ 反号。v0.99.27：Q 序列上的候选只能跟 **ΔQ** 比符号（var vs A/W 不可比）
+        d_meas = (float(feat["vec"]["d_q"]) if from_q else (float(feat["vec"]["d_p"]) if use_p else float(feat["d_it"])))
         if abs(float(delta)) > 1e-9 and abs(d_meas) > 1e-9 and (float(delta) > 0) != (d_meas > 0):
             flags.append("sign_flip")                 # ＝前后窗取错了（跨过了相邻的另一次动作），不是本设备的动作
         if crowded:
@@ -538,7 +635,7 @@ def detect_profile(p4: np.ndarray, q4: np.ndarray, i4: np.ndarray, profile: Dict
         status = "confirmed" if accepted and not flags else ("low_confidence" if accepted else "rejected")
         if accepted:
             state = "on" if m["direction"] == "START" else "off"
-        out.append({"onset": onset, "end": end, "delta": delta, "feat": feat, "match": m, "confidence": conf,
+        out.append({"onset": onset, "end": end, "delta": delta, "feat": feat, "match": m, "confidence": conf, "source": "q" if from_q else "x",
                     "flags": flags, "accepted": accepted, "status": status, "scale": (int(sc) if sc >= 1 else float(sc)),
                     "scales_hit": [(int(x) if x >= 1 else float(x)) for x in hits],
                     "post_wait": int(post_n), "pre_lo": pre_lo, "post_hi": post_hi})
@@ -752,11 +849,8 @@ def build_profile(cfg, file: str, *, device_id: str = "device", labels: Optional
         notes.append(f"{n_pol}/{len(samples)} 个事件的 ΔP 与 ΔI 异号（有功为负）：CT 极性接反或电压/电流相别未配对（列映射），画像 ΔP/ΔQ 的符号与总线侧不一致将匹配不上；请核对接线 / 列映射，或改用 quantity=i")
     startup = fit_group([s for s in samples if s["direction"] == "START"])
     shutdown = fit_group([s for s in samples if s["direction"] == "STOP"])
-    for name, g in (("启动", startup), ("停止", shutdown)):
-        if g is None:
-            notes.append(f"没有{name}事件样本：画像只含另一方向，总线侧只能辨识该方向")
-        elif g["n"] < 3:
-            notes.append(f"{name}画像只有 {g['n']} 次事件：σ 按相对下限（{int(_REL_FLOOR['d_p'] * 100)}% 中心值）给出，建议采集不同日期 / 工况的 ≥3 次独立启停（方案 §3.4）")
+    # v0.99.27：样本量提示集中到 sample_size_notes()（提取结果 / 画像加载 / 界面 / CLI 用同一段文字）
+    notes.extend(sample_size_notes({"startup": startup, "shutdown": shutdown}))
     # 稳态电平（设备 OFF / ON 时本侧 P 或 I）
     lv_off = float(np.median(x[:pre_n])) if x.size >= pre_n else float(x[0])
     doc = {"schema": PROFILE_SCHEMA, "device_id": str(device_id or "device"), "version": "1.0",
@@ -795,4 +889,6 @@ def profile_summary(doc: Dict[str, Any]) -> Dict[str, Any]:
             "startup": g("startup"), "shutdown": g("shutdown"), "path": doc.get("_path"), "label_mode": doc.get("label_mode"),
             "source_file": doc.get("source_file"), "notes": list(doc.get("notes") or []),
             "features": list(names), "has_harmonic": "d_ih" in names,
+            # v0.99.27：每方向 <3 个样本时给出界面提示（提取结果 与 画像匹配状态行都用这一份）
+            "min_events": MIN_EVENTS_PER_DIR, "sample_notes": sample_size_notes(doc),
             "harmonic": dict(doc.get("harmonic") or {}) if "d_ih" in names else {}}

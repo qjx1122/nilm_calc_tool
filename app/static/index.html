@@ -1195,7 +1195,7 @@
               </div>
             </div>
             <div class="wp-group">
-              <div class="wp-group-title">③ 事件前后窗</div>
+              <div class="wp-group-title">③ 事件前后窗 <small class="note">（建议每方向 ≥3 次启停：启动 / 停止各录 3 次以上，σ 才由实际重复性给出）</small></div>
               <div class="row2">
                 <label class="f" title="事件前窗周波数（取稳态前值）"><span class="lbl">前窗 (周波)</span><input id="np-pre" type="number" min="3" step="1" value="10"></label>
                 <label class="f" title="事件后窗周波数：应 ≥ 设备启动过程（冲击 / 爬升）时长；总线侧确认事件也要等这么多周波"><span class="lbl">后窗 (周波)</span><input id="np-post" type="number" min="3" step="1" value="50"></label>
@@ -1210,6 +1210,7 @@
             <div class="notes p">
               <div>画像＝多次启停事件的前后差分特征（ΔIa/ΔIb/ΔIc/ΔP/ΔQ、峰值比、持续周波）均值 μ 与标准差 σ，以及归一化启停轨迹模板；总线侧用对角马氏距离匹配并给出置信度。</div>
               <div>设备侧电流 ≠ 总线侧增量；本版不做同步校准，总线侧事件只给<b>观测幅值 + 置信度</b>，不估计设备贡献幅值。画像与总线侧检测量口径（P / I）须一致。</div>
+              <div><b>样本量</b>：每个方向（启动 / 停止）建议 <b>≥3 次独立启停</b>（不同日期或工况）。只有 1 个样本时 σ 完全取经验下限（ΔI/ΔP/ΔIh 15 %、ΔQ 25 %），容差偏紧 ⇒ 现场噪声或被夹在他负荷中间的启停容易被判成不匹配，幅值相近的他负荷也更容易被误认成本设备。样本不足时结果区与负荷辨识页的画像状态行都会给出提示（候选诊断 CSV 里有每次被拒的原因，可据此判断是"样本不够"还是"设备没启动"）。</div>
             </div>
           </div>
         </div>

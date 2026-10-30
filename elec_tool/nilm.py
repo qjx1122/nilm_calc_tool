@@ -38,7 +38,7 @@ from .timefmt import fmt_local, wall_day
 from .config import AppConfig, NILM_ALGO_DEFAULTS, NILM_ALGO_NAMES, NILM_CHANNELS, NILM_W_TO_A, NilmConfig
 from .nilm_auto import AUTO_MIN_CYCLES, auto_algo_params, window_stats
 from .config import NILM_SCALAR_ALGOS
-from .nilm_profile import ProfileError, detect_profile, load_profile, profile_summary
+from .nilm_profile import ProfileError, detect_profile, load_profile, profile_summary, sample_size_notes
 
 __all__ = ["NilmEvent", "NilmDetector", "CycleFeatures", "detect_steps", "NILM_ALGO_NAMES", "HARM_ORDERS"]
 
@@ -492,7 +492,8 @@ class NilmWriter:
             # v0.99.26：device_id（多画像必须区分是哪个画像的候选）＋ d_ih / c_d_ih（谐波电流维度）
             fields = ["source_id", "run_id", "t_start", "t_start_local", "g_on", "device_id", "direction", "status", "flags", "scale", "scales_hit",
                       "confidence", "d2", "d2_per_dim", "margin", "d_ia", "d_ib", "d_ic", "d_p", "d_q", "peak_ratio", "dur_cycles", "d_ih",
-                      "c_d_ia", "c_d_ib", "c_d_ic", "c_d_p", "c_d_q", "c_peak_ratio", "c_dur_cycles", "c_d_ih"]
+                      "c_d_ia", "c_d_ib", "c_d_ic", "c_d_p", "c_d_q", "c_peak_ratio", "c_dur_cycles", "c_d_ih",
+                      "source"]                       # v0.99.27：候选来源 x（检测量序列）/ q（无功序列，纯无功阶跃）
             with SHARED_FILE_LOCK:
                 os.makedirs(self.dir, exist_ok=True)
                 from .events import _rotate_if_header_differs
@@ -507,7 +508,8 @@ class NilmWriter:
                                 "/".join(str(x) for x in (d.get("scales_hit") or [])),
                                 d.get("confidence", ""), d.get("d2", ""), d.get("d2_per_dim", ""), d.get("margin", "")]
                                + [v.get(k, "") for k in ("d_ia", "d_ib", "d_ic", "d_p", "d_q", "peak_ratio", "dur_cycles", "d_ih")]
-                               + [c.get(k, "") for k in ("d_ia", "d_ib", "d_ic", "d_p", "d_q", "peak_ratio", "dur_cycles", "d_ih")])
+                               + [c.get(k, "") for k in ("d_ia", "d_ib", "d_ic", "d_p", "d_q", "peak_ratio", "dur_cycles", "d_ih")]
+                               + [d.get("source", "x")])
         except Exception as exc:   # pragma: no cover
             self.errors.append(f"候选诊断写盘失败：{exc}")
 
@@ -594,6 +596,12 @@ class NilmDetector:
                 slot["profile"] = load_profile(ap)
             except (ProfileError, ValueError, OSError) as exc:
                 slot["err"] = f"画像加载失败：{exc}"
+            if slot["profile"] is not None:
+                # v0.99.27：每方向 <3 个启停样本时在界面上提示（σ 只能取经验下限，容差偏紧）
+                try:
+                    slot["notes"].extend(sample_size_notes(slot["profile"]))
+                except Exception:                                        # noqa: BLE001 —— 提示失败绝不影响匹配
+                    pass
             out.append(slot)
         # 同一 device_id 挂两次多半是误操作：两个 slot 各自独立检测会把同一事件报两遍 ⇒ 第二个加提示（仍加载，用户可自行去掉）
         seen: Dict[str, int] = {}
@@ -944,7 +952,8 @@ class NilmDetector:
                          "device_id": dev, "d2": round(m["d2"], 3), "d2_per_dim": round(m["d2_per_dim"], 3), "confidence": round(r["confidence"], 4),
                          "margin": (round(m["margin"], 2) if math.isfinite(m["margin"]) else None), "status": r["status"],
                          "flags": list(r["flags"]), "scale": float(r.get("scale", 1)), "scales_hit": [float(x) for x in (r.get("scales_hit") or [])], "contrib": {k: round(v, 2) for k, v in m["contrib"].items()},
-                         "vec": {k: round(float(v), 4) for k, v in f["vec"].items()}, "seen": g_on <= last_end + gap})
+                         "vec": {k: round(float(v), 4) for k, v in f["vec"].items()}, "seen": g_on <= last_end + gap,
+                         "source": str(r.get("source", "x"))})
             if g_on <= last_end + gap:
                 continue
             if not r["accepted"]:

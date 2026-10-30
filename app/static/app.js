@@ -3358,7 +3358,9 @@ function nilmProfileState(side = sideOf()) {
   const paths = pf.paths || (pf.path ? [pf.path] : []);
   if (!paths.length && !list.length) { el.textContent = '未设置画像文件路径。'; return; }
   if (pf.error && !list.some(x => x.loaded)) { el.innerHTML = `<span class="bad">${esc(pf.error)}</span>`; return; }
-  const g = s => k => (s[k] ? `${s[k].n} 次` : '无');
+  // v0.99.27：样本不足（<min_events，默认 3）时样本数标红——σ 只能取经验下限，容差偏紧
+  const g = s => k => { const v = s[k]; if (!v) return '无'; const n = +v.n || 0;
+    return n < (s.min_events || 3) ? `<span class="bad" title="建议每方向 ≥${s.min_events || 3} 次独立启停">${n} 次</span>` : `${n} 次`; };
   const multi = list.length > 1;
   const rows = list.map((it, i) => {
     const head = multi ? `<b>${i + 1}.</b> ` : '';
@@ -4657,10 +4659,19 @@ function npPayload() {
 function npRender(d) {
   const p = d.profile || {}; const F = d.features || [];
   const nS = d.startup ? d.startup.n : 0, nD = d.shutdown ? d.shutdown.n : 0;
+  // v0.99.27：每方向建议 ≥3 次启停——样本不足时把「启动 / 停止样本」卡片标红并给出建议值
+  const MIN_N = (p && p.min_events) || 3;
+  const few = nS < MIN_N || nD < MIN_N;
+  const nTxt = `<span class="${few ? 'warn' : ''}">${nS} / ${nD}</span>` + (few ? `<span class="mut">（建议各 ≥${MIN_N}）</span>` : '');
   const cards = [['设备', esc(p.device_id || '—')], ['口径', esc(p.unit || '—')], ['标签方式', p.label_mode === 'labels' ? '人工标签' : '自动定位'],
-                 ['前 / 后窗 (周波)', `${p.pre_cycles} / ${p.post_cycles}`], ['启动 / 停止样本', `${nS} / ${nD}`]];
+                 ['前 / 后窗 (周波)', `${p.pre_cycles} / ${p.post_cycles}`], ['启动 / 停止样本', nTxt]];
   $('#np-summary').innerHTML = cards.map(([k, v]) => `<div class="card"><div class="k">${k}</div><div class="v">${v}</div></div>`).join('');
-  $('#np-status').innerHTML = `<div>画像已写出 <code>${esc(d.saved_to)}</code></div>` + (d.notes || []).map(n => `<div class="warn">提示：${esc(n)}</div>`).join('');
+  // v0.99.27：样本量提示单独一行加粗（"建议每方向 ≥3 次启停"），其余 notes 照旧以「提示」列出
+  const sn = (p.sample_notes && p.sample_notes.length ? p.sample_notes : []).filter(x => !(d.notes || []).includes(x));
+  const allNotes = [...(d.notes || []), ...sn];
+  $('#np-status').innerHTML = `<div>画像已写出 <code>${esc(d.saved_to)}</code></div>`
+    + (few ? `<div class="warn"><b>样本量不足：启动 ${nS} / 停止 ${nD}（建议每方向 ≥${MIN_N} 次独立启停）</b>——样本不够时 σ 只能取经验下限，画像容差偏紧，匹配更容易漏检、也更容易把幅值相近的他负荷认成同一设备。请多录几段启停后重新提取。</div>` : '')
+    + allNotes.map(n => `<div class="warn">提示：${esc(n)}</div>`).join('');
   const cr = $('#np-cmdrow'); cr.style.display = d.command ? '' : 'none'; $('#np-cmd').textContent = d.command || '';
   const f = x => (typeof x === 'number' ? (Number.isInteger(x) ? String(x) : (+x.toPrecision(4)).toString()) : String(x));
   const FN = { d_ia: 'ΔIa (A)', d_ib: 'ΔIb (A)', d_ic: 'ΔIc (A)', d_p: 'ΔP (W)', d_q: 'ΔQ (var)', peak_ratio: '峰值比', dur_cycles: '持续 (周波)', d_ih: 'ΔIh (A)' };   // v0.99.26：第 8 维谐波电流增量
