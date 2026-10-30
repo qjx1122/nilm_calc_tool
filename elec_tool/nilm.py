@@ -824,7 +824,7 @@ class NilmDetector:
             diag.append({"t_start": float(self._t[onset]), "t_start_local": _ts(float(self._t[onset])), "g_on": int(g_on), "direction": m["direction"],
                          "d2": round(m["d2"], 3), "d2_per_dim": round(m["d2_per_dim"], 3), "confidence": round(r["confidence"], 4),
                          "margin": (round(m["margin"], 2) if math.isfinite(m["margin"]) else None), "status": r["status"],
-                         "flags": list(r["flags"]), "scale": int(r.get("scale", 1)), "scales_hit": list(r.get("scales_hit") or []), "contrib": {k: round(v, 2) for k, v in m["contrib"].items()},
+                         "flags": list(r["flags"]), "scale": float(r.get("scale", 1)), "scales_hit": [float(x) for x in (r.get("scales_hit") or [])], "contrib": {k: round(v, 2) for k, v in m["contrib"].items()},
                          "vec": {k: round(float(v), 4) for k, v in f["vec"].items()}, "seen": g_on <= last_end + gap})
             if g_on <= last_end + gap:
                 continue

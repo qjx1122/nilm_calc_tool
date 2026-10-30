@@ -51,7 +51,7 @@ def _median(a: np.ndarray, fallback: float = 0.0) -> float:
 
 
 def event_features(p4: np.ndarray, q4: np.ndarray, i4: np.ndarray, onset: int, end: int,
-                   pre_n: int, post_n: int) -> Dict[str, Any]:
+                   pre_n: int, post_n: int, pre_lo: Optional[int] = None, post_hi: Optional[int] = None) -> Dict[str, Any]:
     """候选事件（窗内索引 onset→end）的特征向量与归一化轨迹。p4/q4/i4：(4, L)，顺序 total, A, B, C。
 
     * ΔIa/ΔIb/ΔIc/ΔP/ΔQ ＝ 事件后窗 [end, end+post_n) 中位数 − 事件前窗 [onset−pre_n, onset) 中位数（§5.4）；
@@ -62,6 +62,11 @@ def event_features(p4: np.ndarray, q4: np.ndarray, i4: np.ndarray, onset: int, e
     L = p4.shape[1]
     a0, a1 = max(0, onset - pre_n), onset
     b0, b1 = min(end, L), min(end + post_n, L)
+    # v0.99.24：前后窗被相邻变点截断（总线侧其它负荷在 pre/post 窗内投切时，窗取到别的台阶）；截断后长度不足则不截
+    if pre_lo is not None and a0 < int(pre_lo) < a1 and (a1 - int(pre_lo)) >= max(10, pre_n // 10):
+        a0 = int(pre_lo)
+    if post_hi is not None and b0 < int(post_hi) < b1 and (int(post_hi) - b0) >= max(10, post_n // 10):
+        b1 = int(post_hi)
     if b0 >= b1:
         b0, b1 = min(end, L - 1), L
     pre = {"p": _median(p4[0, a0:a1], p4[0, max(0, onset - 1)]), "q": _median(q4[0, a0:a1], q4[0, max(0, onset - 1)]),
@@ -253,7 +258,7 @@ def match_event(profile: Dict[str, Any], feat: Dict[str, Any], lam_rel: float = 
 
 
 
-def transition_end(x: np.ndarray, onset: int, post_n: int, tgt: float, dlt: float) -> int:
+def transition_end(x: np.ndarray, onset: int, post_n: int, tgt: float, dlt: float, hi: Optional[int] = None) -> int:
     """v0.99.23：过渡结束点（统一规则，在线候选 / 标签定位 / 自动定位三处共用）。
 
     在 onset 之后的 post_n 周波上，先做长度 w 的滑动中值平滑（w≈post_n/20，3～25 周波），终点＝平滑轨迹**首次进入**
@@ -264,7 +269,8 @@ def transition_end(x: np.ndarray, onset: int, post_n: int, tgt: float, dlt: floa
     随便一次 ±7 A 的抖动就把终点推到几十秒之后（实录 dur 2161 周波 vs 画像 256，D² 贡献 221；后窗整体后移还把 ΔQ 量错，贡献 110），
     真停机因此被拒。平滑 + 保持能同时抵御冲击尖峰（会离开带、保持失败）与孤立抖动（被中值吸收）。"""
     L = x.size
-    seg = x[onset:onset + post_n]
+    stop = onset + post_n if hi is None else min(onset + post_n, int(hi))   # v0.99.24：可被下一变点截断
+    seg = x[onset:max(stop, onset + 2)]
     n = seg.size
     if n <= 1:
         return min(onset + 1, L - 1)
@@ -326,6 +332,35 @@ def _two_window_candidates(x: np.ndarray, pre_n: int, post_n: int, min_d: float,
     return out
 
 
+def change_points(x: np.ndarray, pre_n: int, post_n: int, min_d: float, k_sig: float) -> List[Tuple[int, float]]:
+    """v0.99.24：窗内「其它变化」的位置与带符号幅值（用于截断候选的前后特征窗）。短双滑窗（w≈post/20，10～150 周波）、
+    门槛＝max(¼ 候选门槛, k·σ)。"""
+    w = max(10, min(150, post_n // 20))
+    return [(o, d) for o, _e, d in _two_window_candidates(x, w, w, 0.25 * min_d, k_sig)]
+
+
+def window_bounds(cps: Sequence[Tuple[int, float]], onset: int, end: int, pre_n: int, post_n: int,
+                  delta: float = 0.0, dur_max: int = 0, peak_max: float = 1.0) -> Tuple[Optional[int], Optional[int]]:
+    """候选 (onset,end) 的前窗下界 / 后窗上界：前一个变点（含其过渡）之后、下一个变点之前。
+
+    后窗：onset 之后 1.5×dur_max（画像最长持续）以内的变点，若与候选**同号**（慢斜坡 / 分级启动被短窗切成多个同向变点），或
+    反号但幅值不超过 1.25×max(peak_max−1, 0.25)×|Δ|（启动冲击峰的回落、过冲的回摆——peak_max＝画像峰值比均值），视为候选自身
+    过渡的一部分，不截断；其余变点（反号且幅值大、或超出该范围）都截断。前窗：任何变点都截断。"""
+    w = max(10, min(150, post_n // 20))
+    before = [c for c, _d in cps if c < onset - w]
+    own_until = onset + int(1.5 * max(dur_max, 0)) + w
+    decay_lim = 1.25 * max(float(peak_max) - 1.0, 0.25) * abs(float(delta))
+
+    def _own(c: int, d: float) -> bool:
+        if c > own_until:
+            return False
+        return ((d >= 0) == (delta >= 0)) or abs(d) <= decay_lim
+    after = [c for c, d in cps if c > end + w and not _own(c, d)]
+    pre_lo = (max(before) + w) if before else None
+    post_hi = (min(after) - w) if after else None
+    return pre_lo, post_hi
+
+
 def detect_profile(p4: np.ndarray, q4: np.ndarray, i4: np.ndarray, profile: Dict[str, Any], prm: Dict[str, Any],
                    use_p: bool, device_state: str = "unknown", skip: Sequence[str] = ()) -> List[Dict[str, Any]]:
     """窗上运行一次画像匹配检测。返回按 onset 排序的候选结果列表（每项含 onset/end/pre/post/match/flags/accepted）。
@@ -356,15 +391,25 @@ def detect_profile(p4: np.ndarray, q4: np.ndarray, i4: np.ndarray, profile: Dict
     min_d = 0.5 * min(amp) if amp else 0.0
     k_sig = float(prm.get("k_sigma", 4.0))
     max_scale = max(1, int(float(prm.get("max_scale", 8))))
-    scales = [1]
-    while scales[-1] * 2 <= max_scale:
-        scales.append(scales[-1] * 2)
+    # v0.99.24：细尺度（÷2、÷4 … 到 min_scale）——画像前后窗很长（慢启停设备 pre/post=3000）时，总线上相邻 60 s 内其它负荷的
+    #   投切会和目标事件落进同一个「超限游程」，只留一个峰（幅值最大的那个），目标事件根本成不了候选（实录：+60 A 他负荷
+    #   58 s 后设备 +35 A 斜坡启动、16 s 后 −70 A 他负荷，整段只报了 +60 A 那个）。细尺度窗短，相邻事件各自成游程。
+    min_scale = float(prm.get("min_scale", 0.25))
+    scales: List[float] = []
+    sc = 1.0
+    while sc >= min_scale and max(pre_n, post_n) * sc >= 10:
+        scales.insert(0, sc); sc /= 2.0
+    sc = 2.0
+    while sc <= max_scale:
+        scales.append(sc); sc *= 2.0
     merged: List[Dict[str, Any]] = []            # {onset, end, delta, scale}
     for sc in scales:
-        for onset, end, delta in _two_window_candidates(x, pre_n * sc, post_n * sc, min_d, k_sig):
+        wp, wq = max(5, int(round(pre_n * sc))), max(5, int(round(post_n * sc)))
+        for onset, end, delta in _two_window_candidates(x, wp, wq, min_d, k_sig):
             hit = None
-            for g in merged:                      # 与已有候选重叠（onset 落在其 [onset − post·sc, end + post·sc]）⇒ 同一事件
-                if g["onset"] - post_n * sc <= onset <= g["end"] + post_n * sc:
+            for g in merged:                      # 与已有候选重叠 ⇒ 同一事件；容差按**已有（更细）候选**的尺度，粗尺度游程不吞并相邻细候选
+                tol = int(post_n * min(sc, g["scale"]))
+                if g["onset"] - tol <= onset <= g["end"] + tol:
                     hit = g; break
             if hit is None:
                 merged.append({"onset": onset, "end": end, "delta": delta, "scale": sc, "scales_hit": [sc]})
@@ -374,6 +419,10 @@ def detect_profile(p4: np.ndarray, q4: np.ndarray, i4: np.ndarray, profile: Dict
                     hit["delta"] = delta
     merged.sort(key=lambda g: g["onset"])
     cands = [(g["onset"], g["end"], g["delta"], g["scale"], g["scales_hit"]) for g in merged]
+    cps = change_points(x, pre_n, post_n, min_d, k_sig)                     # v0.99.24：相邻变点截断特征窗
+    dur_max = max([int((g.get("dur_cycles") or {}).get("max", 0) or 0) for g in groups] + [0])
+    _pk = FEATURES.index("peak_ratio")
+    peak_max = max([float(g["mu"][_pk]) for g in groups if g.get("mu")] + [1.0])
     d2_max = float(prm.get("d2_max", 9.0)); min_conf = float(prm.get("min_confidence", 0.3))
     margin_min = float(prm.get("margin", 1.5)); lam = float(prm.get("lambda_rel", 0.1))
     state_check = int(float(prm.get("state_check", 1))) != 0
@@ -381,7 +430,16 @@ def detect_profile(p4: np.ndarray, q4: np.ndarray, i4: np.ndarray, profile: Dict
     out: List[Dict[str, Any]] = []
     state = device_state
     for onset, end, delta, sc, hits in cands:
-        feat = event_features(p4, q4, i4, onset, end, pre_n, post_n)          # v0.99.19：特征窗口与画像提取一致
+        pre_lo, post_hi = window_bounds(cps, onset, end, pre_n, post_n, delta, dur_max, peak_max)
+        if sc < 1:
+            # v0.99.24：细尺度找到的候选，其终点是按短后窗（post·sc）定的——慢斜坡在短窗里的「目标电平」是坡中值，终点会定在坡的前段；
+            #   这里按画像自身 post 几何（并受下一变点截断）重算终点，使 dur / 后窗与画像提取时同一规则
+            a0 = max(0, onset - pre_n) if pre_lo is None else max(0, onset - pre_n, int(pre_lo))
+            b1 = onset + post_n if post_hi is None else min(onset + post_n, int(post_hi))
+            if b1 - onset >= 2 and onset - a0 >= 1:
+                tgt = float(np.median(x[onset:b1])); dl = tgt - float(np.median(x[a0:onset]))
+                end = transition_end(x, onset, post_n, tgt, abs(dl), hi=post_hi)
+        feat = event_features(p4, q4, i4, onset, end, pre_n, post_n, pre_lo, post_hi)   # v0.99.19：特征窗口与画像提取一致；v0.99.24：相邻变点截断
         m = match_event(profile, feat, lam, skip, pmap)
         flags: List[str] = []
         if m.get("phase_map_auto") and m.get("phase_map") != "ABC":
@@ -401,8 +459,9 @@ def detect_profile(p4: np.ndarray, q4: np.ndarray, i4: np.ndarray, profile: Dict
         if accepted:
             state = "on" if m["direction"] == "START" else "off"
         out.append({"onset": onset, "end": end, "delta": delta, "feat": feat, "match": m, "confidence": conf,
-                    "flags": flags, "accepted": accepted, "status": status, "scale": int(sc), "scales_hit": [int(x) for x in hits],
-                    "post_wait": int(post_n)})
+                    "flags": flags, "accepted": accepted, "status": status, "scale": (int(sc) if sc >= 1 else float(sc)),
+                    "scales_hit": [(int(x) if x >= 1 else float(x)) for x in hits],
+                    "post_wait": int(post_n), "pre_lo": pre_lo, "post_hi": post_hi})
     return out
 
 
