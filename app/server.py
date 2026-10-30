@@ -138,18 +138,32 @@ def _dump_run_configs(run_dir: str, started_side: str) -> List[str]:
             # v0.99.20：本侧启用「设备画像匹配」且 profile_path 指向存在的文件 ⇒ 原封不动复制到运行目录 nilm/ 下
             #   （文件名 profile_{side}_{原文件名}），run_info 记录来源；复盘时画像与事件 / 配置在同一目录
             try:
-                prof_on = bool((c.nilm.algorithms.get("profile") or {}).get("enabled", False)) and bool(getattr(c.nilm, "profile_path", ""))
-                if prof_on:
-                    pp = _abs_path(str(c.nilm.profile_path))
-                    if os.path.isfile(pp):
-                        nd = os.path.join(run_dir, "nilm"); os.makedirs(nd, exist_ok=True)
-                        dst = os.path.join(nd, f"profile_{s}_{os.path.basename(pp)}")
+                # v0.99.26：多画像——nilm.profile_path（; 分隔）/ nilm.profile_paths 里的每个画像都复制到运行目录，
+                #   run_info 记 profile_file（第一个，兼容旧字段）/ profile_files（全部）；复制时按序号前缀避免同名覆盖
+                prof_on = bool((c.nilm.algorithms.get("profile") or {}).get("enabled", False))
+                paths = list(c.nilm.profile_path_list()) if hasattr(c.nilm, "profile_path_list") else ([str(c.nilm.profile_path)] if c.nilm.profile_path else [])
+                if prof_on and paths:
+                    nd = os.path.join(run_dir, "nilm"); os.makedirs(nd, exist_ok=True)
+                    files: List[str] = []; srcs: List[str] = []; errs: List[str] = []
+                    for i_p, raw in enumerate(paths):
+                        pp = _abs_path(str(raw))
+                        if not os.path.isfile(pp):
+                            errs.append(f"画像文件不存在：{raw}")
+                            continue
+                        pre = f"profile_{s}_" if len(paths) == 1 else f"profile_{s}{i_p + 1}_"
+                        dst = os.path.join(nd, f"{pre}{os.path.basename(pp)}")
                         shutil.copyfile(pp, dst); written.append(dst)
-                        info["sides"][s]["profile_file"] = os.path.relpath(dst, run_dir).replace(os.sep, "/")
-                        info["sides"][s]["profile_copied_from"] = _display_path(pp)
-                    else:
-                        info["sides"][s]["profile_file"] = None
-                        info["sides"][s]["profile_error"] = f"画像文件不存在：{c.nilm.profile_path}"
+                        files.append(os.path.relpath(dst, run_dir).replace(os.sep, "/")); srcs.append(_display_path(pp))
+                    info["sides"][s]["profile_file"] = files[0] if files else None
+                    info["sides"][s]["profile_files"] = files
+                    info["sides"][s]["profile_copied_from"] = srcs[0] if srcs else None
+                    info["sides"][s]["profile_copied_from_all"] = srcs
+                    if errs:
+                        info["sides"][s]["profile_error"] = "；".join(errs)
+                elif prof_on:
+                    info["sides"][s]["profile_file"] = None
+                    info["sides"][s]["profile_files"] = []
+                    info["sides"][s]["profile_error"] = "画像匹配已启用但未填画像路径（nilm.profile_path / nilm.profile_paths）"
             except Exception as exc:
                 log.warning("运行目录复制画像失败（%s）：%s", s, exc)
         except Exception as exc:

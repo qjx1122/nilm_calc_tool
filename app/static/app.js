@@ -3234,7 +3234,7 @@ const NILM_ALGOS = {
   median_diff:  { name: '中值滤波差分', desc: '先 N 点中值滤波去尖峰，再做阈值差分（对单周波尖峰/缺口不敏感）',
                   params: { median_cycles: '中值窗 (周波)', min_delta_w: '最小幅值 (W · P口径)', min_delta_a: '最小幅值 (A · I口径)', settle_cycles: '稳定周波数', settle_tol_w: '稳定容差 (W · P口径)', settle_tol_a: '稳定容差 (A · I口径)', max_rise_cycles: '最长暂态 (周波)' } },
   // v0.90：设备画像匹配（多特征；对象固定为三相合成；画像文件由数据处理页「设备画像提取」生成）
-  profile:      { name: '设备画像匹配', desc: '稳健双滑窗找候选 → 事件前后 ΔIa/ΔIb/ΔIc/ΔP/ΔQ/峰值比/持续周波 与启动/停止画像的对角马氏距离 D² → 置信度 exp(−D²/2d)，低于门槛拒识；设备状态机（OFF→启动 / ON→停止）；输出设备 ID、方向、观测幅值、置信度，不估计设备贡献幅值',
+  profile:      { name: '设备画像匹配', desc: '稳健双滑窗找候选 → 事件前后 ΔIa/ΔIb/ΔIc/ΔP/ΔQ/峰值比/持续周波/Δ谐波电流(2~13 次合量) 与启动/停止画像的对角马氏距离 D² → 置信度 exp(−D²/2d)，低于门槛拒识；设备状态机（OFF→启动 / ON→停止）；输出设备 ID、方向、观测幅值、置信度，不估计设备贡献幅值',
                   params: { d2_max: 'D² 上限 (每维均值)', min_confidence: '最低置信度 (0~1)', k_sigma: '候选门槛 k×σ', margin: '最优/次优 D² 比下限', lambda_rel: '协方差收缩系数', state_check: '状态机 (1 启用 / 0 关闭)', phase_map: '相序映射 (1 ABC·2 ACB·3 BAC·4 BCA·5 CAB·6 CBA·0 自动)', max_scale: '候选多尺度最大倍数 (1＝单尺度；8＝前后窗 ×1/2/4/8 兼容慢斜坡)', min_scale: '候选细尺度下限 (0.25＝前后窗 ÷4/÷2 拆分 60 s 内相邻事件；1＝不用)' } },
 };
 const NILM_COLORS = { threshold: '#ff6b6b', two_window: '#ffa94d', cusum: '#ffd43b', glr: '#69db7c', steady_state: '#4dabf7', median_diff: '#da77f2', profile: '#63e6be' };
@@ -3252,7 +3252,7 @@ function buildNilmForm(side = sideOf()) {
       `<label class="${k.endsWith('_w') ? 'nilm-unit-w' : (k.endsWith('_a') ? 'nilm-unit-a' : '')}">${sp.params[k]}<input type="number" step="any" min="0" id="nilm-${a}-${k}"></label>`).join('');
     // v0.90：画像匹配额外有画像文件路径（文本，nilm.profile_path）与加载状态
     // v0.99.3：画像匹配的检测对象 / 检测量不可指定——对象固定为三相合成 total（候选按 ΣP 或三相电流合成量搜索，事件 channel=total），检测量随画像文件口径（p/i），须与本侧 nilm.quantity 一致；此处以只读项固定展示
-    const extra = a === 'profile' ? `<div class="row2"><label class="f" style="grid-column:1/-1"><span class="lbl">画像文件路径</span><input type="text" id="nilm-profile_path" placeholder="output/nilm/profile_<设备>_<时间>.json"><span class="note">nilm.profile_path；相对仓库根；数据处理页「设备画像提取」生成</span></label>
+    const extra = a === 'profile' ? `<div class="row2"><label class="f" style="grid-column:1/-1"><span class="lbl">画像文件路径（多个设备用 ; 分隔）</span><input type="text" id="nilm-profile_path" placeholder="output/nilm/profile_设备1_时间.json;output/nilm/profile_设备2_时间.json"><span class="note">nilm.profile_path；相对仓库根；多个画像各自独立状态机/去重，最多 8 个；数据处理页「设备画像提取」生成（也可直接填 nilm.profile_paths 数组）</span></label>
       <label class="f nilm-fixed" title="画像匹配不支持按相检测：候选按三相合成量（P 口径＝ΣP，I 口径＝三相电流合成）搜索，事件对象固定为 total；上方「检测对象」勾选对本算法不生效"><span class="lbl">检测对象（固定）</span><input type="text" value="三相总 total（固定，不可选）" disabled><span class="note">上方「检测对象」勾选只作用于其它算法</span></label>
       <label class="f nilm-fixed" title="画像匹配的检测量由画像文件决定（提取时的 quantity：p 有功 / i 电流），且必须与本侧「检测量」实际口径一致，否则 ΔP/ΔI 不可比、画像匹配不运行"><span class="lbl">检测量（固定）</span><input type="text" id="nilm-profile-qty" value="随画像文件（加载后显示）" disabled><span class="note">须与本侧「检测量」实际口径一致，不一致时不运行并在状态行提示</span></label></div><div id="nilm-profile-state" class="mut" style="font-size:12px"></div>` : '';
     // v0.26.1：标题行＝色块 + 勾选框 + 算法名（紧挨），算法说明单独一行
@@ -3337,20 +3337,32 @@ function fillNilmForm(nc, side = sideOf()) {
   nilmProfileState(side);
 }
 
-/* v0.90：画像匹配面板下的加载状态行（来自 summary.profile） */
+/* v0.90：画像匹配面板下的加载状态行（来自 summary.profile）
+   v0.99.26：多画像——summary.profile.profiles 逐画像一行（各自设备状态 / 最近候选）；无该字段时退回单画像旧字段 */
 function nilmProfileState(side = sideOf()) {
   const el = E(side, 'nilm-profile-state'); if (!el) return;
   const pf = (NLs(side).summary || {}).profile;
   const qel = E(side, 'nilm-profile-qty');   // v0.99.3：固定检测量展示＝画像文件口径
-  if (qel) { const s0 = (pf && pf.loaded && pf.summary) || null; qel.value = s0 ? (s0.quantity === 'p' ? 'p 有功功率 P（画像文件口径，固定）' : s0.quantity === 'i' ? 'i 电流有效值 I（画像文件口径，固定）' : `${s0.quantity || s0.unit || '?'}（画像文件口径，固定）`) : '随画像文件（加载后显示）'; }
+  const list = (pf && Array.isArray(pf.profiles) && pf.profiles.length) ? pf.profiles : (pf ? [pf] : []);
+  const s0 = (list[0] && list[0].loaded && list[0].summary) || null;
+  if (qel) { qel.value = s0 ? (s0.quantity === 'p' ? 'p 有功功率 P（画像文件口径，固定）' : s0.quantity === 'i' ? 'i 电流有效值 I（画像文件口径，固定）' : `${s0.quantity || s0.unit || '?'}（画像文件口径，固定）`) : '随画像文件（加载后显示）'; }
   if (!pf) { el.textContent = ''; return; }
-  if (!pf.path) { el.textContent = '未设置画像文件路径。'; return; }
-  if (pf.error) { el.innerHTML = `<span class="bad">${esc(pf.error)}</span>`; return; }
-  if (!pf.loaded) { el.textContent = `画像未加载（${esc(pf.path)}）`; return; }
-  const s = pf.summary || {}; const g = k => (s[k] ? `${s[k].n} 次` : '无');
-  el.innerHTML = `已加载：设备 <b>${esc(s.device_id || '')}</b>（${esc(s.unit || '')} 口径，启动样本 ${g('startup')} / 停止样本 ${g('shutdown')}，前后窗 ${s.pre_cycles}/${s.post_cycles} 周波，${esc(s.created || '')}）· 设备状态 ${esc(pf.device_state || 'unknown')}`
-    + ((pf.last || []).length ? `<br>最近候选：${pf.last.slice(-5).map(c => `${esc(c.t_start_local || '')} ${c.direction} D²/d=${c.d2_per_dim} 置信 ${(c.confidence * 100).toFixed(0)}% ${c.status}${c.flags && c.flags.length ? '[' + c.flags.join(',') + ']' : ''}`).join('；')}` : '')
-    + `<br><span class="mut">候选诊断（含被拒）全程落盘：运行目录 <code>output/{时间}/nilm/nilm_profile_candidates_{日期}.csv</code>（nilm.save 开启时）；画像文件副本 <code>nilm/profile_{侧}_{原文件名}.json</code></span>`;
+  const paths = pf.paths || (pf.path ? [pf.path] : []);
+  if (!paths.length && !list.length) { el.textContent = '未设置画像文件路径。'; return; }
+  if (pf.error && !list.some(x => x.loaded)) { el.innerHTML = `<span class="bad">${esc(pf.error)}</span>`; return; }
+  const g = s => k => (s[k] ? `${s[k].n} 次` : '无');
+  const multi = list.length > 1;
+  const rows = list.map((it, i) => {
+    const head = multi ? `<b>${i + 1}.</b> ` : '';
+    if (!it.loaded) return `${head}<span class="bad">未加载</span> ${esc(it.error || it.path || '')}`;
+    const s = it.summary || {}; const gg = g(s);
+    const harm = it.has_harmonic === false ? ' · <span class="mut">无谐波维度（旧画像，建议重提）</span>' : (it.has_harmonic ? ' · 含谐波维度 ΔIh' : '');
+    return `${head}已加载：设备 <b>${esc(s.device_id || it.device_id || '')}</b>（${esc(s.unit || '')} 口径，启动样本 ${gg('startup')} / 停止样本 ${gg('shutdown')}，前后窗 ${s.pre_cycles}/${s.post_cycles} 周波，${esc(s.created || '')}）${harm} · 设备状态 <b>${esc(it.device_state || 'unknown')}</b>`
+      + ((it.last || []).length ? `<br><span class="mut">最近候选：</span>${it.last.slice(-5).map(c => `${esc(c.t_start_local || '')} ${c.direction} D²/d=${c.d2_per_dim} 置信 ${(c.confidence * 100).toFixed(0)}% ${c.status}${c.flags && c.flags.length ? '[' + c.flags.join(',') + ']' : ''}`).join('；')}` : '')
+      + ((it.notes || []).length ? `<br><span class="bad">${it.notes.map(esc).join('；')}</span>` : '');
+  });
+  el.innerHTML = (multi ? `<span class="mut">多画像：${list.filter(x => x.loaded).length}/${list.length} 个已加载</span><br>` : '') + rows.join('<br>')
+    + `<br><span class="mut">候选诊断（含被拒）全程落盘：运行目录 <code>output/{时间}/nilm/nilm_profile_candidates_{日期}.csv</code>（含 device_id 列，nilm.save 开启时）；画像文件副本 <code>nilm/profile_{侧}_*.json</code></span>`;
 }
 
 function collectNilmPayload(side = sideOf()) {
@@ -4680,9 +4692,14 @@ function npFill(side) {
   const st = side === 'branch' ? BRD.state : S.state;
   if (!NLs(side).dirty && st && st.config) fillNilmForm(st.config.nilm, side);
   const el = E(side, 'nilm-profile_path'); if (!el) { toast('负荷辨识表单尚未建立', 'err'); return; }
-  el.value = NP.last.saved_to; NLs(side).dirty = true;
+  // v0.99.26：多画像——已有别的画像路径时追加（; 分隔），不覆盖已挂的其它设备
+  const cur = (el.value || '').split(';').map(x => x.trim()).filter(Boolean);
+  const added = !cur.includes(NP.last.saved_to);
+  if (added) cur.push(NP.last.saved_to);
+  if (cur.length > 8) { toast('画像最多同时挂 8 个，请先删掉一个再填', 'err'); return; }
+  el.value = cur.join(';'); NLs(side).dirty = true;
   const en = E(side, 'nilm-profile-enabled'); if (en && !en.checked) en.checked = true;
-  toast(`已填入${side === 'branch' ? '分路侧' : '总线侧'}画像路径并勾选「设备画像匹配」；请到负荷辨识页点「保存${side === 'branch' ? '分路侧' : '总线侧'}配置」生效`, 'ok');
+  toast(`已${added ? (cur.length > 1 ? '追加' : '填入') : '确认'}${side === 'branch' ? '分路侧' : '总线侧'}画像路径（当前 ${cur.length} 个）并勾选「设备画像匹配」；请到负荷辨识页点「保存${side === 'branch' ? '分路侧' : '总线侧'}配置」生效`, 'ok');
 }
 
 function bindProcess() {

@@ -141,20 +141,28 @@ def main() -> int:
                   f"nilm.profile_path={cfg.nilm.profile_path!r}）；请用 --config 指向勾选了画像匹配的那一侧配置，或加 --set profile.enabled=1 --set nilm.profile_path=<画像.json>")
         else:
             pf = det.summary().get("profile") or {}
-            print(f"  画像文件 {pf.get('path')}  加载 {'成功' if pf.get('loaded') else '失败'}  {pf.get('error') or ''}  设备状态 {pf.get('device_state')}")
-            s_ = pf.get("summary") or {}
-            if s_:
-                print(f"  画像口径 {s_.get('unit')}  启动样本 {(s_.get('startup') or {}).get('n', 0)}  停止样本 {(s_.get('shutdown') or {}).get('n', 0)}  前后窗 {s_.get('pre_cycles')}/{s_.get('post_cycles')}")
-            hist = det.profile_hist
-            if not hist:
-                print("  全程没有产生任何候选：候选门槛＝max(画像最小 |Δ| 的一半, k_sigma×前窗噪声)。请核对本侧检测量与画像口径、"
-                      "数据里是否真有 ≥ 该幅值的台阶（nilm_profile_diag.py --file 可看）")
-            for g_on in sorted(hist):
-                c = hist[g_on]
-                top = sorted(c.get("contrib", {}).items(), key=lambda kv: -kv[1])[:3]
-                print(f"  {c.get('t_start_local')}  {c['direction']:5s} D²/维={c['d2_per_dim']:<7g} 置信={c['confidence']:<7g} "
-                      f"{c['status']:14s} {','.join(c.get('flags') or []) or '-':28s} 最大贡献 " + "  ".join(f"{k}={v}" for k, v in top)
-                      + (f"   ΔP={c['vec'].get('d_p')} ΔIa={c['vec'].get('d_ia')}" if c.get("vec") else ""))
+            # v0.99.26：多画像——逐个画像打印（各自状态机 / 候选历史）
+            plist = pf.get("profiles") or [pf]
+            if len(plist) > 1:
+                print(f"  多画像：{pf.get('loaded_count', 0)}/{len(plist)} 个已加载")
+            for i_p, one in enumerate(plist):
+                pre_ = f"  [{i_p + 1}] " if len(plist) > 1 else "  "
+                print(f"{pre_}画像文件 {one.get('path')}  加载 {'成功' if one.get('loaded') else '失败'}  {one.get('error') or ''}  设备状态 {one.get('device_state')}")
+                s_ = one.get("summary") or {}
+                if s_:
+                    print(f"{pre_}画像口径 {s_.get('unit')}  设备 {s_.get('device_id')}  启动样本 {(s_.get('startup') or {}).get('n', 0)}  停止样本 {(s_.get('shutdown') or {}).get('n', 0)}  前后窗 {s_.get('pre_cycles')}/{s_.get('post_cycles')}"
+                          + ("" if one.get("has_harmonic", True) else "  （旧画像：无谐波维度 d_ih）"))
+                hist = (det._profiles[i_p].get("hist") if i_p < len(getattr(det, "_profiles", [])) else None) or (
+                    det.profile_hist if len(plist) == 1 else {}) or {}
+                if not hist:
+                    print(f"{pre_}全程没有产生任何候选：候选门槛＝max(画像最小 |Δ| 的一半, k_sigma×前窗噪声)。请核对本侧检测量与画像口径、"
+                          "数据里是否真有 ≥ 该幅值的台阶（nilm_profile_diag.py --file 可看）")
+                for g_on in sorted(hist):
+                    c = hist[g_on]
+                    top = sorted(c.get("contrib", {}).items(), key=lambda kv: -kv[1])[:3]
+                    print(f"{pre_}{c.get('t_start_local')}  {c['direction']:5s} D²/维={c['d2_per_dim']:<7g} 置信={c['confidence']:<7g} "
+                          f"{c['status']:14s} {','.join(c.get('flags') or []) or '-':28s} 最大贡献 " + "  ".join(f"{k}={v}" for k, v in top)
+                          + (f"   ΔP={c['vec'].get('d_p')} ΔIa={c['vec'].get('d_ia')}" if c.get("vec") else ""))
         print(f"事件已写入 {a.out}（{len(events)} 行）；下一步：python tools/nilm_check.py --events {a.out} --truth <真值表.csv>")
     return 0
 

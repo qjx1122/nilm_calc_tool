@@ -31,14 +31,25 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 import numpy as np
 
 PROFILE_SCHEMA = "nilm_profile/1"
-FEATURES = ["d_ia", "d_ib", "d_ic", "d_p", "d_q", "peak_ratio", "dur_cycles"]
+# v0.99.26：新增第 8 维 d_ih＝**谐波电流增量**（2~13 次谐波电流有效值的合量，事件后窗中位数 − 前窗中位数，A）。
+#   动机（第 171/172 轮实测）：整流/变频类设备在总线上贡献约 +15 A 谐波电流（THD_I×I 从 16~18 A 升到 31~33 A），
+#   而同功率的线性负荷（电阻/电机）几乎为 0——这是把"本设备"与"幅值相近的他负荷"分开的最强维度
+#   （第 171 轮构造的"同功率 35 A/−23 kW 完全线性仿冒"在 7 维下 D²=0、置信度 1.0（必然误报）；加 d_ih 后 D²≈29、
+#    置信度 0.16 < min_confidence 0.3 ⇒ 拒识。见 tests/test_r173_harmonic_multi_profile.py）。
+#   新维度统一追加在末尾：旧画像（7 维）的 μ/σ 下标不变，加载后自动按"缺少的特征跳过"处理（见 profile_feature_names）。
+FEATURES = ["d_ia", "d_ib", "d_ic", "d_p", "d_q", "peak_ratio", "dur_cycles", "d_ih"]
+LEGACY_FEATURES = FEATURES[:7]                 # v0.99.26：v0.99.25 及更早生成的画像（无谐波维度）
 FEATURE_NAMES = {"d_ia": "ΔIa (A)", "d_ib": "ΔIb (A)", "d_ic": "ΔIc (A)", "d_p": "ΔP (W)", "d_q": "ΔQ (var)",
-                 "peak_ratio": "启动峰值比", "dur_cycles": "持续周波数"}
+                 "peak_ratio": "启动峰值比", "dur_cycles": "持续周波数", "d_ih": "Δ谐波电流 (A)"}
 TEMPLATE_POINTS = 16
 # σ 收缩下限：相对中心的比例（单次事件也能给出合理容差）与绝对下限（电流 A / 功率 W / 比值 / 周波）
-_REL_FLOOR = {"d_ia": 0.15, "d_ib": 0.15, "d_ic": 0.15, "d_p": 0.15, "d_q": 0.25, "peak_ratio": 0.3, "dur_cycles": 0.5}
+_REL_FLOOR = {"d_ia": 0.15, "d_ib": 0.15, "d_ic": 0.15, "d_p": 0.15, "d_q": 0.25, "peak_ratio": 0.3, "dur_cycles": 0.5,
+              "d_ih": 0.15}
 # v0.92.5：dur_cycles 下限 2→5 周波（在线终点估计对噪声敏感，单样本画像 σ=2 时 10 周波偏差就贡献 25）
-_ABS_FLOOR = {"d_ia": 0.02, "d_ib": 0.02, "d_ic": 0.02, "d_p": 5.0, "d_q": 5.0, "peak_ratio": 0.1, "dur_cycles": 5.0}
+# v0.99.26：d_ih 相对下限 15%（与 ΔI 同口径；实测设备在运/停机谐波电流 30~33 A vs 16~18 A，事件间波动 ±15%）、
+#   绝对下限 2 A（母线谐波电流测量的噪声量级，实测同站稳态 1 s 中位数抖动 < 1 A；低于 2 A 的差别不作为证据）
+_ABS_FLOOR = {"d_ia": 0.02, "d_ib": 0.02, "d_ic": 0.02, "d_p": 5.0, "d_q": 5.0, "peak_ratio": 0.1, "dur_cycles": 5.0,
+              "d_ih": 2.0}
 
 
 class ProfileError(ValueError):
@@ -51,10 +62,15 @@ def _median(a: np.ndarray, fallback: float = 0.0) -> float:
 
 
 def event_features(p4: np.ndarray, q4: np.ndarray, i4: np.ndarray, onset: int, end: int,
-                   pre_n: int, post_n: int, pre_lo: Optional[int] = None, post_hi: Optional[int] = None) -> Dict[str, Any]:
+                   pre_n: int, post_n: int, pre_lo: Optional[int] = None, post_hi: Optional[int] = None,
+                   ih4: Optional[np.ndarray] = None) -> Dict[str, Any]:
     """候选事件（窗内索引 onset→end）的特征向量与归一化轨迹。p4/q4/i4：(4, L)，顺序 total, A, B, C。
 
+    ``ih4``：v0.99.26 谐波电流（4, L，同顺序，单位 A，2~13 次谐波电流有效值合量）；为空时 d_ih 记 0
+    （旧调用方 / 旧测试不带谐波数据，画像里该维的 μ 也是 0，贡献为 0）。
+
     * ΔIa/ΔIb/ΔIc/ΔP/ΔQ ＝ 事件后窗 [end, end+post_n) 中位数 − 事件前窗 [onset−pre_n, onset) 中位数（§5.4）；
+    * ΔIh ＝ 同上口径的谐波电流变化（A，正＝事件后谐波电流更大）；
     * peak_ratio ＝ 事件窗内三相电流合成量相对事件前基线的最大偏移 / 稳态偏移（≥1；1＝无启动冲击）；
     * dur_cycles ＝ end − onset；
     * template ＝ [onset, end+post_n) 内合成电流相对事件前基线的变化 / 稳态变化，重采样到 TEMPLATE_POINTS 点。
@@ -79,6 +95,12 @@ def event_features(p4: np.ndarray, q4: np.ndarray, i4: np.ndarray, onset: int, e
     post = {"p": _median(p4[0, b0:b1]), "q": _median(q4[0, b0:b1]), "ia": _median(i4[1, b0:b1]), "ib": _median(i4[2, b0:b1]),
             "ic": _median(i4[3, b0:b1]), "it": _median(i4[0, b0:b1])}
     d_it = post["it"] - pre["it"]
+    # v0.99.26：谐波电流增量（2~13 次合量）——设备是不是"谐波源"的直接证据，线性负荷约为 0
+    d_ih = 0.0
+    if ih4 is not None and getattr(ih4, "shape", (0, 0))[1] == L:
+        h_pre = _median(ih4[0, a0:a1], float(ih4[0, max(0, onset - 1)]) if ih4.shape[1] else 0.0)
+        h_post = _median(ih4[0, b0:b1], h_pre)
+        d_ih = float(h_post - h_pre)
     seg = i4[0, onset:b1] - pre["it"]
     if seg.size == 0:
         seg = np.zeros(1)
@@ -91,8 +113,11 @@ def event_features(p4: np.ndarray, q4: np.ndarray, i4: np.ndarray, onset: int, e
     xs = np.linspace(0, max(seg.size - 1, 1), TEMPLATE_POINTS)
     template = np.interp(xs, np.arange(seg.size), traj) if seg.size > 1 else np.full(TEMPLATE_POINTS, float(traj[0]))
     vec = {"d_ia": post["ia"] - pre["ia"], "d_ib": post["ib"] - pre["ib"], "d_ic": post["ic"] - pre["ic"],
-           "d_p": post["p"] - pre["p"], "d_q": post["q"] - pre["q"], "peak_ratio": peak_ratio, "dur_cycles": float(end - onset)}
-    return {"vec": vec, "template": [float(x) for x in template], "pre": pre, "post": post, "d_it": float(d_it)}
+           "d_p": post["p"] - pre["p"], "d_q": post["q"] - pre["q"], "peak_ratio": peak_ratio, "dur_cycles": float(end - onset),
+           "d_ih": float(d_ih)}
+    thd_delta = float(d_ih / abs(d_it)) if abs(d_it) > 1e-12 else 0.0      # 增量 THD（诊断用，不参与 D²）
+    return {"vec": vec, "template": [float(x) for x in template], "pre": pre, "post": post, "d_it": float(d_it),
+            "d_ih": float(d_ih), "thd_delta": thd_delta}
 
 
 def _vec_array(vec: Dict[str, float]) -> np.ndarray:
@@ -120,31 +145,62 @@ def fit_group(samples: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
                        for s in samples]}
 
 
+def profile_feature_names(profile: Dict[str, Any]) -> List[str]:
+    """画像实际包含的特征名（v0.99.26）。
+
+    新画像 8 维（含 d_ih）；v0.99.25 及更早的画像只有前 7 维——旧画像必须**照旧可用**，
+    因此维数以 μ 的长度为准，缺的特征在匹配时跳过（等价于该维不参与 D²），
+    而不是把旧画像判为"特征定义不一致"拒绝加载（方案 §3.5 的版本检查改为"必须是当前 FEATURES 的前缀"）。
+    """
+    declared = profile.get("features")
+    n_dec = len(declared) if isinstance(declared, (list, tuple)) and declared else 0
+    # 以 μ 的实际长度为准：7 维旧画像（v0.99.25 及更早）即便头部声明的 features 被新版本改写成 8 项，
+    #   也按 7 维解释；两者不一致时取较小者（多出来的维度没有 μ/σ，本来也无法参与计算）
+    n_mu = 0
+    for k in ("startup", "shutdown"):
+        g = profile.get(k) or {}
+        n_mu = max(n_mu, len(g.get("mu") or []))
+    cands = [n for n in (n_dec, n_mu) if 1 <= n <= len(FEATURES)]
+    if cands:
+        return list(FEATURES[:min(cands)])
+    return list(FEATURES)
+
+
 def validate_profile(doc: Dict[str, Any]) -> Dict[str, Any]:
     if not isinstance(doc, dict) or doc.get("schema") != PROFILE_SCHEMA:
         raise ProfileError(f"画像文件 schema 不是 {PROFILE_SCHEMA}（当前 {doc.get('schema') if isinstance(doc, dict) else type(doc).__name__!r}）")
-    if list(doc.get("features") or []) != FEATURES:
-        raise ProfileError(f"画像特征定义与本版本不一致：{doc.get('features')} ≠ {FEATURES}（特征定义版本不一致时拒绝加载，方案 §3.5）")
     if not doc.get("startup") and not doc.get("shutdown"):
         raise ProfileError("画像里既没有启动画像也没有停止画像")
+    feats = doc.get("features")
+    if feats is not None:
+        if not isinstance(feats, (list, tuple)) or not all(isinstance(x, str) for x in feats) \
+                or list(feats) != FEATURES[:len(feats)] or not (len(LEGACY_FEATURES) <= len(feats) <= len(FEATURES)):
+            raise ProfileError(f"画像特征定义与本版本不一致：{feats}（本版本为 {FEATURES}；仅接受它的前缀，"
+                               f"即 {len(LEGACY_FEATURES)} 维旧画像或 {len(FEATURES)} 维新画像）")
+    names = profile_feature_names(doc)
+    if len(names) < len(LEGACY_FEATURES):        # 少于 7 维：无法与任何版本对上
+        raise ProfileError(f"画像特征数 {len(names)} 少于最低要求 {len(LEGACY_FEATURES)}（{LEGACY_FEATURES}）")
     for key in ("startup", "shutdown"):
         g = doc.get(key)
         if not g:
             continue
-        if len(g.get("mu", [])) != len(FEATURES) or len(g.get("sigma", [])) != len(FEATURES):
-            raise ProfileError(f"画像 {key}.mu/sigma 维数不对")
+        if len(g.get("mu", [])) != len(names) or len(g.get("sigma", [])) != len(names):
+            raise ProfileError(f"画像 {key}.mu/sigma 维数不对（{len(g.get('mu', []))}/{len(g.get('sigma', []))}，"
+                               f"应为 {len(names)}＝{names}）")
         if any((not math.isfinite(float(v))) or float(v) <= 0 for v in g["sigma"]):
             raise ProfileError(f"画像 {key}.sigma 必须全为正有限数")
+    doc["_features"] = list(names)          # 归一化后的实际维度（下划线键不进 save_profile）
     return doc
 
 
 def load_profile(path: str, root: Optional[str] = None) -> Dict[str, Any]:
     p = path if os.path.isabs(path) else os.path.join(root or os.getcwd(), path)
     doc = _load_profile_raw(p)
-    jd = FEATURES.index("dur_cycles")
+    names = doc.get("_features") or profile_feature_names(doc)
+    jd = names.index("dur_cycles") if "dur_cycles" in names else None
     for k in ("startup", "shutdown"):          # v0.92.5：旧画像的 σ 按当前绝对下限抬升
         g = doc.get(k)
-        if g and len(g.get("sigma", [])) > jd:
+        if g and jd is not None and len(g.get("sigma", [])) > jd:
             g["sigma"][jd] = max(float(g["sigma"][jd]), _ABS_FLOOR["dur_cycles"])
     pc = doc.get("pt_ct")
     if isinstance(pc, dict) and not bool(pc.get("enabled", True)):     # v0.99.23：旧画像「PT/CT 关闭」＝未换算 ⇒ PT=CT=1
@@ -164,15 +220,18 @@ def _load_profile_raw(p: str) -> Dict[str, Any]:
 
 # ------------------------------------------------------------------ 匹配
 def mahalanobis_diag(vec: Dict[str, float], mu: Sequence[float], sigma: Sequence[float], lam_rel: float = 0.1,
-                     skip: Sequence[str] = ()) -> Tuple[float, List[float]]:
-    """对角马氏距离 D² 与各维贡献；Σ_λ = diag(σ²) + λ·median(σ²)·I（§5.5 收缩）。``skip``：不参与的特征名（v0.93：三相三线无 B 相电流时跳过 d_ib）。"""
-    x = _vec_array(vec); m = np.asarray(mu, dtype=np.float64); s = np.asarray(sigma, dtype=np.float64)
+                     skip: Sequence[str] = (), feats: Optional[Sequence[str]] = None) -> Tuple[float, List[float]]:
+    """对角马氏距离 D² 与各维贡献；Σ_λ = diag(σ²) + λ·median(σ²)·I（§5.5 收缩）。``skip``：不参与的特征名（v0.93：三相三线无 B 相电流时跳过 d_ib）。
+    ``feats``：μ/σ 对应的特征名（v0.99.26：旧画像 7 维没有 d_ih，按下标与 FEATURES 前缀对齐）。"""
+    names = list(feats) if feats else list(FEATURES)
+    x = np.array([float(vec[k]) for k in names], dtype=np.float64)
+    m = np.asarray(mu, dtype=np.float64); s = np.asarray(sigma, dtype=np.float64)
     var = s * s
     var = var + float(lam_rel) * float(np.median(var))
     contrib = (x - m) ** 2 / var
     for k in skip:
-        if k in FEATURES:
-            contrib[FEATURES.index(k)] = 0.0
+        if k in names:
+            contrib[names.index(k)] = 0.0
     return float(np.sum(contrib)), [float(c) for c in contrib]
 
 
@@ -235,14 +294,15 @@ def match_event(profile: Dict[str, Any], feat: Dict[str, Any], lam_rel: float = 
         return best
     mapping = PHASE_MAPS[int(phase_map)]
     vec = remap_phases(feat["vec"], mapping)
-    skip = [k for k in skip if k in FEATURES]
-    d = max(1, len(FEATURES) - len(skip))
+    feats = profile_feature_names(profile)          # v0.99.26：旧画像 7 维、新画像 8 维（含 d_ih）
+    skip = [k for k in skip if k in feats]
+    d = max(1, len(feats) - len(skip))
     res: Dict[str, Any] = {}
     for key, name in (("startup", "START"), ("shutdown", "STOP")):
         g = profile.get(key)
         if not g:
             continue
-        d2, contrib = mahalanobis_diag(vec, g["mu"], g["sigma"], lam_rel, skip)
+        d2, contrib = mahalanobis_diag(vec, g["mu"], g["sigma"], lam_rel, skip, feats)
         td = template_distance(feat["template"], g["template"])
         res[name] = {"d2": d2, "contrib": contrib, "template_dist": td, "template_spread": float(g.get("template_spread", 0.3))}
     if not res:
@@ -257,7 +317,7 @@ def match_event(profile: Dict[str, Any], feat: Dict[str, Any], lam_rel: float = 
     margin = (res[other[0]]["d2"] / d2) if (other and d2 > 0) else float("inf")
     return {"direction": best, "d2": d2, "d2_per_dim": d2 / d, "confidence": conf * traj_penalty, "margin": margin,
             "phase_map": mapping, "phase_map_auto": False,
-            "template_dist": td, "traj_penalty": traj_penalty, "contrib": dict(zip(FEATURES, res[best]["contrib"])),
+            "template_dist": td, "traj_penalty": traj_penalty, "contrib": dict(zip(feats, res[best]["contrib"])),
             "d2_start": res.get("START", {}).get("d2"), "d2_stop": res.get("STOP", {}).get("d2")}
 
 
@@ -373,7 +433,8 @@ def window_bounds(cps: Sequence[Tuple[int, float]], onset: int, end: int, pre_n:
 
 
 def detect_profile(p4: np.ndarray, q4: np.ndarray, i4: np.ndarray, profile: Dict[str, Any], prm: Dict[str, Any],
-                   use_p: bool, device_state: str = "unknown", skip: Sequence[str] = ()) -> List[Dict[str, Any]]:
+                   use_p: bool, device_state: str = "unknown", skip: Sequence[str] = (),
+                   ih4: Optional[np.ndarray] = None) -> List[Dict[str, Any]]:
     """窗上运行一次画像匹配检测。返回按 onset 排序的候选结果列表（每项含 onset/end/pre/post/match/flags/accepted）。
 
     ``skip``：不参与匹配的特征名；三相三线两表法（transform.wiring=3p3w）本侧无 B 相电流，引擎传 ("d_ib",)，
@@ -453,7 +514,7 @@ def detect_profile(p4: np.ndarray, q4: np.ndarray, i4: np.ndarray, profile: Dict
         floor_post = max(10, post_n // 20)
         gap_post = (int(post_hi) - int(end)) if post_hi is not None else post_n
         crowded = post_hi is not None and gap_post < floor_post                       # 干净后窗偏短：记标志并改用 post_hi 前 floor_post 周波（v0.99.25）
-        feat = event_features(p4, q4, i4, onset, end, pre_n, post_n, pre_lo, post_hi)   # v0.99.19：特征窗口与画像提取一致；v0.99.24：相邻变点截断
+        feat = event_features(p4, q4, i4, onset, end, pre_n, post_n, pre_lo, post_hi, ih4)   # v0.99.19：特征窗口与画像提取一致；v0.99.24：相邻变点截断；v0.99.26：谐波电流
         m = match_event(profile, feat, lam, skip, pmap)
         flags: List[str] = []
         if m.get("phase_map_auto") and m.get("phase_map") != "ABC":
@@ -546,7 +607,8 @@ def _locate_near(x: np.ndarray, k_center: int, half: int, pre_n: int, post_n: in
 
 def load_cycles(cfg, file: str, *, max_cycles: int = 400000, t_start: str = "", t_end: str = "", custom_time: bool = False,
                 custom_time_start: str = "", custom_time_end: str = ""):
-    """读取设备侧文件为逐周波序列。返回 (c, feat, t, p4, q4, i4, u_nonzero)；``cfg`` 不被修改。"""
+    """读取设备侧文件为逐周波序列。返回 (c, feat, t, p4, q4, i4, ih4, u_nonzero)；``cfg`` 不被修改。
+    v0.99.26：新增 ih4（4, N）＝逐周波谐波电流（2~13 次合量，A）。旧调用方按 7 元组解包需同步（tools 里已改）。"""
     from .config import AppConfig, parse_play_start
     from .nilm import CycleFeatures, detect_steps
     from .nilm_auto import auto_params
@@ -570,7 +632,7 @@ def load_cycles(cfg, file: str, *, max_cycles: int = 400000, t_start: str = "", 
             parse_play_start("time", t_end); c.source.play_end_time = t_end
         c.validate()
     feat = CycleFeatures(c.sampling.fs, c.sampling.f_nom)
-    ts, ps, qs, is_ = [], [], [], []
+    ts, ps, qs, is_, hs = [], [], [], [], []          # v0.99.26：hs＝逐周波谐波电流
     u_nonzero = False; n = 0
     with create_source(c) as src:
         while True:
@@ -583,14 +645,16 @@ def load_cycles(cfg, file: str, *, max_cycles: int = 400000, t_start: str = "", 
                 u_nonzero = True
             f = feat.push(scale_block(blk, c.transform))
             if f["t"].size:
-                ts.append(f["t"]); ps.append(f["p"]); qs.append(f["q"]); is_.append(f["i"]); n += int(f["t"].size)
+                ts.append(f["t"]); ps.append(f["p"]); qs.append(f["q"]); is_.append(f["i"])
+                hs.append(f["ih"] if f.get("ih") is not None else np.zeros((4, f["t"].size))); n += int(f["t"].size)
             if n >= max_cycles:
                 break
     if not ts:
         raise ProfileError("没有读到整周波数据")
     t = np.concatenate(ts)[:max_cycles]; p4 = np.concatenate(ps, axis=1)[:, :max_cycles]
     q4 = np.concatenate(qs, axis=1)[:, :max_cycles]; i4 = np.concatenate(is_, axis=1)[:, :max_cycles]
-    return c, feat, t, p4, q4, i4, u_nonzero
+    ih4 = np.concatenate(hs, axis=1)[:, :max_cycles]          # v0.99.26：逐周波谐波电流（画像第 8 维 d_ih 的来源）
+    return c, feat, t, p4, q4, i4, ih4, u_nonzero
 
 
 def build_profile(cfg, file: str, *, device_id: str = "device", labels: Optional[str] = None, label_tol_s: float = 2.0,
@@ -600,9 +664,9 @@ def build_profile(cfg, file: str, *, device_id: str = "device", labels: Optional
     """从设备侧文件构建画像。``merge_gap_s``（v0.92，仅自动定位模式）：同方向、中间没有反向事件、起点间隔 ≤ 该秒数的
     相邻事件视为同一次动作被稳态分段切碎（或启动后的分级带载 / 反复重启），只保留 |ΔI| 最大的一个；0＝不合并。``cfg``＝基准配置（PT/CT、fs、列映射，不被修改）。``labels``＝标签文本（空＝自动用稳态分段 +
     自适应参数找启停事件：幅值为正＝启动、为负＝停止）。返回画像文档（含 ``events`` 明细与 ``notes``）。"""
-    c, feat, t, p4, q4, i4, u_nonzero = load_cycles(cfg, file, max_cycles=max_cycles, t_start=t_start, t_end=t_end, custom_time=custom_time,
+    c, feat, t, p4, q4, i4, ih4, u_nonzero = load_cycles(cfg, file, max_cycles=max_cycles, t_start=t_start, t_end=t_end, custom_time=custom_time,
                                                    custom_time_start=custom_time_start, custom_time_end=custom_time_end)
-    from .nilm import detect_steps
+    from .nilm import HARM_ORDERS, detect_steps
     from .nilm_auto import auto_params
     from .timefmt import fmt_local
     q_req = quantity or str(getattr(c.nilm, "quantity", "auto") or "auto")
@@ -628,7 +692,7 @@ def build_profile(cfg, file: str, *, device_id: str = "device", labels: Optional
             d = "START" if delta >= 0 else "STOP"
             if d != lb["direction"]:
                 notes.append(f"标签 {lb['text']} 为 {lb['direction']}，但附近最大变化为 {'正' if delta >= 0 else '负'}向（Δ={delta:.4g}），按标签方向归类，请复核")
-            ef = event_features(p4, q4, i4, onset, end, pre_n, post_n)
+            ef = event_features(p4, q4, i4, onset, end, pre_n, post_n, ih4=ih4)
             samples.append({**ef, "direction": lb["direction"], "onset": int(onset), "end": int(end), "t_start": float(t[onset]),
                             "t_start_local": fmt_local(float(t[onset])), "source": f"label:{lb['text']}"})
         mode = "labels"
@@ -653,7 +717,7 @@ def build_profile(cfg, file: str, *, device_id: str = "device", labels: Optional
             if onset + 2 <= x.size:
                 tgt_ = float(np.median(x[onset:onset + post_n])); dl_ = tgt_ - float(np.median(x[max(0, onset - pre_n):onset]))
                 end = transition_end(x, onset, post_n, tgt_, abs(dl_))
-            ef = event_features(p4, q4, i4, int(onset), int(end), pre_n, post_n)
+            ef = event_features(p4, q4, i4, int(onset), int(end), pre_n, post_n, ih4=ih4)
             # v0.91.2：方向按合成电流有效值的变化判（RMS 恒正，启动必升、停止必降），不再按 P 判——P 的符号受 CT 极性 / 相别配对影响
             samples.append({**ef, "direction": "START" if ef["d_it"] >= 0 else "STOP", "onset": int(onset), "end": int(end),
                             "t_start": float(t[onset]), "t_start_local": fmt_local(float(t[onset])), "source": src})
@@ -703,6 +767,8 @@ def build_profile(cfg, file: str, *, device_id: str = "device", labels: Optional
            "wiring": {"wiring": str(getattr(c.transform, "wiring", "3p4w")), "reconstruct_3w": bool(getattr(c.transform, "reconstruct_3w", False)),
                       "invert_current": bool(getattr(c.transform, "invert_current", False)), "invert_phases": str(getattr(c.transform, "invert_phases", "") or "")},   # v0.95
            "pre_cycles": pre_n, "post_cycles": post_n, "features": list(FEATURES), "feature_names": dict(FEATURE_NAMES),
+           "harmonic": {"orders": [int(k) for k in HARM_ORDERS], "unit": "A", "feature": "d_ih",
+                        "note": "2~13 次谐波电流有效值合量（ΣI_k² 开方，A）；特征是事件前后之差（三相之和）；设备是不是谐波源的指纹，线性负荷≈0"},
            "template_points": TEMPLATE_POINTS, "cycles": int(t.size), "t_first": float(t[0]), "t_last": float(t[-1]),
            "steady": {"level_first_window": lv_off}, "startup": startup, "shutdown": shutdown, "notes": notes,
            "calibration": {"bus_mapping": None, "note": "无同步总线侧校准数据：总线侧只输出观测幅值，不估计设备贡献幅值（方案 §4/§7）"}}
@@ -719,11 +785,14 @@ def save_profile(doc: Dict[str, Any], path: str) -> str:
 
 def profile_summary(doc: Dict[str, Any]) -> Dict[str, Any]:
     """给界面 / summary 用的精简信息。"""
+    names = profile_feature_names(doc)          # v0.99.26：旧画像 7 维 / 新画像 8 维
     def g(key):
         x = doc.get(key)
-        return None if not x else {"n": x["n"], "mu": dict(zip(FEATURES, x["mu"])), "sigma": dict(zip(FEATURES, x["sigma"])),
+        return None if not x else {"n": x["n"], "mu": dict(zip(names, x["mu"])), "sigma": dict(zip(names, x["sigma"])),
                                    "dur_cycles": x.get("dur_cycles")}
     return {"device_id": doc.get("device_id"), "version": doc.get("version"), "created": doc.get("created"), "quantity": doc.get("quantity"),
             "unit": doc.get("unit"), "pre_cycles": doc.get("pre_cycles"), "post_cycles": doc.get("post_cycles"),
             "startup": g("startup"), "shutdown": g("shutdown"), "path": doc.get("_path"), "label_mode": doc.get("label_mode"),
-            "source_file": doc.get("source_file"), "notes": list(doc.get("notes") or [])}
+            "source_file": doc.get("source_file"), "notes": list(doc.get("notes") or []),
+            "features": list(names), "has_harmonic": "d_ih" in names,
+            "harmonic": dict(doc.get("harmonic") or {}) if "d_ih" in names else {}}

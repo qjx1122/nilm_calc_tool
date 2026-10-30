@@ -842,7 +842,27 @@ class NilmConfig:
     # v0.90：设备画像文件路径（tools/nilm_profile.py 或数据处理页「设备画像提取」生成的 JSON；相对路径相对仓库根）。
     #   空＝未加载画像，algorithms.profile.enabled 即使为 true 也不检测并在 summary.notes 说明。
     profile_path: str = ""
+    # v0.99.26：多画像——同一侧同时挂多个设备画像（多个设备在同一总线上，各自独立状态机 / 去重 / 设备判定）。
+    #   两种写法等价且可混用：``profile_path`` 里用 ``;`` 分隔多个路径（向后兼容单路径字符串），或在这里逐项列。
+    #   去重按绝对路径；最多 MAX_PROFILES 个（每多一个画像每轮评估多一次多尺度扫描，按实测 8 个以内开销可接受）。
+    profile_paths: List[str] = field(default_factory=list)
     algorithms: Dict[str, Dict[str, Any]] = field(default_factory=lambda: {k: dict(v) for k, v in NILM_ALGO_DEFAULTS.items()})
+
+    def profile_path_list(self, limit: bool = True) -> List[str]:
+        """v0.99.26：实际要加载的画像路径列表（``;`` 分隔的 profile_path ＋ profile_paths，去重保序）。
+        ``limit=False`` 时不做上限截断（配置校验用，以便报错而不是静默丢弃）。"""
+        out: List[str] = []
+        raw: List[str] = []
+        for chunk in str(self.profile_path or "").split(";"):
+            raw.append(chunk)
+        raw.extend(str(x or "") for x in (self.profile_paths or []))
+        for item in raw:
+            t = str(item or "").strip()
+            if t and t not in out:
+                out.append(t)
+        return out[:self.MAX_PROFILES] if limit else out
+
+    MAX_PROFILES = 8
 
     def params(self, algo: str) -> Dict[str, Any]:
         base = dict(NILM_ALGO_DEFAULTS[algo])
@@ -853,6 +873,15 @@ class NilmConfig:
         self.auto_params = bool(self.auto_params) if not isinstance(self.auto_params, str) else self.auto_params.strip().lower() in ("1", "true", "on", "yes")
         self.quantity = str(self.quantity or "auto").strip().lower()
         self.profile_path = str(self.profile_path or "").strip()
+        if self.profile_paths is None:
+            self.profile_paths = []
+        elif isinstance(self.profile_paths, str):
+            self.profile_paths = [x for x in self.profile_paths.split(";")]
+        else:
+            self.profile_paths = [str(x or "").strip() for x in self.profile_paths]
+        if len(self.profile_path_list(limit=False)) > self.MAX_PROFILES:
+            raise ConfigError(f"nilm 画像最多同时加载 {self.MAX_PROFILES} 个（profile_path 用 ; 分隔或填 profile_paths；"
+                              f"当前 {len(self.profile_path_list(limit=False))} 个）")
         if self.quantity not in NILM_QUANTITIES:
             raise ConfigError(f"nilm.quantity 必须是 {NILM_QUANTITIES} 之一（当前 {self.quantity!r}）")
         if not self.channels or any(c not in NILM_CHANNELS for c in self.channels):

@@ -40,12 +40,15 @@ from .nilm_auto import AUTO_MIN_CYCLES, auto_algo_params, window_stats
 from .config import NILM_SCALAR_ALGOS
 from .nilm_profile import ProfileError, detect_profile, load_profile, profile_summary
 
-__all__ = ["NilmEvent", "NilmDetector", "CycleFeatures", "detect_steps", "NILM_ALGO_NAMES"]
+__all__ = ["NilmEvent", "NilmDetector", "CycleFeatures", "detect_steps", "NILM_ALGO_NAMES", "HARM_ORDERS"]
+
+# v0.99.26：逐周波谐波电流（2~13 次合量，A）——画像第 8 维 d_ih 的来源（CycleFeatures(harmonics=False) 可关）
+HARM_ORDERS = (2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13)
 
 _CSV_FIELDS = ["source_id", "id", "algorithm", "algorithm_name", "channel", "t_start", "t_start_local", "t_end", "t_end_local",
                "duration_s", "cycles", "direction", "magnitude_w", "delta_p_w", "delta_q_var", "delta_i_a",
                "pre_p_w", "post_p_w", "score", "quantity", "magnitude", "unit", "run_id",
-               "device_id", "confidence", "d2", "profile_direction", "status", "quality_flags"]   # v0.90：画像匹配事件附加列
+               "device_id", "confidence", "d2", "profile_direction", "status", "quality_flags", "delta_ih_a"]   # v0.90：画像匹配事件附加列；v0.99.26：delta_ih_a
 # v0.32：run_id（本次运行标识）；v0.36：quantity（p/i 检测量）、magnitude（检测量口径的 |Δ|）、unit（W/A）
 
 
@@ -84,6 +87,7 @@ class NilmEvent:
     profile_direction: str = ""       # START / STOP
     status: str = ""                  # confirmed / low_confidence
     quality_flags: str = ""           # 逗号分隔：state_mismatch / ambiguous_direction / trajectory_deviates
+    delta_ih_a: float = 0.0           # v0.99.26：谐波电流增量（2~13 次合量，A，后窗−前窗）；非画像算法为 0
 
     def to_dict(self) -> Dict[str, Any]:
         d = asdict(self)
@@ -99,9 +103,9 @@ class NilmEvent:
 
 # ---------------------------------------------------------------- 逐周波特征
 class CycleFeatures:
-    """把连续采样切成整周波，输出每周波的 P / Q / I（4 个对象：total, A, B, C）。"""
+    """把连续采样切成整周波，输出每周波的 P / Q / I / 谐波电流（4 个对象：total, A, B, C）。"""
 
-    def __init__(self, fs: float, f_nom: float):
+    def __init__(self, fs: float, f_nom: float, harmonics: bool = True):
         self.fs = float(fs)
         self.f_nom = float(f_nom)
         self.n_cycle = max(4, int(round(self.fs / self.f_nom)))
@@ -110,9 +114,17 @@ class CycleFeatures:
         n = self.n_cycle
         k = np.arange(n)
         self._e = np.exp(-2j * np.pi * k / n)          # 基波单频 DFT 核
+        # v0.99.26：逐周波谐波电流。HARM_ORDERS＝参与合量的次数（GB/T 14549 关注的 2~13 次），
+        #   每周波对三相电流各做一次 rfft，取这几次的幅值，合量＝Σ RMS_k² 的平方根（A）。开销≈1 次 rfft/周波，
+        #   6400 Hz/50 Hz 时 n=128、单周波 3×128 点，实测比 P/Q 的 DFT 还便宜。
+        self.harm_orders = HARM_ORDERS if harmonics else ()
+        self._kmax = min(max(self.harm_orders) if self.harm_orders else 0, max(1, n // 2 - 1))
 
     def push(self, block: SampleBlock) -> Dict[str, np.ndarray]:
-        """返回本次新增的整周波特征：t (M,), p/q/i (4, M)（顺序 total, A, B, C）。M 可能为 0。"""
+        """返回本次新增的整周波特征：t (M,), p/q/i/ih (4, M)（顺序 total, A, B, C）。M 可能为 0。
+
+        v0.99.26：``ih``＝谐波电流（2~13 次有效值合量，A）；第 0 行（total）为三相平均，其余为各相。
+        """
         if self._carry is not None and self._carry.n:
             # 时间不连续（缺口）则丢弃结转的零头，避免把两段拼成一个假周波
             if block.n and (block.t[0] - self._carry.t[-1]) > 1.5 / self.fs:
@@ -128,7 +140,8 @@ class CycleFeatures:
         self._carry = (SampleBlock(t=block.t[m * n:], u=block.u[:, m * n:], i=block.i[:, m * n:],
                                    scaled=block.scaled, source=block.source, seq=block.seq) if rest else None)
         if m == 0:
-            return {"t": np.zeros(0), "p": np.zeros((4, 0)), "q": np.zeros((4, 0)), "i": np.zeros((4, 0))}
+            return {"t": np.zeros(0), "p": np.zeros((4, 0)), "q": np.zeros((4, 0)), "i": np.zeros((4, 0)),
+                    "ih": np.zeros((4, 0))}
         u = block.u[:, :m * n].reshape(3, m, n)
         i = block.i[:, :m * n].reshape(3, m, n)
         t = block.t[:m * n].reshape(m, n)[:, 0]
@@ -141,7 +154,20 @@ class CycleFeatures:
         p = np.vstack([p_ph.sum(axis=0), p_ph])
         q = np.vstack([q_ph.sum(axis=0), q_ph])
         irms = np.vstack([np.sqrt(np.sum(i_ph ** 2, axis=0)), i_ph])  # total 取三相均方根合成（仅作幅值参考）
-        return {"t": t, "p": p, "q": q, "i": irms}
+        # v0.99.26：逐周波谐波电流合量（2~13 次，A）。每相各自把各次有效值平方和开方，再合成 total（三相平均，见下）。
+        #   只用各次幅值、不带相位——作为「设备是不是谐波源」的指纹足够（第 172 轮：运行 27~33 A / 停机 16~18 A）。
+        ih_ph = np.zeros((3, m))
+        if self.harm_orders and self._kmax >= 2:
+            spec = np.fft.rfft(i, axis=2)                              # (3, m, n/2+1)，归一化：|X_k| = 峰值/2·n ⇒ ×2/n
+            ks = [k for k in self.harm_orders if k <= self._kmax]
+            if ks:
+                amp = np.abs(spec[:, :, ks]) * (2.0 / n)                # (3, m, K) 各次峰值
+                ih_ph = np.sqrt(np.sum((amp / np.sqrt(2.0)) ** 2, axis=2))   # Σ RMS² 开方
+        # total 行取**三相平均**（不是 RMS 合成）：d_ih 是"事件前后之差"，只有线性可加的合量才能保证
+        #   Δ(本设备 + 其它负荷) = Δ本设备 + Δ其它；平均而不是求和，是为了让数字与工程习惯的"每相谐波电流"
+        #   同口径（与实时 harmonic 文件的 THD_I×I 直接可比）。谐波幅值恒正，各相不会相互抵消。
+        ih = np.vstack([np.mean(ih_ph, axis=0), ih_ph])
+        return {"t": t, "p": p, "q": q, "i": irms, "ih": ih}
 
 
 # ---------------------------------------------------------------- 各算法（纯函数：窗数组 → 候选事件）
@@ -439,7 +465,7 @@ class NilmWriter:
                    f"{d['pre_p_w']:.3f}", f"{d['post_p_w']:.3f}", f"{d['score']:.4g}",
                    d.get("quantity", "p"), f"{d.get('magnitude', d['magnitude_w']):.4f}", d.get("unit", "W"), self.run_id,
                    d.get("device_id", ""), f"{d.get('confidence', 0.0):.4f}", f"{d.get('d2', 0.0):.4g}", d.get("profile_direction", ""),
-                   d.get("status", ""), d.get("quality_flags", "")]
+                   d.get("status", ""), d.get("quality_flags", ""), f"{d.get('delta_ih_a', 0.0):.4f}"]
             with SHARED_FILE_LOCK:
                 csv.writer(self._fh).writerow(row)
                 self._fh.flush()
@@ -463,9 +489,10 @@ class NilmWriter:
         try:
             day = wall_day()
             path = os.path.join(self.dir, f"nilm_profile_candidates_{day}.csv")
-            fields = ["source_id", "run_id", "t_start", "t_start_local", "g_on", "direction", "status", "flags", "scale", "scales_hit",
-                      "confidence", "d2", "d2_per_dim", "margin", "d_ia", "d_ib", "d_ic", "d_p", "d_q", "peak_ratio", "dur_cycles",
-                      "c_d_ia", "c_d_ib", "c_d_ic", "c_d_p", "c_d_q", "c_peak_ratio", "c_dur_cycles"]
+            # v0.99.26：device_id（多画像必须区分是哪个画像的候选）＋ d_ih / c_d_ih（谐波电流维度）
+            fields = ["source_id", "run_id", "t_start", "t_start_local", "g_on", "device_id", "direction", "status", "flags", "scale", "scales_hit",
+                      "confidence", "d2", "d2_per_dim", "margin", "d_ia", "d_ib", "d_ic", "d_p", "d_q", "peak_ratio", "dur_cycles", "d_ih",
+                      "c_d_ia", "c_d_ib", "c_d_ic", "c_d_p", "c_d_q", "c_peak_ratio", "c_dur_cycles", "c_d_ih"]
             with SHARED_FILE_LOCK:
                 os.makedirs(self.dir, exist_ok=True)
                 from .events import _rotate_if_header_differs
@@ -476,11 +503,11 @@ class NilmWriter:
                         w.writerow(fields)
                     v = d.get("vec") or {}; c = d.get("contrib") or {}
                     w.writerow([self.source_id, self.run_id, f"{float(d.get('t_start', 0.0)):.4f}", d.get("t_start_local", ""), d.get("g_on", ""),
-                                d.get("direction", ""), d.get("status", ""), ",".join(d.get("flags") or []), d.get("scale", 1),
+                                d.get("device_id", ""), d.get("direction", ""), d.get("status", ""), ",".join(d.get("flags") or []), d.get("scale", 1),
                                 "/".join(str(x) for x in (d.get("scales_hit") or [])),
                                 d.get("confidence", ""), d.get("d2", ""), d.get("d2_per_dim", ""), d.get("margin", "")]
-                               + [v.get(k, "") for k in ("d_ia", "d_ib", "d_ic", "d_p", "d_q", "peak_ratio", "dur_cycles")]
-                               + [c.get(k, "") for k in ("d_ia", "d_ib", "d_ic", "d_p", "d_q", "peak_ratio", "dur_cycles")])
+                               + [v.get(k, "") for k in ("d_ia", "d_ib", "d_ic", "d_p", "d_q", "peak_ratio", "dur_cycles", "d_ih")]
+                               + [c.get(k, "") for k in ("d_ia", "d_ib", "d_ic", "d_p", "d_q", "peak_ratio", "dur_cycles", "d_ih")])
         except Exception as exc:   # pragma: no cover
             self.errors.append(f"候选诊断写盘失败：{exc}")
 
@@ -506,6 +533,7 @@ class NilmDetector:
         self._p = np.zeros((4, 0))
         self._q = np.zeros((4, 0))
         self._i = np.zeros((4, 0))
+        self._ih = np.zeros((4, 0))         # v0.99.26：逐周波谐波电流（4, N），画像 d_ih 维度用
         self._g0 = 0                        # 窗内第 0 个元素的全局周波序号
         self.cycles_total = 0
         self._log: List[NilmEvent] = []
@@ -524,32 +552,69 @@ class NilmDetector:
         # v0.87：自适应参数——最近一次评估每个对象推导出的公共统计量与各算法参数（供界面 / 等价命令查看）
         self.auto_last: Dict[str, Dict[str, Any]] = {}
         # v0.90：设备画像（algorithm=profile）
+        # v0.99.26：多画像——每个画像一个 slot（独立文件 / 状态机 / 去重 / 候选历史 / 诊断）。
+        #   下面的 _profile / _profile_err / device_state / profile_last / profile_hist 仍指向**第一个**画像，
+        #   保持旧接口（界面旧字段、CLI 工具、旧测试）可用；多画像一律走 _profiles / summary()["profiles"]。
+        self._profiles: List[Dict[str, Any]] = []
         self._profile: Optional[Dict[str, Any]] = None
         self._profile_err: str = ""
         self._profile_key: Tuple[str, float] = ("", 0.0)
-        self.device_state: str = "unknown"                  # 画像状态机：unknown / on / off
+        self.device_state: str = "unknown"                  # 画像状态机：unknown / on / off（第一个画像）
         self.profile_last: List[Dict[str, Any]] = []        # 最近一次评估的候选（含被拒的，供界面诊断）
         self.profile_hist: Dict[int, Dict[str, Any]] = {}   # v0.92.2：全程候选（按全局 onset 去重，≤400 条）
-        self._load_profile()
+        self._load_profiles()
 
-    def _load_profile(self) -> None:
-        """按 nilm.profile_path 加载画像（路径或文件 mtime 变化才重读）。失败不抛，记录到 _profile_err。"""
-        path = str(getattr(self.ncfg, "profile_path", "") or "").strip()
-        if not path:
-            self._profile = None; self._profile_err = ""; self._profile_key = ("", 0.0); return
+    def _load_profiles(self) -> None:
+        """v0.99.26：按 nilm.profile_path（``;`` 分隔）/ nilm.profile_paths 加载**全部**画像。
+
+        * 逐路径按 (绝对路径, mtime) 判缓存：没变的画像复用旧 slot（状态机 / 去重 / 候选历史都保留），
+          只有变化的才重读——配置热更新（改窗口、改别的算法参数）不会把设备状态清零。
+        * 加载失败不抛：失败信息写进该 slot 的 ``err``，其余画像照常工作。
+        * ``_profile`` / ``_profile_err`` / ``device_state`` 等旧字段同步指向第一个画像（向后兼容）。
+        """
+        paths = self.ncfg.profile_path_list() if hasattr(self.ncfg, "profile_path_list") else (
+            [str(getattr(self.ncfg, "profile_path", "") or "").strip()] if str(getattr(self.ncfg, "profile_path", "") or "").strip() else [])
         root = self._root or os.getcwd()
-        ap = path if os.path.isabs(path) else os.path.join(root, path)
-        try:
-            mt = os.path.getmtime(ap)
-        except OSError:
-            mt = 0.0
-        if self._profile is not None and self._profile_key == (ap, mt):
-            return
-        try:
-            self._profile = load_profile(ap); self._profile_err = ""
-        except (ProfileError, ValueError, OSError) as exc:
-            self._profile = None; self._profile_err = f"画像加载失败：{exc}"
-        self._profile_key = (ap, mt)
+        old = {str(p.get("path")): p for p in self._profiles}
+        out: List[Dict[str, Any]] = []
+        for path in paths:
+            ap = path if os.path.isabs(path) else os.path.join(root, path)
+            try:
+                mt = os.path.getmtime(ap)
+            except OSError:
+                mt = 0.0
+            prev = old.get(ap)
+            if prev is not None and tuple(prev.get("key") or ("", 0.0)) == (ap, mt) and (prev.get("profile") is not None or prev.get("err")):
+                out.append(prev)                      # 未变化：原样复用（保留状态机）
+                continue
+            slot: Dict[str, Any] = {"path": ap, "key": (ap, mt), "profile": None, "err": "",
+                                    "state": "unknown", "last": [], "hist": {}, "last_end": -10 ** 9,
+                                    "notes": []}
+            try:
+                slot["profile"] = load_profile(ap)
+            except (ProfileError, ValueError, OSError) as exc:
+                slot["err"] = f"画像加载失败：{exc}"
+            out.append(slot)
+        # 同一 device_id 挂两次多半是误操作：两个 slot 各自独立检测会把同一事件报两遍 ⇒ 第二个加提示（仍加载，用户可自行去掉）
+        seen: Dict[str, int] = {}
+        for i, sl in enumerate(out):
+            did = str((sl.get("profile") or {}).get("device_id") or "")
+            if not did:
+                continue
+            if did in seen:
+                sl["notes"].append(f"device_id={did} 与第 {seen[did] + 1} 个画像重复：两个画像都会独立检测，同一事件可能被报两次，"
+                                   f"请确认是否重复选择了同一设备")
+            else:
+                seen[did] = i
+        self._profiles = out
+        self._profile = (out[0]["profile"] if out else None)
+        self._profile_key = (out[0]["path"], float(out[0]["key"][1])) if out else ("", 0.0)
+        self._profile_err = "; ".join(f"{os.path.basename(sl['path'])}: {sl['err']}" for sl in out if sl.get("err"))
+        self.device_state = (out[0]["state"] if out else "unknown")
+
+    # v0.99.26：旧名保留（tools / 测试 / 外部脚本可能直接调）
+    def _load_profile(self) -> None:
+        self._load_profiles()
 
     @property
     def auto_params_effective(self) -> bool:
@@ -576,10 +641,11 @@ class NilmDetector:
             if (cfg.sampling.fs, cfg.sampling.f_nom) != (self.feat.fs, self.feat.f_nom):
                 self.feat = CycleFeatures(cfg.sampling.fs, cfg.sampling.f_nom)
                 self._t = np.zeros(0); self._p = np.zeros((4, 0)); self._q = np.zeros((4, 0)); self._i = np.zeros((4, 0))
+                self._ih = np.zeros((4, 0))
                 self._g0 += 0
             self.writer.close()
             self.writer = NilmWriter(self.ncfg, root=self._root, source_id=int(getattr(self.cfg.output, "source_id", 0) or 0), run_id=self.run_id, dir_override=self.run_dir)
-            self._load_profile()
+            self._load_profiles()
 
     # ---- 主入口
     def ingest(self, block: SampleBlock) -> List[Dict[str, Any]]:
@@ -598,10 +664,12 @@ class NilmDetector:
             self._p = np.concatenate([self._p, f["p"]], axis=1)
             self._q = np.concatenate([self._q, f["q"]], axis=1)
             self._i = np.concatenate([self._i, f["i"]], axis=1)
+            self._ih = np.concatenate([self._ih, f.get("ih", np.zeros((4, m)))], axis=1)
             W = max(int(self.ncfg.window_cycles), self._profile_window_need())   # v0.92.4：画像匹配需要的窗口可能大于 window_cycles
             if self._t.shape[0] > W:
                 cut = self._t.shape[0] - W
                 self._t = self._t[cut:]; self._p = self._p[:, cut:]; self._q = self._q[:, cut:]; self._i = self._i[:, cut:]
+                self._ih = self._ih[:, cut:]
                 self._g0 += cut
             # v0.99.17：评估节流——每 eval_every_cycles 个新周波评估一次（640 样本/块 ≈ 3.2 周波，原来每块都对整窗重跑 7 种算法）
             self._since_eval += m
@@ -728,27 +796,85 @@ class NilmDetector:
         out += self._evaluate_profile(qty, gap, g_last)
         out.sort(key=lambda e: (e.t_start, e.algorithm))
         return out
-
     def _profile_window_need(self) -> int:
-        """画像匹配评估一个候选至少需要的周波数：pre + 最长持续 + 2×post（候选搜索需 post，终点后再等 post 个周波确认）。"""
-        if self._profile is None or not bool(self.ncfg.params("profile").get("enabled", False)):
+        """画像匹配评估一个候选至少需要的周波数：pre + 最长持续 + 2×post（候选搜索需 post，终点后再等 post 个周波确认）。
+
+        v0.99.26：多画像时取**所有已加载画像的最大需求**（窗口只保留一份，按最大需求缓存，小画像不受影响）。"""
+        if not self._profiles or not bool(self.ncfg.params("profile").get("enabled", False)):
             return 0
-        pre_n = int(self._profile.get("pre_cycles", 10)); post_n = int(self._profile.get("post_cycles", 50))
-        dur = max([int((self._profile.get(k) or {}).get("dur_cycles", {}).get("max", 0) or 0) for k in ("startup", "shutdown")] + [0])
         sc = max(1, int(float(self.ncfg.params("profile").get("max_scale", 8))))     # v0.99.15：多尺度候选的最大前后窗
-        return pre_n * sc + dur + 2 * post_n * sc + 10
+        need = 0
+        for slot in self._profiles:
+            prof = slot.get("profile")
+            if not prof:
+                continue
+            pre_n = int(prof.get("pre_cycles", 10)); post_n = int(prof.get("post_cycles", 50))
+            dur = max([int((prof.get(k) or {}).get("dur_cycles", {}).get("max", 0) or 0) for k in ("startup", "shutdown")] + [0])
+            need = max(need, pre_n * sc + dur + 2 * post_n * sc + 10)
+        return need
+
+    def _profile_health_check(self) -> None:
+        """v0.92.6：本侧数据体检（与具体画像无关，多画像只做一次）——画像候选按三相合成量找，
+        若某相无数据或各相有功符号不一致，总有功会互相抵消、台阶被吞掉。"""
+        if getattr(self, "_profile_health_done", False) or self._p.shape[1] < 20:
+            return
+        self._profile_health_done = True
+        pm = [float(np.median(self._p[k, -200:])) for k in (1, 2, 3)]
+        im = [float(np.median(self._i[k, -200:])) for k in (1, 2, 3)]
+        ia_max = max(abs(v) for v in im) if im else 0.0
+        three_wire = bool(getattr(self.cfg.transform, "b_phase_missing", False))   # v0.93：三相三线两表法 B 相无 CT 属正常（v0.94 重构后 B 相已补回，照常检查）
+        dead = [ch for ch, v in zip("ABC", im) if ia_max > 0 and abs(v) < 0.01 * ia_max and not (three_wire and ch == "B")]
+        live = [k for k, ch in enumerate("ABC") if ch not in dead and abs(pm[k]) > 0 and not (three_wire and ch == "B")]
+        signs = {(pm[k] > 0) for k in live}
+        msgs = []
+        if dead:
+            msgs.append(f"{'/'.join(dead)} 相电流≈0（该相电压或电流列未映射/无数据；若为三相三线两表法请把接线方式设为 3p3w）")
+        if len(signs) > 1:
+            neg = [ch for k, ch in enumerate("ABC") if k in live and pm[k] < 0]
+            pos = [ch for k, ch in enumerate("ABC") if k in live and pm[k] > 0]
+            if len(pos) == len(neg):   # 两相相反（典型：三相三线两表法）——无法判定哪一相，提示按设备侧 P 符号核对
+                both = pos + neg
+                hint = f"{'/'.join(sorted(both))} 相中有一相 CT 极性可能接反（两表法 pf<0.5 时两表读数符号本可相反，请结合设备侧 P 符号核对）；可在配置 transform.invert_phases 填 \"{sorted(both)[0]}\" 或 \"{sorted(both)[1]}\"（界面「分相电流极性反转」）后重跑"
+            else:
+                flip = pos if len(pos) < len(neg) else neg
+                hint = f"{'/'.join(flip)} 相 CT 极性可能接反；可在配置 transform.invert_phases 填 \"{''.join(flip)}\"（界面「分相电流极性反转」）后重跑"
+            msgs.append("各相有功符号不一致（" + "，".join(f"P{ch}={pm[k]:.0f}W" for k, ch in enumerate("ABC")) + f"）：{hint}，总有功 ΣP 相互抵消")
+        if msgs:
+            self.errors.append("画像匹配数据体检：" + "；".join(msgs) + "。画像候选按三相合成 ΣP/ΣI 搜索，这种数据下设备台阶会被抵消或失真，先修正接线方式/极性再用画像匹配")
 
     def _evaluate_profile(self, qty: str, gap: int, g_last: int) -> List[NilmEvent]:
-        """v0.90：设备画像匹配（多特征，对象固定为三相合成 total；P 口径用总有功做候选，I 口径用三相电流合成量）。"""
+        """v0.90：设备画像匹配（多特征，对象固定为三相合成 total；P 口径用总有功做候选，I 口径用三相电流合成量）。
+
+        v0.99.26：多画像——逐个画像独立跑（各自状态机、去重、候选历史），结果按 onset 合并返回。
+        旧字段（device_state / profile_last / profile_hist / _last_end["profile","total"]）同步为第一个画像的，
+        保证旧界面 / 工具 / 测试行为不变。"""
         prm = self.ncfg.params("profile")
-        if not prm.get("enabled", False):
+        if not prm.get("enabled", False) or not self._profiles:
             return []
-        if self._profile is None:
-            return []
-        prof = self._profile
+        self._profile_health_check()
+        out: List[NilmEvent] = []
+        for slot in self._profiles:
+            if not slot.get("profile"):
+                continue
+            out.extend(self._evaluate_one_profile(slot, prm, qty, gap, g_last))
+        out.sort(key=lambda e: (e.t_start, e.device_id))
+        if self._profiles:
+            sl0 = self._profiles[0]
+            self.device_state = sl0.get("state", "unknown")
+            self.profile_last = list(sl0.get("last") or [])
+            self.profile_hist = dict(sl0.get("hist") or {})
+        return out
+
+    def _evaluate_one_profile(self, slot: Dict[str, Any], prm: Dict[str, Any], qty: str, gap: int,
+                              g_last: int) -> List[NilmEvent]:
+        """单个画像的匹配（v0.99.26 从 _evaluate_profile 拆出，逻辑与单画像版本一致）。"""
+        prof = slot["profile"]
+        dev = str(prof.get("device_id") or os.path.basename(slot.get("path") or ""))
+        tag = f"[{dev}] " if len(self._profiles) > 1 else ""
         use_p = (qty == "p")
         if prof.get("quantity") != ("p" if use_p else "i"):
-            msg = f"画像按 {prof.get('unit')} 口径构建，本侧检测量为 {'P' if use_p else 'I'}：ΔP/ΔI 特征不可比，画像匹配未运行（请统一 nilm.quantity）"
+            msg = (f"{tag}画像按 {prof.get('unit')} 口径构建，本侧检测量为 {'P' if use_p else 'I'}：ΔP/ΔI 特征不可比，"
+                   f"该画像匹配未运行（请统一 nilm.quantity）")
             if msg not in self.errors:
                 self.errors.append(msg)
             return []
@@ -756,47 +882,28 @@ class NilmDetector:
         #   只在两侧变比不同时提示一次（变比不同本身不影响匹配：总线 CT=250、分路 CT=1 正是常态）
         pc = prof.get("pt_ct") or {}
         tr = self.cfg.transform
-        if pc and not getattr(self, "_profile_ptct_noted", False) and (abs(float(pc.get("ct_ratio", tr.ct_ratio)) - float(tr.ct_ratio)) > 1e-9
-                                                                      or abs(float(pc.get("pt_ratio", tr.pt_ratio)) - float(tr.pt_ratio)) > 1e-9):
-            self._profile_ptct_noted = True
-            self.errors.append(f"提示：画像按 PT={pc.get('pt_ratio')} CT={pc.get('ct_ratio')} 换算后提取，本侧 PT={tr.pt_ratio:g} CT={tr.ct_ratio:g}；"
+        noted = getattr(self, "_profile_ptct_noted", None)
+        if noted is None:
+            noted = self._profile_ptct_noted = set()
+        if pc and dev not in noted and (abs(float(pc.get("ct_ratio", tr.ct_ratio)) - float(tr.ct_ratio)) > 1e-9
+                                       or abs(float(pc.get("pt_ratio", tr.pt_ratio)) - float(tr.pt_ratio)) > 1e-9):
+            noted.add(dev)
+            self.errors.append(f"{tag}提示：画像按 PT={pc.get('pt_ratio')} CT={pc.get('ct_ratio')} 换算后提取，本侧 PT={tr.pt_ratio:g} CT={tr.ct_ratio:g}；"
                                f"两侧都是换算后的量、变比不同不影响匹配。若设备侧文件是未换算的二次侧原始值而 CT 填了 1，ΔI/ΔP 会差一个变比而匹配不上")
-        # v0.99.6：接线不一致提示（只提示一次）：画像 3p4w、本侧 3p3w 未重构 ⇒ ΔIb 跳过；相序可用 phase_map 调整
+        # v0.99.6：接线不一致提示（每个画像只提示一次）：画像 3p4w、本侧 3p3w 未重构 ⇒ ΔIb 跳过；相序可用 phase_map 调整
         pw = (prof.get("wiring") or {}).get("wiring")
-        if pw and pw != str(getattr(tr, "wiring", "3p4w")) and not getattr(self, "_profile_wiring_noted", False):
-            self._profile_wiring_noted = True
-            self.errors.append(f"画像在 {pw} 接线下提取，本侧为 {getattr(tr, 'wiring', '3p4w')}：ΔP/ΔQ/峰值比/持续周波不受影响；分相 ΔI 若本侧为三相三线且未勾选 3P3W 重构则跳过 ΔIb；"
+        wnoted = getattr(self, "_profile_wiring_noted", None)
+        if wnoted is None:
+            wnoted = self._profile_wiring_noted = set()
+        if pw and pw != str(getattr(tr, "wiring", "3p4w")) and dev not in wnoted:
+            wnoted.add(dev)
+            self.errors.append(f"{tag}画像在 {pw} 接线下提取，本侧为 {getattr(tr, 'wiring', '3p4w')}：ΔP/ΔQ/峰值比/持续周波不受影响；分相 ΔI 若本侧为三相三线且未勾选 3P3W 重构则跳过 ΔIb；"
                                f"两侧相别标注可能不同，可用 profile.phase_map 指定相序映射（0＝自动）")
-        # v0.92.6：本侧数据体检——画像候选按三相合成量找，若某相无数据或各相有功符号不一致，总有功会互相抵消、台阶被吞掉
-        if self._p.shape[1] >= 20:
-            pm = [float(np.median(self._p[k, -200:])) for k in (1, 2, 3)]
-            im = [float(np.median(self._i[k, -200:])) for k in (1, 2, 3)]
-            ia_max = max(abs(v) for v in im) if im else 0.0
-            three_wire = bool(getattr(self.cfg.transform, "b_phase_missing", False))   # v0.93：三相三线两表法 B 相无 CT 属正常（v0.94 重构后 B 相已补回，照常检查）
-            dead = [ch for ch, v in zip("ABC", im) if ia_max > 0 and abs(v) < 0.01 * ia_max and not (three_wire and ch == "B")]
-            live = [k for k, ch in enumerate("ABC") if ch not in dead and abs(pm[k]) > 0 and not (three_wire and ch == "B")]
-            signs = {(pm[k] > 0) for k in live}
-            msgs = []
-            if dead:
-                msgs.append(f"{'/'.join(dead)} 相电流≈0（该相电压或电流列未映射/无数据；若为三相三线两表法请把接线方式设为 3p3w）")
-            if len(signs) > 1:
-                neg = [ch for k, ch in enumerate("ABC") if k in live and pm[k] < 0]
-                pos = [ch for k, ch in enumerate("ABC") if k in live and pm[k] > 0]
-                if len(pos) == len(neg):   # 两相相反（典型：三相三线两表法）——无法判定哪一相，提示按设备侧 P 符号核对
-                    both = pos + neg
-                    hint = f"{'/'.join(sorted(both))} 相中有一相 CT 极性可能接反（两表法 pf<0.5 时两表读数符号本可相反，请结合设备侧 P 符号核对）；可在配置 transform.invert_phases 填 \"{sorted(both)[0]}\" 或 \"{sorted(both)[1]}\"（界面「分相电流极性反转」）后重跑"
-                else:
-                    flip = pos if len(pos) < len(neg) else neg
-                    hint = f"{'/'.join(flip)} 相 CT 极性可能接反；可在配置 transform.invert_phases 填 \"{''.join(flip)}\"（界面「分相电流极性反转」）后重跑"
-                msgs.append("各相有功符号不一致（" + "，".join(f"P{ch}={pm[k]:.0f}W" for k, ch in enumerate("ABC")) + f"）：{hint}，总有功 ΣP 相互抵消")
-            if msgs and not getattr(self, "_profile_health_warned", False):
-                self._profile_health_warned = True
-                self.errors.append("画像匹配数据体检：" + "；".join(msgs) + "。画像候选按三相合成 ΣP/ΣI 搜索，这种数据下设备台阶会被抵消或失真，先修正接线方式/极性再用画像匹配")
         need = self._profile_window_need()
         if need > int(self.ncfg.window_cycles):
             dur_max = max([int((prof.get(k) or {}).get("dur_cycles", {}).get("max", 0) or 0) for k in ("startup", "shutdown")] + [0])
             sc_max = max(1, int(float(prm.get("max_scale", 8))))
-            msg = (f"画像前后窗 {prof.get('pre_cycles')}/{prof.get('post_cycles')} 周波（最长持续 {dur_max}，多尺度 ×{sc_max}）"
+            msg = (f"{tag}画像前后窗 {prof.get('pre_cycles')}/{prof.get('post_cycles')} 周波（最长持续 {dur_max}，多尺度 ×{sc_max}）"
                    f"需要约 {need} 周波的检测窗，大于 nilm.window_cycles={self.ncfg.window_cycles}：已自动按 {need} 周波缓存评估；"
                    f"建议把画像前后窗改小（典型 10/50～10/200）重提，或加大 window_cycles。"
                    f"注意：前后窗取的是中位数，间隔小于后窗的两次动作会互相污染，事件时刻也可能偏移")
@@ -804,15 +911,15 @@ class NilmDetector:
                 self.errors.append(msg)
         try:
             skip = ("d_ib",) if bool(getattr(self.cfg.transform, "b_phase_missing", False)) else ()   # v0.93：三相三线无 B 相电流；v0.94 重构后不再跳过
-            res = detect_profile(self._p, self._q, self._i, prof, prm, use_p, self.device_state, skip)
+            res = detect_profile(self._p, self._q, self._i, prof, prm, use_p, slot.get("state", "unknown"), skip, self._ih)
         except Exception as exc:
-            msg = f"profile 检测异常：{type(exc).__name__}: {exc}"
+            msg = f"{tag}profile 检测异常：{type(exc).__name__}: {exc}"
             if msg not in self.errors:
                 self.errors.append(msg)
             return []
         post_n = int(prof.get("post_cycles", 50))
-        key = ("profile", "total")
-        last_end = self._last_end.get(key, -gap - 1)
+        key = ("profile", dev)
+        last_end = int(slot.get("last_end", -10 ** 9)) if slot.get("last_end") is not None else -10 ** 9
         out: List[NilmEvent] = []
         diag: List[Dict[str, Any]] = []
         for r in res:
@@ -822,7 +929,7 @@ class NilmDetector:
                 continue
             m = r["match"]; f = r["feat"]
             diag.append({"t_start": float(self._t[onset]), "t_start_local": _ts(float(self._t[onset])), "g_on": int(g_on), "direction": m["direction"],
-                         "d2": round(m["d2"], 3), "d2_per_dim": round(m["d2_per_dim"], 3), "confidence": round(r["confidence"], 4),
+                         "device_id": dev, "d2": round(m["d2"], 3), "d2_per_dim": round(m["d2_per_dim"], 3), "confidence": round(r["confidence"], 4),
                          "margin": (round(m["margin"], 2) if math.isfinite(m["margin"]) else None), "status": r["status"],
                          "flags": list(r["flags"]), "scale": float(r.get("scale", 1)), "scales_hit": [float(x) for x in (r.get("scales_hit") or [])], "contrib": {k: round(v, 2) for k, v in m["contrib"].items()},
                          "vec": {k: round(float(v), 4) for k, v in f["vec"].items()}, "seen": g_on <= last_end + gap})
@@ -830,7 +937,9 @@ class NilmDetector:
                 continue
             if not r["accepted"]:
                 continue
-            self.device_state = "on" if m["direction"] == "START" else "off"
+            slot["state"] = "on" if m["direction"] == "START" else "off"
+            if slot is self._profiles[0]:
+                self.device_state = slot["state"]
             v = f["vec"]; dp = float(v["d_p"]); d_main = dp if use_p else f["d_it"]
             ev = NilmEvent(id=self._next_id, algorithm="profile", channel="total",
                            t_start=float(self._t[onset]), t_end=float(self._t[end]),
@@ -839,23 +948,29 @@ class NilmDetector:
                            pre_p_w=float(f["pre"]["p"]), post_p_w=float(f["post"]["p"]), cycles=int(end - onset),
                            score=float(r["confidence"]), g_start=g_on, g_end=g_end, quantity=qty, magnitude=abs(float(d_main)),
                            unit="W" if use_p else "A", device_id=str(prof.get("device_id", "")), confidence=float(r["confidence"]),
-                           d2=float(m["d2"]), profile_direction=m["direction"], status=r["status"], quality_flags=",".join(r["flags"]))
+                           d2=float(m["d2"]), profile_direction=m["direction"], status=r["status"], quality_flags=",".join(r["flags"]),
+                           delta_ih_a=float(f["vec"].get("d_ih", 0.0)))
             self._next_id += 1
             out.append(ev)
             last_end = g_end
-        self._last_end[key] = last_end
+        slot["last_end"] = last_end
+        if slot is self._profiles[0]:
+            self._last_end[key] = last_end
+        else:
+            self._last_end[key] = last_end
         if diag:
-            self.profile_last = diag[-20:]
+            slot["last"] = diag[-20:]
+            hist = slot.setdefault("hist", {})
             # v0.92.2：按窗内全局位置去重累积（最终状态覆盖早先的"等数据"版本），供回放工具 / 界面解释"为什么没报"
             for d_ in diag:
                 if d_.get("seen"):
                     continue                                   # 已报过 / 被 min_gap 压制的候选不进历史（状态机已翻转，结论无意义）
-                if int(d_["g_on"]) not in self.profile_hist:    # v0.99.20：首次出现即落盘（nilm/nilm_profile_candidates_{日期}.csv）
+                if int(d_["g_on"]) not in hist:                 # v0.99.20：首次出现即落盘（nilm/nilm_profile_candidates_{日期}.csv）
                     self.writer.write_profile_candidate(d_)
-                self.profile_hist[int(d_["g_on"])] = d_
-            if len(self.profile_hist) > 400:
-                for k_ in sorted(self.profile_hist)[:len(self.profile_hist) - 400]:
-                    self.profile_hist.pop(k_, None)
+                hist[int(d_["g_on"])] = d_
+            if len(hist) > 400:
+                for k_ in sorted(hist)[:len(hist) - 400]:
+                    hist.pop(k_, None)
         return out
 
     @staticmethod
@@ -913,18 +1028,47 @@ class NilmDetector:
             enabled_algos = [a for a in NILM_ALGO_DEFAULTS if self.ncfg.params(a).get("enabled", True)]
             # v0.90：画像匹配状态
             prof_on = bool(self.ncfg.params("profile").get("enabled", False))
-            prof_info: Dict[str, Any] = {"enabled": prof_on, "path": str(getattr(self.ncfg, "profile_path", "") or ""), "loaded": self._profile is not None,
+            # v0.99.26：多画像。``profiles`` 逐画像明细（path / device_id / 状态机 / 最近候选），
+            #   下面的 ``profile`` 仍是**第一个**画像的旧结构（旧界面 / 工具 / 测试不用改），两者内容一致。
+            slots = list(self._profiles)
+            prof_list: List[Dict[str, Any]] = []
+            for sl in slots:
+                pf = sl.get("profile")
+                prof_list.append({"path": str(sl.get("path", "")), "device_id": (pf or {}).get("device_id", ""), "loaded": pf is not None,
+                                  "error": str(sl.get("err") or ""), "device_state": str(sl.get("state", "unknown")),
+                                  "features": list((pf or {}).get("_features") or []),
+                                  "has_harmonic": "d_ih" in ((pf or {}).get("_features") or []),
+                                  "summary": (profile_summary(pf) if pf else None), "last": list(sl.get("last") or []),
+                                  "candidates": len(sl.get("hist") or {}),
+                                  "notes": list(sl.get("notes") or [])})
+            prof_info: Dict[str, Any] = {"enabled": prof_on, "path": str(getattr(self.ncfg, "profile_path", "") or ""),
+                                         "paths": list(getattr(self.ncfg, "profile_path_list", lambda: [])() or []),
+                                         "loaded": self._profile is not None,
                                          "error": self._profile_err, "device_state": self.device_state,
-                                         "summary": (profile_summary(self._profile) if self._profile else None), "last": list(self.profile_last)}
-            if prof_on and not getattr(self.ncfg, "profile_path", ""):
-                notes.append("设备画像匹配已勾选但 nilm.profile_path 为空：请先在数据处理页「设备画像提取」生成画像并填入路径")
+                                         "summary": (profile_summary(self._profile) if self._profile else None), "last": list(self.profile_last),
+                                         "count": len(slots), "loaded_count": sum(1 for d_ in prof_list if d_["loaded"]),
+                                         "profiles": prof_list}
+            if prof_on and not prof_info["paths"]:
+                notes.append("设备画像匹配已勾选但 nilm.profile_path 为空：请先在数据处理页「设备画像提取」生成画像并填入路径"
+                             "（多个设备可填多个画像：用 ; 分隔，或填 nilm.profile_paths）")
             elif prof_on and self._profile_err:
                 notes.append(self._profile_err)
-            elif prof_on and self._profile is not None:
-                pf = self._profile
-                notes.append(f"设备画像匹配：设备 {pf.get('device_id')}（{pf.get('unit')} 口径，启动样本 {pf['startup']['n'] if pf.get('startup') else 0} / 停止样本 "
-                             f"{pf['shutdown']['n'] if pf.get('shutdown') else 0}，前后窗 {pf.get('pre_cycles')}/{pf.get('post_cycles')} 周波）；"
-                             f"对象固定为三相合成，输出观测幅值与置信度，不估计设备贡献幅值；当前设备状态 {self.device_state}")
+            for i_sl, (sl, d_) in enumerate(zip(slots, prof_list)):
+                for nt in d_["notes"]:
+                    notes.append(nt)
+                if not d_["loaded"]:
+                    continue
+                pf = sl["profile"]
+                pre_txt = (f"设备 {pf.get('device_id')}（{pf.get('unit')} 口径，启动样本 {pf['startup']['n'] if pf.get('startup') else 0} / 停止样本 "
+                           f"{pf['shutdown']['n'] if pf.get('shutdown') else 0}，前后窗 {pf.get('pre_cycles')}/{pf.get('post_cycles')} 周波）")
+                if len(slots) > 1:
+                    pre_txt = f"第 {i_sl + 1}/{len(slots)} 个画像·" + pre_txt
+                notes.append(f"设备画像匹配：{pre_txt}；对象固定为三相合成，输出观测幅值与置信度，不估计设备贡献幅值；"
+                             f"当前设备状态 {d_['device_state']}"
+                             + ("" if d_["has_harmonic"] else "；该画像无谐波维度 d_ih（v0.99.25 及更早生成），谐波特征不参与匹配，建议重新提取"))
+            if len(slots) > 1:
+                notes.append(f"多画像匹配：已加载 {prof_info['loaded_count']}/{len(slots)} 个画像，各自独立状态机 / 去重 / 设备判定；"
+                             f"同一事件可能同时命中多个设备（输出里以 device_id 区分），候选诊断 CSV 也带 device_id 列")
             auto_cfg = bool(getattr(self.ncfg, "auto_params", False))
             auto_eff = self.auto_params_effective
             if auto_eff:
@@ -939,7 +1083,7 @@ class NilmDetector:
                     "channels": list(self.ncfg.channels), "channels_effective": self.channels_effective, "algorithms_enabled": enabled_algos,
                     "quantity": str(self.ncfg.quantity), "quantity_effective": qty, "voltage_missing": self.voltage_missing,
                     "algorithm_names": NILM_ALGO_NAMES, "writer": self.writer.info(), "errors": list(self.errors),
-                    "profile": prof_info, "notes": notes}
+                    "profile": prof_info, "profiles": prof_list, "notes": notes}
 
     def load_events(self, rows: List[Dict[str, Any]], replace: bool = True) -> int:
         """v0.18：把 nilm_events CSV 读回的事件（字典，见 replay_load.load_nilm_events）装入日志。"""
@@ -963,7 +1107,7 @@ class NilmDetector:
                                unit=str(d.get("unit") or "W"), device_id=str(d.get("device_id") or ""),
                                confidence=float(d.get("confidence") or 0.0), d2=float(d.get("d2") or 0.0),
                                profile_direction=str(d.get("profile_direction") or ""), status=str(d.get("status") or ""),
-                               quality_flags=str(d.get("quality_flags") or ""))
+                               quality_flags=str(d.get("quality_flags") or ""), delta_ih_a=float(d.get("delta_ih_a") or 0.0))
                 self._next_id += 1
                 self._log.append(ev)
                 self.counts[algo] = self.counts.get(algo, 0) + 1

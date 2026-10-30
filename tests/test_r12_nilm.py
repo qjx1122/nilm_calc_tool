@@ -298,7 +298,8 @@ def test_current_only_detection_all_algorithms(tmp_path, monkeypatch):
     rows = list(csv.reader(open(f, encoding="utf-8-sig")))
     iq = rows[0].index("quantity")
     assert rows[0][iq:iq + 4] == ["quantity", "magnitude", "unit", "run_id"] and rows[1][iq] == "i" and rows[1][iq + 2] == "A"
-    assert rows[0][-6:] == ["device_id", "confidence", "d2", "profile_direction", "status", "quality_flags"]   # v0.90
+    # v0.90 画像列；v0.99.26 在末尾新增 delta_ih_a（谐波电流增量，A）
+    assert rows[0][-7:] == ["device_id", "confidence", "d2", "profile_direction", "status", "quality_flags", "delta_ih_a"]
 
 
 def test_quantity_p_without_voltage_reports_error_and_i_with_voltage_works(tmp_path, monkeypatch):

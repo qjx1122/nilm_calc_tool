@@ -35,7 +35,7 @@ def diag_file(a) -> int:
     from elec_tool.nilm_profile import load_cycles
     from elec_tool.timefmt import fmt_local
     cfg = load_or_default(a.config, strict=True)
-    c, feat, t, p4, q4, i4, u_nonzero = load_cycles(cfg, a.file, max_cycles=int(a.max_cycles))
+    c, feat, t, p4, q4, i4, ih4, u_nonzero = load_cycles(cfg, a.file, max_cycles=int(a.max_cycles))   # v0.99.26：多返回 ih4
     cps = float(c.sampling.f_nom)
     series = {"p": p4[0], "i": i4[0]} if u_nonzero else {"i": i4[0]}
     found = {}; info = {}

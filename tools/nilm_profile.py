@@ -23,7 +23,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
 from elec_tool.config import ConfigError, load_or_default   # noqa: E402
-from elec_tool.nilm_profile import FEATURES, ProfileError, build_profile, save_profile   # noqa: E402
+from elec_tool.nilm_profile import ProfileError, build_profile, profile_feature_names, save_profile   # noqa: E402
 
 
 def build_cli_command(file: str, *, device: str, config=None, labels=None, label_tol=None, pre=None, post=None, quantity=None,
@@ -125,7 +125,7 @@ def main() -> int:
         if not g:
             print(f"  {name}画像：无样本"); continue
         print(f"  {name}画像：{g['n']} 次事件  持续 {g['dur_cycles']['min']:.0f}~{g['dur_cycles']['max']:.0f} 周波")
-        for j, k in enumerate(FEATURES):
+        for j, k in enumerate(profile_feature_names(doc)):          # v0.99.26：按画像实际维度打印（含 d_ih 谐波电流）
             print(f"      {k:<11} μ={g['mu'][j]:>12.4g}  σ={g['sigma'][j]:>10.4g}")
         for e in g["events"]:
             print(f"      · {e['t_start_local']}  ΔP={e['vec']['d_p']:.4g}  ΔIa/b/c={e['vec']['d_ia']:.4g}/{e['vec']['d_ib']:.4g}/{e['vec']['d_ic']:.4g}  峰值比={e['vec']['peak_ratio']:.2f}  {e['source']}")
