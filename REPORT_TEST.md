@@ -1782,3 +1782,18 @@ NilmConfig.MAX_PROFILES = 8                                                     
 3. **谐波维分不开"两台同类设备"**：bus-2 的 12:49 那台也是谐波源（ΔIh +18 A），对 d_ih 来说它"更像设备"，压不住；最终靠 ΔP/ΔI 幅值（0.55 倍）与 ΔQ 拒绝（D²/维 10.6，余量仅 1.2×）。
 4. **多画像是"并集"不是"互斥"**：两台设备同时启动时两条事件都会报，不做"占位"约束、也不做跨设备压制（会误删真实的同时启动）；`device_id` 相同时会提示"可能重复选择了同一设备"。
 5. **`quantity='i'` 时纯无功阶跃仍不是变点**（第 172 轮附带发现，本轮未改）：`change_points()` 只在 `i4[0]`/`p4[0]` 中二选一，电容投切看不见，后窗会把 ΔQ 吃进去。本轮 12:41:16 候选的 ΔQ −25 770 var 即由此而来（干净窗只有 −0.33 kvar）。
+
+### 五、端到端复核（Web API 全链路）与顺带修掉的一个真 bug
+
+合成一份「设备侧」CSV（6400 Hz、24 s、三相电压 + 电流；基流 10 A/相，设备 3 次启停各注入 +5 A 基波与 1.5 A 5 次 / 0.8 A 7 次谐波）→ CLI 提取画像 → 经 `/api/config` 挂上 → `/api/engine/start` 播同一份文件：
+
+| 检查点 | 结果 |
+|---|---|
+| 画像 JSON | `features` 8 项；`startup.mu[7] = 1.700 A`（= √(1.5²+0.8²)，解析解吻合）、`sigma[7] = 2.0`（绝对下限）、`shutdown.mu[7] = −1.700`；新增 `harmonic{orders,unit,feature,note}` 块 |
+| 引擎检出 | `counts.profile = 6`（3 START + 3 STOP），全部 `confirmed`、`D²=0.00`、`conf=1.000`，`errors=[]` |
+| 事件字段 | `delta_ih_a = +1.700 / −1.700`（逐条与注入量一致）；`nilm_events_*.csv` 末列、`nilm_profile_candidates_*.csv` 的 `d_ih`/`c_d_ih` 同步落盘 |
+| 多画像并挂 | `profile_path` 同时挂 8 维新画像 + 7 维旧画像 ⇒ `loaded_count=2`、`has_harmonic` 分别 True/False、notes 逐画像一条；旧画像 `A` 口径与本侧 P 口径不符时按既有规则**只报错不误判** |
+| 配置往返 | `/api/config` PUT `"a.json;b.json"` → GET 原样回显（不做规范化，去重发生在加载时） |
+
+**顺带发现并修掉的真 bug（CLI 默认配置不对）**：`tools/nilm_profile.py` 的 `--config` 帮助写的是「缺省 configs/runtime.json，没有则 configs/default.json」，但代码直接 `load_or_default(None)` ＝**代码级默认值**（`pt_ratio=100`、`ct_ratio=15`），而 Web 界面跑的是 `configs/default.json`（PT=CT=1）。于是命令行提取的画像 ΔI/ΔP 比界面大 15 / 1500 倍，总线侧**永远匹配不上**，且只在 `errors` 里留一句"变比不同不影响匹配"（这句本身也是错的，已改）。修复：① 缺省按帮助里的顺序找 `configs/runtime.json` → `configs/default.json`，并把实际用的配置文件写进画像 `command`；② PT/CT 不一致的提示改为给出**实际倍数**（"本侧 ΔI 是画像的 1/15 倍、ΔP 的 1/1500 倍"）并说明什么情况下才真的不影响匹配。验证：修复后同一份文件重提画像 ⇒ `ΔI=5.096 A`、`ΔIh=1.700 A`（旧为 76.44 / 25.5），总线侧 6 条 confirmed。
+

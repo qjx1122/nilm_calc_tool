@@ -323,7 +323,7 @@ def test_ptct_check_primary_side_ratios_may_differ(profile_path, tmp_path):
     for a in range(0, t.size, 640):
         det.ingest(SampleBlock(t=t[a:a + 640], u=u[:, a:a + 640], i=i[:, a:a + 640]))
     assert not any("口径不一致" in e for e in det.errors)
-    # v0.99.23：PT/CT 恒启用；本侧 PT=CT=1 与画像 CT=15 不同 ⇒ 仅提示「变比不同不影响匹配」，画像匹配照常运行
+    # v0.99.23：PT/CT 恒启用；本侧 PT=CT=1 与画像 CT=15 不同 ⇒ 仅提示（v0.99.26 起提示里带实际倍数），画像匹配照常运行
     cfg2 = AppConfig(); cfg2.transform.enabled = False; cfg2.nilm.profile_path = p2; cfg2.nilm.save = False
     for a in NILM_SCALAR_ALGOS:
         cfg2.nilm.algorithms[a]["enabled"] = False
@@ -331,5 +331,5 @@ def test_ptct_check_primary_side_ratios_may_differ(profile_path, tmp_path):
     det2 = NilmDetector(cfg2)
     for a in range(0, t.size, 640):
         det2.ingest(SampleBlock(t=t[a:a + 640], u=u[:, a:a + 640], i=i[:, a:a + 640]))
-    assert any("变比不同不影响匹配" in e for e in det2.errors)
+    assert any("换算后提取" in e and "本侧 ΔI 是画像的" in e for e in det2.errors)
     assert not any("画像匹配不会命中" in e for e in det2.errors)

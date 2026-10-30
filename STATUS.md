@@ -17,6 +17,8 @@
   - ③ **向后兼容**：7 维旧画像照旧加载（按 μ 长度定维度、谐波维跳过，`d` 取 7 不用 8 稀释）；旧配置（只有 `profile_path`）不受影响；候选/事件 CSV 表头变化由 `_rotate_if_header_differs` 自动转表头
   - 验证：新增 `tests/test_r173_harmonic_multi_profile.py` **17 项**；全量 **493 passed / 1 skipped**（153 s）；真实数据（`tmp/` bus-2、bus-3 两段 1 s 实录按 50 周波/秒展开）复现「3 候选全 rejected / 0 候选」，注入检验两侧 confirmed（7 维 0.743/0.745 → 8 维 0.770/0.772）
   - 文档：`README.md` v0.99.26 条、`REPORT_TEST.md` 第 173 轮专题、`NILM_TUNING_GUIDE.md` G.6 + H.25、`session/NILM_AC_session_complete.md` 第 173 轮节
+  - **端到端复核（Web API 全链路）**：合成设备侧文件 → CLI 提画像（`d_ih μ=1.700 A` 与解析解 √(1.5²+0.8²) 吻合）→ `/api/config` 挂上 → `/api/engine/start` 播同一文件 ⇒ **6 条 profile 事件全部 confirmed（D²=0、conf=1.000）、`delta_ih_a=±1.700`**，事件/候选 CSV 与 `summary.profile.profiles[]` 均正确
+  - **顺带修掉真 bug**：`tools/nilm_profile.py --config` 缺省时退回**代码级**默认值（PT=100 / CT=15），而界面跑 `configs/default.json`（PT=CT=1）⇒ CLI 提取的画像 ΔI/ΔP 大 15/1500 倍、总线侧永远匹配不上；已改为按帮助所述顺序找 `configs/runtime.json`→`configs/default.json`，并把 PT/CT 不一致的提示改成给**实际倍数**
   - 验收状态：沙盒侧 ✅；**用户侧 🔶 待回报**（需用户用真实设备侧文件重提一次 8 维画像，再看总线侧候选诊断）
 - **上一任务（2026-10-13 第 12 轮，已交付、沙盒侧✅实录）**：用户需求——负荷辨识子界面：① 尽量多的事件检测算法实时检测窗口内周波数据；② 事件含发生时刻、方向、幅度；③ 各算法参数可配；④ 事件保存 CSV（算法类型、起止时间、方向、幅值）。
   - 实现：`elec_tool/nilm.py`（`CycleFeatures` 逐周波 P/Q/I，4 对象；6 算法纯函数 `detect_steps`：threshold / two_window / cusum / glr / steady_state / median_diff；`NilmDetector` 滚动窗重评估 + 终点序号去重 + 确认周波；`NilmWriter` → `output/nilm/nilm_events_<日期>.csv` 18 列）；`config.NilmConfig`（通用 + 相对门槛 `rel_tol_pct/min_delta_pct` + `algorithms` 字典，`from_dict` 合并默认、`validate` 逐参数校验）；引擎 `_ingest` 后 `_detect_nilm`、状态 `nilm_events_total/nilm_cycles`、`info().nilm`；REST `/api/nilm/events|cycles|clear`、WS `nilm_event/nilm_cleared`；前端「🧩 负荷辨识」视图（卡片、周波窗曲线 + `drawLine opt.marks` 事件竖线、事件表 + 过滤、按算法生成的参数表单、徽标）；`tools/gen_nilm_sample.py`
@@ -283,6 +285,8 @@
 10. **T-004 遗留**：自定义播放时间目前只对 `csv_file` 生效（`csv_tail` 若现场文件也是 0/00/00 写法需扩展）；趋势历史随「重新启动数据源」清空，跨运行/跨进程的 24 h 需落盘（SQLite/滚动 CSV）；`history_hours`/`history_max_points` 未上界面；曲线横轴跨午夜不显示日期；自定义起始时间按本地时区（若现场要 UTC 需加 `tz` 字段）
 
 ## 决策记录 / 踩坑
+- 2026-10-30｜**踩坑（第 173 轮，端到端复核发现）**：`tools/nilm_profile.py` 的 `--config` 缺省值**文档与代码不一致**——帮助写「缺省 configs/runtime.json，没有则 configs/default.json」，代码却是 `load_or_default(None)`＝代码级默认（PT=100/CT=15），而 Web 跑 `configs/default.json`（PT=CT=1）。后果：命令行提的画像 ΔI/ΔP 大 15/1500 倍，总线侧**永远匹配不上**，且只留一句"变比不同不影响匹配"（这句话本身也不准确）。教训：**凡是"两侧要换算到同一口径"的功能，默认配置必须只有一处事实来源**；提醒文案要给出可核对的倍数，而不是让人猜
+- 2026-10-30｜**决策（第 173 轮，窗口提示）**：多画像的缓存窗口按**所有画像的最大需求**留，但"窗口不够"的提示改按**该画像自己的**需求算——否则挂一个 pre/post=3000 的老画像会把 10/50 的新画像的提示写成 7 万周波，误导排查方向
 - 2026-10-30｜**第 173 轮决策（谐波特征维度定义）**：① 谐波电流取 **2~13 次有效值合量**（GB/T 14549 关注段），每周波对三相各做一次 rfft，`ih` 的 total 行取**三相平均**而非 RMS 合成或三相求和——只有线性可加的合量才能保证 `Δ(本设备+其它) = Δ本设备 + Δ其它`；② 新维度**追加在 `FEATURES` 末尾**，保证旧画像 μ/σ 下标 0~6 不变（`peak_ratio`/`dur_cycles` 的硬编码下标继续成立），且旧画像按 μ 长度自动降级为 7 维、谐波维跳过（不用 8 维稀释置信度）；③ σ 下限取 **15% / 2 A**（与 ΔI 同口径）：第 169/170 轮实测设备在运/停机谐波电流 30~33 A vs 16~18 A，事件间波动约 ±15%
 - 2026-10-30｜**第 173 轮决策（多画像形态）**：`profile_path` 用 `;` 分隔 + 新增 `profile_paths` 列表（两种写法等价可混用，去重保序，上限 8）——比"务必填成数组"对老配置更友好；每画像独立 slot 并**按 (绝对路径, mtime) 复用**（改窗口等热更新不清设备状态）；**放弃跨设备同刻压制**（原设计"同刻只留最优"会把两台设备真实的同时启动删掉，且两者同时命中本身就是"画像太像"的有用诊断）
 - 2026-10-30｜**踩坑（第 173 轮）**：① `load_cycles()` 返回值从 7 元组变 8 元组（多 `ih4`），漏改调用点会静默错位——已全量 grep 调用点；② `detect_profile(..., ih4=None)` 漏传不报错但 `d_ih` 恒 0（静默失效，靠 `test_cycle_features_harmonic_current_analytic` 与 `test_thd_delta_*` 兜住）；③ `summary()` 里取"第一个画像"不能用 `prof_list.index(...)`（内容相同会取错），必须 `enumerate`；④ `_profile_window_need()` 多画像要取**所有画像的最大值**，否则第二个画像的候选永远等不到后窗

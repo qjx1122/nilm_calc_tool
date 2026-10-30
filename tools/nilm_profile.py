@@ -92,8 +92,17 @@ def main() -> int:
     ap.add_argument("--invert-phases", default=None, help="v0.95：分相电流极性反转，如 A / AC（覆盖配置 transform.invert_phases）")
     ap.add_argument("--json", action="store_true", help="把画像文档打印到 stdout")
     a = ap.parse_args()
+    # v0.99.26：--config 缺省时按帮助里写的那样去找 configs/runtime.json → configs/default.json。
+    #   此前直接 load_or_default(None) 会退回**代码级**默认值（PT=100 / CT=15），与界面实际运行用的
+    #   configs/default.json（PT=CT=1）不是一套变比 ⇒ 画像的 ΔI/ΔP 差 15/1500 倍，总线侧永远匹配不上。
+    cfg_path = a.config
+    if not cfg_path:
+        for _cand in (os.path.join(ROOT, "configs", "runtime.json"), os.path.join(ROOT, "configs", "default.json")):
+            if os.path.isfile(_cand):
+                cfg_path = _cand
+                break
     try:
-        cfg = load_or_default(a.config, strict=True)
+        cfg = load_or_default(cfg_path, strict=bool(a.config))
         _apply_wiring_args(cfg, a)
         labels_txt = None
         if a.labels:
@@ -111,7 +120,7 @@ def main() -> int:
     out = a.out or os.path.join(cfg.nilm.nilm_dir, f"profile_{a.device}_{time.strftime('%Y%m%d_%H%M%S')}.json")
     if not os.path.isabs(out):
         out = os.path.join(ROOT, out) if not os.path.exists(os.path.dirname(out) or ".") else out
-    doc["command"] = build_cli_command(a.file, device=a.device, config=a.config, labels=a.labels, label_tol=a.label_tol, pre=a.pre, post=a.post,
+    doc["command"] = build_cli_command(a.file, device=a.device, config=(a.config or cfg_path), labels=a.labels, label_tol=a.label_tol, pre=a.pre, post=a.post,
                                        quantity=a.quantity, t_start=a.t_start, t_end=a.t_end, custom_time=a.custom_time,
                                        custom_time_start=a.custom_time_start, custom_time_end=a.custom_time_end, out=a.out)
     save_profile(doc, out)

@@ -796,21 +796,27 @@ class NilmDetector:
         out += self._evaluate_profile(qty, gap, g_last)
         out.sort(key=lambda e: (e.t_start, e.algorithm))
         return out
-    def _profile_window_need(self) -> int:
-        """画像匹配评估一个候选至少需要的周波数：pre + 最长持续 + 2×post（候选搜索需 post，终点后再等 post 个周波确认）。
+    @staticmethod
+    def _profile_need_one(prof: Dict[str, Any], sc: int) -> int:
+        """单个画像评估一个候选至少需要的周波数：pre + 最长持续 + 2×post（候选搜索要 post，终点后再等 post 个周波确认）。"""
+        pre_n = int(prof.get("pre_cycles", 10)); post_n = int(prof.get("post_cycles", 50))
+        dur = max([int((prof.get(k) or {}).get("dur_cycles", {}).get("max", 0) or 0) for k in ("startup", "shutdown")] + [0])
+        return pre_n * sc + dur + 2 * post_n * sc + 10
 
-        v0.99.26：多画像时取**所有已加载画像的最大需求**（窗口只保留一份，按最大需求缓存，小画像不受影响）。"""
+    def _profile_window_need(self) -> int:
+        """画像匹配评估一个候选至少需要的周波数（多画像取**所有已加载画像的最大需求**：窗口只保留一份）。
+
+        v0.99.26：每个画像的 pre/post 可以差很多（3000/3000 的老画像 vs 10/50 的新画像），
+        缓存窗口必须按最大需求留，否则小画像永远等不到后窗；但"窗口不够"的提示按**该画像自己的**需求给。
+        """
         if not self._profiles or not bool(self.ncfg.params("profile").get("enabled", False)):
             return 0
         sc = max(1, int(float(self.ncfg.params("profile").get("max_scale", 8))))     # v0.99.15：多尺度候选的最大前后窗
         need = 0
         for slot in self._profiles:
             prof = slot.get("profile")
-            if not prof:
-                continue
-            pre_n = int(prof.get("pre_cycles", 10)); post_n = int(prof.get("post_cycles", 50))
-            dur = max([int((prof.get(k) or {}).get("dur_cycles", {}).get("max", 0) or 0) for k in ("startup", "shutdown")] + [0])
-            need = max(need, pre_n * sc + dur + 2 * post_n * sc + 10)
+            if prof:
+                need = max(need, self._profile_need_one(prof, sc))
         return need
 
     def _profile_health_check(self) -> None:
@@ -888,8 +894,14 @@ class NilmDetector:
         if pc and dev not in noted and (abs(float(pc.get("ct_ratio", tr.ct_ratio)) - float(tr.ct_ratio)) > 1e-9
                                        or abs(float(pc.get("pt_ratio", tr.pt_ratio)) - float(tr.pt_ratio)) > 1e-9):
             noted.add(dev)
-            self.errors.append(f"{tag}提示：画像按 PT={pc.get('pt_ratio')} CT={pc.get('ct_ratio')} 换算后提取，本侧 PT={tr.pt_ratio:g} CT={tr.ct_ratio:g}；"
-                               f"两侧都是换算后的量、变比不同不影响匹配。若设备侧文件是未换算的二次侧原始值而 CT 填了 1，ΔI/ΔP 会差一个变比而匹配不上")
+            pt_p = float(pc.get("pt_ratio") or 1.0); ct_p = float(pc.get("ct_ratio") or 1.0)
+            pt_r = float(tr.pt_ratio or 1.0); ct_r = float(tr.ct_ratio or 1.0)
+            k_i = (ct_r / ct_p) if ct_p else 1.0
+            k_p = (pt_r * ct_r) / (pt_p * ct_p) if (pt_p and ct_p) else 1.0
+            self.errors.append(f"{tag}提示：画像按 PT={pt_p:g} CT={ct_p:g} 换算后提取，本侧 PT={pt_r:g} CT={ct_r:g} ⇒ 换算到同一口径后"
+                               f"本侧 ΔI 是画像的 {k_i:g} 倍、ΔP 的 {k_p:g} 倍。两侧都是同一变比体系（都换算成一次值）时只是提示、不影响匹配；"
+                               f"但如果设备侧录的是**二次侧原始值**而提取时用了非 1 的 PT/CT（或反过来），ΔI/ΔP 会差这个倍数、永远匹配不上——"
+                               f"请用与总线侧相同的 PT/CT 重新提取画像（`tools/nilm_profile.py --config <总线侧配置>`）")
         # v0.99.6：接线不一致提示（每个画像只提示一次）：画像 3p4w、本侧 3p3w 未重构 ⇒ ΔIb 跳过；相序可用 phase_map 调整
         pw = (prof.get("wiring") or {}).get("wiring")
         wnoted = getattr(self, "_profile_wiring_noted", None)
@@ -899,12 +911,12 @@ class NilmDetector:
             wnoted.add(dev)
             self.errors.append(f"{tag}画像在 {pw} 接线下提取，本侧为 {getattr(tr, 'wiring', '3p4w')}：ΔP/ΔQ/峰值比/持续周波不受影响；分相 ΔI 若本侧为三相三线且未勾选 3P3W 重构则跳过 ΔIb；"
                                f"两侧相别标注可能不同，可用 profile.phase_map 指定相序映射（0＝自动）")
-        need = self._profile_window_need()
+        sc_max = max(1, int(float(prm.get("max_scale", 8))))
+        need = self._profile_need_one(prof, sc_max)          # v0.99.26：按**该画像**的需求提示（缓存窗口另按全局最大值）
         if need > int(self.ncfg.window_cycles):
             dur_max = max([int((prof.get(k) or {}).get("dur_cycles", {}).get("max", 0) or 0) for k in ("startup", "shutdown")] + [0])
-            sc_max = max(1, int(float(prm.get("max_scale", 8))))
             msg = (f"{tag}画像前后窗 {prof.get('pre_cycles')}/{prof.get('post_cycles')} 周波（最长持续 {dur_max}，多尺度 ×{sc_max}）"
-                   f"需要约 {need} 周波的检测窗，大于 nilm.window_cycles={self.ncfg.window_cycles}：已自动按 {need} 周波缓存评估；"
+                   f"需要约 {need} 周波的检测窗，大于 nilm.window_cycles={self.ncfg.window_cycles}：已自动按 {self._profile_window_need()} 周波缓存评估；"
                    f"建议把画像前后窗改小（典型 10/50～10/200）重提，或加大 window_cycles。"
                    f"注意：前后窗取的是中位数，间隔小于后窗的两次动作会互相污染，事件时刻也可能偏移")
             if msg not in self.errors:

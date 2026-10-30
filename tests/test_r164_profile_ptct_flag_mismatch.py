@@ -52,7 +52,7 @@ def test_ptct_flag_mismatch_warns_but_still_matches(tmp_path):
     evs = _feed(det)
     prof_evs = [e for e in evs if e["algorithm"] == "profile"]
     assert prof_evs and prof_evs[0]["direction"] == "down" and prof_evs[0]["status"] in ("confirmed", "low_confidence")
-    assert any("变比不同不影响匹配" in m for m in det.errors)
+    assert any("换算后提取" in m and "本侧 ΔI 是画像的" in m for m in det.errors)   # v0.99.26：提示里给出实际倍数
     assert not any("画像匹配不会命中" in m for m in det.errors)
     assert det.profile_hist, "候选诊断应已累积"
     files = os.listdir(tmp_path / "run")
@@ -64,4 +64,4 @@ def test_ptct_flag_same_no_warning(tmp_path):
     det = _detector(tmp_path, prof, bus_ptct_enabled=True)
     evs = _feed(det)
     assert [e for e in evs if e["algorithm"] == "profile"]
-    assert not any("变比不同不影响匹配" in m for m in det.errors)   # 画像 PT/CT=1/1 vs 本侧 4/250 不同 ⇒ 会提示；这里改为同变比
+    assert not any("换算后提取" in m for m in det.errors)   # 画像 PT/CT=1/1 vs 本侧 4/250 不同 ⇒ 会提示；这里改为同变比
