@@ -240,7 +240,7 @@ D1~D7：
 | A3 | `cli.py compute --file data/sample_6400hz.csv --format table --every 5` | `✓ 完成：输出 26 次；读入样本 32000（5.00s 数据），块 25，缓冲 10880/10880`；`各量输出次数：{'fundamental': 26, 'harmonic': 26, 'voltage': 6, …, 'spectrum': 6}` | 需求⑥成立：同一份数据里 0.2 s 窗出 26 次、1 s 窗出 6 次，各量独立调度 |
 | A4 | `cli.py compute --file … --set-window voltage=5` | `缓冲 32000/49280`；`'voltage': 2` | 改窗长即时生效且缓冲自动扩容（容量公式 `ceil(最长窗×fs×1.5)+max(块,64)`） |
 | A5 | `cli.py sources --file data/sample_6400hz.csv` | `编码：utf-8-sig`；`列映射：{'timestamp':0,'ua':1,'ia':2,'ub':3,'ib':4,'uc':5,'ic':6}`；`时间戳模式：s 推算采样率：6399.9943 Hz` | 用户给定列格式被正确识别；时间戳反推 fs 与配置偏差 0.0001% |
-| A6 | `cli.py serve --host 127.0.0.1 --port 8001 --pt 100 --ct 15 --set-window voltage=2` + `curl /api/state` | `serve 生效配置: PT=100.0 CT=15.0 fs=6400.0 | voltage 窗=2.0s | source=simulator`；`running: False` | CLI 覆盖参数确实传到 Web 会话；未设 `ELEC_TOOL_AUTOSTART` 时不自动跑引擎（需界面点启动） |
+| A6 | `cli.py serve --host 127.0.0.1 --port 8001 --pt 100 --ct 15 --set-window voltage=2` + `curl /api/state` | `serve 生效配置: PT=100.0 CT=15.0 fs=6400.0 \| voltage 窗=2.0s \| source=simulator`；`running: False` | CLI 覆盖参数确实传到 Web 会话；未设 `ELEC_TOOL_AUTOSTART` 时不自动跑引擎（需界面点启动） |
 | A7 | Web 实时链路（`ELEC_TOOL_AUTOSTART=1`，模拟器 `sim_speed=1`） | `速率 6398–6400 点/s`；`emits {'fundamental': 258, 'harmonic': 258, 'voltage': 51, …}`；`voltage 请求1.0s → 实际1.0s 6400点/50周期 f_used=49.999992 泄漏=False` | 实时摄入达额定速率；窗长口径**精确**等于请求值；WebSocket 推送为「分量子集」，前端 `mergeResult()` 按键合并 |
 | A8 | 离线安装（内网场景）：`pip download -r requirements.txt -d wheels` → 新 venv `pip install --no-index --find-links wheels -r requirements.txt` | Linux：29 包/28 MB，装完 `selftest 44/44`、`pytest 140 passed`（当时值） | 完全无网可部署；Windows 目标须显式列包（见 A9） |
 | A9 | `pip download --platform win_amd64 --python-version 3.11 --implementation cp --abi cp311 --only-binary=:all: numpy fastapi uvicorn websockets pytest httpx -d wheels_win` | 24 包/18 MB，含 `numpy-2.4.6-cp311-cp311-win_amd64.whl` | ✅下载侧通过；⚠️ 用 `-r requirements.txt` 跨平台下载会 `ResolutionImpossible`（`uvicorn[standard]`→uvloop 无 Windows wheel），已在 requirements.txt 用 PEP 508 平台标记分流 + README §2.4(c) 给出显式列包命令 |
@@ -251,7 +251,7 @@ D1~D7：
 | # | 现象（实测） | 根因 | 修法与回归测试 |
 | --- | --- | --- | --- |
 | B1 | 32000 行的 CSV 跑出 `samples_in=32640`；等满 1.2 s 数据却只算出 6272 点 | `EngineRunner.start()` **持锁** join 旧线程，旧线程正卡在「写结果要拿同一把锁」→ 互等到 2 s 超时后旧线程存活；旧线程每轮重读 `self.engine`，于是继续轮询**被替换的新引擎** → 同批数据双重摄入 | 锁外 join + 每轮全新 `threading.Event` + 线程只持有本轮私有 `engine/stop_event` + 每轮自检「被取代即退场」；回归：`tests/test_server.py::test_offline_window_length_changes_output_count`（断言 `samples_in == 文件行数`） |
-| B2 | 用户配 **1 s** 窗，实际只算 **0.98 s / 49 周期**，频谱分辨率变 1.0204 Hz，并持续打印「整周期截断」告警 | `plan_window` 用**绝对**容差 `floor(cyc_req + 1e-9)` 判整周期；估频 `f_used=49.999987`（相对误差 2.6e-7）时 `cyc_req=49.999987` 直接掉到 49 周期 | 改相对容差 `max(1e-9, 1e-5·|cyc_req|)`；真·非整数周期（49.85 Hz→49 周期）行为不变；回归：`tests/test_analysis.py::test_plan_window_estimated_freq_near_integer_keeps_all_cycles` |
+| B2 | 用户配 **1 s** 窗，实际只算 **0.98 s / 49 周期**，频谱分辨率变 1.0204 Hz，并持续打印「整周期截断」告警 | `plan_window` 用**绝对**容差 `floor(cyc_req + 1e-9)` 判整周期；估频 `f_used=49.999987`（相对误差 2.6e-7）时 `cyc_req=49.999987` 直接掉到 49 周期 | 改相对容差 `max(1e-9, 1e-5·\|cyc_req\|)`；真·非整数周期（49.85 Hz→49 周期）行为不变；回归：`tests/test_analysis.py::test_plan_window_estimated_freq_near_integer_keeps_all_cycles` |
 
 > 附带修正：未知导出格式返回 400（原静默走 JSON 分支）；重启引擎清空历史（一次运行＝一个数据集）；界面配置写 `configs/runtime.json`，出厂模板 `configs/default.json` 不再被污染；自检报告如实显示运行环境（Python/OS/numpy）；csv_tail 的 `tail_from_end`/`watch_dir_newest` 补上 CLI 开关与界面勾选框（此前只能改配置文件）。
 
@@ -1037,7 +1037,7 @@ U11-3 勾选 UTC 后界面时间=____
 ### 沙盒侧实录（三件套：命令 + 输出 + 判读）✅
 | # | 命令 | 输出（节选） | 判读 |
 |---|---|---|---|
-| S1 | `.venv/bin/python -m pytest tests/test_r10_colmap.py -q` | `8 passed` | 默认列序 / 表头乱序按表头 / 列号+列名混填 / 未映射置 0（`max|u_b|==0`）/ 无时间戳 3 块时间轴 `diff==1/6400` 连续 / 表头判定 / 校验 4 类报错 / REST 端到端 `rms A=5770 B=0 C=0` ✅ |
+| S1 | `.venv/bin/python -m pytest tests/test_r10_colmap.py -q` | `8 passed` | 默认列序 / 表头乱序按表头 / 列号+列名混填 / 未映射置 0（`max\|u_b\|==0`）/ 无时间戳 3 块时间轴 `diff==1/6400` 连续 / 表头判定 / 校验 4 类报错 / REST 端到端 `rms A=5770 B=0 C=0` ✅ |
 | S2 | `.venv/bin/python -m pytest tests -q` | `243 passed, 1 skipped` | 旧 235 项无回退（`test_config` 的 `resolve` 用例保持不变）✅ |
 | S3 | `JSDOM_DIR=/tmp/uitest node tools/ui_r10_check.cjs` | `结果：15 通过 / 0 失败` | M1 回填与禁用态；M2 启用/默认列序/按探查表头填入（`ua=A相电压`）/探查输出 `[1] 时间戳`；M3 PUT 载荷 `columns.mapping_enabled=true, ub=''` 且服务端生效；M4 探查显示「启用 columns.mapping」「未映射不播放：B相电压…」；M5 播放样例 notes 含「未映射」、`rms {A:5805.7,B:0,C:0}`、刷新后表单保持 ✅ |
 | S4 | `curl PUT /api/config {"columns":{"mapping_enabled":true,"mapping":{"ub":"","ib":"","uc":"","ic":""}}}` → `GET /api/probe?path=data/sample_6400hz.csv` | `"columns":{"timestamp":0,"ua":1,"ia":2,"ub":null,…},"mapping_enabled":true,"unmapped":["B相电压","B相电流","C相电压","C相电流"]` | 探查接口回显映射与未映射字段 ✅ |
@@ -2872,3 +2872,124 @@ python tools/nilm_profile.py --derive-from output\nilm\profile_device_20261030_2
 
 - 是否进入 `REPORT.md`（稳定结论）：**否**（参数口径属操作手册，已沉淀在 `NILM_TUNING_GUIDE.md` H.30）。
 - 遗留问题：① 文中"填错的后果"多数来自代码行为与 H.28/H.29 已实测的两例，**逐项参数单独做 A/B 实测仍未做**（例如只把 `k_sigma` 从 4 调到 6 的命中率变化）；② 三套预设的"保守/宽松"边界未用现场数据回归；③ 用户侧尚未按 H.30 实际配一遍。
+
+
+---
+
+## 第 182 轮（2026-11-01）：改画像前后窗后回放误识别——现场产物逐条取证
+
+**用户原话**：「修改提取设备画像时的前后窗参数后，重新提取设备画像并基于新提取的设备画像分别使用带设备停机和带设备开机的总线波形数据通过总线侧和分路侧进行播放并辨识，结果误识别很多，详细输出见 tmp 目录下相关文件，请详细分析原因。」
+
+**性质**：只读取证 + 复算，**未改代码**；文档交付 `NILM_TUNING_GUIDE.md` 附录 **H.31**（+212 行，2451 → 2663）。
+
+### 1. 现场（`tmp/`，2026-10-31 23:43 那一次回放）
+
+| 项 | 内容 |
+|---|---|
+| run_info | `created_local 2026-10-31 23:43:51`，两侧同时起播（bus 0.416 s / branch 0.531 s） |
+| 波形 | 总线侧 `化工行业-海湾化工-bus-停止.csv`、分路侧 `…-bus-启动.csv`（**注意：与 10-30 那次用的 `…-停止-1.csv` / `…-启动-1.csv` 不是同一份导出**） |
+| 画像 | 两侧都复制自 `output\nilm\profile_device_20261031_222210.json`（**改后画像，pre/post=10/200**） |
+| 检测配置 | `quantity=i`、`channels=[A]`、`window_cycles=3000`、`min_gap_cycles=1000`、`auto_params=true`、6 标量算法全开、profile `enabled=true` 其余默认（`d2_max 9 / min_confidence 0.3 / state_check 1 / max_scale 8`） |
+| 数据量 | 事件 `nilm_events_20261031.csv` 382 条（14:33:19~15:09:45）+ `nilm_events_20261101.csv` 69 条（跨零点续写，同一 run_id） |
+| 候选 | `nilm_profile_candidates_20261031.csv` 213 行 + `_20261101.csv` 54 行 |
+
+### 2. 画像取证（决定性）
+
+| 项 | 改前 `…_20261030_233706` | 改后 `…_20261031_222210` |
+|---|---|---|
+| `pre / post` | 3000 / 3000 | **10 / 200** |
+| startup `n` | 1 | **2** |
+| startup μΔIa / σΔIa | +35.95 / 5.39（=15 % 下限） | **+8.102 / 10.582（σ/\|μ\|=1.31）** |
+| startup μΔP | −23 933 W | −6 936 W |
+| startup dur | 1271 周波（25.4 s） | 63.5 周波（39~88） |
+| startup peak_ratio | 1.59 | 3.48 |
+| shutdown n / μΔIa / dur | 1 / −36.26 / 305 | 1 / **−18.21 / 1 周波** |
+| `need`（max_scale 8） | **73 281 周波 = 1466 s**（> 数据 1093/976 s ⇒ 不裁剪） | **3 378 周波 = 67.6 s**（正常） |
+
+**改后画像的两个「启动」样本**（`startup.events`）：
+
+| 时刻 | source | ΔIa | ΔIb | ΔIc | ΔP | peak_ratio | dur |
+|---|---|---|---|---|---|---|---|
+| 15:00:40.624 | `auto:steady_state` | **+0.62 A** | +0.90 | +0.92 | −405 W | 4.05 | 39 |
+| 15:01:21.024 | `auto:two_window` | **+15.58 A** | +11.04 | +20.76 | −13 468 W | 2.90 | 88 |
+
+⇒ 相差 25 倍的两个事件被平均成 μ=8.10 A，样本 σ=10.58 A（**σ>μ**）。`0.62 A` 低于总线 1 s 噪声峰峰值（60 A）两个量级，判为噪声级；`label_mode=auto`（无人工标签）是它被收进来的前提。
+画像 `notes` 已自带三条警告：「建议每方向 ≥3 次」「3/3 个事件的 ΔP 与 ΔI 异号（CT 极性接反）」「启动画像只有 2 次事件…幅值相近的他负荷也更容易被误认」。
+
+### 3. 回放取证
+
+**3.1 事件分布**
+
+| 算法 | 20261031 | 20261101 | 合计 |
+|---|---|---|---|
+| cusum | 65 | 12 | 77 |
+| threshold | 57 | 9 | 66 |
+| glr | 54 | 10 | 64 |
+| steady_state | 52 | 10 | 62 |
+| median_diff | 52 | 8 | 60 |
+| two_window | 47 | 9 | 56 |
+| **profile** | **55** | **11** | **66** |
+| 合计 | 382 | 69 | **451** |
+
+**3.2 画像事件**
+
+| 指标 | 20261031 | 20261101 |
+|---|---|---|
+| 条数 | 55 | 11 |
+| 方向 | **START 54 / STOP 1** | **START 11 / STOP 0** |
+| status | confirmed **2** / low_confidence 53 | low_confidence 11 |
+| conf | 0.303 / **0.376** / 0.768（min/中位/max） | 0.308 / 0.360 / 0.419 |
+| D² | 0.87 / 4.60 / 16.60 | 2.83 / 5.27 / 7.76 |
+| \|ΔI\| | 3.37 / 10.52 / 26.50 A | 6.71 / 10.34 / 16.88 A |
+
+**3.3 候选与 flags**
+
+| 指标 | 20261031（213 行） | 20261101（54 行） |
+|---|---|---|
+| `state_mismatch` | **208（97.7 %）** | **54（100 %）** |
+| `window_crowded` | 66 | 13 |
+| `trajectory_deviates` | 48 | 11 |
+| `d2_exceeds` | 33 | 15 |
+| `sign_flip` | 20 | 5 |
+| `ambiguous_direction` | 6 | 0 |
+| confirmed / low_confidence / rejected | 2 / 53 / 158 | 0 / 11 / 43 |
+
+**3.4 事件率与背景台阶**
+
+| 指标 | 总线侧 | 分路侧 |
+|---|---|---|
+| 画像事件（该 run） | 35 条 | 31 条 |
+| 时间跨度 | 14:33:19~14:53:10 | 14:53:19~15:09:45 |
+| 间隔中位 / 最小 | **25 s / 20 s** | **29 s / 21 s** |
+| 背景台阶（≥2 A，±5 s 中位，3 s 去重） | **156 个**，\|Δ\| 中位 **4.2 A** | **159 个**，中位 **4.4 A** |
+| 画像事件落在背景台阶 ±5 s 内 | （两侧合计） | **52 / 66（79 %）** |
+
+> `min_gap_cycles=1000`＝20 s，正是最小间隔 ⇒ **抑制器已饱和**，系统在满速报警。
+
+**3.5 文件头假事件**：两条首报（14:33:19.165 / 14:53:19.165）正好落在两段数据的第一个采样附近；`_window()` 在 `onset < pre_n` 时前窗被压成一个点（`p4[0, onset-1]`），任何起始电平差都成为台阶。分路侧那条以 **conf 0.768** 成为全表最高分，并把状态机翻成 `on`，此后 63 条 START 全部带 `state_mismatch`。
+
+### 4. 与 10-30 那次（`pre/post=3000/3000`）的对照
+
+| 项 | 3000/3000（10-30） | 10/200（10-31） |
+|---|---|---|
+| 画像 μΔIa / σ | 35.95 / 5.39（下限） | 8.10 / 10.58（样本差） |
+| `need` / 缓冲 | 73 281 / 不裁剪 | 3 378 / 67.6 s |
+| 画像事件 | **2** | **66** |
+| 标量算法事件 | 323 | 385 |
+| 候选 | 5 行（4 条 `window_crowded`） | 267 行（262 条 `state_mismatch`） |
+
+⇒ **换前后窗只改变了画像算法自己的行为**：从「几乎不动」变成「每 25 s 一次」；6 个标量算法的条数在同一量级（323 → 385），它们的问题与前后窗无关。
+
+### 5. 结论与改动清单
+
+见 `NILM_TUNING_GUIDE.md` H.31.0（三句话）/ H.31.6（归因汇总）/ H.31.7（A 参数 4 条 + B 代码 5 条 + C 提取侧 3 条）/ H.31.9（一页纸）。
+
+**不改码即可见效的三条**：`min_confidence` 0.3→**0.42**（66 条 → 7 条，两条 confirmed 全留；**不要用 0.45**，会把 conf 0.436 的唯一真 STOP 杀掉）、`min_gap_cycles` 1000→180 000、重提画像（剔 0.62 A 噪声、每方向 ≥3 样本、先修 CT 极性）。
+
+### 6. 未验证 / 遗留
+
+1. **设备真值缺失**：`dev1.csv` 不在 `tmp/`，无法确证 15:00:40 的 0.62 A 不是设备动作（按量级判噪声）。
+2. **两批波形不可直接比**：本次是 `…-bus-停止.csv`/`…-bus-启动.csv`（背景台阶 156/159），10-30 是 `…-停止-1.csv`/`…-启动-1.csv`（28/30）⇒ 只能比「同一画像在不同参数下的行为」，不能比两次回放的误报率。
+3. **原始 10 kHz 波形缺失**：逐周波 σ、`min_delta` 均为重建推断。
+4. **参数改动未实跑**：`min_confidence=0.42`（66→7）、`min_gap=180 000` 的收益是按事件表逐条扫描推算，下一轮需真跑复测。
+5. **500 错误**：与本次无关，仍未定位（见 STATUS）。
