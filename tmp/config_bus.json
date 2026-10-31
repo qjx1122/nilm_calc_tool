@@ -121,7 +121,7 @@
   },
   "source": {
     "kind": "csv_file",
-    "path": "data\\化工行业-海湾化工-bus-停止-1.csv",
+    "path": "data\\化工行业-海湾化工-bus-停止.csv",
     "poll_interval_s": 0.05,
     "block_samples": 640,
     "tail_from_end": false,
@@ -367,7 +367,7 @@
       }
     },
     "auto_params": true,
-    "profile_path": "output\\nilm\\profile_device_20261030_233706.json"
+    "profile_path": "output\\nilm\\profile_device_20261031_222210.json"
   },
   "branch": {
     "enabled": true,
