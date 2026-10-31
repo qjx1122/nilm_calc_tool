@@ -22,6 +22,7 @@
 """
 from __future__ import annotations
 
+import copy
 import json
 import math
 import os
@@ -891,4 +892,216 @@ def profile_summary(doc: Dict[str, Any]) -> Dict[str, Any]:
             "features": list(names), "has_harmonic": "d_ih" in names,
             # v0.99.27：每方向 <3 个样本时给出界面提示（提取结果 与 画像匹配状态行都用这一份）
             "min_events": MIN_EVENTS_PER_DIR, "sample_notes": sample_size_notes(doc),
-            "harmonic": dict(doc.get("harmonic") or {}) if "d_ih" in names else {}}
+            "harmonic": dict(doc.get("harmonic") or {}) if "d_ih" in names else {},
+            "stage": dict(doc.get("stage") or {})}
+
+
+# ------------------------------------------------------------------ 档位（多档位 / 变频设备的画像补救）
+# v0.99.28（第 179 轮）：**多档位设备只录到部分档位时怎么办**。三个后果都来自"画像只代表被录到的那一档"：
+#   ① 候选门槛 `min_d = 0.5·min(|ΔP| 或 |ΔI合成|)` 取自画像幅值 ⇒ **低于 0.5× 录制档位的档位连候选都不生成**（静默漏报）；
+#   ② 0.5~0.7× 能成候选但被 `min_confidence` 拒（实测单档画像的可接受区间是 **0.70~1.30×**，见 `stage_window`）；
+#   ③ 把不同档位的事件混进同一份画像最糟：μ 落在两档之间（一个不存在的档位）、σ 涨到 40~60 %，
+#      接受区间被拉成 0.1~1.4×，"同幅值纯线性假负荷"会被判成确认（实测 conf 0.43）。
+# 补救：**派生档位画像**——把已录档位的画像按倍数 k 同比缩放出一组"假设画像"（JSON 里写 `stage` 说明来源与假设），
+#   用 `nilm.profile_path` 的 `;` 列表一起加载。窗口 0.70~1.30× ⇒ 网格间距 1.30/0.70 = 1.857 时正好
+#   "无缝且不重叠"（同一事件不会被两份画像重复报出）。派生只缩放幅度量纲维，`peak_ratio`（比值）保持，
+#   `dur_cycles` 默认保持（σ 已有 50 % 下限：实测按 k 缩与不缩，D²/维 只差 0.1~0.4）。
+STAGE_GRID_RATIO = 1.857                         # 1.30/0.70：档位窗口"无缝且不重叠"的唯一间距
+STAGE_AMP_FEATURES = ("d_ia", "d_ib", "d_ic", "d_p", "d_q", "d_ih")   # 随档位同比缩放的维
+
+
+def _stage_amp(group: Dict[str, Any], names: Sequence[str], use_p: bool) -> float:
+    """画像幅值（与 `detect_profile` 的候选门槛同口径）：P 口径取 |ΔP|，I 口径取三相 ΔI 合成。"""
+    mu = group.get("mu") or []
+    if use_p:
+        j = names.index("d_p") if "d_p" in names else None
+        return abs(float(mu[j])) if j is not None and len(mu) > j else 0.0
+    return float(math.sqrt(sum(float(mu[names.index(k)]) ** 2 for k in ("d_ia", "d_ib", "d_ic") if k in names and len(mu) > names.index(k))))
+
+
+def _stage_vec(group: Dict[str, Any], names: Sequence[str], k: float, q_mode: str = "scale", ih_exp: float = 1.0,
+               dur_exp: float = 0.0) -> Dict[str, float]:
+    """把一份画像的 μ 按档位倍数 k 缩放成"合成事件"特征向量（peak 不动）。"""
+    mu = list(group.get("mu") or [])
+    out: Dict[str, float] = {}
+    for i, f in enumerate(names):
+        m = float(mu[i])
+        if f in ("d_ia", "d_ib", "d_ic", "d_p"):
+            out[f] = m * k
+        elif f == "d_q":
+            out[f] = m if str(q_mode) == "const" else m * k
+        elif f == "d_ih":
+            out[f] = m * (k ** float(ih_exp))
+        elif f == "dur_cycles":
+            out[f] = m * (k ** float(dur_exp))
+        else:
+            out[f] = m
+    return out
+
+
+def stage_window(doc: Dict[str, Any], *, lam_rel: float = 0.1, d2_max: float = 9.0, min_confidence: float = 0.3,
+                 k_min: float = 0.05, k_max: float = 3.0, step: float = 0.01, q_mode: str = "scale",
+                 ih_exp: float = 1.0, dur_exp: float = 0.0) -> Dict[str, Any]:
+    """该画像能接受的**档位倍数区间**（相对画像里录到的档位）＋候选门槛对应的档位。
+
+    把画像自己的 μ 按 k 同比缩放成合成事件，走真实 ``match_event`` 判接受 —— 与线上判定完全同口径
+    （含 σ 收缩 λ、``d2_max``、``min_confidence``、相序），所以是"这份画像到底认几档"的实测值，不是经验值。
+
+    返回 ``{k_lo, k_hi, k_gate, min_d, amp, unit, probes}``：
+      * ``k_lo~k_hi``：特征空间能接受的档位区间（本机 8 维、I 口径实测 **0.70~1.30**）；
+      * ``k_gate``：低于它**连候选都不会生成**（``min_d`` 门槛）——静默漏报区；
+      * ``k_lo~k_gate`` 之间：能成候选但会被拒（诊断 CSV 里能看到 `d2_exceeds`）。
+    """
+    names = profile_feature_names(doc)
+    use_p = str(doc.get("quantity") or "i").strip().lower() == "p"
+    amps = [a for a in (_stage_amp(doc[key], names, use_p) for key in ("startup", "shutdown") if doc.get(key)) if a > 0]
+    amp = max(amps) if amps else 0.0
+    min_d = 0.5 * min(amps) if amps else 0.0
+    lo = hi = None
+    n = int(round((k_max - k_min) / step)) + 1
+    for j in range(n):
+        k = round(k_min + j * step, 6)
+        best = None
+        for key in ("startup", "shutdown"):
+            g = doc.get(key)
+            if not g:
+                continue
+            vec = _stage_vec(g, names, k, q_mode, ih_exp, dur_exp)
+            r = match_event(doc, {"vec": vec, "template": list(g.get("template") or [])}, lam_rel, (), 1)
+            if best is None or r["d2"] < best["d2"]:
+                best = r
+        if best is None:
+            continue
+        ok = (best["d2_per_dim"] <= float(d2_max)) and (best["confidence"] >= float(min_confidence))
+        if ok and lo is None:
+            lo = k
+        if ok:
+            hi = k
+    return {"k_lo": lo, "k_hi": hi, "k_gate": (round(min_d / amp, 3) if amp > 0 else None), "min_d": round(min_d, 4),
+            "amp": round(amp, 4), "unit": str(doc.get("unit") or ("W" if use_p else "A")), "probes": n}
+
+
+def derive_stage_profile(doc: Dict[str, Any], scale: float, *, q_mode: str = "scale", ih_exp: float = 1.0,
+                         dur_exp: float = 0.0, device_id: Optional[str] = None) -> Dict[str, Any]:
+    """按档位倍数 ``scale`` 派生一份**假设**画像（该档位没有实录，用已录档位同比缩放）。
+
+    * μ/σ 的幅度维（ΔIa/ΔIb/ΔIc/ΔP/ΔQ/ΔIh）同乘 ``scale``（``q_mode="const"`` 时 ΔQ 不动；
+      ``ih_exp`` 可把谐波维改成 ``k**ih_exp``，轻载 THD 升高时取 0.7~0.9 更接近实际）；
+    * σ 再按 ``_REL_FLOOR`` / ``_ABS_FLOOR`` 抬回下限（低档位时绝对下限会接管，容差不会过窄）；
+    * ``peak_ratio`` 保持（比值，与档位无关）；``dur_cycles`` 默认保持（σ 有 50 % 下限兜底，``dur_exp`` 可改）；
+    * 原始事件的 ``events`` 明细**丢弃**（它记录的是被录档位的事件，缩放后会引起误会），只留 ``n``；
+    * 写 ``stage`` 字段说明"派生自哪份画像、哪个倍数、什么假设"——**不是实测**，界面 / 报告里要显式提示。
+    """
+    k = float(scale)
+    if not (0.05 <= k <= 20.0):
+        raise ProfileError(f"档位倍数不合理：{k:g}（应在 0.05~20 之间，相对**画像里录到的那一档**）")
+    names = profile_feature_names(doc)
+    out = copy.deepcopy(doc)
+    base = str(doc.get("device_id") or "device")
+    out["device_id"] = str(device_id or f"{base}@{round(k * 100):g}%")
+    for key in ("startup", "shutdown"):
+        g = out.get(key)
+        if not g:
+            continue
+        mu = [float(v) for v in g.get("mu") or []]
+        sg = [float(v) for v in g.get("sigma") or []]
+        vec = _stage_vec(g, names, k, q_mode, ih_exp, dur_exp)
+        mu2 = [float(vec[f]) for f in names]
+        sg2 = []
+        for i, f in enumerate(names):
+            ratio = (mu2[i] / mu[i]) if abs(mu[i]) > 1e-12 else 1.0
+            s2 = max(abs(sg[i]) * abs(ratio), _REL_FLOOR[f] * abs(mu2[i]), _ABS_FLOOR[f])
+            sg2.append(float(s2))
+        g["mu"] = mu2
+        g["sigma"] = sg2
+        if dur_exp and isinstance(g.get("dur_cycles"), dict):
+            g["dur_cycles"] = {kk: float(vv) * (k ** float(dur_exp)) for kk, vv in g["dur_cycles"].items()}
+        g.pop("events", None)                       # 原始事件明细属于被录档位，缩放后不再成立
+    notes = list(out.get("notes") or [])
+    notes.append(f"档位派生（v0.99.28）：按 k={k:g}×（相对画像 {base} 录到的档位）缩放，"
+                 f"q_mode={q_mode}、ih_exp={ih_exp:g}、dur_exp={dur_exp:g}。**该档位没有实录**，"
+                 f"μ/σ 是按倍数外推的假设值；上总线前请用该档的真实启停复核 `nilm_profile_diag`/候选 CSV 的 `c_*`。")
+    out["notes"] = notes
+    out["stage"] = {"derived_from": base, "scale": k, "q_mode": str(q_mode), "ih_exp": float(ih_exp),
+                    "dur_exp": float(dur_exp), "basis": "image",
+                    "note": "由已录档位画像按倍数派生的假设画像，无该档实录；混档提取（多档事件进同一份画像）会把 μ 拉到两档之间、σ 放大，禁止"}
+    return validate_profile(out)
+
+
+def stage_grid_ratio(doc: Dict[str, Any], **kw: Any) -> float:
+    """该画像的"无缝且不重叠"网格间距 ＝ **实测**接受窗口 ``k_hi / k_lo``（不是常数）。
+
+    本机实测量：真实 8 维画像 0.70~1.30 ⇒ 1.857；小样本 / 高噪声画像窗口更窄（如 0.73~1.27 ⇒ 1.74），
+    用固定 1.857 会留缝 —— 所以网格间距一律按调用方画像的实测窗口算。
+    """
+    w = stage_window(doc, **kw)
+    lo, hi = w.get("k_lo"), w.get("k_hi")
+    if not lo or not hi or float(hi) <= float(lo):
+        return float(STAGE_GRID_RATIO)
+    return float(hi) / float(lo)
+
+
+def derive_stage_profiles(doc: Dict[str, Any], scales: Optional[Sequence[float]] = None, *, count: int = 5,
+                          center: float = 1.0, ratio: Optional[float] = None, **kw: Any) -> List[Dict[str, Any]]:
+    """派生一组档位画像。``scales`` 给定则照它派生；否则按"阶梯"生成 ``count`` 份（见 ``derive_stage_ladder``）。
+
+    ``ratio`` 给定时退化为等比网格（间距 ``ratio``，用于"我就要固定间距"的场合）；不给则用阶梯——
+    因为**每份派生画像自己的窗口宽度不一样**（低档位的 σ 会被绝对下限接管，窗口更宽），固定间距会重叠或留缝。
+    """
+    if scales is not None:
+        return [derive_stage_profile(doc, float(k), **kw) for k in scales]
+    if ratio:
+        c = int(max(1, count)); half = (c - 1) / 2.0
+        return [derive_stage_profile(doc, float(center) * (float(ratio) ** (j - half)), **kw) for j in range(c)]
+    return derive_stage_ladder(doc, count=count, center=center, **kw)
+
+
+def _window_ratio(w: Dict[str, Any]) -> float:
+    """窗口上下界之比＝"无缝且不重叠"的档位间距（窗口 0.70~1.30 ⇒ 1.857）。"""
+    lo, hi = w.get("k_lo"), w.get("k_hi")
+    if not lo or not hi or float(hi) <= float(lo):
+        return float(STAGE_GRID_RATIO)
+    return float(hi) / float(lo)
+
+
+def derive_stage_ladder(doc: Dict[str, Any], *, count: int = 5, center: float = 1.0, **kw: Any) -> List[Dict[str, Any]]:
+    """从 ``center`` 档出发，按**每份派生画像实测的接受窗口**向两侧接力铺开 ``count`` 份。
+
+    摆放规则（向上为例）：新档位 ``k_new`` 使"新画像窗口的下界"正好落在"上一份画像窗口的上界"上 ——
+    ``k_new · k_lo(k_new) = k_prev · k_hi(prev)``。因为窗口宽度随档位变化（低档位的 σ 被绝对下限接管、窗口更宽），
+    这里对 ``k_new`` 做 3 次不动点迭代收敛。结果：相邻两份的接受区间**首尾相接**，既不漏档、也不重复报。
+    """
+    c = int(max(1, count))
+    half = (c - 1) // 2
+    wkw = {k: v for k, v in kw.items() if k in ("lam_rel", "d2_max", "min_confidence", "q_mode", "ih_exp", "dur_exp")}
+    base = derive_stage_profile(doc, float(center), **kw)
+    out: List[Dict[str, Any]] = [base]
+
+    def _place(cur: Dict[str, Any], up: bool) -> Dict[str, Any]:
+        w_cur = stage_window(cur, **wkw)
+        if not w_cur.get("k_lo") or not w_cur.get("k_hi"):
+            k = float(cur["stage"]["scale"]) * (float(STAGE_GRID_RATIO) if up else 1.0 / float(STAGE_GRID_RATIO))
+            return derive_stage_profile(doc, k, **kw)
+        edge = float(cur["stage"]["scale"]) * (float(w_cur["k_hi"]) if up else float(w_cur["k_lo"]))
+        k = float(cur["stage"]["scale"]) * (_window_ratio(w_cur) if up else 1.0 / _window_ratio(w_cur))   # 初值：按上一份的窗口比
+        sub = derive_stage_profile(doc, k, **kw)
+        for _ in range(3):                              # 不动点：让新画像自己的窗口贴住上一份的边界
+            w = stage_window(sub, **wkw)
+            if not w.get("k_lo") or not w.get("k_hi"):
+                break
+            k2 = edge / (float(w["k_lo"]) if up else float(w["k_hi"]))
+            if abs(k2 - k) <= 1e-6:
+                break
+            k = k2
+            sub = derive_stage_profile(doc, k, **kw)
+        return sub
+
+    cur = base
+    for _ in range(half):                                         # 向上（更大档位）
+        cur = _place(cur, True); out.append(cur)
+    cur = base
+    for _ in range(c - 1 - half):                                 # 向下（更小档位）
+        cur = _place(cur, False); out.append(cur)
+    return sorted(out, key=lambda g: float((g.get("stage") or {}).get("scale") or 0.0))
+
+
