@@ -20,6 +20,11 @@
   - **验证**：`nilm_check --tol-s 1.5` ⇒ 3 份 `profile 6 6 0 0 0 100% ✅ 可上线`（7 种算法全对）、5 份 `6 6 0 2 2 ⚠ 2 条带内误报`；`stage_window` 逐份数值复核（12 份，见 `REPORT_TEST.md` 第 181 轮第三节表）。
   - **文档**：`REPORT_TEST.md` 第 181 轮专题（含逐份窗口表、对账实录、用例覆盖表、4 条遗留）；`session/NILM_AC_session_complete.md` 第 181 轮节；本文件。
   - 验收状态：沙盒侧 ✅（全部期望值本机实跑）；**用户侧 🔶 待回报**（现场按 H.29 走一遍；两例均为合成数据、三相严格对称）。
+- **本任务·补（2026-10-31，同日追加，**文档类，未改代码**）**：用户问「设备画像提取中各算法参数如何设定、对应负荷辨识事件界面中该算法又如何设置」。
+  - 交付：`NILM_TUNING_GUIDE.md` 再增 **H.30「设备画像提取的参数怎么填、负荷辨识事件里「设备画像匹配」怎么配（逐项对照手册）」**（+242 行，全 **2451** 行）：H.30.0 参数分布总表 + 三个"配了也不生效"的坑 → H.30.1 提取侧基准配置 8 项 → H.30.2 ①②③④ 四组（**pre/post 会跨界面生效**、`need = pre×max_scale + dur + 2×post×max_scale + 10`、四类典型组合）→ H.30.3 检测侧公共项 → H.30.4「设备画像匹配」16 项分 6 组 → H.30.5 三套预设 → H.30.6 配参六步 → H.30.7 12 条「现象→根因→改哪项」→ H.30.8 一页纸。
+  - 取证结论：① `_profile_window_need()` 默认 **891 周波**（pre/post 10/50 × max_scale 8），`max_scale=1/2/4/8 ⇒ 121/231/451/891`，默认 `window_cycles=300` ⇒ 引擎自动扩窗并提示；② `auto_params` / `rel_tol_pct` / `min_delta_pct` **只作用于 6 种标量算法**，对画像匹配无效；③ 判据换算：`min_confidence 0.3 ⇔ D²/维 ≤ 2.41`、`d2_max 9 ⇔ 平均 |z| ≤ 3`、`stage_dim_max 9 ⇔ 单维 |z| ≤ 3`。
+  - 文档：`REPORT_TEST.md` 第 181 轮·补专题；`session/…` 同节；本文件。
+  - 验收状态：沙盒侧 ✅（代码逐行取证 + `need` 实测）；**用户侧 🔶**（三套预设与"填错后果"中逐项 A/B 未单独实测）。
 - **进行中（2026-10-31，未完成）**：用户另报「**测试设备画像提取功能时提示失败：HTTP 500**」。
   - 已定位的边界：`POST /api/process/nilm_profile`（`app/server.py:2901–3010`）**内部把 5 类异常与 `except Exception` 全部转成 400** ⇒ 500 **不可能**从 handler 的 `try` 里出来，只可能来自 ① `try` **之前**的两条局部 import（`from elec_tool.nilm_profile import …`、`from tools.nilm_profile import build_cli_command as _profile_cmd`；`tools/` 无 `__init__.py`，靠仓库根在 `sys.path` 才能导入）② 中间件 `_SideRouter` / `current_side()` / `_abs_path` ③ **响应序列化**——FastAPI 的 `JSONResponse.render` 用 `json.dumps(..., allow_nan=False)`，**已实测**：路由返回 `NaN`、`Infinity` 或 `numpy` 标量 ⇒ 一律 **500 + 纯文本 "Internal Server Error"**（前端 `api()` 对非 JSON 的响应正好显示 `HTTP 500`，与用户症状一致）。
   - 已排除：空单元 / `1e400` / 只有电流列 / 提前结束的文件（分别返回 200/200/200/400）；`stage` 派生接口 200；`build_cli_command` 签名与调用一致（含 `merge_gap`）。

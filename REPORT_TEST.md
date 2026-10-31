@@ -2833,3 +2833,42 @@ python tools/nilm_profile.py --derive-from output\nilm\profile_device_20261030_2
   2. 两例均为**合成数据**（三相严格对称、按 k 缩放）；真实设备的低档 THD 上升、无功不随档位比例等情形仍只在 H.28.5 里给出方向，未做实录；
   3. 用户侧（Windows + 现场数据）尚未按 H.29 的 14 条走一遍，属 🔶 待回报；
   4. 在此期间用户另报"设备画像提取 HTTP 500"，排查中（见 `STATUS.md` 下一步）。
+
+## 第 181 轮 · 补（2026-10-31）：设备画像提取 ↔ 负荷辨识「设备画像匹配」参数对照手册（H.30）
+
+- 类型：用户专题（文档类，**未改代码**）
+- 目标与假设：用户问"设备画像提取中各算法参数如何设定、对应负荷辨识事件界面中该算法又如何设置"。假设读者要**逐项可查**：每个参数给出「位置 / 默认 / 代码行为 / 怎么定 / 填错的后果」，并说明两侧的耦合关系。
+- 方法 / 数据 / 参数：逐行读代码取证——`app/static/index.html:1118-1245`（提取侧 ①②③④ 与基准配置）、`index.html:812-833` + `app.js:3227-3240`（检测侧公共项与「设备画像匹配」14 项）、`elec_tool/config.py:770-802`（默认值）、`elec_tool/nilm_profile.py:475-560`（候选生成 `_two_window_candidates`）、`:381-431`（`match_event` / `mahalanobis_diag`）、`:554-760`（`detect_profile` 判据）、`elec_tool/nilm.py:837-857`（缓存窗口需求）、`:911-1040`（`_evaluate_one_profile`）。
+- 用户执行命令（含实录路径）：本节为文档，无用户命令；取证命令：`python -c "from elec_tool.config import NILM_ALGO_DEFAULTS; print(NILM_ALGO_DEFAULTS['profile'])"`、`NilmDetector._profile_window_need()`（`/tmp/r181/need.py`）。
+- 结果 / 结论：
+
+**一、交付**：`NILM_TUNING_GUIDE.md` 新增 **H.30**（+242 行，全 2451 行）——
+| 小节 | 内容 |
+|---|---|
+| H.30.0 | 参数分布总表 + 三个"配了也不生效"的坑（`rel_tol_pct`/`min_delta_pct`/`auto_params` 只作用于 6 种标量算法；只填路径不勾 enabled；检测量不一致直接跳过画像） |
+| H.30.1 | 提取侧基准配置 8 项（fs、f_nom、PT/CT、时标 UTC、接线、3P3W 重构、极性、检测量）+ 手算核对 |
+| H.30.2 | ①②③④ 四组：设备 ID/文件名、标签/容差 2 s/合并 10 s、**pre 10 / post 50**（同时决定设备侧特征、总线侧候选、总线侧特征、检出延迟）、派生档位 4 项；含 `need = pre×max_scale + dur + 2×post×max_scale + 10` 与四类典型组合 |
+| H.30.3 | 检测侧公共项 6 个（quantity / window_cycles / min_gap_cycles / save / auto_params / rel_tol_pct / min_delta_pct） |
+| H.30.4 | 「设备画像匹配」16 项分 6 组（总开关与画像、候选门槛、相似度判据、方向与相序、窗口几何、档位策略），每项给默认值 / 代码行为 / 怎么定 |
+| H.30.5 | 三套预设（保守 / 标准 / 宽松） |
+| H.30.6 | 配参六步（每步只看一个数） |
+| H.30.7 | 12 条"现象 → 根因 → 改哪一项" |
+| H.30.8 | 一页纸 |
+
+**二、本次取证得到的两条关键事实**
+
+1. **缓存窗口需求**：默认 `pre/post=10/50` + `max_scale=8` ⇒ `_profile_window_need()` = **891 周波（≈17.8 s）**，而 `nilm.window_cycles` 默认 300 ⇒ 引擎自动扩窗并在状态行提示。实测：`max_scale=1/2/4/8` ⇒ need **121 / 231 / 451 / 891**。
+2. **`auto_params` 不影响画像匹配**：`elec_tool/nilm.py:753-800` 的自适应参数推导只发生在 `for algo in NILM_SCALAR_ALGOS` 循环内；画像匹配的判据完全由画像 σ + `k_sigma`/`min_stage`/`d2_max`/`min_confidence` 决定。`rel_tol_pct` / `min_delta_pct` 同理。
+
+**三、判据换算（写进文档，便于现场自查）**
+
+| 参数 | 值 | 等价判据 |
+|---|---|---|
+| `min_confidence=0.3` | `exp(−D²/2d) ≥ 0.3` | `D²/维 ≤ 2.41` |
+| `d2_max=9` | `D²/维 ≤ 9` | 平均 \|z\| ≤ 3（对应 conf ≥ 0.011，通常不是卡点） |
+| `stage_dim_max=9` | 任一维贡献 ≤ 9 | 单维 \|z\| ≤ 3（仅 `stage_free=1` 生效） |
+| `min_stage=0.5` | 候选门槛 = 0.5×画像幅值 | 0.35× 档位**连候选都不生成** |
+| `k_sigma=4` | 候选门槛 = max(min_d, 4×前窗 σ) | 噪声大时自动抬高 |
+
+- 是否进入 `REPORT.md`（稳定结论）：**否**（参数口径属操作手册，已沉淀在 `NILM_TUNING_GUIDE.md` H.30）。
+- 遗留问题：① 文中"填错的后果"多数来自代码行为与 H.28/H.29 已实测的两例，**逐项参数单独做 A/B 实测仍未做**（例如只把 `k_sigma` 从 4 调到 6 的命中率变化）；② 三套预设的"保守/宽松"边界未用现场数据回归；③ 用户侧尚未按 H.30 实际配一遍。
