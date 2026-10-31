@@ -650,3 +650,30 @@
 - **成本**：每画像每次评估 ≈4~5 ms（L≈10 281 周波）；5 份 ≈ +20~25 ms/块（块 0.64 s）≈3~4 % 单核；20 min 回放墙钟约 +30~60 s。运行目录复制按 `;` 列表逐画像（第 173 轮已实现），派生 `device_id`（`device@54%`）不同名 ⇒ 不触发"重复 device_id"提示。
 - **测试**：新增 `tests/test_r179_stage_profile.py` 8 项（窗口/门槛、派生规则与坏倍数、认自己拒别人、网格无缝不重叠、端到端 detect_profile、小谐波设备低档余量、CLI 两种模式）；全量 **514 passed / 1 skipped**（159 s）。
 - **未做**：界面入口（只有 CLI/API）、方案 B 的语义变更、`lambda_rel` 默认值调整。
+
+## 第 180 轮（2026-10-31）：按第 179 轮第 1~3 项落地 —— 派生档位界面入口 / 档位自由匹配（方案 B）/ `lambda_rel` 默认 0.02
+
+- **用户指令（原话）**：「按上述1-3点进行实施修改」＝① 派生档位的界面入口、② 方案 B（档位自由匹配）、③ `profile.lambda_rel` 默认 0.1 → 0.01~0.02。第 4 项（用"已知某一档"的总线数据做反向验证）**用户未答** ⇒ 记为待验证。
+- **① 界面入口**：数据处理页「设备画像提取」新增 **④ 派生档位画像**（倍数 `0.4,0.7,1.2` / 输出目录 / ΔQ 缩放 `scale|const` / 谐波指数 + 「派生档位画像」「复制派生路径串」）；结果区给每档的**可接受区间、候选门槛 min_d、静默区、文件名**与 `;` 路径串、等价 CLI 命令。后端 `POST /api/process/nilm_profile_stage`（`app/server.py`）。事件表显示 `xx % 档` 与 `升档/降档` 徽标。
+- **② 方案 B（档位自由匹配）**：`match_event(..., stage_free=True)` 用加权最小二乘解唯一缩放 `s*`，σ 随 s 同比缩放后算形状残差；**s 只用 ΔI/ΔP 标定**（`STAGE_REF_FEATURES`）——让 ΔQ/ΔIh 参与会把 s 拖走、残差摊平、单维否决失效（实测 s 掉到 0.6~0.9、单维只有 1.5~2.2）。新配置：`stage_free`（0/1）、`min_stage`（候选门槛，0.5＝旧）、`stage_min_scale`/`stage_max_scale`（0.2/3.0）、`stage_dim_max`（单维否决，默认 9，只在 stage_free 生效）。事件新增 `stage_scale`（解出的档位倍数）与 `event_kind`（`start/stop/stage_up/stage_down`，CSV 末尾两列，旧 31 列不变）。
+- **语义**：设备在 ON 又出现同向台阶 ⇒ `stage_up`/`stage_down`，`state` 不变、不记 `state_mismatch`、置信度不折半（实测 1.0→1.6 的台阶 s=0.6）。
+- **③ `lambda_rel` 0.1 → 0.02**：`peak_ratio` 有效 σ 由 4.03× 降到 2.01×、`d_ih` 1.25×→1.05×；认档窗口 0.70~1.30 → **0.72~1.28**；两条真实事件 conf 0.748→0.755、0.764→0.777（略升）；同幅值纯线性假负荷 5.57→7.04/conf 0.030；9 条真实候选仍全拒。**回退＝把 `lambda_rel` 改回 0.1**。
+- **实测（档位自由）**：合成 0.2~3.0 全收且 s 精确；第 178 轮两条真实事件 D²/维 0.56/0.51、conf 0.755/0.777、s 0.975/0.982、单维最大 1.68/2.06；00:07 那次 9 条真实候选**全拒**（最好 16:44:05 由 15.00 降到 **6.37**、conf 0.041，s=1.56——真正拦它的是 `min_confidence` 与单维否决）；ΔIh=0.4× 假负荷 0.407（平均门会收）→ 单维 14.4 **拒**；ΔQ=0 同幅值 0.368 → 单维 16.0 **拒**；16:42:19 他设备单维 124 拒；"同形状且 ΔQ 同号" 0.442 收（期望行为）。
+- **门槛**：`min_stage` 0.5/0.3/0.2 ⇒ 31.90/19.14/12.76 A（＝50/30/20 % 档）。
+- **成本**：`detect_profile` 7.5 ms（固定）→ 12.1 ms（自由）/块（L=10 281），≈单核 1.9 %。
+- **测试**：新增 `tests/test_r180_stage_free.py` 22 项；`tests/test_r12_nilm.py` 事件 CSV 表头断言 `[-7:]`→`[-9:]`；全量 **536 passed / 1 skipped**（157 s，基线 514）。
+- **兼容**：旧 7 维画像、旧配置（缺键取默认）、旧 31 列事件 CSV 全部照旧；`stage_free=0`+`min_stage=0.5` 与 v0.99.28 行为一致，唯一全局变更是 `lambda_rel`。
+- **坑/结论**：① 档位自由会系统性压低平均 D²（16:44:05 15.0→6.4）⇒ **不能同时调大 d2_max、也别把 min_confidence 降到 0.2 以下**；② `stage_dim_max` 只对 stage_free 生效（固定档位保持旧口径，避免升级后历史结果变化）；③ 电机励磁无功恒定（`q_mode=const`）的设备在 k≤0.5 会被自由档位误杀（8/48 组）⇒ 这类走派生网格 + `--stage-q-mode const`。
+- **未做**：第 4 项反向验证（用户未答）；方案 C（稳态运行态辨识）。
+- **环境**：开局沙盒被回收（仓库回基线 `27b28ea`、round-178/179 的提交不在本地、`.venv` 消失）⇒ `git fetch` + `git reset --mixed origin/arena/…`（远端头 **`7f23142`**，含第 179 轮代码与文档）+ `git checkout origin/… -- REPORT_TEST.md STATUS.md session/` 恢复文档，重建 `.venv`。
+
+### 第 180 轮 · 收尾复核补丁（同日，同一轮内追加）
+
+- **发现（端到端实跑）**：用 6400 Hz 合成波形建 500 W 设备画像，再在总线侧造 "3 s 起 +500（1.0 档）→ 6 s −300（降到 0.4 档）→ 9 s −200（停机）"。按首版规则（`stage_change` 只看方向 vs 二元 on/off）输出 **`start / stop / stage_down`**：中间那次设备还在 0.4 档运行却标成 `stop`（状态被误翻成 off），最后那次真停机被标成 `stage_down`（状态永远翻不回来）。
+- **根因**：降档与停机**方向相同**（STOP）、幅值都可能小于一档（1.0→0.6 剩 0.4 档；0.4 档直接停机 s 也是 0.4）⇒ 只有记"当前在第几档"才分得开。
+- **改法**：`elec_tool/nilm.py` 新增 `STAGE_LEVEL_EPS=0.15` 与 `_stage_kind(m, s, level) -> (kind, level_after)`（停机起步⇒`start`、运行中加档⇒`stage_up`、降档后仍有残留⇒`stage_down`、降到 ≤eps⇒`stop`）；`_evaluate_one_profile` 维护 `slot["level"]`（画像档位倍数，0＝停机）**只在事件落盘后推进**，`slot["state"]` 由 level 反推；重扫旧候选不重复推进、用 `slot["kinds"][g_on]` 回填当时类型（否则候选诊断 CSV 会把已报过的候选记成新语义）；`summary().profile.profiles[]` 增 `level`。`detect_profile` 里 `stage_change` 保持原样（只影响 `state_mismatch` 折半），事件类型不再由它决定；`stage_free=0` 行为一字未改。
+- **改后**：`start(1.00) / stage_down(0.60) / stop(0.40)`、时刻 3/6/9 s、`device_state=off`、`level=0.00`；候选诊断同表一致。
+- **边界**：① 0.2 档启动仍是 `start`（不是升档）、0.2 档直接停机仍是 `stop`；② 缓冲区内第一个候选若就是部分 STOP（state unknown）记 `stop` 并归零（保守），全量重放可纠正；③ 漏报一次降档会让 level 偏高（账本无回正），看候选 CSV 的 `level`/`stage_scale` 对账。
+- **测试**：`tests/test_r180_stage_free.py` 追加 `test_stage_kind_table`（7 条语义表）与 `test_detector_labels_stage_down_before_stop`（端到端）⇒ **25 项全通过**；画像相关 5 个测试文件 **103 passed**；全量 **539 passed / 1 skipped**（158 s）。
+- **文档**：`README.md` v0.99.29 ②/⑥、`REPORT.md` C-25、`REPORT_TEST.md` 第 180 轮第八节、`NILM_TUNING_GUIDE.md` H.27 判读段、本文件、`STATUS.md`。
+- **同时补的兼容项**：`elec_tool/replay_load.py` 回放工具读事件 CSV 时带上 `stage_scale` / `event_kind`（旧文件缺列 → 1.0 / 空串）；`elec_tool/nilm.py` 事件类型判定抽成 `_event_kind()`（固定档位）与 `_stage_kind()`（档位自由），三处调用共用。

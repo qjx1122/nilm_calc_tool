@@ -199,6 +199,8 @@ def load_nilm_events(dir_: str, source_id: int, t_from: Optional[float] = None, 
                 # v0.90：画像匹配附加列（旧文件没有这些列 → 空）
                 "device_id": g(row, "device_id") or "", "confidence": _num(g(row, "confidence")) or 0.0, "d2": _num(g(row, "d2")) or 0.0,
                 "profile_direction": g(row, "profile_direction") or "", "status": g(row, "status") or "", "quality_flags": g(row, "quality_flags") or "",
+                # v0.99.29：档位自由匹配（旧文件没有这两列 → 1.0 / 空）
+                "stage_scale": _num(g(row, "stage_scale")), "event_kind": g(row, "event_kind") or "",
             })
         if len(out) >= limit:
             break

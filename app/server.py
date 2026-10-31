@@ -2623,6 +2623,101 @@ async def process_nilm_tune_base(source: str = "default") -> Any:
     return {"ok": True, "source": src, "side": side, "base": _nt_base_fields(cfg), "keys": list(NT_BASE_KEYS) + ["quantity"]}
 
 
+@app.post("/api/process/nilm_profile_stage")
+async def process_nilm_profile_stage(payload: Dict[str, Any]) -> Any:
+    """v0.99.29：**派生档位画像**——多档位 / 变频设备只录到部分档位时的补救（第 179 轮分析的界面入口）。
+
+    对一份**已提取**的画像按倍数 k 缩放出一组"假设档位"画像（JSON 里 ``stage`` 字段写明来源与假设），
+    写到 ``output/nilm/``（或指定目录），返回每份的可接受档位区间 / 候选门槛 / 文件名，以及可直接粘贴到
+    ``nilm.profile_path`` 的 ``;`` 路径串。
+
+    body：{profile: 画像 JSON 路径（必填）, scales: "0.4,0.7,1.2" 或 [0.4,0.7], out_dir?: 目录,
+           q_mode?: scale|const, ih_exp?: 1.0, dur_exp?: 0.0}
+    返回 {ok, rows:[{scale, pct, device_id, path, k_lo, k_hi, min_d, amp, unit}], paths, command, notes}。
+    """
+    from elec_tool.nilm_profile import (ProfileError, derive_stage_profile, load_profile, save_profile,
+                                        stage_window, stage_grid_ratio)
+    src = str(payload.get("profile") or payload.get("path") or "").strip()
+    if not src:
+        return JSONResponse(status_code=400, content={"ok": False, "error": "请先在上方「提取设备画像」，或用 profile 指定既有画像 JSON 路径"})
+    src_abs = _abs_path(src)
+    if not os.path.isfile(src_abs):
+        return JSONResponse(status_code=400, content={"ok": False, "error": f"画像文件不存在：{src}"})
+
+    def _f(k: str, default: float) -> float:
+        v = payload.get(k)
+        if v in (None, ""):
+            return default
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            raise ProfileError(f"{k} 必须是数字（当前 {v!r}）")
+
+    try:
+        raw = payload.get("scales", payload.get("stages", ""))
+        if isinstance(raw, (list, tuple)):
+            toks = [str(x) for x in raw]
+        else:
+            toks = str(raw).replace(";", ",").replace("，", ",").replace(" ", ",").replace("×", "").replace("x", "").replace("X", "").split(",")
+        scales: List[float] = []
+        for t in toks:
+            t = t.strip()
+            if not t:
+                continue
+            try:
+                scales.append(float(t))
+            except ValueError:
+                raise ProfileError(f"档位倍数不是数字：{t!r}（例：0.4,0.7,1.2）")
+        if not scales:
+            raise ProfileError("请填写要派生的档位倍数（相对画像录到的那一档，例：0.4,0.7,1.2）")
+        if len(scales) > 20:
+            raise ProfileError(f"一次最多派生 20 份（当前 {len(scales)}）；档位越多候选越多，建议按 1.3~1.8 倍间距选几档")
+        q_mode = str(payload.get("q_mode") or "scale").strip().lower()
+        if q_mode not in ("scale", "const"):
+            raise ProfileError(f"q_mode 只能是 scale / const（当前 {q_mode!r}）")
+        ih_exp = _f("ih_exp", 1.0); dur_exp = _f("dur_exp", 0.0)
+        doc = load_profile(src_abs)
+        out_dir = str(payload.get("out_dir") or "").strip()
+        if out_dir:
+            d_abs = _abs_path(out_dir)
+        else:
+            d_abs = os.path.dirname(os.path.abspath(src_abs))
+        os.makedirs(d_abs, exist_ok=True)
+        stem = os.path.splitext(os.path.basename(src_abs))[0]
+        base_win = stage_window(doc)
+        rows: List[Dict[str, Any]] = []
+        paths: List[str] = []
+        for k in scales:
+            sub = derive_stage_profile(doc, float(k), q_mode=q_mode, ih_exp=ih_exp, dur_exp=dur_exp)
+            fn = f"{stem}_stage{float(k):.4g}.json"
+            fp = os.path.join(d_abs, fn)
+            sub["command"] = (f'python tools/nilm_profile.py --derive-from "{_display_path(src_abs)}" '
+                              f'--derive-stages "{float(k):g}" --stage-q-mode {q_mode} --stage-ih-exp {ih_exp:g} '
+                              f'--stage-dur-exp {dur_exp:g} --stage-out-dir "{_display_path(d_abs)}"')
+            save_profile(sub, fp)
+            w = stage_window(sub)
+            paths.append(_display_path(fp))
+            rows.append({"scale": float(k), "pct": round(float(k) * 100.0, 1), "device_id": sub.get("device_id"),
+                         "path": _display_path(fp), "k_lo": w.get("k_lo"), "k_hi": w.get("k_hi"),
+                         "min_d": w.get("min_d"), "amp": w.get("amp"), "unit": w.get("unit"),
+                         "gate_pct": (round(float(w["k_gate"]) * 100.0, 1) if w.get("k_gate") else None)})
+        notes = [f"基准画像录到的是 **1 档**：可接受区间 {base_win['k_lo']}~{base_win['k_hi']}×，"
+                 f"候选门槛 {base_win['min_d']:g} {base_win['unit']}（低于 {base_win['k_gate']}× 的档位连候选都不会生成）",
+                 "派生画像是**假设**：只按倍数外推幅度维（ΔIa/ΔIb/ΔIc/ΔP/ΔQ/ΔIh），峰值比保持、持续周波默认保持；"
+                 "该档位没有实录，上线后用候选 CSV 的 c_* 与 status 复核",
+                 f"建议档位间距 ≥ {stage_grid_ratio(doc):.2f}×（该画像实测接受窗口之比）——间距更小会同一事件被两份画像重复报出，更大则留缝"]
+        cmd = (f'python tools/nilm_profile.py --derive-from "{_display_path(src_abs)}" '
+               f'--derive-stages "{",".join(f"{k:g}" for k in scales)}" --stage-q-mode {q_mode} '
+               f'--stage-ih-exp {ih_exp:g} --stage-dur-exp {dur_exp:g} --stage-out-dir "{_display_path(d_abs)}"')
+        return {"ok": True, "rows": rows, "paths": ";".join(paths), "command": cmd, "notes": notes,
+                "base": {"path": _display_path(src_abs), "device_id": doc.get("device_id"), "window": base_win,
+                         "grid_ratio": stage_grid_ratio(doc)}}
+    except (ProfileError, ConfigError, ValueError) as exc:
+        return JSONResponse(status_code=400, content={"ok": False, "error": str(exc)})
+    except Exception as exc:  # noqa: BLE001
+        return JSONResponse(status_code=400, content={"ok": False, "error": f"{type(exc).__name__}: {exc}"})
+
+
 @app.post("/api/process/nilm_tune")
 async def process_nilm_tune(payload: Dict[str, Any]) -> Any:
     """v0.52：数据处理子界面「负荷辨识调参」——对指定波形文件（可选时间段）量噪声、给出 6 种算法参数建议

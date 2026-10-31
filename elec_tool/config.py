@@ -793,8 +793,12 @@ NILM_ALGO_DEFAULTS: Dict[str, Dict[str, Any]] = {
     #   候选＝稳健双滑窗（前后窗长取画像 pre/post，门槛 k_sigma×噪声 且 ≥ 画像幅值一半）→ 特征向量与启动/停止画像的对角马氏距离 D²
     #   → 置信度 exp(−D²/2d)。d2_max＝每维平均 D² 上限；min_confidence＝最低置信度；margin＝最优/次优 D² 比下限（区分度）；
     #   lambda_rel＝协方差收缩系数；state_check＝1 启用设备状态机（OFF→START / ON→STOP 合理，否则置信度减半并标记）。默认不启用。
-    "profile":      {"enabled": False, "d2_max": 9.0, "min_confidence": 0.3, "k_sigma": 4.0, "margin": 1.5, "lambda_rel": 0.1, "state_check": 1,
-                     "phase_map": 1, "max_scale": 8, "min_scale": 0.25},   # v0.99.24：细尺度下限（1＝不用细尺度）；v0.99.15：多尺度候选最大倍数（1＝单尺度）；v0.99.6：总线/设备侧相序映射 1 ABC·2 ACB·3 BAC·4 BCA·5 CAB·6 CBA·0 自动
+    #   v0.99.29：lambda_rel 默认 0.1→0.02（第 179 轮实测：λ·median(σ²) 是跨量纲中位数，0.1 会把 peak_ratio 的有效 σ
+    #     放大 4 倍、d_ih 放大 1.25 倍 ⇒ 判别力被白送掉；0.02 下真实事件 D²/维 只从 0.54/0.50 升到 0.58/0.54，误报收得更紧）；
+    #     stage_free＝档位自由匹配（0 关 / 1 开，一份画像覆盖任意档位）；min_stage＝候选门槛÷画像幅值（0.5＝旧行为）。
+    "profile":      {"enabled": False, "d2_max": 9.0, "min_confidence": 0.3, "k_sigma": 4.0, "margin": 1.5, "lambda_rel": 0.02, "state_check": 1,
+                     "phase_map": 1, "max_scale": 8, "min_scale": 0.25, "stage_free": 0, "min_stage": 0.5,
+                     "stage_min_scale": 0.2, "stage_max_scale": 3.0, "stage_dim_max": 9.0},   # v0.99.24：细尺度下限（1＝不用细尺度）；v0.99.15：多尺度候选最大倍数（1＝单尺度）；v0.99.6：总线/设备侧相序映射 1 ABC·2 ACB·3 BAC·4 BCA·5 CAB·6 CBA·0 自动
 }
 # 逐周波标量序列上的 6 种突变检测算法（画像匹配是多特征算法，不在其中）
 NILM_SCALAR_ALGOS = ("threshold", "two_window", "cusum", "glr", "steady_state", "median_diff")
@@ -912,12 +916,24 @@ class NilmConfig:
                     fv = float(v)
                 except (TypeError, ValueError):
                     raise ConfigError(f"nilm.algorithms.{a}.{k} 必须是数值（当前 {v!r}）")
-                if fv <= 0 and not (a == "profile" and k in ("state_check", "phase_map")):      # v0.90：state_check 允许 0（关闭状态机）；v0.99.6：phase_map 0＝自动
+                # v0.90：state_check 允许 0（关闭状态机）；v0.99.6：phase_map 0＝自动；
+                # v0.99.29：stage_free 0＝固定档位、stage_dim_max 0＝关单维否决
+                if fv <= 0 and not (a == "profile" and k in ("state_check", "phase_map", "stage_free", "stage_dim_max")):
                     raise ConfigError(f"nilm.algorithms.{a}.{k} 必须 > 0（当前 {v}）")
+                if a == "profile" and k in ("stage_free",) and int(fv) not in (0, 1):
+                    raise ConfigError(f"nilm.algorithms.profile.stage_free 必须是 0（固定档位）或 1（档位自由匹配），当前 {v}")
+                if a == "profile" and k == "min_stage" and not (0.0 < fv <= 3.0):
+                    raise ConfigError(f"nilm.algorithms.profile.min_stage 必须在 (0, 3]（相对画像幅值的候选门槛倍数；0.5＝旧行为），当前 {v}")
+                if a == "profile" and k in ("stage_min_scale", "stage_max_scale") and not (0.0 < fv <= 20.0):
+                    raise ConfigError(f"nilm.algorithms.profile.{k} 必须在 (0, 20]（档位倍数的拟合范围，相对画像录到的档位），当前 {v}")
+                if a == "profile" and k == "stage_dim_max" and not (0.0 <= fv):
+                    raise ConfigError(f"nilm.algorithms.profile.stage_dim_max 必须 ≥ 0（0＝关单维否决），当前 {v}")
                 if a == "profile" and k == "phase_map" and (int(fv) != fv or not (0 <= fv <= 6)):
                     raise ConfigError(f"nilm.algorithms.profile.phase_map 必须是 0（自动）或 1..6（1 ABC·2 ACB·3 BAC·4 BCA·5 CAB·6 CBA），当前 {v}")
                 if k.endswith("cycles") and int(fv) != fv:
                     raise ConfigError(f"nilm.algorithms.{a}.{k} 必须是整数周波数（当前 {v}）")
+            if a == "profile" and float(prm["stage_min_scale"]) >= float(prm["stage_max_scale"]):
+                raise ConfigError(f"nilm.algorithms.profile.stage_min_scale 必须 < stage_max_scale（当前 {prm['stage_min_scale']} ≥ {prm['stage_max_scale']}）")
             if a in ("threshold", "median_diff") and int(prm["max_rise_cycles"]) < int(prm["settle_cycles"]):
                 raise ConfigError(f"nilm.algorithms.{a}.max_rise_cycles 必须 ≥ settle_cycles")
         need = max(int(self.params("glr")["window_cycles"]) * 2 + 2,

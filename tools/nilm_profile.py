@@ -154,7 +154,7 @@ def _derive_stages(doc, a, out_profile):
             continue
         sub = derive_stage_profile(doc, k, q_mode=a.stage_q_mode, ih_exp=a.stage_ih_exp, dur_exp=a.stage_dur_exp)
         sub["command"] = doc.get("command", "")          # 与基准画像同一条命令（含 --derive-* 参数，见 build_cli_command）
-        p = os.path.join(d, f"{stem}_stage{float(k):.4g}.json")
+        p = os.path.join(d, f"{stem}_stage{float(k):.3g}.json")
         save_profile(sub, p)
         out.append({"path": p, "doc": sub, "window": stage_window(sub)})
     return out

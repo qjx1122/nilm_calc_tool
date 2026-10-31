@@ -39,6 +39,8 @@ PROFILE_SCHEMA = "nilm_profile/1"
 #    置信度 0.16 < min_confidence 0.3 ⇒ 拒识。见 tests/test_r173_harmonic_multi_profile.py）。
 #   新维度统一追加在末尾：旧画像（7 维）的 μ/σ 下标不变，加载后自动按"缺少的特征跳过"处理（见 profile_feature_names）。
 FEATURES = ["d_ia", "d_ib", "d_ic", "d_p", "d_q", "peak_ratio", "dur_cycles", "d_ih"]
+STAGE_AMP_FEATURES = ("d_ia", "d_ib", "d_ic", "d_p", "d_q", "d_ih")   # v0.99.29：随档位同比缩放的维（peak_ratio / dur_cycles 与出力无关）
+STAGE_REF_FEATURES = ("d_ia", "d_ib", "d_ic", "d_p")                  # 标定档位倍数 s 只用有功 / 电流（见 _fit_stage）
 LEGACY_FEATURES = FEATURES[:7]                 # v0.99.26：v0.99.25 及更早生成的画像（无谐波维度）
 FEATURE_NAMES = {"d_ia": "ΔIa (A)", "d_ib": "ΔIb (A)", "d_ic": "ΔIc (A)", "d_p": "ΔP (W)", "d_q": "ΔQ (var)",
                  "peak_ratio": "启动峰值比", "dur_cycles": "持续周波数", "d_ih": "Δ谐波电流 (A)"}
@@ -258,7 +260,7 @@ def _load_profile_raw(p: str) -> Dict[str, Any]:
 
 
 # ------------------------------------------------------------------ 匹配
-def mahalanobis_diag(vec: Dict[str, float], mu: Sequence[float], sigma: Sequence[float], lam_rel: float = 0.1,
+def mahalanobis_diag(vec: Dict[str, float], mu: Sequence[float], sigma: Sequence[float], lam_rel: float = 0.02,
                      skip: Sequence[str] = (), feats: Optional[Sequence[str]] = None) -> Tuple[float, List[float]]:
     """对角马氏距离 D² 与各维贡献；Σ_λ = diag(σ²) + λ·median(σ²)·I（§5.5 收缩）。``skip``：不参与的特征名（v0.93：三相三线无 B 相电流时跳过 d_ib）。
     ``feats``：μ/σ 对应的特征名（v0.99.26：旧画像 7 维没有 d_ih，按下标与 FEATURES 前缀对齐）。"""
@@ -319,14 +321,72 @@ def remap_phases(vec: Dict[str, float], mapping: str) -> Dict[str, float]:
     return out
 
 
-def match_event(profile: Dict[str, Any], feat: Dict[str, Any], lam_rel: float = 0.1, skip: Sequence[str] = (),
-                phase_map: int = 1) -> Dict[str, Any]:
+# v0.99.29（第 180 轮）：**档位自由匹配**（`nilm.algorithms.profile.stage_free=1`）。
+#   问题：固定档位时 μ/σ 只代表"录到的那一档"，实测只认 0.70~1.30×（第 179 轮）。多档位设备要覆盖全部档位
+#   要么派生一堆画像（v0.99.28），要么**把整体幅度当自由参数**——判定时先解出"这一档是多少 ×"，再算形状残差：
+#   形状（ΔI:ΔP:ΔQ:ΔIh 的比例、相别分布、峰值比、持续周波）不变的是同一台设备，只是出力不同。
+#   这样一份画像覆盖 0.15~3.0×（`stage_range`），事件里多出 `stage_scale`（解出的档位倍数）。
+#   风险与对策：档位自由放宽了"幅值必须像"这条约束 ⇒ 必须靠形状维（尤其 ΔIh/ΔP 与 ΔQ 符号）把关，
+#   实测"同幅值纯线性假负荷"仍拒（D²/维 6.97、conf 0.030），16:42 那条 ΔQ 反号也仍拒（16.3、conf 0.000）；
+#   但**平均 D² 会被自由参数系统性压低**（16:44:05 由 15.0 → 6.4）⇒ 另加单维否决（见 detect_profile 的 stage_dim_max）。
+STAGE_FREE_RANGE: Tuple[float, float] = (0.15, 3.0)
+
+
+def _stage_scaled_stats(mu: Sequence[float], sigma: Sequence[float], names: Sequence[str],
+                        s: float) -> Tuple[np.ndarray, np.ndarray]:
+    """把画像 μ/σ 按档位倍数 s 同比缩放（只缩放幅度维），σ 再按经验下限抬回。"""
+    mu_a = np.asarray(mu, dtype=np.float64); sg_a = np.asarray(sigma, dtype=np.float64)
+    mu2 = mu_a.copy(); sg2 = sg_a.copy()
+    for i, f in enumerate(names):
+        if f in STAGE_AMP_FEATURES:
+            mu2[i] = mu_a[i] * float(s)
+            sg2[i] = sg_a[i] * abs(float(s))
+    for i, f in enumerate(names):
+        sg2[i] = max(float(sg2[i]), _REL_FLOOR[f] * abs(float(mu2[i])), _ABS_FLOOR[f])
+    return mu2, sg2
+
+
+def _fit_stage(x: np.ndarray, mu: Sequence[float], sigma: Sequence[float], names: Sequence[str], lam_rel: float,
+               skip: Sequence[str], stage_range: Tuple[float, float]) -> Tuple[float, float, np.ndarray]:
+    """解单一档位缩放 s（加权最小二乘）并返回该 s 下的残差 D² 与各维贡献。
+
+    ``s* = Σ(xᵢμᵢ/varᵢ) / Σ(μᵢ²/varᵢ)``（对角方差下的闭式解），再夹到 ``stage_range``；
+    然后用**按 s 缩放过的** σ 重算残差（σ 随档位同比放大，容差不会因档位大而变紧）。
+
+    **s 只用有功 / 电流维标定**（``STAGE_REF_FEATURES``），不用 ΔQ / ΔIh：这两维的相对容差最紧（ΔIh 15 %、
+    ΔQ 25 %），若让它们参与标定，一个"谐波不成比例"的他负荷会把 s 拖走、残差被摊到所有维上、
+    单维否决就失效了（实测：ΔIh 只有 0.4× 的假负荷，含 ΔIh 标定 ⇒ s 掉到 0.6、单维贡献只有 1.5；
+    只按 P/I 标定 ⇒ s≈0.95、ΔIh 单维贡献 12，被否决拦下）。档位本来就是"出力"的概念，P/I 才是出力的度量。
+    """
+    var = np.asarray(sigma, dtype=np.float64) ** 2
+    var = var + float(lam_rel) * float(np.median(var))
+    mu_a = np.asarray(mu, dtype=np.float64)
+    idx = [i for i, f in enumerate(names) if f in STAGE_REF_FEATURES and f not in skip]
+    if not idx:
+        idx = [i for i, f in enumerate(names) if f in STAGE_AMP_FEATURES and f not in skip]
+    num = float(sum(x[i] * mu_a[i] / var[i] for i in idx)) if idx else 0.0
+    den = float(sum(mu_a[i] ** 2 / var[i] for i in idx)) if idx else 0.0
+    s = (num / den) if den > 1e-12 else 0.0
+    s = float(min(max(s, float(stage_range[0])), float(stage_range[1])))
+    mu2, sg2 = _stage_scaled_stats(mu_a, np.asarray(sigma, dtype=np.float64), names, s)
+    var2 = sg2 ** 2
+    var2 = var2 + float(lam_rel) * float(np.median(var2))
+    contrib = (x - mu2) ** 2 / var2
+    for k in skip:
+        if k in names:
+            contrib[names.index(k)] = 0.0
+    return s, float(np.sum(contrib)), contrib
+
+
+def match_event(profile: Dict[str, Any], feat: Dict[str, Any], lam_rel: float = 0.02, skip: Sequence[str] = (),
+                phase_map: int = 1, stage_free: bool = False,
+                stage_range: Tuple[float, float] = (0.15, 3.0)) -> Dict[str, Any]:
     """候选特征与启动 / 停止画像分别匹配；返回最优方向、D²、置信度、区分度与轨迹距离。``skip``：不参与匹配的特征（见 mahalanobis_diag）。
     ``phase_map``：相序映射编码（见 PHASE_MAPS；0＝自动试 6 种取 D² 最小）。"""
     if phase_map == 0:
         best = None
         for code, m in PHASE_MAPS.items():
-            r = match_event(profile, feat, lam_rel, skip, code)
+            r = match_event(profile, feat, lam_rel, skip, code, stage_free, stage_range)   # v0.99.29：自动相序要继承档位自由
             if best is None or r["d2"] < best["d2"]:
                 best = r
         best["phase_map_auto"] = True
@@ -337,13 +397,19 @@ def match_event(profile: Dict[str, Any], feat: Dict[str, Any], lam_rel: float = 
     skip = [k for k in skip if k in feats]
     d = max(1, len(feats) - len(skip))
     res: Dict[str, Any] = {}
+    x_arr = np.asarray([float(vec[k]) for k in feats], dtype=np.float64)
     for key, name in (("startup", "START"), ("shutdown", "STOP")):
         g = profile.get(key)
         if not g:
             continue
-        d2, contrib = mahalanobis_diag(vec, g["mu"], g["sigma"], lam_rel, skip, feats)
+        if stage_free:                                   # v0.99.29：档位自由——先解 s 再算形状残差
+            st, d2, contrib = _fit_stage(x_arr, g["mu"], g["sigma"], feats, lam_rel, skip, stage_range)
+        else:
+            d2, contrib = mahalanobis_diag(vec, g["mu"], g["sigma"], lam_rel, skip, feats)
+            st = 1.0
         td = template_distance(feat["template"], g["template"])
-        res[name] = {"d2": d2, "contrib": contrib, "template_dist": td, "template_spread": float(g.get("template_spread", 0.3))}
+        res[name] = {"d2": d2, "contrib": contrib, "template_dist": td, "template_spread": float(g.get("template_spread", 0.3)),
+                     "stage_scale": float(st)}
     if not res:
         raise ProfileError("画像为空")
     best = min(res, key=lambda k: res[k]["d2"])
@@ -357,7 +423,12 @@ def match_event(profile: Dict[str, Any], feat: Dict[str, Any], lam_rel: float = 
     return {"direction": best, "d2": d2, "d2_per_dim": d2 / d, "confidence": conf * traj_penalty, "margin": margin,
             "phase_map": mapping, "phase_map_auto": False,
             "template_dist": td, "traj_penalty": traj_penalty, "contrib": dict(zip(feats, res[best]["contrib"])),
-            "d2_start": res.get("START", {}).get("d2"), "d2_stop": res.get("STOP", {}).get("d2")}
+            "d2_start": res.get("START", {}).get("d2"), "d2_stop": res.get("STOP", {}).get("d2"),
+            # v0.99.29：解出的档位倍数（固定档位时恒为 1.0）；事件 CSV 的 stage_scale 列用它
+            "stage_scale": float(res[best].get("stage_scale", 1.0)), "stage_free": bool(stage_free),
+            # v0.99.29：单维最大贡献——档位自由模式用它做**单维否决**（见 detect_profile 的 stage_dim_max）
+            "d2_dim_max": float(max((abs(float(c)) for c in res[best]["contrib"]), default=0.0)),
+            "d2_dim_name": (max(zip(feats, res[best]["contrib"]), key=lambda kv: abs(float(kv[1])))[0] if feats else "")}
 
 
 
@@ -490,7 +561,12 @@ def detect_profile(p4: np.ndarray, q4: np.ndarray, i4: np.ndarray, profile: Dict
 
     prm：``d2_max``（每维平均 D² 上限）、``min_confidence``、``k_sigma``（候选门槛的噪声倍数）、``margin``（最优 / 次优 D² 比下限）、
     ``lambda_rel``（协方差收缩）、``state_check``（1/0）、``max_scale``（v0.99.15：多尺度候选搜索的最大倍数，1＝只用画像 pre/post 单尺度）。
-    候选的最小幅值＝画像里 |ΔP|（或 |ΔI 合成|）最小值的一半。
+    候选的最小幅值＝``min_stage`` × 画像里 |ΔP|（或 |ΔI 合成|）的最小值（默认 0.5 ⇒ 旧行为"一半"；
+    档位自由匹配时通常降到 0.2~0.3，否则低于 0.5× 的档位连候选都不生成）。
+
+    v0.99.29：``stage_free``（0/1）＝档位自由匹配——先解出"这一档是画像档位的多少倍"（``stage_scale``）再算形状残差；
+    ``stage_min_scale``/``stage_max_scale`` 限定可解范围；``stage_dim_max``＝单维否决（任一维 D² 超它就拒，0＝关）。
+    档位自由模式下"已在运行又出现同向台阶"识别为升档/降档（``stage_change``），不改 on/off 状态、不折半置信度。
 
     多尺度（v0.99.15，v0.99.19 修正）：慢斜坡停机（如变频器减速 3 s 快降 + 25 s 指数尾）在 pre/post=10/50 周波的双滑窗里 1 s 内
     只能看到全幅的一小部分，达不到「画像幅值一半」门槛 ⇒ 没有候选。现在依次用 ×1、×2、×4 … ×max_scale 的前后窗各搜一遍，
@@ -508,7 +584,9 @@ def detect_profile(p4: np.ndarray, q4: np.ndarray, i4: np.ndarray, profile: Dict
     else:
         x = i4[0]
         amp = [math.sqrt(sum(g["mu"][FEATURES.index(k)] ** 2 for k in ("d_ia", "d_ib", "d_ic") if k not in skip)) for g in groups]
-    min_d = 0.5 * min(amp) if amp else 0.0
+    # v0.99.29：候选门槛＝`min_stage`×画像幅值（默认 0.5＝旧行为；档位自由匹配时通常调到 0.2~0.3，
+    #   否则低于 0.5× 的档位连候选都不生成，看不到也就谈不上"认出来"）
+    min_d = float(prm.get("min_stage", 0.5)) * min(amp) if amp else 0.0
     k_sig = float(prm.get("k_sigma", 4.0))
     max_scale = max(1, int(float(prm.get("max_scale", 8))))
     # v0.99.24：细尺度（÷2、÷4 … 到 min_scale）——画像前后窗很长（慢启停设备 pre/post=3000）时，总线上相邻 60 s 内其它负荷的
@@ -589,7 +667,13 @@ def detect_profile(p4: np.ndarray, q4: np.ndarray, i4: np.ndarray, profile: Dict
     _pk = FEATURES.index("peak_ratio")
     peak_max = max([float(g["mu"][_pk]) for g in groups if g.get("mu")] + [1.0])
     d2_max = float(prm.get("d2_max", 9.0)); min_conf = float(prm.get("min_confidence", 0.3))
-    margin_min = float(prm.get("margin", 1.5)); lam = float(prm.get("lambda_rel", 0.1))
+    margin_min = float(prm.get("margin", 1.5)); lam = float(prm.get("lambda_rel", 0.02))
+    # v0.99.29：档位自由匹配（0 关 / 1 开）——一份画像覆盖 `stage_range` 内的任意档位，事件带 `stage_scale`
+    stage_free = bool(int(float(prm.get("stage_free", 0) or 0)))
+    s_lo = float(prm.get("stage_min_scale", 0.2) or 0.2); s_hi = float(prm.get("stage_max_scale", 3.0) or 3.0)
+    dim_lim = float(prm.get("stage_dim_max", 9.0) or 0.0)                 # 0＝关；只在档位自由模式下生效
+    if s_hi <= s_lo:
+        s_hi = s_lo * 15.0
     state_check = int(float(prm.get("state_check", 1))) != 0
     pmap = phase_map_code(prm.get("phase_map", 1))                      # v0.99.6：总线 / 设备侧相序映射
     out: List[Dict[str, Any]] = []
@@ -612,16 +696,26 @@ def detect_profile(p4: np.ndarray, q4: np.ndarray, i4: np.ndarray, profile: Dict
         gap_post = (int(post_hi) - int(end)) if post_hi is not None else post_n
         crowded = post_hi is not None and gap_post < floor_post                       # 干净后窗偏短：记标志并改用 post_hi 前 floor_post 周波（v0.99.25）
         feat = event_features(p4, q4, i4, onset, end, pre_n, post_n, pre_lo, post_hi, ih4)   # v0.99.19：特征窗口与画像提取一致；v0.99.24：相邻变点截断；v0.99.26：谐波电流
-        m = match_event(profile, feat, lam, skip, pmap)
+        m = match_event(profile, feat, lam, skip, pmap, stage_free, (s_lo, s_hi))   # v0.99.29：档位自由
         flags: List[str] = []
         if m.get("phase_map_auto") and m.get("phase_map") != "ABC":
             flags.append("phase_map_" + str(m.get("phase_map")))       # 自动相序：记录实际采用的映射（非 ABC 时提示）
         conf = m["confidence"]
         if m["d2_per_dim"] > d2_max:
             flags.append("d2_exceeds")
+        # v0.99.29：档位自由会把一个自由参数（s）吃掉一部分残差，**平均 D² 会系统性偏低**——实测 16:44:05 那条从 15.0 掉到 7.8
+        #   （看似快过 d2_max=9 了），而"ΔIh 只有 0.4×"的假负荷平均 1.85（conf 0.396 本该被接受）。
+        #   所以档位自由模式额外做**单维否决**：任一维 |z|>√stage_dim_max 就拒（默认 9 ⇒ |z|≤3）。
+        if stage_free and dim_lim > 0 and m.get("d2_dim_max", 0.0) > dim_lim:
+            flags.append("dim_exceeds")
         if math.isfinite(m["margin"]) and m["margin"] < margin_min:
             flags.append("ambiguous_direction")
-        if state_check and state != "unknown":
+        # v0.99.29：档位自由模式下，"已在运行又出现一次 START"＝**升档**（反之"已停机又 STOP"＝降档），不是状态机冲突 ⇒
+        #   不折半、不记 flag。这里只影响置信度；**事件类型由 `_evaluate_one_profile` 按运行档位（slot["level"]）落**，
+        #   因为"降档"与"停机"在方向上都是 STOP，只有档位账本分得开（1.0→0.6→0.4 应是 stage_down 再 stop）。
+        stage_change = bool(stage_free and state != "unknown" and ((m["direction"] == "START" and state == "on")
+                                                                   or (m["direction"] == "STOP" and state == "off")))
+        if state_check and state != "unknown" and not stage_change:
             if (m["direction"] == "START" and state == "on") or (m["direction"] == "STOP" and state == "off"):
                 flags.append("state_mismatch"); conf *= 0.5
         if m["traj_penalty"] < 1.0:
@@ -632,12 +726,13 @@ def detect_profile(p4: np.ndarray, q4: np.ndarray, i4: np.ndarray, profile: Dict
             flags.append("sign_flip")                 # ＝前后窗取错了（跨过了相邻的另一次动作），不是本设备的动作
         if crowded:
             flags.append("window_crowded")            # 相邻他负荷紧贴终点：后窗只能取很短的一段（仍按这一段量，D²/置信度照常把关）
-        accepted = ("d2_exceeds" not in flags) and ("sign_flip" not in flags) and conf >= min_conf
+        accepted = ("d2_exceeds" not in flags) and ("dim_exceeds" not in flags) and ("sign_flip" not in flags) and conf >= min_conf
         status = "confirmed" if accepted and not flags else ("low_confidence" if accepted else "rejected")
-        if accepted:
+        if accepted and not stage_change:                      # v0.99.29：档位变化不改 on/off 状态
             state = "on" if m["direction"] == "START" else "off"
         out.append({"onset": onset, "end": end, "delta": delta, "feat": feat, "match": m, "confidence": conf, "source": "q" if from_q else "x",
                     "flags": flags, "accepted": accepted, "status": status, "scale": (int(sc) if sc >= 1 else float(sc)),
+                    "stage_scale": float(m.get("stage_scale", 1.0)), "stage_change": stage_change,
                     "scales_hit": [(int(x) if x >= 1 else float(x)) for x in hits],
                     "post_wait": int(post_n), "pre_lo": pre_lo, "post_hi": post_hi})
     return out
@@ -906,8 +1001,7 @@ def profile_summary(doc: Dict[str, Any]) -> Dict[str, Any]:
 #   用 `nilm.profile_path` 的 `;` 列表一起加载。窗口 0.70~1.30× ⇒ 网格间距 1.30/0.70 = 1.857 时正好
 #   "无缝且不重叠"（同一事件不会被两份画像重复报出）。派生只缩放幅度量纲维，`peak_ratio`（比值）保持，
 #   `dur_cycles` 默认保持（σ 已有 50 % 下限：实测按 k 缩与不缩，D²/维 只差 0.1~0.4）。
-STAGE_GRID_RATIO = 1.857                         # 1.30/0.70：档位窗口"无缝且不重叠"的唯一间距
-STAGE_AMP_FEATURES = ("d_ia", "d_ib", "d_ic", "d_p", "d_q", "d_ih")   # 随档位同比缩放的维
+STAGE_GRID_RATIO = 1.857                         # 兜底常数＝1.30/0.70（λ=0.1 时的窗口比）；实际一律用 stage_grid_ratio() 实测
 
 
 def _stage_amp(group: Dict[str, Any], names: Sequence[str], use_p: bool) -> float:
@@ -939,16 +1033,17 @@ def _stage_vec(group: Dict[str, Any], names: Sequence[str], k: float, q_mode: st
     return out
 
 
-def stage_window(doc: Dict[str, Any], *, lam_rel: float = 0.1, d2_max: float = 9.0, min_confidence: float = 0.3,
+def stage_window(doc: Dict[str, Any], *, lam_rel: float = 0.02, d2_max: float = 9.0, min_confidence: float = 0.3,
                  k_min: float = 0.05, k_max: float = 3.0, step: float = 0.01, q_mode: str = "scale",
-                 ih_exp: float = 1.0, dur_exp: float = 0.0) -> Dict[str, Any]:
+                 ih_exp: float = 1.0, dur_exp: float = 0.0, stage_free: bool = False,
+                 min_stage: float = 0.5) -> Dict[str, Any]:
     """该画像能接受的**档位倍数区间**（相对画像里录到的档位）＋候选门槛对应的档位。
 
     把画像自己的 μ 按 k 同比缩放成合成事件，走真实 ``match_event`` 判接受 —— 与线上判定完全同口径
     （含 σ 收缩 λ、``d2_max``、``min_confidence``、相序），所以是"这份画像到底认几档"的实测值，不是经验值。
 
     返回 ``{k_lo, k_hi, k_gate, min_d, amp, unit, probes}``：
-      * ``k_lo~k_hi``：特征空间能接受的档位区间（本机 8 维、I 口径实测 **0.70~1.30**）；
+      * ``k_lo~k_hi``：特征空间能接受的档位区间（本机 8 维、I 口径实测 **0.70~1.30**（λ=0.1）/ **0.72~1.28**（λ=0.02））；
       * ``k_gate``：低于它**连候选都不会生成**（``min_d`` 门槛）——静默漏报区；
       * ``k_lo~k_gate`` 之间：能成候选但会被拒（诊断 CSV 里能看到 `d2_exceeds`）。
     """
@@ -956,7 +1051,7 @@ def stage_window(doc: Dict[str, Any], *, lam_rel: float = 0.1, d2_max: float = 9
     use_p = str(doc.get("quantity") or "i").strip().lower() == "p"
     amps = [a for a in (_stage_amp(doc[key], names, use_p) for key in ("startup", "shutdown") if doc.get(key)) if a > 0]
     amp = max(amps) if amps else 0.0
-    min_d = 0.5 * min(amps) if amps else 0.0
+    min_d = float(min_stage) * min(amps) if amps else 0.0
     lo = hi = None
     n = int(round((k_max - k_min) / step)) + 1
     for j in range(n):
@@ -967,7 +1062,7 @@ def stage_window(doc: Dict[str, Any], *, lam_rel: float = 0.1, d2_max: float = 9
             if not g:
                 continue
             vec = _stage_vec(g, names, k, q_mode, ih_exp, dur_exp)
-            r = match_event(doc, {"vec": vec, "template": list(g.get("template") or [])}, lam_rel, (), 1)
+            r = match_event(doc, {"vec": vec, "template": list(g.get("template") or [])}, lam_rel, (), 1, stage_free)
             if best is None or r["d2"] < best["d2"]:
                 best = r
         if best is None:
@@ -1048,11 +1143,14 @@ def derive_stage_profiles(doc: Dict[str, Any], scales: Optional[Sequence[float]]
     ``ratio`` 给定时退化为等比网格（间距 ``ratio``，用于"我就要固定间距"的场合）；不给则用阶梯——
     因为**每份派生画像自己的窗口宽度不一样**（低档位的 σ 会被绝对下限接管，窗口更宽），固定间距会重叠或留缝。
     """
+    # v0.99.29：``kw`` 里可以混有 ``lam_rel`` / ``d2_max``（网格要用同一套判定口径），
+    #   但这些是 `stage_window` 的参数、`derive_stage_profile` 不认——分开传，否则网格一调口径就 TypeError
+    dkw = {k: v for k, v in kw.items() if k in ("q_mode", "ih_exp", "dur_exp", "device_id")}
     if scales is not None:
-        return [derive_stage_profile(doc, float(k), **kw) for k in scales]
+        return [derive_stage_profile(doc, float(k), **dkw) for k in scales]
     if ratio:
         c = int(max(1, count)); half = (c - 1) / 2.0
-        return [derive_stage_profile(doc, float(center) * (float(ratio) ** (j - half)), **kw) for j in range(c)]
+        return [derive_stage_profile(doc, float(center) * (float(ratio) ** (j - half)), **dkw) for j in range(c)]
     return derive_stage_ladder(doc, count=count, center=center, **kw)
 
 
@@ -1073,18 +1171,20 @@ def derive_stage_ladder(doc: Dict[str, Any], *, count: int = 5, center: float = 
     """
     c = int(max(1, count))
     half = (c - 1) // 2
-    wkw = {k: v for k, v in kw.items() if k in ("lam_rel", "d2_max", "min_confidence", "q_mode", "ih_exp", "dur_exp")}
-    base = derive_stage_profile(doc, float(center), **kw)
+    wkw = {k: v for k, v in kw.items() if k in ("lam_rel", "d2_max", "min_confidence", "q_mode", "ih_exp", "dur_exp",
+                                                "stage_free", "min_stage")}
+    dkw = {k: v for k, v in kw.items() if k in ("q_mode", "ih_exp", "dur_exp", "device_id")}
+    base = derive_stage_profile(doc, float(center), **dkw)
     out: List[Dict[str, Any]] = [base]
 
     def _place(cur: Dict[str, Any], up: bool) -> Dict[str, Any]:
         w_cur = stage_window(cur, **wkw)
         if not w_cur.get("k_lo") or not w_cur.get("k_hi"):
             k = float(cur["stage"]["scale"]) * (float(STAGE_GRID_RATIO) if up else 1.0 / float(STAGE_GRID_RATIO))
-            return derive_stage_profile(doc, k, **kw)
+            return derive_stage_profile(doc, k, **dkw)
         edge = float(cur["stage"]["scale"]) * (float(w_cur["k_hi"]) if up else float(w_cur["k_lo"]))
         k = float(cur["stage"]["scale"]) * (_window_ratio(w_cur) if up else 1.0 / _window_ratio(w_cur))   # 初值：按上一份的窗口比
-        sub = derive_stage_profile(doc, k, **kw)
+        sub = derive_stage_profile(doc, k, **dkw)
         for _ in range(3):                              # 不动点：让新画像自己的窗口贴住上一份的边界
             w = stage_window(sub, **wkw)
             if not w.get("k_lo") or not w.get("k_hi"):
@@ -1093,7 +1193,7 @@ def derive_stage_ladder(doc: Dict[str, Any], *, count: int = 5, center: float = 
             if abs(k2 - k) <= 1e-6:
                 break
             k = k2
-            sub = derive_stage_profile(doc, k, **kw)
+            sub = derive_stage_profile(doc, k, **dkw)
         return sub
 
     cur = base

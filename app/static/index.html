@@ -1201,6 +1201,21 @@
                 <label class="f" title="事件后窗周波数：应 ≥ 设备启动过程（冲击 / 爬升）时长；总线侧确认事件也要等这么多周波"><span class="lbl">后窗 (周波)</span><input id="np-post" type="number" min="3" step="1" value="50"></label>
               </div>
             </div>
+            <div class="wp-group" id="np-stage-group">
+              <div class="wp-group-title">④ 派生档位画像 <small class="note">（多档位 / 变频设备只录到部分档位时：把上面提取到的画像按倍数缩放，生成"假设档位"画像一起挂到负荷辨识。派生是外推、不是实录；一份画像只认录到的那一档 ±30 %，见下方结果表的"可接受区间"）</small></div>
+              <div class="row2">
+                <label class="f" title="相对**本次提取到的画像档位**的倍数，逗号分隔，如 0.4,0.7,1.2；建议间距 ≥1.3~1.8 倍（间距太小同一事件会被两份画像重复报出，太大则留缝）"><span class="lbl">档位倍数（相对本次画像）</span><input id="np-stage-scales" placeholder="例：0.4,0.7,1.2"></label>
+                <label class="f" title="派生画像输出目录；留空＝与本次画像同目录（默认 output/nilm/）"><span class="lbl">输出目录</span><input id="np-stage-dir" placeholder="空＝画像同目录"></label>
+              </div>
+              <div class="row2">
+                <label class="f" title="ΔQ 随档位：scale＝同比缩放（默认，负载型无功）；const＝保持不变（电机励磁无功基本不随负载变时用）"><span class="lbl">ΔQ 缩放</span><select id="np-stage-qmode"><option value="scale">scale 同比缩放</option><option value="const">const 保持不变</option></select></label>
+                <label class="f" title="ΔIh ∝ k^ih_exp：1＝谐波电流随档位同比（默认）；轻载 THD 升高时取 0.7~0.9"><span class="lbl">谐波指数 ih_exp</span><input id="np-stage-ihexp" type="number" step="0.05" value="1"></label>
+              </div>
+              <div class="btnrow">
+                <button id="btn-np-stage" disabled title="先点下面的「提取设备画像」得到画像，再派生">派生档位画像</button>
+                <button id="btn-np-stage-copy" disabled title="把全部派生画像路径（; 分隔）复制到剪贴板，粘贴到负荷辨识页「画像文件路径」">复制派生路径串</button>
+              </div>
+            </div>
             <div class="btnrow">
               <button id="btn-np-run" class="primary">提取设备画像</button>
               <button id="btn-np-refresh">刷新文件列表</button>
@@ -1220,6 +1235,13 @@
           <div id="np-status" class="notes"></div>
           <div id="np-cmdrow" class="notes" style="display:none">等价命令 <code id="np-cmd"></code> <button id="btn-np-copy" type="button" style="padding:1px 8px;font-size:12px">复制</button></div>
           <div id="np-result" class="tablewrap"></div>
+          <div id="np-stage-status" class="notes"></div>
+          <div id="np-stage-result" class="tablewrap"></div>
+          <div id="np-stage-paths" class="notes" style="display:none">
+            <div>派生画像路径（<code>;</code> 分隔）——可直接粘贴到负荷辨识页「画像文件路径」，或写 <code>nilm.profile_path</code>：</div>
+            <div class="row2"><code id="np-stage-pathstr" style="word-break:break-all"></code></div>
+            <div id="np-stage-cmdrow" class="mut" style="display:none">等价命令 <code id="np-stage-cmd"></code></div>
+          </div>
           <details><summary>原始画像 JSON</summary><pre id="np-json" class="pre"></pre></details>
         </div>
       </div>

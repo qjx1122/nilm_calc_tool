@@ -48,7 +48,8 @@ HARM_ORDERS = (2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13)
 _CSV_FIELDS = ["source_id", "id", "algorithm", "algorithm_name", "channel", "t_start", "t_start_local", "t_end", "t_end_local",
                "duration_s", "cycles", "direction", "magnitude_w", "delta_p_w", "delta_q_var", "delta_i_a",
                "pre_p_w", "post_p_w", "score", "quantity", "magnitude", "unit", "run_id",
-               "device_id", "confidence", "d2", "profile_direction", "status", "quality_flags", "delta_ih_a"]   # v0.90：画像匹配事件附加列；v0.99.26：delta_ih_a
+               "device_id", "confidence", "d2", "profile_direction", "status", "quality_flags", "delta_ih_a",
+               "stage_scale", "event_kind"]   # v0.90：画像匹配事件附加列；v0.99.26：delta_ih_a；v0.99.29：档位倍数 / 事件类型
 # v0.32：run_id（本次运行标识）；v0.36：quantity（p/i 检测量）、magnitude（检测量口径的 |Δ|）、unit（W/A）
 
 
@@ -88,6 +89,9 @@ class NilmEvent:
     status: str = ""                  # confirmed / low_confidence
     quality_flags: str = ""           # 逗号分隔：state_mismatch / ambiguous_direction / trajectory_deviates
     delta_ih_a: float = 0.0           # v0.99.26：谐波电流增量（2~13 次合量，A，后窗−前窗）；非画像算法为 0
+    # v0.99.29：档位自由匹配（stage_free=1）——解出的档位倍数（1.0＝按画像本身档位；固定档位时恒为 1.0）
+    stage_scale: float = 1.0
+    event_kind: str = ""              # start / stop（启停）· stage_up / stage_down（已在运行时的升降档）；非画像算法为空
 
     def to_dict(self) -> Dict[str, Any]:
         d = asdict(self)
@@ -465,7 +469,8 @@ class NilmWriter:
                    f"{d['pre_p_w']:.3f}", f"{d['post_p_w']:.3f}", f"{d['score']:.4g}",
                    d.get("quantity", "p"), f"{d.get('magnitude', d['magnitude_w']):.4f}", d.get("unit", "W"), self.run_id,
                    d.get("device_id", ""), f"{d.get('confidence', 0.0):.4f}", f"{d.get('d2', 0.0):.4g}", d.get("profile_direction", ""),
-                   d.get("status", ""), d.get("quality_flags", ""), f"{d.get('delta_ih_a', 0.0):.4f}"]
+                   d.get("status", ""), d.get("quality_flags", ""), f"{d.get('delta_ih_a', 0.0):.4f}",
+                   f"{float(d.get('stage_scale', 1.0) or 1.0):.4f}", d.get("event_kind", "")]
             with SHARED_FILE_LOCK:
                 csv.writer(self._fh).writerow(row)
                 self._fh.flush()
@@ -493,7 +498,7 @@ class NilmWriter:
             fields = ["source_id", "run_id", "t_start", "t_start_local", "g_on", "device_id", "direction", "status", "flags", "scale", "scales_hit",
                       "confidence", "d2", "d2_per_dim", "margin", "d_ia", "d_ib", "d_ic", "d_p", "d_q", "peak_ratio", "dur_cycles", "d_ih",
                       "c_d_ia", "c_d_ib", "c_d_ic", "c_d_p", "c_d_q", "c_peak_ratio", "c_dur_cycles", "c_d_ih",
-                      "source"]                       # v0.99.27：候选来源 x（检测量序列）/ q（无功序列，纯无功阶跃）
+                      "source", "stage_scale", "event_kind"]   # v0.99.27：候选来源；v0.99.29：档位倍数 / 事件类型
             with SHARED_FILE_LOCK:
                 os.makedirs(self.dir, exist_ok=True)
                 from .events import _rotate_if_header_differs
@@ -509,13 +514,37 @@ class NilmWriter:
                                 d.get("confidence", ""), d.get("d2", ""), d.get("d2_per_dim", ""), d.get("margin", "")]
                                + [v.get(k, "") for k in ("d_ia", "d_ib", "d_ic", "d_p", "d_q", "peak_ratio", "dur_cycles", "d_ih")]
                                + [c.get(k, "") for k in ("d_ia", "d_ib", "d_ic", "d_p", "d_q", "peak_ratio", "dur_cycles", "d_ih")]
-                               + [d.get("source", "x")])
+                               + [d.get("source", "x"), d.get("stage_scale", 1.0), d.get("event_kind", "")])
         except Exception as exc:   # pragma: no cover
             self.errors.append(f"候选诊断写盘失败：{exc}")
 
     def info(self) -> Dict[str, Any]:
         return {"enabled": bool(self.cfg.save), "dir": self.dir, "current_file": self._path,
                 "rows_written": self.rows_written, "errors": list(self.errors)}
+
+
+STAGE_LEVEL_EPS = 0.15          # 档位倍数残差 ≤ 它 ⇒ 认为设备已停（档位拟合误差量级，约等于 ±15 % 档位）
+
+
+def _event_kind(m: Dict[str, Any]) -> str:
+    """v0.99.29：启停事件类型（固定档位模式）。"""
+    return "start" if str(m.get("direction")) == "START" else "stop"
+
+
+def _stage_kind(m: Dict[str, Any], s: float, level: float) -> Tuple[str, float]:
+    """v0.99.29：档位自由模式下按**运行档位**判定事件类型 + 走完这一步之后的档位。
+
+    ``level``＝事件前的运行档位（画像档位的倍数，0＝停机），``s``＝本步拟合出的档位倍数。
+    * 停机状态起步 ⇒ ``start``（哪怕只到 0.2 档）；运行中再加一档 ⇒ ``stage_up``；
+    * 停机后剩余档位仍 > eps ⇒ ``stage_down``（设备还在低速运行）；降到 0 ⇒ ``stop``。
+    这样"1.0 档运行 → 降到 0.6 → 再降 0.4 停机"会落成 start / stage_down / stop；
+    只看方向的老规则会把中间那次报成 stop（设备其实还在运行）、最后那次报成 stage_down（其实停了）。
+    """
+    lvl = max(0.0, float(level or 0.0)); st = max(0.0, float(s or 0.0))
+    if str(m.get("direction")) == "START":
+        return ("start" if lvl <= STAGE_LEVEL_EPS else "stage_up"), lvl + st
+    after = max(0.0, lvl - st)
+    return ("stop" if after <= STAGE_LEVEL_EPS else "stage_down"), after
 
 
 # ---------------------------------------------------------------- 检测器
@@ -938,6 +967,13 @@ class NilmDetector:
                 self.errors.append(msg)
             return []
         post_n = int(prof.get("post_cycles", 50))
+        # v0.99.29：档位自由模式下的"运行档位"（画像档位的倍数，0＝停机）——事件类型与状态机都按它算
+        sf = bool(int(float(prm.get("stage_free", 0) or 0)))
+        lvl = slot.get("level")
+        lvl = (1.0 if slot.get("state") == "on" else 0.0) if lvl is None else float(lvl or 0.0)
+        kinds = slot.get("kinds")
+        if kinds is None:
+            kinds = slot["kinds"] = {}          # g_on → 当时落的事件类型（重扫旧候选时按档位账本回填）
         key = ("profile", dev)
         last_end = int(slot.get("last_end", -10 ** 9)) if slot.get("last_end") is not None else -10 ** 9
         out: List[NilmEvent] = []
@@ -948,17 +984,30 @@ class NilmDetector:
             if g_end + int(r.get("post_wait", post_n)) > g_last:   # 事件后窗（按命中尺度）数据不够：等下一块
                 continue
             m = r["match"]; f = r["feat"]
+            kind, lvl2 = _stage_kind(m, float(r.get("stage_scale", 1.0) or 1.0), lvl) if sf else (_event_kind(m), lvl)
+            kind = kinds.get(int(g_on), kind) if sf else kind     # 已报过的候选：档位账本已翻过，按当时记录回填
             diag.append({"t_start": float(self._t[onset]), "t_start_local": _ts(float(self._t[onset])), "g_on": int(g_on), "direction": m["direction"],
                          "device_id": dev, "d2": round(m["d2"], 3), "d2_per_dim": round(m["d2_per_dim"], 3), "confidence": round(r["confidence"], 4),
                          "margin": (round(m["margin"], 2) if math.isfinite(m["margin"]) else None), "status": r["status"],
                          "flags": list(r["flags"]), "scale": float(r.get("scale", 1)), "scales_hit": [float(x) for x in (r.get("scales_hit") or [])], "contrib": {k: round(v, 2) for k, v in m["contrib"].items()},
                          "vec": {k: round(float(v), 4) for k, v in f["vec"].items()}, "seen": g_on <= last_end + gap,
-                         "source": str(r.get("source", "x"))})
+                         "source": str(r.get("source", "x")), "stage_scale": round(float(r.get("stage_scale", 1.0)), 4),
+                         "event_kind": kind})
             if g_on <= last_end + gap:
                 continue
             if not r["accepted"]:
                 continue
-            slot["state"] = "on" if m["direction"] == "START" else "off"
+            # v0.99.29：档位变化（运行中换档）不改 on/off 状态——按走完这一步的运行档位落状态
+            if sf:
+                lvl = lvl2
+                slot["level"] = lvl
+                slot["state"] = "on" if lvl > STAGE_LEVEL_EPS else "off"
+                kinds[int(g_on)] = kind
+                if len(kinds) > 400:
+                    for k_ in sorted(kinds)[:len(kinds) - 400]:
+                        kinds.pop(k_, None)
+            else:
+                slot["state"] = "on" if m["direction"] == "START" else "off"
             if slot is self._profiles[0]:
                 self.device_state = slot["state"]
             v = f["vec"]; dp = float(v["d_p"]); d_main = dp if use_p else f["d_it"]
@@ -970,7 +1019,8 @@ class NilmDetector:
                            score=float(r["confidence"]), g_start=g_on, g_end=g_end, quantity=qty, magnitude=abs(float(d_main)),
                            unit="W" if use_p else "A", device_id=str(prof.get("device_id", "")), confidence=float(r["confidence"]),
                            d2=float(m["d2"]), profile_direction=m["direction"], status=r["status"], quality_flags=",".join(r["flags"]),
-                           delta_ih_a=float(f["vec"].get("d_ih", 0.0)))
+                           delta_ih_a=float(f["vec"].get("d_ih", 0.0)), stage_scale=float(r.get("stage_scale", 1.0)),
+                           event_kind=kind)
             self._next_id += 1
             out.append(ev)
             last_end = g_end
@@ -1057,6 +1107,7 @@ class NilmDetector:
                                   "features": list((pf or {}).get("_features") or []),
                                   "has_harmonic": "d_ih" in ((pf or {}).get("_features") or []),
                                   "summary": (profile_summary(pf) if pf else None), "last": list(sl.get("last") or []),
+                                  "level": round(float(sl.get("level") or 0.0), 3),
                                   "candidates": len(sl.get("hist") or {}),
                                   "notes": list(sl.get("notes") or [])})
             prof_info: Dict[str, Any] = {"enabled": prof_on, "path": str(getattr(self.ncfg, "profile_path", "") or ""),
@@ -1065,6 +1116,9 @@ class NilmDetector:
                                          "error": self._profile_err, "device_state": self.device_state,
                                          "summary": (profile_summary(self._profile) if self._profile else None), "last": list(self.profile_last),
                                          "count": len(slots), "loaded_count": sum(1 for d_ in prof_list if d_["loaded"]),
+                                         "stage_free": bool(int(float(self.ncfg.params("profile").get("stage_free", 0) or 0))),
+                                         "min_stage": float(self.ncfg.params("profile").get("min_stage", 0.5) or 0.5),
+                                         "lambda_rel": float(self.ncfg.params("profile").get("lambda_rel", 0.02) or 0.02),
                                          "profiles": prof_list}
             if prof_on and not prof_info["paths"]:
                 notes.append("设备画像匹配已勾选但 nilm.profile_path 为空：请先在数据处理页「设备画像提取」生成画像并填入路径"
@@ -1125,7 +1179,8 @@ class NilmDetector:
                                unit=str(d.get("unit") or "W"), device_id=str(d.get("device_id") or ""),
                                confidence=float(d.get("confidence") or 0.0), d2=float(d.get("d2") or 0.0),
                                profile_direction=str(d.get("profile_direction") or ""), status=str(d.get("status") or ""),
-                               quality_flags=str(d.get("quality_flags") or ""), delta_ih_a=float(d.get("delta_ih_a") or 0.0))
+                               quality_flags=str(d.get("quality_flags") or ""), delta_ih_a=float(d.get("delta_ih_a") or 0.0),
+                               stage_scale=float(d.get("stage_scale") or 1.0), event_kind=str(d.get("event_kind") or ""))
                 self._next_id += 1
                 self._log.append(ev)
                 self.counts[algo] = self.counts.get(algo, 0) + 1
