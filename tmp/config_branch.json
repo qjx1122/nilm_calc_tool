@@ -217,28 +217,28 @@
     "min_delta_pct": 0.0,
     "algorithms": {
       "threshold": {
-        "enabled": true,
+        "enabled": false,
         "min_delta_w": 50.0,
         "settle_cycles": 5,
         "settle_tol_w": 20.0,
         "max_rise_cycles": 40
       },
       "two_window": {
-        "enabled": true,
+        "enabled": false,
         "pre_cycles": 10,
         "post_cycles": 10,
         "min_delta_w": 50.0,
         "k_sigma": 3.0
       },
       "cusum": {
-        "enabled": true,
+        "enabled": false,
         "drift_w": 10.0,
         "threshold_w": 200.0,
         "min_delta_w": 50.0,
         "settle_cycles": 5
       },
       "glr": {
-        "enabled": true,
+        "enabled": false,
         "window_cycles": 15,
         "threshold": 25.0,
         "min_delta_w": 50.0,
@@ -246,14 +246,14 @@
         "settle_cycles": 5
       },
       "steady_state": {
-        "enabled": true,
+        "enabled": false,
         "tol_w": 30.0,
         "min_steady_cycles": 10,
         "min_delta_w": 50.0,
         "max_transient_cycles": 100
       },
       "median_diff": {
-        "enabled": true,
+        "enabled": false,
         "median_cycles": 5,
         "min_delta_w": 50.0,
         "settle_cycles": 5,
@@ -265,8 +265,8 @@
       }
     },
     "quantity": "i",
-    "auto_params": true,
-    "profile_path": "output\\nilm\\profile_device_20261103_190358.json"
+    "auto_params": false,
+    "profile_path": "output\\nilm\\profile_device_20261104_000631.json"
   },
   "branch": {
     "enabled": false,

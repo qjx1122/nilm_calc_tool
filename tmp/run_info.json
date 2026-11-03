@@ -1,14 +1,14 @@
 {
-  "created_local": "2026-11-03 21:30:34.067",
+  "created_local": "2026-11-04 01:13:36.242",
   "started_side": "bus",
   "starts": [
     {
       "side": "bus",
-      "at_local": "2026-11-03 21:30:34.067"
+      "at_local": "2026-11-04 01:13:36.242"
     },
     {
       "side": "branch",
-      "at_local": "2026-11-03 21:30:34.124"
+      "at_local": "2026-11-04 01:13:36.800"
     }
   ],
   "sides": {
@@ -19,13 +19,13 @@
       "config_file": "config_bus.json",
       "config_copied_from": "configs\\runtime.json",
       "config_mode": "verbatim_copy",
-      "profile_file": "nilm/profile_bus_profile_device_20261103_190358.json",
+      "profile_file": "nilm/profile_bus_profile_device_20261104_000631.json",
       "profile_files": [
-        "nilm/profile_bus_profile_device_20261103_190358.json"
+        "nilm/profile_bus_profile_device_20261104_000631.json"
       ],
-      "profile_copied_from": "output\\nilm\\profile_device_20261103_190358.json",
+      "profile_copied_from": "output\\nilm\\profile_device_20261104_000631.json",
       "profile_copied_from_all": [
-        "output\\nilm\\profile_device_20261103_190358.json"
+        "output\\nilm\\profile_device_20261104_000631.json"
       ]
     },
     "branch": {
@@ -35,13 +35,13 @@
       "config_file": "config_branch.json",
       "config_copied_from": "configs\\branch_runtime.json",
       "config_mode": "verbatim_copy",
-      "profile_file": "nilm/profile_branch_profile_device_20261103_190358.json",
+      "profile_file": "nilm/profile_branch_profile_device_20261104_000631.json",
       "profile_files": [
-        "nilm/profile_branch_profile_device_20261103_190358.json"
+        "nilm/profile_branch_profile_device_20261104_000631.json"
       ],
-      "profile_copied_from": "output\\nilm\\profile_device_20261103_190358.json",
+      "profile_copied_from": "output\\nilm\\profile_device_20261104_000631.json",
       "profile_copied_from_all": [
-        "output\\nilm\\profile_device_20261103_190358.json"
+        "output\\nilm\\profile_device_20261104_000631.json"
       ]
     }
   }
