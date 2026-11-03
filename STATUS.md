@@ -1,7 +1,7 @@
 # STATUS.md
 
 > 续接文件（BOOTSTRAP.md v2.2 台账）。每次收尾必更新；只改本文件，不另建同类文件。
-> 最后更新：2026-11-03（第 184 轮：**设备画像提取支持单相 / 分相设备**——画像增 `phases`（缺省 ABC，旧画像零改动）、匹配时跳过未接相 ΔI、CLI/接口/界面三处入口；**改代码**，全量 `565 passed`；指南正文仍未动）
+> 最后更新：2026-11-03（第 184 轮：**设备画像提取支持单相 / 分相设备**——画像增 `phases`（缺省 ABC，旧画像零改动）、匹配时跳过未接相 ΔI、**候选台阶序列按本相取**（修 I 口径下 0.275 A 的静默漏报）、CLI/接口/界面三处入口、指南新增 H.32；**改代码**，全量 `569 passed`）
 
 ## 当前角色
 - 角色：**资深电力算法专家**（`ROLE.md` v1.4 指定的默认当前角色）
@@ -15,11 +15,13 @@
   - **分析**：① 事件定位只吃三相总（`detect_profile` 取 `p4[0]`/`i4[0]`）；② 特征固定 8 维（含 3 个 ΔI 维），未接相 μ≈0、σ 被 `_ABS_FLOOR` 0.02 A 托底 ⇒ 该维变成最敏感维；③ `PHASE_MAPS`/`remap_phases` 只解决"CT 接错相"，解决不了"另两相是别人的负荷"；④ 唯一的"某维不参与"通道是 v0.93 的 3p3w `skip=("d_ib",)`，缺"设备本来没接这一相"的来源；⑤ `d_p/d_q` 三相合成、`d_ih` 三相平均、ΔI 是**有效值差（无符号）**。
   - **实测（同一画像、只改相别）**：他负荷落在前后窗内 ⇒ 现状 **D²/维 14.10 / conf 0.001 rejected**；跳 `d_ib/d_ic` 后 **3.39 / 0.183 仍拒**；他负荷落后窗 ⇒ 单相画像 **0.823 / 0.6626 `window_crowded`**（ΔP 690→920）vs ABC **3.564 / 0.1683 rejected**；差分对照同一事件 `d_ib` 贡献 **0 vs 94.28** ⇒ **跳维必要不充分**（已写进报告与代码注释）。
   - **实现 v0.99.30（6 文件 + 1 测试）**：`nilm_profile.py` 新增 `PHASE_DIMS/PHASE_ROWS/PHASES_ALL/PROFILE_PHASE_NAMES`、`normalize_phases/profile_phases/profile_skip_dims/detect_phases`，`build_profile(phases="auto")` 写 `phases/phase_source/phase_stats`＋notes，`validate_profile` 归一，`profile_summary` 暴露 4 键，`detect_profile` 合并 `skip+profile_skip_dims`，`amp` 兜底（三相 ΔI 全跳过时不再 `min_d=0`）；`nilm.py` 槽位提示（跳维清单 + 3p3w 无 B 相 CT 时"只在 B 相有证据"警告）；`tools/nilm_profile.py --phases`（命令串读 `doc["phases"]`）；`app/server.py` 端点收 `phases`（非法 400）；`index.html #np-phases` + `app.js` 结果卡。**旧画像（无 `phases`）行为逐位不变**。
-  - **验证**：`pytest -q tests` **565 passed / 1 skipped**（+26 项）；CLI 三列单相文件 ⇒ `phases=A auto`、`d_ia 3.00/0.45`、`d_p 690`；端点 200（`--phases A`）/400/200（ABC）三态；页面含控件；AB 相设备 ⇒ `phases=AB`、`d_ia=d_ib=3.0`。
+  - **验证**：`pytest -q tests` **569 passed / 1 skipped**（+30 项）；CLI 三列单相文件 ⇒ `phases=A auto`、`d_ia 3.00/0.45`、`d_p 690`；端点 200（`--phases A`）/400/200（ABC）三态；页面含控件；AB 相设备 ⇒ `phases=AB`、`d_ia=d_ib=3.0`。
+  - **补做（同日复核后）**：① **更正自己写错的两条口径**（`d_p/d_q` 是三相**求和**、单相设备的增量即其自身，不会被摊薄；`d_ih` 才是三相**平均**＝真实值 1/3，但两侧同口径、可比性不受影响，真正受影响的是 2 A 绝对 σ 下限折回单相相当于 6 A）⇒ 撤销「`d_p/d_q` 单相重算」这条待办；② **候选台阶序列也按相别取**（P 口径 `Σp_ph`、I 口径 `√Σi_ph²`、无功同理；`phases=ABC` 仍取 total 行 ⇒ 旧行为逐位不变）——实测 I 口径下这是硬伤：A 相 +3 A、B/C 各 50 A 基流时三相合成量只涨 **0.275 A**（< 门槛 1.5 A）⇒ **0 条候选、静默漏报**，按本相取则 1 条 `delta=3.000 A`；P 口径候选 delta 由 920 W → **690 W**（本相）。
   - **踩坑**：脚本替换把 `phases=phases` 插进 `nilm_tune` 端点 ⇒ `NameError`，**全量测试 9 个无关用例挂**才暴露（教训：同文本锚点要连带上一行函数调用一起替换）；测试数据把 B 相他负荷放在 520 周波，`min_stage=0.5×690 W` 直接滤掉该台阶，负向用例失效（改为同刻投切）。
-  - 交付：`REPORT_TEST.md` 第 184 轮专题（8 小节）；`session/NILM_AC_session_complete.md` 第 184 轮节；本文件。
+  - 交付：`REPORT_TEST.md` 第 184 轮专题（10 小节）；`session/NILM_AC_session_complete.md` 第 184 轮节；本文件。
   - 验收状态：沙盒侧 ✅（合成数据、PT=CT=1）；**用户侧 🔶 未验证**（无真实单相设备录波；三相不平衡 / CT 相位误差 / 启动冲击未覆盖）。
-  - **待批准**：① 指南补 **H.32**（单相设备现场用法，用户上轮明确"先别落笔"，本轮同样未动指南正文，代码里原引用的 H.32 已改为引用报告 §184.5）；② `d_p/d_q` 单相重算方案（需改总线侧特征提取口径，事件表会分裂出两套 ΔP）；③ 前端 jsdom 用例。
+  - **文档（本轮已写）**：`NILM_TUNING_GUIDE.md` 新增 **H.32**「单相设备怎么做画像匹配」（操作 / 跳维后六维行为 / 四个坑 / 三条限制 / 三步验收，2730 行）；`README.md` 变更记录 v0.99.30；《设备画像提取与总线侧负荷辨识事件检测算法方案.md》§3.5、§5.5 补相别字段与未接相维处理。
+  - **仍未做**：① 前端 jsdom 自动化用例（`#np-phases` 只做了静态 + 接口验证）；② 现场真实单相录波未验证；③ AB/AC/BC 线间设备在电压不平衡下的 ΔQ 未单独处理；④ ΔI 无符号（要改 `CycleFeatures` 输出口径，影响全部标量算法，不做）。
 - **上一任务（2026-11-03 第 183 轮，已交付·**文档类，未改代码**）**：用户问「结合当前最新版本代码，重新检查 `NILM_TUNING_GUIDE.md` 文档每章节各部分内容，分析是否有问题。」
   - **复核方法**：2663 行按 22 段读完（§0–§8、附录 A–I）；`NILM_ALGO_DEFAULTS` + `NilmConfig` 默认值机器比对；文档 49 个 `--flag` 与 5 个工具源码 `add_argument` 比对（49/49 存在）；`/api/*` 与 `server.py` 路由比对（全存在，`/api/branch/*` 由 `_SideRouter` 改写）；界面控件改按 `id` 判定；4 组数值实跑。
   - **高（照做会错）**：① 「启用 PT/CT」**15 处**仍在（L23/393/554/793/1027/1101/1118/1141/1147/1224/1250/1271/1869/2225/2243），v0.99.23 已取消开关（`config.py:169–191` `enabled` 恒 True；`index.html:1007` 只剩 `hidden` 占位），与同文件 H.22 正面冲突；② `profile.lambda_rel` 默认写 **0.1**，代码 **0.02**（L365/L725）——实测 λ=0.1 窗口 0.62~1.38×（比 2.226）、λ=0.02 窗口 0.67~1.33×（比 1.985，与 H.28 例 1 一致）；③ 「口径 二次侧」分支已成死代码（`nilm_tuning.py:624` `scaled=bool(enabled)` 恒 True），L793/L1027/L261 的二次侧排障整类失效。
@@ -379,7 +381,7 @@
 - 等用户执行 T-002 的 W/R/P 组（Windows 部署 / 真实数据对账 / 生产常驻）并回报实录
 
 ## 下一步（TODO）
-0. **第 184 轮待批准**：① 指南补 **H.32**（单相 / 分相设备的现场用法；本轮按用户「先别落笔」指令未动 `NILM_TUNING_GUIDE.md`，代码里原引用的 H.32 已改为指向 `REPORT_TEST.md` §184.5）；② `d_p/d_q` 单相重算方案评审（要不要给同一次候选算两套 ΔP）；③ 前端 jsdom 用例（`#np-phases` + 结果卡）；④ 真实单相设备录波复测（三相不平衡、CT 相位误差、启动冲击均未覆盖）
+0. **第 184 轮收尾**：① 前端 jsdom 用例（`#np-phases` + 结果卡，`tools/ui_*.check.cjs` 家族）；② 真实单相设备录波复测（三相不平衡、CT 相位误差、启动冲击、PT/CT≠1 均未覆盖）；③ 线间设备（AB/AC/BC）在电压不平衡下的 ΔQ 口径；④ 若现场出现「单相设备跨相变动」（A→B 换相），当前按固定相别匹配会漏——需另立专题（先看真实数据再定）
 1. **用户侧（阻塞项，模式 B）**：先跑 **T-007 的 U9 组**、**T-006 的 U8 组**、**T-005 的 U7 组**与 **T-004 的 U6 组**（用真实采集文件，期望见 `REPORT_TEST.md`），再跑 T-003 的 **S 组**（`python tools/verify_sources.py` 期望 PASS 5 / FAIL 0；`pytest tests/ -q` 期望 **204 passed**；两个终端跑 tcp_feeder / csv_appender + `cli.py live` 期望缺口 0），**T-003 的 U 组**（浏览器手点 7 步，界面下拉框，期望见 `REPORT_TEST.md`），再跑 T-002 的 W 组（Windows 部署，预计 10 分钟）与 R 组（真实数据对账，核心验收），按「结果回收格式」贴回；P 组（生产常驻）可选
 2. Agent 侧（收到实录后）：把三件套写入 T-002「结果 / 结论」，按 J-\* 逐条对账，回填 `README.md` §2/§3/§4 与 `NILM_DATA_DICT.md` 的 🔶 项（注明来源＋日期）
 2a. **第 175 轮待用户回报（画像匹配没跑起来的三条）**：① 把运行目录的代码更新到 v0.99.27（判定：事件 CSV 末列应有 `delta_ih_a`、画像 8 维）；② 总线侧 `profile_path` 只填一个存在的画像文件（升级后才支持 `A;B`）；③ 两侧 `nilm.quantity` 统一成 `i`、去掉两侧 `transform.invert_phases='A'`。改完复跑，期望：总线 06:38:17 `STOP confirmed ≈0.83`、分路 07:00:09 `START confirmed ≈0.50`。若仍未出现，再查 `summary.profile.profiles[].loaded/error` 与 `errors` 里的「该画像匹配未运行」提示
