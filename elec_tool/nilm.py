@@ -38,8 +38,8 @@ from .timefmt import fmt_local, wall_day
 from .config import AppConfig, NILM_ALGO_DEFAULTS, NILM_ALGO_NAMES, NILM_CHANNELS, NILM_W_TO_A, NilmConfig
 from .nilm_auto import AUTO_MIN_CYCLES, auto_algo_params, window_stats
 from .config import NILM_SCALAR_ALGOS
-from .nilm_profile import (ProfileError, detect_profile, load_profile, profile_phases, profile_skip_dims,
-                            profile_summary, sample_size_notes)
+from .nilm_profile import (ProfileError, detect_profile, load_profile, profile_phase_rows, profile_phases,
+                            profile_skip_dims, profile_summary, sample_size_notes)
 
 __all__ = ["NilmEvent", "NilmDetector", "CycleFeatures", "detect_steps", "NILM_ALGO_NAMES", "HARM_ORDERS"]
 
@@ -1028,11 +1028,22 @@ class NilmDetector:
                 slot["state"] = "on" if m["direction"] == "START" else "off"
             if slot is self._profiles[0]:
                 self.device_state = slot["state"]
-            v = f["vec"]; dp = float(v["d_p"]); d_main = dp if use_p else f["d_it"]
+            v = f["vec"]; dp = float(v["d_p"])
+            # v0.99.31：单相 / 分相画像——事件幅值与 CSV 的 ΔI 取**设备所接相的电流合成量**（与本相候选序列、
+            #   画像 μ(d_ia…) 同口径），不再是三相合成 √ΣI²。否则 A 相 3 A 的单相设备（B/C 各 50 A 基流）
+            #   事件表写 0.275 A，与画像 μ=3 A 差 11 倍（第 184 轮审计实测）。三相画像 / 旧画像仍用 f["d_it"]，逐位不变。
+            rows = profile_phase_rows(prof)
+            if rows:                                     # 单相 / 分相：观测 ΔI 按设备所接相的电流合成量取
+                def _iph(d: Dict[str, Any]) -> float:
+                    return math.sqrt(sum(float(d[("ia", "ib", "ic")[r - 1]]) ** 2 for r in rows))
+                d_i_obs = _iph(f["post"]) - _iph(f["pre"])
+            else:
+                d_i_obs = float(f["d_it"])               # 三相画像 / 旧画像：三相合成（旧行为）
+            d_main = dp if use_p else d_i_obs
             ev = NilmEvent(id=self._next_id, algorithm="profile", channel="total",
                            t_start=float(self._t[onset]), t_end=float(self._t[end]),
                            direction="up" if m["direction"] == "START" else "down", magnitude_w=abs(dp), delta_p_w=dp,
-                           delta_q_var=float(v["d_q"]), delta_i_a=float(f["d_it"]),
+                           delta_q_var=float(v["d_q"]), delta_i_a=float(d_i_obs),
                            pre_p_w=float(f["pre"]["p"]), post_p_w=float(f["post"]["p"]), cycles=int(end - onset),
                            score=float(r["confidence"]), g_start=g_on, g_end=g_end, quantity=qty, magnitude=abs(float(d_main)),
                            unit="W" if use_p else "A", device_id=str(prof.get("device_id", "")), confidence=float(r["confidence"]),

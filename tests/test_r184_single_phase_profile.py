@@ -19,6 +19,7 @@ import os
 import numpy as np
 import pytest
 
+from elec_tool.blocks import SampleBlock
 from elec_tool.config import AppConfig
 from elec_tool.nilm import NilmDetector
 from elec_tool.nilm_profile import (FEATURES, ProfileError, build_profile, derive_stage_profile, detect_phases,
@@ -314,3 +315,64 @@ def test_two_phase_profile_sums_declared_phases():
     assert d_ab and abs(d_ab[0]["delta"] - 920.0) < 1e-6
     assert d_a and abs(d_a[0]["delta"] - 690.0) < 1e-6
     assert d_abc and abs(d_abc[0]["delta"] - 920.0) < 1e-6      # ABC 走 total 行，与 AB 同值
+
+
+# ---------------------------------------------------------------- v0.99.31：I 口径单相设备的事件幅值
+def _wave_3ph(*, dur=24.0, step=12.0, ia0=5.0, ia1=8.0, ib=50.0, ic=50.0, u_amp=230.0):
+    """三相电压 + 三相电流（A 相在 step 处 +3 A，B/C 各 50 A 基流）。"""
+    t = np.arange(0.0, dur, 1.0 / FS)
+    w = 2 * np.pi * F * t
+    s = lambda ph: np.sqrt(2.0) * np.sin(w + ph)
+    ia = np.where(t >= step, ia1, ia0) * s(0.0)
+    ib_ = ib * s(-2 * np.pi / 3); ic_ = ic * s(2 * np.pi / 3)
+    u = u_amp * np.vstack([s(0.0), s(-2 * np.pi / 3), s(2 * np.pi / 3)])
+    return t, u, np.vstack([ia, ib_, ic_])
+
+
+def _run_engine_i(tmp_path, doc, quantity="i"):
+    path = str(tmp_path / ("p_%s.json" % quantity)); save_profile(doc, path)
+    cfg = _cfg()
+    cfg.nilm.quantity = quantity; cfg.nilm.channels = ["total"]
+    for a in list(cfg.nilm.algorithms):
+        cfg.nilm.algorithms[a]["enabled"] = (a == "profile")
+    cfg.nilm.algorithms["profile"].update({"enabled": True, "max_scale": 1, "min_scale": 1})
+    cfg.nilm.profile_path = path; cfg.nilm.window_cycles = 300
+    cfg.validate()
+    det = NilmDetector(cfg)
+    t, u, i = _wave_3ph()
+    evs = []
+    for a in range(0, t.size, 640):
+        evs += det.ingest(SampleBlock(t=t[a:a + 640], u=u[:, a:a + 640], i=i[:, a:a + 640]))
+    return det, [e for e in evs if e["algorithm"] == "profile"]
+
+
+def test_single_phase_event_amplitude_uses_own_phase_i(tmp_path):
+    """I 口径 + 单相 A 相画像：事件幅值应是**本相** ΔI（≈3 A），不是三相合成 ΔI（≈0.27 A）。
+
+    背景 B/C 各 50 A 时 √ΣI² 只涨 0.275 A ⇒ 若事件幅值仍取合成量，事件表会把 3 A 的设备显示成 0.27 A
+    （与画像 μ=3 A 差 11 倍）。候选门槛 / D² 本来就用本相，这里只钉住**显示**这一处。
+    """
+    doc = _single_phase_doc("A")
+    doc["quantity"] = "i"; doc["unit"] = "A"
+    for g in ("startup", "shutdown"):
+        if doc.get(g):
+            doc[g]["mu"][FEATURES.index("d_p")] = 690.0
+    det, evs = _run_engine_i(tmp_path, doc)
+    assert evs, "单相画像在 I 口径下没有报出任何事件"
+    up = max(evs, key=lambda e: e["magnitude"])
+    assert up["unit"] == "A" and up["direction"] == "up"
+    assert up["magnitude"] == pytest.approx(3.0, abs=0.35), f"事件幅值 {up['magnitude']:.3f} A 不是本相台阶"
+    assert up["delta_i_a"] == pytest.approx(3.0, abs=0.35), f"CSV delta_i_a={up['delta_i_a']:.3f} 不是本相台阶"
+    # 对照：同一段数据、画像写成三相（等价 v0.99.29）⇒ 合成台阶 0.275 A 达不到候选门槛，一条都不报
+    det3, evs3 = _run_engine_i(tmp_path, _single_phase_doc("ABC"))
+    assert not evs3
+
+
+def test_single_phase_event_delta_i_uses_own_phase_p(tmp_path):
+    """P 口径：事件幅值是 W（ΔP），但 CSV / 事件表的 **ΔI 列**同样按本相取（3 A），不是合成 0.275 A。"""
+    doc = _single_phase_doc("A")          # quantity 缺省 "p"
+    det, evs = _run_engine_i(tmp_path, doc, quantity="p")
+    assert evs, "单相画像在 P 口径下没有报出任何事件"
+    up = max(evs, key=lambda e: e["magnitude"])
+    assert up["unit"] == "W" and up["magnitude"] == pytest.approx(690.0, rel=0.05)
+    assert up["delta_i_a"] == pytest.approx(3.0, abs=0.35)
