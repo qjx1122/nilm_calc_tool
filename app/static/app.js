@@ -3236,8 +3236,11 @@ const NILM_ALGOS = {
   // v0.90：设备画像匹配（多特征；对象固定为三相合成；画像文件由数据处理页「设备画像提取」生成）
   profile:      { name: '设备画像匹配', desc: '稳健双滑窗找候选 → 事件前后 ΔIa/ΔIb/ΔIc/ΔP/ΔQ/峰值比/持续周波/Δ谐波电流(2~13 次合量) 与启动/停止画像的对角马氏距离 D² → 置信度 exp(−D²/2d)，低于门槛拒识；设备状态机（OFF→启动 / ON→停止）；输出设备 ID、方向、观测幅值、置信度，不估计设备贡献幅值',
                   params: { d2_max: 'D² 上限 (每维均值)', min_confidence: '最低置信度 (0~1)', k_sigma: '候选门槛 k×σ', margin: '最优/次优 D² 比下限', lambda_rel: '协方差收缩系数', state_check: '状态机 (1 启用 / 0 关闭)', phase_map: '相序映射 (1 ABC·2 ACB·3 BAC·4 BCA·5 CAB·6 CBA·0 自动)', max_scale: '候选多尺度最大倍数 (1＝单尺度；8＝前后窗 ×1/2/4/8 兼容慢斜坡)', min_scale: '候选细尺度下限 (0.25＝前后窗 ÷4/÷2 拆分 60 s 内相邻事件；1＝不用)',
-                            stage_free: '档位自由匹配 (0 固定档位 / 1 一份画像覆盖任意档位)', min_stage: '候选门槛 ÷ 画像幅值 (0.5＝旧行为；档位自由建议 0.2~0.3)',
-                            stage_min_scale: '档位倍数下限', stage_max_scale: '档位倍数上限', stage_dim_max: '单维否决 D² (档位自由时启用；0＝关)' } },
+                            stage_free: '档位自由匹配配置', min_stage: '候选门槛 ÷ 画像幅值 (0.5＝旧行为；档位自由建议 0.2~0.3)',
+                            stage_min_scale: '档位倍数下限（仅档位自由匹配可配）', stage_max_scale: '档位倍数上限（仅档位自由匹配可配）', stage_dim_max: '单维否决 D²（仅档位自由匹配可配；0＝关）' },
+                  // v0.99.32：stage_free 后端只接受 0/1（config.py 强校验）⇒ 渲染成列表框；且只有选 1（档位自由匹配）时
+                  // stage_min_scale / stage_max_scale / stage_dim_max 三项才可编辑（0＝派生网格固定档位时后端不使用它们）。
+                  selects: { stage_free: [['0', '0 派生网格（固定档位）'], ['1', '1 档位自由匹配（一份画像覆盖任意档位）']] } },
 };
 const NILM_COLORS = { threshold: '#ff6b6b', two_window: '#ffa94d', cusum: '#ffd43b', glr: '#69db7c', steady_state: '#4dabf7', median_diff: '#da77f2', profile: '#63e6be' };
 const NILM_FIELDS = ['enabled', 'save', 'quantity', 'window_cycles', 'min_gap_cycles', 'rel_tol_pct', 'min_delta_pct', 'auto_params', 'profile_path'];   // v0.87：auto_params；v0.90：profile_path（文本）
@@ -3250,8 +3253,12 @@ function buildNilmForm(side = sideOf()) {
   const host = E(side, 'nilm-algos');
   host.innerHTML = Object.keys(NILM_ALGOS).map(a => {
     const sp = NILM_ALGOS[a];
-    const inputs = Object.keys(sp.params).map(k =>
-      `<label class="${k.endsWith('_w') ? 'nilm-unit-w' : (k.endsWith('_a') ? 'nilm-unit-a' : '')}">${sp.params[k]}<input type="number" step="any" min="0" id="nilm-${a}-${k}"></label>`).join('');
+    const inputs = Object.keys(sp.params).map(k => {
+      const cls = k.endsWith('_w') ? 'nilm-unit-w' : (k.endsWith('_a') ? 'nilm-unit-a' : '');
+      const opts = sp.selects && sp.selects[k];                     // v0.99.32：枚举型参数渲染成列表框（如 stage_free 只有 0/1）
+      if (opts) return `<label class="${cls}">${sp.params[k]}<select id="nilm-${a}-${k}">${opts.map(([v, t]) => `<option value="${v}">${t}</option>`).join('')}</select></label>`;
+      return `<label class="${cls}">${sp.params[k]}<input type="number" step="any" min="0" id="nilm-${a}-${k}"></label>`;
+    }).join('');
     // v0.90：画像匹配额外有画像文件路径（文本，nilm.profile_path）与加载状态
     // v0.99.3：画像匹配的检测对象 / 检测量不可指定——对象固定为三相合成 total（候选按 ΣP 或三相电流合成量搜索，事件 channel=total），检测量随画像文件口径（p/i），须与本侧 nilm.quantity 一致；此处以只读项固定展示
     const extra = a === 'profile' ? `<div class="row2"><label class="f" style="grid-column:1/-1"><span class="lbl">画像文件路径（多个设备用 ; 分隔）</span><input type="text" id="nilm-profile_path" placeholder="output/nilm/profile_设备1_时间.json;output/nilm/profile_设备2_时间.json"><span class="note">nilm.profile_path；相对仓库根；多个画像各自独立状态机/去重，最多 8 个；数据处理页「设备画像提取」生成（也可直接填 nilm.profile_paths 数组）</span></label>
@@ -3272,12 +3279,32 @@ function buildNilmForm(side = sideOf()) {
   bindNilmForm(side);
 }
 
+/* v0.99.32：stage_free 下拉联动 —— 只有选「1 档位自由匹配」时 stage_min_scale / stage_max_scale /
+   stage_dim_max 才可配置（0＝派生网格固定档位时后端不使用这三项：stage_range 只进 _fit_stage、单维否决只在 stage_free 分支生效）。 */
+function nilmStageGate(side = sideOf()) {
+  const sf = E(side, 'nilm-profile-stage_free');
+  if (!sf) return;
+  const free = String(sf.value) === '1';
+  ['stage_min_scale', 'stage_max_scale', 'stage_dim_max'].forEach(k => {
+    const el = E(side, `nilm-profile-${k}`);
+    if (!el) return;
+    el.disabled = !free;
+    const lab = el.closest('label');
+    if (lab) {
+      lab.classList.toggle('nilm-stage-off', !free);
+      lab.title = free ? '' : '仅当上方「档位自由匹配配置」选 1 时可配置（stage_free=0 时后端不使用这些参数）';
+    }
+  });
+}
+
 function bindNilmForm(side) {
   [E(side, 'nilm-form'), E(side, 'nilm-algos')].forEach(h => h && h.querySelectorAll('input, select').forEach(el => {
     const mark = () => { NLs(side).dirty = true; }; el.addEventListener('input', mark); el.addEventListener('change', mark);
   }));
   const q = E(side, 'nilm-quantity'); if (q) q.addEventListener('change', () => nilmDimUnits(side));
   const ap = E(side, 'nilm-auto_params'); if (ap) ap.addEventListener('change', () => nilmDimUnits(side));
+  const sf = E(side, 'nilm-profile-stage_free');                    // v0.99.32：档位自由匹配下拉 → 三项档位参数可配性
+  if (sf) { sf.addEventListener('change', () => nilmStageGate(side)); nilmStageGate(side); }
   // v0.88：自适应参数两侧均可启用（v0.87 曾隐藏分路侧勾选）
 }
 
@@ -3323,7 +3350,7 @@ function nilmDimUnits(side = sideOf(), effective) {
 }
 
 function fillNilmForm(nc, side = sideOf()) {
-  if (!nc || NLs(side).dirty) { nilmDimUnits(side); return; }
+  if (!nc || NLs(side).dirty) { nilmDimUnits(side); nilmStageGate(side); return; }
   NILM_FIELDS.forEach(f => {
     const el = E(side, `nilm-${f}`); if (!el) return;
     if (el.type === 'checkbox') el.checked = !!nc[f]; else el.value = nc[f];
@@ -3343,6 +3370,7 @@ function fillNilmForm(nc, side = sideOf()) {
     const en = E(side, `nilm-${a}-enabled`); if (en) en.checked = prm.enabled !== false;
     Object.keys(NILM_ALGOS[a].params).forEach(k => { const el = E(side, `nilm-${a}-${k}`); if (el && prm[k] !== undefined) el.value = prm[k]; });
   });
+  nilmStageGate(side);                                              // v0.99.32：回填可能改了 stage_free（程序赋值不触发 change）
   nilmDimUnits(side);
   nilmProfileState(side);
 }

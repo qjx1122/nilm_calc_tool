@@ -920,7 +920,9 @@ class NilmConfig:
                 # v0.99.29：stage_free 0＝固定档位、stage_dim_max 0＝关单维否决
                 if fv <= 0 and not (a == "profile" and k in ("state_check", "phase_map", "stage_free", "stage_dim_max")):
                     raise ConfigError(f"nilm.algorithms.{a}.{k} 必须 > 0（当前 {v}）")
-                if a == "profile" and k in ("stage_free",) and int(fv) not in (0, 1):
+                # v0.99.32：加 int(fv) != fv —— 否则 0.5/1.5/-0.5 会被 int() 截断成 0/1/0 放行，
+                # 配置里写 1.5 实际按 1 用、写 0.5 按 0 用，与「取值只有 0/1」的约定不符（界面已改列表框，这里收紧口径）。
+                if a == "profile" and k in ("stage_free",) and (int(fv) != fv or int(fv) not in (0, 1)):
                     raise ConfigError(f"nilm.algorithms.profile.stage_free 必须是 0（固定档位）或 1（档位自由匹配），当前 {v}")
                 if a == "profile" and k == "min_stage" and not (0.0 < fv <= 3.0):
                     raise ConfigError(f"nilm.algorithms.profile.min_stage 必须在 (0, 3]（相对画像幅值的候选门槛倍数；0.5＝旧行为），当前 {v}")

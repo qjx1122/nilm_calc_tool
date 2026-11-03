@@ -170,6 +170,47 @@ def test_canvas_prep_does_not_reread_scaled_height_attribute():
     assert len(reads) == 1 and "if (!cv.dataset.h)" in reads[0], reads
     assert not re.search(r"const height = h \|\| cv\.getAttribute", body)
 
+def test_profile_stage_free_is_select_and_gated_params():
+    """v0.99.32：stage_free 后端只接受 0/1（config.py:923-924）⇒ 界面必须是列表框（number 输入能键入 2、1.5 被保存时 400）；
+    且只有选 1（档位自由匹配）时 stage_min_scale / stage_max_scale / stage_dim_max 才可配置
+    （stage_free=0 时后端不使用这三项：stage_range 只进 _fit_stage、单维否决只在 stage_free 分支生效）。"""
+    from elec_tool.config import ConfigError, NilmConfig
+
+    # ① 后端取值只有 0/1 —— 与界面列表框选项一一对应
+    cfg = NilmConfig()
+    for bad in (2, -1, 0.5):
+        cfg.algorithms["profile"]["stage_free"] = bad
+        with pytest.raises(ConfigError, match="stage_free"):
+            cfg.validate()
+    cfg.algorithms["profile"]["stage_free"] = 1
+    cfg.validate()                                                  # 0/1 都合法
+
+    # ② app.js 把 stage_free 定义成列表框（selects 枚举），选项恰为 0/1
+    m = re.search(r"""selects:\s*\{\s*stage_free:\s*(\[\[.*?\]\])\s*\}""", APPJS, re.S)
+    assert m, "app.js 没把 stage_free 定义成列表框（NILM_ALGOS.profile.selects）"
+    opts = dict(re.findall(r"""\['(\d+)',\s*'([^']+)'\]""", m.group(1)))
+    assert set(opts) == {"0", "1"}, f"stage_free 列表框选项 {sorted(opts)} 应恰为 0/1"
+    assert "派生网格" in opts["0"] and "固定档位" in opts["0"], opts["0"]
+    assert "档位自由匹配" in opts["1"] and "任意档位" in opts["1"], opts["1"]
+    # 渲染分支：有 selects 的参数走 <select>，其余仍走 number 输入
+    assert "sp.selects && sp.selects[k]" in APPJS, "buildNilmForm 没有按 selects 渲染 <select>"
+
+    # ③ 联动：只有选 1 才放开三项（nilmStageGate 在建表、绑定、回填三处都被调用）
+    assert "function nilmStageGate(" in APPJS, "缺少 stage_free → 档位参数的联动函数 nilmStageGate"
+    gate = re.search(r"function nilmStageGate\(.*?\)\s*\{(.*?)\n\}", APPJS, re.S)
+    assert gate, "nilmStageGate 函数体解析失败（正则需同步）"
+    body = gate.group(1)
+    for k in ("stage_min_scale", "stage_max_scale", "stage_dim_max"):
+        assert k in body, f"nilmStageGate 没处理 {k}"
+    assert "el.disabled = !free" in body, "nilmStageGate 没有按 stage_free 禁用/启用输入框"
+    assert APPJS.count("nilmStageGate(side)") >= 3, "nilmStageGate 应在 bind/fill（含 dirty 早退）等 ≥3 处调用"
+    assert re.search(r"""const sf = E\(side, 'nilm-profile-stage_free'\);.*?sf\.addEventListener\(\s*'change'""", APPJS, re.S), \
+        "stage_free 下拉没注册 change 联动"
+    # ④ 灰显样式存在
+    style = (ROOT / "app/static/style.css").read_text(encoding="utf-8")
+    assert "label.nilm-stage-off" in style, "style.css 缺 nilm-stage-off 灰显规则"
+
+
 def test_profile_phases_control_and_payload(page):
     """v0.99.30：设备画像提取的「设备相别」下拉——选项与后端 normalize_phases 一致，且确实进了载荷。"""
     from elec_tool.nilm_profile import PHASES_ALL, normalize_phases
