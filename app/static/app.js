@@ -4663,7 +4663,8 @@ function npPayload() {
   return { path: t.path, t_start: t.t_start, t_end: t.t_end, quantity: t.quantity, custom_time: t.custom_time,
            custom_time_start: t.custom_time_start, custom_time_end: t.custom_time_end, base_mode: t.base_mode, base: t.base,
            col_map_enabled: t.col_map_enabled, col_map: t.col_map,
-           device_id: v('np-device'), labels: $('#np-labels').value, label_tol_s: v('np-tol') || null,
+           device_id: v('np-device'), phases: ($('#np-phases') ? $('#np-phases').value : 'auto'),
+           labels: $('#np-labels').value, label_tol_s: v('np-tol') || null,
            pre_cycles: v('np-pre') || null, post_cycles: v('np-post') || null, merge_gap_s: ($('#np-merge') && $('#np-merge').value !== '') ? parseFloat($('#np-merge').value) : null, name: v('np-name') };
 }
 function npRender(d) {
@@ -4673,7 +4674,10 @@ function npRender(d) {
   const MIN_N = (p && p.min_events) || 3;
   const few = nS < MIN_N || nD < MIN_N;
   const nTxt = `<span class="${few ? 'warn' : ''}">${nS} / ${nD}</span>` + (few ? `<span class="mut">（建议各 ≥${MIN_N}）</span>` : '');
-  const cards = [['设备', esc(p.device_id || '—')], ['口径', esc(p.unit || '—')], ['标签方式', p.label_mode === 'labels' ? '人工标签' : '自动定位'],
+  const ph = (p.phases || 'ABC').toUpperCase();
+  const phTxt = ph === 'ABC' ? '三相 ABC' : `<span class="warn">${ph}</span>` + `<span class="mut">（跳过 ${(p.phase_skip || []).join('、') || '—'}）</span>`;
+  const cards = [['设备', esc(p.device_id || '—')], ['口径', esc(p.unit || '—')], ['设备相别', phTxt],
+                 ['标签方式', p.label_mode === 'labels' ? '人工标签' : '自动定位'],
                  ['前 / 后窗 (周波)', `${p.pre_cycles} / ${p.post_cycles}`], ['启动 / 停止样本', nTxt]];
   $('#np-summary').innerHTML = cards.map(([k, v]) => `<div class="card"><div class="k">${k}</div><div class="v">${v}</div></div>`).join('');
   // v0.99.27：样本量提示单独一行加粗（"建议每方向 ≥3 次启停"），其余 notes 照旧以「提示」列出

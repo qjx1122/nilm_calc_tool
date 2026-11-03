@@ -2903,12 +2903,14 @@ async def process_nilm_profile(payload: Dict[str, Any]) -> Any:
     """v0.90：数据处理子界面「设备画像提取」——对设备侧（分路侧）含启停过程的波形文件构建设备画像 JSON
     （与 ``tools/nilm_profile.py`` 同一实现），写到 ``nilm.nilm_dir``；总线侧把路径填入 nilm.profile_path 并勾选「设备画像匹配」后即可使用。
 
-    body：{path, device_id?, labels?: "时间,动作\n…", label_tol_s?: 2, pre_cycles?: 10, post_cycles?: 50, quantity?, max_cycles?,
+    body：{path, device_id?, labels?: "时间,动作\n…", label_tol_s?: 2, pre_cycles?: 10, post_cycles?: 50, quantity?, phases?: "auto",
+           max_cycles?,
            t_start?, t_end?, custom_time?, custom_time_start?, custom_time_end?, name?: "profile_<设备>_{时间}.json",
            base_mode?/base?/col_map_enabled?/col_map? 同 /api/process/nilm_tune}
     labels 空＝自动定位（稳态分段 + 自适应参数；幅值为正＝启动、为负＝停止）。返回 {ok, saved_to, profile(summary), events, notes, command}。
     """
-    from elec_tool.nilm_profile import ProfileError, build_profile, profile_summary, sample_size_notes, save_profile
+    from elec_tool.nilm_profile import (ProfileError, build_profile, normalize_phases, profile_summary, sample_size_notes,
+                                        save_profile)
     from tools.nilm_profile import build_cli_command as _profile_cmd
     path = str(payload.get("path") or "").strip()
     if not path:
@@ -2941,12 +2943,16 @@ async def process_nilm_profile(payload: Dict[str, Any]) -> Any:
             raise ProfileError(f"quantity 必须是 auto / p / i（当前 {quantity!r}）")
         if base_mode == "running":
             quantity = None
+        # v0.99.30：设备相别（auto＝按事件幅值自动判；A/B/C/AB/AC/BC 人工指定）
+        phases_raw = str(payload.get("phases") or "auto").strip()
+        phases = normalize_phases(phases_raw) or "auto"        # 非法值在这里抛 ProfileError → 400
         kw = dict(device_id=device_id, labels=labels, label_tol_s=_num("label_tol_s", 2.0), pre_cycles=int(_num("pre_cycles", 10)),
                   post_cycles=int(_num("post_cycles", 50)), max_cycles=int(_num("max_cycles", 400000)), quantity=quantity,
                   merge_gap_s=_num("merge_gap_s", 10.0),
                   t_start=str(payload.get("t_start") or ""), t_end=str(payload.get("t_end") or ""),
                   custom_time=bool(payload.get("custom_time", False)),
-                  custom_time_start=str(payload.get("custom_time_start") or ""), custom_time_end=str(payload.get("custom_time_end") or ""))
+                  custom_time_start=str(payload.get("custom_time_start") or ""), custom_time_end=str(payload.get("custom_time_end") or ""),
+                  phases=phases)
         doc = await asyncio.to_thread(build_profile, base, src_abs, **kw)
         nl_dir = os.environ.get("ELEC_TOOL_NILM_DIR") or base.nilm.nilm_dir
         d_abs = nl_dir if os.path.isabs(nl_dir) else os.path.join(ROOT, nl_dir)
@@ -2974,7 +2980,8 @@ async def process_nilm_profile(payload: Dict[str, Any]) -> Any:
         doc["col_map_enabled"] = bool(base.columns.mapping_enabled)
         doc["col_map"] = dict(base.columns.mapping) if base.columns.mapping_enabled else None
         doc["command"] = _profile_cmd(_display_path(src_abs), device=device_id, config=cfg_arg, labels=("<标签文本>" if labels else None),
-                                      label_tol=kw["label_tol_s"], pre=kw["pre_cycles"], post=kw["post_cycles"], quantity=quantity, merge_gap=kw["merge_gap_s"],
+                                      label_tol=kw["label_tol_s"], pre=kw["pre_cycles"], post=kw["post_cycles"], quantity=quantity,
+                                      phases=(doc.get("phases") if str(doc.get("phases") or "ABC") != "ABC" else None), merge_gap=kw["merge_gap_s"],
                                       t_start=kw["t_start"], t_end=kw["t_end"], custom_time=kw["custom_time"],
                                       custom_time_start=kw["custom_time_start"], custom_time_end=kw["custom_time_end"], out=_display_path(fp))
         save_profile(doc, fp)
@@ -2987,7 +2994,8 @@ async def process_nilm_profile(payload: Dict[str, Any]) -> Any:
                 _notes.append(_nt)
         return {"ok": True, "saved_to": _display_path(fp), "profile": summ, "events": events, "notes": _notes,
                 "command": doc["command"], "file": _display_path(src_abs), "side": doc["side"], "base_config": base_label,
-                "startup": doc.get("startup"), "shutdown": doc.get("shutdown"), "features": doc.get("features")}
+                "startup": doc.get("startup"), "shutdown": doc.get("shutdown"), "features": doc.get("features"),
+                "phases": doc.get("phases"), "phase_skip": summ.get("phase_skip"), "phase_stats": doc.get("phase_stats")}
     except (ProfileError, ConfigError, ValueError, WaveError, TuneError) as exc:
         return JSONResponse(status_code=400, content={"ok": False, "error": str(exc)})
     except Exception as exc:

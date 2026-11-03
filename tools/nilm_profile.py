@@ -28,6 +28,7 @@ from elec_tool.nilm_profile import (ProfileError, STAGE_GRID_RATIO, build_profil
 
 
 def build_cli_command(file: str, *, device: str, config=None, labels=None, label_tol=None, pre=None, post=None, quantity=None,
+                      phases=None,
                       t_start="", t_end="", custom_time=False, custom_time_start="", custom_time_end="", out=None, merge_gap=None,
                       derive_stages=None, derive_grid=None, derive_center=None, derive_ratio=None, stage_q_mode=None,
                       stage_ih_exp=None, stage_dur_exp=None, stage_out_dir=None) -> str:
@@ -47,6 +48,8 @@ def build_cli_command(file: str, *, device: str, config=None, labels=None, label
         parts += ["--merge-gap", f"{float(merge_gap):g}"]
     if quantity:
         parts += ["--quantity", str(quantity)]
+    if phases and str(phases).lower() not in ("", "auto", "abc"):      # v0.99.30：非三相才写进命令（旧命令不受影响）
+        parts += ["--phases", str(phases)]
     if t_start:
         parts += ["--t-start", q(t_start)]
     if t_end:
@@ -171,6 +174,9 @@ def main() -> int:
     ap.add_argument("--post", type=int, default=50, help="事件后窗周波数（应 ≥ 设备启动过程时长）")
     ap.add_argument("--merge-gap", type=float, default=10.0, help="自动定位模式：同方向连续、间隔 ≤ 该秒数的事件合并为一次（0＝不合并）")
     ap.add_argument("--quantity", default=None, choices=[None, "auto", "p", "i"], help="画像口径（缺省取配置 nilm.quantity）")
+    ap.add_argument("--phases", default="auto", metavar="{auto,ABC,A,B,C,AB,AC,BC}",
+                    help="v0.99.30：设备接在哪几相。auto＝按事件幅值自动判（默认）；单相设备写 A/B/C（或 AB/AC/BC）后，"
+                         "画像记下相别，总线侧匹配时自动跳过未接相的 ΔI（不再被那两相的他负荷顶掉）")
     ap.add_argument("--t-start", default=""); ap.add_argument("--t-end", default="")
     ap.add_argument("--custom-time", action="store_true"); ap.add_argument("--custom-time-start", default=""); ap.add_argument("--custom-time-end", default="")
     ap.add_argument("--out", default=None, help="输出画像 JSON 路径（默认 <nilm_dir>/profile_<device>_<时间戳>.json）")
@@ -238,7 +244,7 @@ def main() -> int:
                 labels_txt = a.labels.replace(";", "\n")
         doc = build_profile(cfg, a.file, device_id=a.device, labels=labels_txt, label_tol_s=a.label_tol, pre_cycles=a.pre,
                             post_cycles=a.post, quantity=a.quantity, merge_gap_s=a.merge_gap, t_start=a.t_start, t_end=a.t_end, custom_time=a.custom_time,
-                            custom_time_start=a.custom_time_start, custom_time_end=a.custom_time_end)
+                            custom_time_start=a.custom_time_start, custom_time_end=a.custom_time_end, phases=a.phases)
     except (ProfileError, ConfigError, OSError, ValueError) as exc:
         print(f"错误：{exc}", file=sys.stderr)
         return 2
@@ -246,7 +252,8 @@ def main() -> int:
     if not os.path.isabs(out):
         out = os.path.join(ROOT, out) if not os.path.exists(os.path.dirname(out) or ".") else out
     doc["command"] = build_cli_command(a.file, device=a.device, config=(a.config or cfg_path), labels=a.labels, label_tol=a.label_tol, pre=a.pre, post=a.post,
-                                       quantity=a.quantity, t_start=a.t_start, t_end=a.t_end, custom_time=a.custom_time,
+                                       quantity=a.quantity, phases=(doc.get("phases") if str(doc.get("phases") or "ABC") != "ABC" else None),
+                                       t_start=a.t_start, t_end=a.t_end, custom_time=a.custom_time,
                                        custom_time_start=a.custom_time_start, custom_time_end=a.custom_time_end, out=a.out,
                                        derive_stages=a.derive_stages, derive_grid=a.derive_grid, derive_center=(a.derive_center if (a.derive_stages or a.derive_grid) else None),
                                        derive_ratio=(a.derive_ratio if a.derive_grid else None), stage_q_mode=(a.stage_q_mode if (a.derive_stages or a.derive_grid) else None),
@@ -266,6 +273,8 @@ def main() -> int:
         return 0
     print(f"设备画像已写出：{out}")
     print(f"  设备 {doc['device_id']}  口径 {doc['unit']}  周波 {doc['cycles']}  标签方式 {doc['label_mode']}  前后窗 {doc['pre_cycles']}/{doc['post_cycles']}")
+    _ph = str(doc.get("phases") or "ABC")          # v0.99.30：单相 / 分相设备
+    print(f"  相别 {_ph}" + ("" if _ph == "ABC" else "（单相 / 分相画像：匹配时跳过未接相的 ΔI）"))
     for key, name in (("startup", "启动"), ("shutdown", "停止")):
         g = doc.get(key)
         if not g:

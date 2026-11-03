@@ -1185,6 +1185,19 @@
                 <label class="f" title="写进画像与事件表的设备标识"><span class="lbl">设备 ID</span><input id="np-device" placeholder="pumpA"></label>
                 <label class="f" title="写到 output/nilm/；留空＝profile_{设备}_{时间}.json"><span class="lbl">画像文件名</span><input id="np-name" placeholder="空＝profile_{设备}_{时间}.json"></label>
               </div>
+              <label class="f" title="v0.99.30：设备接在哪几相。auto＝按各相 |ΔI| 自动判定（未接相的幅值与噪声同量级时判为不接）；单相设备（220 V 单相电机 / UPS / 充电桩）请选 A/B/C，画像会记下相别，总线侧匹配时自动跳过另外两相的 ΔI——不再被那两相的他负荷顶掉。三相设备保持 auto/ABC 即可"><span class="lbl">设备相别</span>
+                <select id="np-phases">
+                  <option value="auto" selected>自动判定（推荐）</option>
+                  <option value="ABC">三相 ABC（全接）</option>
+                  <option value="A">单相 A</option>
+                  <option value="B">单相 B</option>
+                  <option value="C">单相 C</option>
+                  <option value="AB">两相 AB</option>
+                  <option value="AC">两相 AC</option>
+                  <option value="BC">两相 BC</option>
+                </select>
+                <span class="note">单相设备选定后，未接相的 ΔI 在总线上自动跳过（ΔP/ΔQ 仍按三相合成口径）</span>
+              </label>
             </div>
             <div class="wp-group">
               <div class="wp-group-title">② 启停定位 <small class="note">（有标签＝按标签 ± 容差找变化点；标签留空＝自动定位：稳态分段 + 自适应参数，幅值为正＝启动、为负＝停止）</small></div>

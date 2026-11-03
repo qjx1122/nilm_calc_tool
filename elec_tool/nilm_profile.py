@@ -54,6 +54,83 @@ _REL_FLOOR = {"d_ia": 0.15, "d_ib": 0.15, "d_ic": 0.15, "d_p": 0.15, "d_q": 0.25
 _ABS_FLOOR = {"d_ia": 0.02, "d_ib": 0.02, "d_ic": 0.02, "d_p": 5.0, "d_q": 5.0, "peak_ratio": 0.1, "dur_cycles": 5.0,
               "d_ih": 2.0}
 
+# ---------------------------------------------------------------- 单相 / 分相设备（v0.99.30，第 184 轮）
+#   设备侧只接一相（220 V 单相设备、单相 UPS、单相充电桩…）时，另外两相的 ΔI 只是 CT / 采样噪声：
+#   μ≈0、σ 被绝对下限 0.02 A 托底 ⇒ **总线侧任何一个他负荷在那两相投切都会让 D² 爆掉**。
+#   实测（第 184 轮）：A 相 3 A 的真启动 + B/C 相各 2 A / −1.5 A 的他负荷（落在前后窗内）⇒ D²/维 14.1、
+#   置信度 0.001，真事件被拒；把 d_ib/d_ic 跳过 ⇒ D²/维 3.4（仍被 ΔP 的窗污染拒，见报告 §184.5 的限制）。
+#   所以画像要记住"本设备只在哪几相上"，匹配时把**未接相**的维度跳过（复用 3p3w 缺 B 相那套 skip 机制）。
+PHASE_DIMS = {"A": "d_ia", "B": "d_ib", "C": "d_ic"}
+PHASE_ROWS = {"A": 1, "B": 2, "C": 3}          # p4/q4/i4/ih4 的行号（0＝三相合成 / 三相平均）
+PROFILE_PHASE_NAMES = {"A": "A 相", "B": "B 相", "C": "C 相"}
+PHASES_ALL = "ABC"
+
+
+def normalize_phases(v: Any) -> str:
+    """把 "auto" / "ABC" / "A" / "A,B" / ["A"] 归一成 "A"/"AB"/"ABC"（按 ABC 顺序）；空 / auto 返回 ""。
+
+    返回 "" 表示**未声明**（旧画像 / 自动）：匹配时不跳过任何相——与 v0.99.29 及更早的行为完全一致。
+    """
+    if v is None:
+        return ""
+    if isinstance(v, (list, tuple, set)):
+        raw = "".join(str(x) for x in v)
+    else:
+        raw = str(v)
+    t = raw.strip().upper().replace("，", ",").replace(",", "").replace("/", "").replace(" ", "")
+    if t in ("", "0", "AUTO", "自动"):
+        return ""
+    bad = [c for c in t if c not in "ABC"]
+    if bad:
+        raise ProfileError(f"phases 只能含 A/B/C（或 auto / ABC），当前 {v!r}")
+    uniq = "".join(c for c in PHASES_ALL if c in set(t))
+    if not uniq:
+        raise ProfileError(f"phases 不能为空（{v!r}）；三相设备请填 ABC，单相设备填 A/B/C")
+    return uniq
+
+
+def profile_phases(doc: Dict[str, Any]) -> str:
+    """画像声明的相别（"A"/"AB"/"ABC"）；旧画像没有该字段 ⇒ "ABC"（不跳过任何相）。"""
+    try:
+        return normalize_phases(doc.get("phases")) or PHASES_ALL
+    except ProfileError:
+        return PHASES_ALL
+
+
+def profile_skip_dims(doc: Dict[str, Any]) -> Tuple[str, ...]:
+    """画像**未接相**对应的特征名（匹配 / 候选门槛都要跳过）；三相画像返回 ()。"""
+    ph = profile_phases(doc)
+    return tuple(dim for p, dim in PHASE_DIMS.items() if p not in ph)
+
+
+def detect_phases(samples: List[Dict[str, Any]]) -> Tuple[str, Dict[str, Dict[str, float]]]:
+    """从逐事件特征自动判断设备接在哪几相（**只用于提取侧**，不影响已写出的画像）。
+
+    判据（尺度无关，对 PT/CT 不敏感）：某相 ``mean(|ΔI|)`` 既是**主导相的 ≥2 %**，又**≥3 × 自身离散度**
+    （跨事件的 std）——真实接线的相幅值稳定且显著；未接相只剩噪声，μ 与 σ 同量级，过不了 3σ。
+    三项都不过时退回幅值最大的那一相（宁可只认一相，也不要把噪声相写进画像）。
+    返回 ``(phases, stats)``，``stats[相] = {"mu": mean(|ΔI|), "sigma": std, "active": bool}``。
+    """
+    n = len(samples)
+    stats: Dict[str, Dict[str, float]] = {}
+    for ph, key in PHASE_DIMS.items():
+        vals = np.array([abs(float(s.get("vec", {}).get(key, 0.0))) for s in samples], dtype=np.float64)
+        mu = float(vals.mean()) if vals.size else 0.0
+        sd = float(vals.std(ddof=1)) if vals.size > 1 else 0.0
+        stats[ph] = {"mu": mu, "sigma": sd, "active": False}
+    top = max((v["mu"] for v in stats.values()), default=0.0)
+    if top <= 1e-12:                                   # 三相都没有变化（纯无功设备 / 数据异常）：按三相处理
+        return PHASES_ALL, stats
+    for v in stats.values():
+        v["active"] = bool(v["mu"] > 0 and v["mu"] >= max(0.02 * top, 3.0 * v["sigma"]))
+    act = [ph for ph in PHASES_ALL if stats[ph]["active"]]
+    if not act:                                        # 噪声太大分不出：只认最显著的一相
+        best = max(PHASES_ALL, key=lambda ph: stats[ph]["mu"])
+        if stats[best]["mu"] > 1e-12:
+            act = [best]
+            stats[best]["active"] = True
+    return "".join(sorted(act, key=lambda ph: PHASES_ALL.index(ph))) or PHASES_ALL, stats
+
 
 class ProfileError(ValueError):
     pass
@@ -218,6 +295,13 @@ def validate_profile(doc: Dict[str, Any]) -> Dict[str, Any]:
                 or list(feats) != FEATURES[:len(feats)] or not (len(LEGACY_FEATURES) <= len(feats) <= len(FEATURES)):
             raise ProfileError(f"画像特征定义与本版本不一致：{feats}（本版本为 {FEATURES}；仅接受它的前缀，"
                                f"即 {len(LEGACY_FEATURES)} 维旧画像或 {len(FEATURES)} 维新画像）")
+    # v0.99.30：相别（可选；旧画像没有该字段 ⇒ ABC，行为与旧版完全一致）
+    ph_raw = doc.get("phases")
+    if ph_raw is not None:                     # 字段缺省＝旧画像（不跳过任何相）；显式给了就必须是合法相别
+        ph = normalize_phases(ph_raw)
+        if not ph:
+            raise ProfileError(f"画像 phases 不能为空（{ph_raw!r}）；三相填 ABC，单相填 A/B/C")
+        doc["phases"] = ph
     names = profile_feature_names(doc)
     if len(names) < len(LEGACY_FEATURES):        # 少于 7 维：无法与任何版本对上
         raise ProfileError(f"画像特征数 {len(names)} 少于最低要求 {len(LEGACY_FEATURES)}（{LEGACY_FEATURES}）")
@@ -575,6 +659,8 @@ def detect_profile(p4: np.ndarray, q4: np.ndarray, i4: np.ndarray, profile: Dict
     慢停机在设备侧提取时 post=50 只量到快降段的部分幅值、σ 又只有 10 % 下限，总线侧按 ×8 窗量到接近全幅反而 D² 爆掉被拒）。
     返回项附 ``scale``（取几何的尺度；1＝原单尺度行为）、``scales_hit``。
     """
+    # v0.99.30：画像声明了单相 / 分相（phases="A" …）时，未接相的 ΔI 一律跳过（与 3p3w 缺 B 相的 skip 合并）
+    skip = tuple(list(skip) + [k for k in profile_skip_dims(profile) if k not in skip])
     pre_n = int(profile.get("pre_cycles", 10)); post_n = int(profile.get("post_cycles", 50))
     groups = [profile[k] for k in ("startup", "shutdown") if profile.get(k)]
     ip = FEATURES.index("d_p")
@@ -584,6 +670,9 @@ def detect_profile(p4: np.ndarray, q4: np.ndarray, i4: np.ndarray, profile: Dict
     else:
         x = i4[0]
         amp = [math.sqrt(sum(g["mu"][FEATURES.index(k)] ** 2 for k in ("d_ia", "d_ib", "d_ic") if k not in skip)) for g in groups]
+        if not any(a > 1e-12 for a in amp):        # v0.99.30：三相电流维全被跳过（如 B 相画像 + 3p3w 无 B 相 CT）
+            #   仍用画像自身的三相合成幅值做候选门槛，否则 min_d=0 ⇒ 任何台阶都成候选
+            amp = [math.sqrt(sum(g["mu"][FEATURES.index(k)] ** 2 for k in ("d_ia", "d_ib", "d_ic"))) for g in groups]
     # v0.99.29：候选门槛＝`min_stage`×画像幅值（默认 0.5＝旧行为；档位自由匹配时通常调到 0.2~0.3，
     #   否则低于 0.5× 的档位连候选都不生成，看不到也就谈不上"认出来"）
     min_d = float(prm.get("min_stage", 0.5)) * min(amp) if amp else 0.0
@@ -853,10 +942,14 @@ def load_cycles(cfg, file: str, *, max_cycles: int = 400000, t_start: str = "", 
 def build_profile(cfg, file: str, *, device_id: str = "device", labels: Optional[str] = None, label_tol_s: float = 2.0,
                   pre_cycles: int = 10, post_cycles: int = 50, max_cycles: int = 400000, quantity: Optional[str] = None,
                   t_start: str = "", t_end: str = "", custom_time: bool = False, custom_time_start: str = "",
-                  custom_time_end: str = "", merge_gap_s: float = 10.0) -> Dict[str, Any]:
+                  custom_time_end: str = "", merge_gap_s: float = 10.0, phases: str = "auto") -> Dict[str, Any]:
     """从设备侧文件构建画像。``merge_gap_s``（v0.92，仅自动定位模式）：同方向、中间没有反向事件、起点间隔 ≤ 该秒数的
     相邻事件视为同一次动作被稳态分段切碎（或启动后的分级带载 / 反复重启），只保留 |ΔI| 最大的一个；0＝不合并。``cfg``＝基准配置（PT/CT、fs、列映射，不被修改）。``labels``＝标签文本（空＝自动用稳态分段 +
-    自适应参数找启停事件：幅值为正＝启动、为负＝停止）。返回画像文档（含 ``events`` 明细与 ``notes``）。"""
+    自适应参数找启停事件：幅值为正＝启动、为负＝停止）。返回画像文档（含 ``events`` 明细与 ``notes``）。
+
+    ``phases``（v0.99.30）：设备接在哪几相——``"auto"``（默认，按事件幅值自动判）/ ``"ABC"`` /
+    ``"A"`` / ``"B"`` / ``"C"``（或 ``"AB"`` / ``"AC"`` / ``"BC"``）。单相设备写成单相后，画像里记
+    ``phases``，总线侧匹配时自动跳过另外两相的 ΔI（见 ``profile_skip_dims``），不会再被那两相的他负荷顶掉。"""
     c, feat, t, p4, q4, i4, ih4, u_nonzero = load_cycles(cfg, file, max_cycles=max_cycles, t_start=t_start, t_end=t_end, custom_time=custom_time,
                                                    custom_time_start=custom_time_start, custom_time_end=custom_time_end)
     from .nilm import HARM_ORDERS, detect_steps
@@ -936,6 +1029,26 @@ def build_profile(cfg, file: str, *, device_id: str = "device", labels: Optional
         notes.append(f"未提供启停标签：用稳态分段 + 自适应参数自动定位到 {len(samples)} 个事件（合并后）（幅值为正＝启动、为负＝停止），请核对事件明细")
     if not samples:
         raise ProfileError("没有定位到任何启停事件：请检查标签时刻 / 文件内容")
+    # v0.99.30：先定"设备接在哪几相"——单相设备必须把另外两相的 ΔI 从匹配里摘掉（否则总线侧那两相的
+    #   他负荷会让 D² 爆掉），三相设备保持原样（phases="ABC" 与旧画像完全等价）。
+    ph_req = normalize_phases(phases)
+    ph_auto, ph_stats = detect_phases(samples)
+    if ph_req:
+        ph_used, ph_src = ph_req, "manual"
+    else:
+        ph_used, ph_src = ph_auto, "auto"
+        ph_req = ph_used
+    if ph_used != PHASES_ALL:
+        skipped = [PROFILE_PHASE_NAMES[p] for p in PHASES_ALL if p not in ph_used]
+        notes.append(f"单相 / 分相画像（v0.99.30）：设备只接在 {'+'.join(ph_used)} 相，匹配时跳过 "
+                     f"{'、'.join(skipped)}（{'、'.join(PHASE_DIMS[p] for p in PHASES_ALL if p not in ph_used)}）；"
+                     f"相别来源＝{'人工指定' if ph_src == 'manual' else '按事件幅值自动判定'}。"
+                     f"注意 ΔP/ΔQ 仍是**三相合成**口径、ΔIh 是**三相平均**口径（单相设备的谐波只有真实值的 1/3），"
+                     f"限制与用法见 REPORT_TEST.md 第 184 轮 §184.5")
+    if ph_src == "manual" and ph_auto != ph_used:
+        _ph_txt = ", ".join("%s=%.3g A" % (p, ph_stats[p]["mu"]) for p in PHASES_ALL)
+        notes.append(f"⚠ 指定的相别 {ph_used} 与数据里最显著的相别 {ph_auto} 不一致：请复核接线 / 列映射"
+                     f"（各相 |ΔI| 均值：{_ph_txt}）；若确认设备就在 {ph_used} 相、其余相是噪声，可忽略本提示")
     # v0.91.2：一致性检查——方向与 ΔI 符号相反（标签时刻偏差 / 前后窗跨事件）、ΔP 与 ΔI 异号（P 极性可疑）
     n_dir = sum(1 for s_ in samples if (s_["d_it"] >= 0) != (s_["direction"] == "START") and abs(s_["d_it"]) > 1e-9)
     if n_dir:
@@ -957,6 +1070,10 @@ def build_profile(cfg, file: str, *, device_id: str = "device", labels: Optional
            "wiring": {"wiring": str(getattr(c.transform, "wiring", "3p4w")), "reconstruct_3w": bool(getattr(c.transform, "reconstruct_3w", False)),
                       "invert_current": bool(getattr(c.transform, "invert_current", False)), "invert_phases": str(getattr(c.transform, "invert_phases", "") or "")},   # v0.95
            "pre_cycles": pre_n, "post_cycles": post_n, "features": list(FEATURES), "feature_names": dict(FEATURE_NAMES),
+           # v0.99.30：设备接在哪几相（"ABC" / "A" / "AB" …）＋判定来源；总线侧匹配时跳过未接相的 ΔI
+           "phases": str(ph_used), "phase_source": str(ph_src),
+           "phase_stats": {p: {"mu_abs_di": round(float(v["mu"]), 6), "sigma": round(float(v["sigma"]), 6),
+                               "active": bool(v["active"])} for p, v in ph_stats.items()},
            "harmonic": {"orders": [int(k) for k in HARM_ORDERS], "unit": "A", "feature": "d_ih",
                         "note": "2~13 次谐波电流有效值合量（ΣI_k² 开方，A）；特征是事件前后之差（三相平均＝每相口径，线性可加）；设备是不是谐波源的指纹，线性负荷≈0"},
            "template_points": TEMPLATE_POINTS, "cycles": int(t.size), "t_first": float(t[0]), "t_last": float(t[-1]),
@@ -985,6 +1102,10 @@ def profile_summary(doc: Dict[str, Any]) -> Dict[str, Any]:
             "startup": g("startup"), "shutdown": g("shutdown"), "path": doc.get("_path"), "label_mode": doc.get("label_mode"),
             "source_file": doc.get("source_file"), "notes": list(doc.get("notes") or []),
             "features": list(names), "has_harmonic": "d_ih" in names,
+            # v0.99.30：相别（旧画像无字段 ⇒ ABC）与"匹配时要跳过哪些维"
+            "phases": profile_phases(doc), "phase_source": str(doc.get("phase_source") or ""),
+            "phase_skip": list(profile_skip_dims(doc)),
+            "phase_stats": dict(doc.get("phase_stats") or {}),
             # v0.99.27：每方向 <3 个样本时给出界面提示（提取结果 与 画像匹配状态行都用这一份）
             "min_events": MIN_EVENTS_PER_DIR, "sample_notes": sample_size_notes(doc),
             "harmonic": dict(doc.get("harmonic") or {}) if "d_ih" in names else {},

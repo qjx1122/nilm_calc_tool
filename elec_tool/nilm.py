@@ -38,7 +38,8 @@ from .timefmt import fmt_local, wall_day
 from .config import AppConfig, NILM_ALGO_DEFAULTS, NILM_ALGO_NAMES, NILM_CHANNELS, NILM_W_TO_A, NilmConfig
 from .nilm_auto import AUTO_MIN_CYCLES, auto_algo_params, window_stats
 from .config import NILM_SCALAR_ALGOS
-from .nilm_profile import ProfileError, detect_profile, load_profile, profile_summary, sample_size_notes
+from .nilm_profile import (ProfileError, detect_profile, load_profile, profile_phases, profile_skip_dims,
+                            profile_summary, sample_size_notes)
 
 __all__ = ["NilmEvent", "NilmDetector", "CycleFeatures", "detect_steps", "NILM_ALGO_NAMES", "HARM_ORDERS"]
 
@@ -630,6 +631,23 @@ class NilmDetector:
                 try:
                     slot["notes"].extend(sample_size_notes(slot["profile"]))
                 except Exception:                                        # noqa: BLE001 —— 提示失败绝不影响匹配
+                    pass
+                # v0.99.30：单相 / 分相画像——匹配时跳过未接相的 ΔI；3p3w 无 B 相 CT 时 B 相画像永远匹配不上
+                try:
+                    _ph = profile_phases(slot["profile"])
+                    _skip = list(profile_skip_dims(slot["profile"]))
+                    _miss_b = bool(getattr(self.cfg.transform, "b_phase_missing", False))
+                    if _miss_b and "d_ib" not in _skip:
+                        _skip.append("d_ib")                          # 3p3w 无 B 相 CT：本侧天然缺 B
+                    if _skip:
+                        slot["notes"].append(f"画像相别 {_ph}：匹配时跳过 {'、'.join(_skip)}"
+                                             + ("（本侧 3P3W 无 B 相 CT）" if _miss_b and "d_ib" in _skip else "")
+                                             + "；ΔP/ΔQ 仍按三相合成口径比较")
+                    if _miss_b and set(_ph) <= {"B"}:
+                        slot["notes"].append("⚠ 画像的电流证据只在 B 相，而本侧接线为三相三线两表法且未开「3P3W 虚拟中性点重构」"
+                                             "（无 B 相 CT，Ib≡0）⇒ ΔI 不参与匹配，只剩 ΔP/ΔQ/峰值比/持续周波/ΔIh，"
+                                             "容易漏报也容易被幅值相近的他负荷误认；请改接 A/C 相采集，或开启重构后重提画像")
+                except Exception:                                        # noqa: BLE001
                     pass
             out.append(slot)
         # 同一 device_id 挂两次多半是误操作：两个 slot 各自独立检测会把同一事件报两遍 ⇒ 第二个加提示（仍加载，用户可自行去掉）
