@@ -734,3 +734,14 @@
 - 取证要点：`NILM_ALGO_DEFAULTS` profile 15 键（14 数值参数）与 `app.js` 表单一致；文档 49 个 `--flag` 全部存在；`/api/*` 全部存在（`/api/branch/*` 由 `_SideRouter` 改写）；界面控件判定改按 `id` 而非文字（`grep "启用 PT/CT"` 会误命中隐藏注释）。
 - 顺带发现（代码侧，未改）：`_two_window_candidates` docstring 写 median、实现是 mean；`config.py:711`（`limits_secondary`）与 `tools/nilm_tune.py:17` 注释仍按"启用 PT/CT"叙述；`nilm_tune.py:85` 的 `load_or_default` 在 try 外；`index.html:1007` 残留 hidden 复选框。
 - 遗留：界面类结论基于静态源码（未起服务点页面）；软启样例只跑一次；H.29 的 14 条用例本轮未重跑；Windows 侧安装步骤未复现。
+
+## 第 184 轮（2026-11-03）：设备画像提取支持单相 / 分相设备
+
+- 目标：用户问「暂时不需要，先分析代码，考虑在基于设备画像提取算法中增加对设备单相画像提取的支持。」——先给"哪里硬性假定三相 + 单相缺什么 + 路线"，随后**未再请示即推进实现**（已标注，回退方式见报告 §184.8）。
+- 分析结论：① 事件定位只吃三相总（`p4[0]`/`i4[0]`），特征固定 8 维 3 个 ΔI；② `PHASE_MAPS` 只管"接错相"，管不了"另两相是别人的负荷"；③ 唯一的"某维不参与"通道是 v0.93 的 3p3w `skip=("d_ib",)`，但没有"设备本来没接这一相"的来源。
+- 关键实测（同一画像、只改相别）：他负荷落在前后窗内 ⇒ 现状 **D²/维 14.10 / conf 0.001 rejected**；跳 `d_ib/d_ic` 后 **3.39 / 0.183 仍拒**（ΔP 被污染）；他负荷落后窗 ⇒ 单相画像 **0.823 / 0.6626 `window_crowded`**（ΔP 690→920） vs ABC 画像 **3.564 / 0.1683 rejected**；差分对照里同一事件的 `d_ib` 贡献 **0 vs 94.28**。⇒ 跳维**必要不充分**。
+- 实现（v0.99.30，6 文件 + 1 测试）：画像 schema 增可选 `phases/phase_source/phase_stats`（缺省＝ABC，旧画像零改动）；`normalize_phases / profile_phases / profile_skip_dims / detect_phases`；`build_profile(phases="auto")`；`detect_profile` 合并 `skip + profile_skip_dims`；`nilm.py` 槽位提示（跳维清单、3p3w 无 B 相 CT 时"只在 B 相有证据"的警告）；CLI `--phases`；`POST /api/process/nilm_profile` 收 `phases`（非法 400）；界面 `#np-phases` + 结果卡「设备相别」。
+- 顺带修：① 画像三相 ΔI **全被跳过**时 `amp=0 ⇒ min_d=0`（任何台阶都成候选），改为退回画像自身三相合成幅值；② 脚本替换误把 `phases=phases` 插进 `nilm_tune` 端点 ⇒ `NameError`，被全量测试 9 个用例抓到（记录在报告 §184.6.1）；③ 画像 notes 里悬空的「见指南 H.32」改为引用报告 §184.5（指南正文按用户指令**未动**）。
+- 验证：`pytest -q tests` **565 passed / 1 skipped**（+26 项新测试）；CLI 三列单相文件 → `phases=A auto`；端点 200/400/200 三态；页面含 `#np-phases`；AB 相设备提取 → `phases=AB`、`d_ia=d_ib=3.0`（ΔI 来自有效值，**无符号**，已写入限制）。
+- 交付：`REPORT_TEST.md` 第 184 轮专题（8 小节：三相假定表、缺什么、实测证据、改动清单、使用与限制 7 条、验证记录 16 项、未做 5 条、一页纸）；本文件；`STATUS.md`。
+- 遗留：手册 H.32 待批准；`d_p/d_q` 单相重算只有方案；ΔI 符号不做；前端未加 jsdom 用例；无真实单相设备数据。

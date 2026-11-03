@@ -1,7 +1,7 @@
 # STATUS.md
 
 > 续接文件（BOOTSTRAP.md v2.2 台账）。每次收尾必更新；只改本文件，不另建同类文件。
-> 最后更新：2026-11-03（第 183 轮：**`NILM_TUNING_GUIDE.md` 全量复核**——对照 v0.99.29 代码逐章核查，出 16 条问题清单（高 3 / 中 6 / 低 7）＋逐章核对表＋实跑取证；**未改代码、未改指南正文**；修正清单待确认后一次落笔）
+> 最后更新：2026-11-03（第 184 轮：**设备画像提取支持单相 / 分相设备**——画像增 `phases`（缺省 ABC，旧画像零改动）、匹配时跳过未接相 ΔI、CLI/接口/界面三处入口；**改代码**，全量 `565 passed`；指南正文仍未动）
 
 ## 当前角色
 - 角色：**资深电力算法专家**（`ROLE.md` v1.4 指定的默认当前角色）
@@ -11,7 +11,16 @@
   - 说明：更早任务用户显式指定过模式 B（仅对「补齐台账骨架」生效）；此后各任务用户均跳过模式澄清，故一律按上述混合模式执行并在此声明。第 5 轮（界面下拉框检查）沙盒侧＝jsdom 驱动真实页面打真实服务端 + REST 空值语义实录，**已✅实录**；用户侧＝浏览器手点 U 组 7 步，**🔶待回报**。**第 6 轮（四功能）**沙盒侧＝pytest 25 项 + jsdom 30 项 + REST/CLI 实录，**已✅实录**；用户侧＝浏览器手点 U6 组 8 步，**🔶待回报**。**第 7 轮（三功能）**沙盒侧＝pytest 18 项 + jsdom 39 项 + CLI/源层实录，**已✅实录**；用户侧＝U7 组 8 步，**🔶待回报**。**第 9 轮（间谐波/直流/事件）**沙盒侧＝pytest 13 项 + jsdom 28 项 + live preview 实跑，**已✅实录**；用户侧＝U9 组 6 步，**🔶待回报**。**第 10 轮（离线列映射开关）**沙盒侧＝pytest 8 项 + jsdom 15 项 + REST 实录，**已✅实录**；用户侧＝U10 组 6 步，**🔶待回报**。**第 11 轮（时标 UTC 开关）**沙盒侧＝pytest 6 项 + 双时区全量 + jsdom 11 项，**已✅实录**；用户侧＝U11 组 5 步，**🔶待回报**。**第 12 轮（负荷辨识）**沙盒侧＝pytest 8 项 + jsdom 16 项 + 引擎/CSV 实录，**已✅实录**；用户侧＝U12 组 5 步，**🔶待回报**
 
 ## 当前目标
-- **本任务（2026-11-03 第 183 轮，已交付·**文档类，未改代码**）**：用户问「结合当前最新版本代码，重新检查 `NILM_TUNING_GUIDE.md` 文档每章节各部分内容，分析是否有问题。」
+- **本任务（2026-11-03 第 184 轮，已交付·**改代码**，沙盒侧✅）**：用户原话「暂时不需要，先分析代码，考虑在基于设备画像提取算法中增加对设备单相画像提取的支持。」
+  - **分析**：① 事件定位只吃三相总（`detect_profile` 取 `p4[0]`/`i4[0]`）；② 特征固定 8 维（含 3 个 ΔI 维），未接相 μ≈0、σ 被 `_ABS_FLOOR` 0.02 A 托底 ⇒ 该维变成最敏感维；③ `PHASE_MAPS`/`remap_phases` 只解决"CT 接错相"，解决不了"另两相是别人的负荷"；④ 唯一的"某维不参与"通道是 v0.93 的 3p3w `skip=("d_ib",)`，缺"设备本来没接这一相"的来源；⑤ `d_p/d_q` 三相合成、`d_ih` 三相平均、ΔI 是**有效值差（无符号）**。
+  - **实测（同一画像、只改相别）**：他负荷落在前后窗内 ⇒ 现状 **D²/维 14.10 / conf 0.001 rejected**；跳 `d_ib/d_ic` 后 **3.39 / 0.183 仍拒**；他负荷落后窗 ⇒ 单相画像 **0.823 / 0.6626 `window_crowded`**（ΔP 690→920）vs ABC **3.564 / 0.1683 rejected**；差分对照同一事件 `d_ib` 贡献 **0 vs 94.28** ⇒ **跳维必要不充分**（已写进报告与代码注释）。
+  - **实现 v0.99.30（6 文件 + 1 测试）**：`nilm_profile.py` 新增 `PHASE_DIMS/PHASE_ROWS/PHASES_ALL/PROFILE_PHASE_NAMES`、`normalize_phases/profile_phases/profile_skip_dims/detect_phases`，`build_profile(phases="auto")` 写 `phases/phase_source/phase_stats`＋notes，`validate_profile` 归一，`profile_summary` 暴露 4 键，`detect_profile` 合并 `skip+profile_skip_dims`，`amp` 兜底（三相 ΔI 全跳过时不再 `min_d=0`）；`nilm.py` 槽位提示（跳维清单 + 3p3w 无 B 相 CT 时"只在 B 相有证据"警告）；`tools/nilm_profile.py --phases`（命令串读 `doc["phases"]`）；`app/server.py` 端点收 `phases`（非法 400）；`index.html #np-phases` + `app.js` 结果卡。**旧画像（无 `phases`）行为逐位不变**。
+  - **验证**：`pytest -q tests` **565 passed / 1 skipped**（+26 项）；CLI 三列单相文件 ⇒ `phases=A auto`、`d_ia 3.00/0.45`、`d_p 690`；端点 200（`--phases A`）/400/200（ABC）三态；页面含控件；AB 相设备 ⇒ `phases=AB`、`d_ia=d_ib=3.0`。
+  - **踩坑**：脚本替换把 `phases=phases` 插进 `nilm_tune` 端点 ⇒ `NameError`，**全量测试 9 个无关用例挂**才暴露（教训：同文本锚点要连带上一行函数调用一起替换）；测试数据把 B 相他负荷放在 520 周波，`min_stage=0.5×690 W` 直接滤掉该台阶，负向用例失效（改为同刻投切）。
+  - 交付：`REPORT_TEST.md` 第 184 轮专题（8 小节）；`session/NILM_AC_session_complete.md` 第 184 轮节；本文件。
+  - 验收状态：沙盒侧 ✅（合成数据、PT=CT=1）；**用户侧 🔶 未验证**（无真实单相设备录波；三相不平衡 / CT 相位误差 / 启动冲击未覆盖）。
+  - **待批准**：① 指南补 **H.32**（单相设备现场用法，用户上轮明确"先别落笔"，本轮同样未动指南正文，代码里原引用的 H.32 已改为引用报告 §184.5）；② `d_p/d_q` 单相重算方案（需改总线侧特征提取口径，事件表会分裂出两套 ΔP）；③ 前端 jsdom 用例。
+- **上一任务（2026-11-03 第 183 轮，已交付·**文档类，未改代码**）**：用户问「结合当前最新版本代码，重新检查 `NILM_TUNING_GUIDE.md` 文档每章节各部分内容，分析是否有问题。」
   - **复核方法**：2663 行按 22 段读完（§0–§8、附录 A–I）；`NILM_ALGO_DEFAULTS` + `NilmConfig` 默认值机器比对；文档 49 个 `--flag` 与 5 个工具源码 `add_argument` 比对（49/49 存在）；`/api/*` 与 `server.py` 路由比对（全存在，`/api/branch/*` 由 `_SideRouter` 改写）；界面控件改按 `id` 判定；4 组数值实跑。
   - **高（照做会错）**：① 「启用 PT/CT」**15 处**仍在（L23/393/554/793/1027/1101/1118/1141/1147/1224/1250/1271/1869/2225/2243），v0.99.23 已取消开关（`config.py:169–191` `enabled` 恒 True；`index.html:1007` 只剩 `hidden` 占位），与同文件 H.22 正面冲突；② `profile.lambda_rel` 默认写 **0.1**，代码 **0.02**（L365/L725）——实测 λ=0.1 窗口 0.62~1.38×（比 2.226）、λ=0.02 窗口 0.67~1.33×（比 1.985，与 H.28 例 1 一致）；③ 「口径 二次侧」分支已成死代码（`nilm_tuning.py:624` `scaled=bool(enabled)` 恒 True），L793/L1027/L261 的二次侧排障整类失效。
   - **中**：附录 A profile 行缺 8 个新参数（`phase_map/max_scale/min_scale/min_stage/stage_free/stage_min_scale/stage_max_scale/stage_dim_max`）；G.9 五处落后（dur 绝对下限 **2→5 周波**、`dur_cycles`/终点仍是 v0.92.2 规则（实为 `transition_end` 平滑+保持）、`min_d` 未提 `min_stage`、CSV 附加列 **7→9**（缺 `stage_scale/event_kind`）、导语 7 维→8 维）；H.13 缺「公共配置」组映射（fs/f_nom/PT·CT/列映射**无** CLI 参数）；§I.3 等价命令 `--config configs\runtime.json` 新装必崩（`nilm_tune.py:85` 在 try 外 ⇒ 裸 traceback、退出码 1）且界面实际不给 `--wiring`；H.15/I.3 仍在教"对总线侧文件勾估计最小关心负荷"（界面两步法明确劝阻，`index.html:1079`）。
@@ -19,7 +28,7 @@
   - **顺带（代码侧，未改）**：`_two_window_candidates` docstring 写 median、实现是 mean；`config.py:711`（`limits_secondary`）与 `tools/nilm_tune.py:17` 注释仍按"启用 PT/CT"写；`nilm_tune.py:85` ConfigError 未捕获；`index.html:1007` 残留 hidden 复选框。
   - 交付：`REPORT_TEST.md` 第 183 轮专题（16 条问题 + 逐章核对表 + 4 组实跑 + 已核对无误清单 + 修正顺序 6 档）；本文件；`session/NILM_AC_session_complete.md` 同节。
   - 验收状态：沙盒侧 ✅（全部数字本机复算）；指南正文 🔶 **未改**（等用户确认修正清单）；界面类结论为静态源码判定，未起服务点页面。
-- **上一任务（2026-11-01 第 182 轮，已交付·**文档类，未改代码**）**：用户问「修改提取设备画像时的前后窗参数后重新提取画像，分别用带停机/带启动的总线波形经总线侧、分路侧回放并辨识，误识别很多，请详细分析原因（详细输出见 tmp）」。
+- **上上轮任务（2026-11-01 第 182 轮，已交付·**文档类，未改代码**）**：用户问「修改提取设备画像时的前后窗参数后重新提取画像，分别用带停机/带启动的总线波形经总线侧、分路侧回放并辨识，误识别很多，请详细分析原因（详细输出见 tmp）」。
   - **现场还原**：沙盒被重克隆到基础提交，`fetch` 后发现用户已推 **`434bd0b`**「更新加谐波特征和多画像支持后测试输出-修改前后窗大小」——`tmp/` 里正是**改后**画像 `profile_device_20261031_222210`（`pre/post=10/200`）与 10-31 / 11-01 两批回放产物（事件 382 + 69 条、候选 213 + 54 行）。
   - **取证①：画像是坏的，坏在「自动定位收了噪声」而不是窗长**。`startup.n=2`，两次样本 **ΔIa=+0.62 A（`auto:steady_state`，39 周波，peak 4.05）** 与 **+15.58 A（`auto:two_window`，88 周波）**，相差 **25 倍** ⇒ μ=**8.102 A**、σ=**10.582 A（σ/\|μ\|=1.31）**、ΔP μ=−6 936 W；`shutdown.n=1`、ΔIa=−18.214 A、**dur=1 周波**。`label_mode=auto`（无人工标签）是 0.62 A 被收进来的前提；画像 `notes` 本身已警告「每方向 ≥3 次」「3/3 个事件 ΔP 与 ΔI 异号（CT 极性接反）」。
   - **取证②：8 A 的中心压在背景台阶分布上**。两段回放 |ΔIa|≥2 A 台阶 **156 / 159 个**，|Δ| 中位 **4.2 / 4.4 A**；画像 ±1σ 覆盖 −2.5~18.7 A，`d2_max=9` 放到 ±32 A ⇒ **66 条画像事件里 52 条落在真实背景台阶 ±5 s 内**。
@@ -31,7 +40,7 @@
   - **文档**：`REPORT_TEST.md` 第 182 轮专题（现场表、画像样本表、事件/候选/事件率三张实测表、与 10-30 对照表、遗留 5 条）；`session/NILM_AC_session_complete.md` 第 182 轮节；本文件。另修表格内未转义 `|` 共 12 处，三份文档表格列数复检**全部一致**。
   - 验收状态：沙盒侧 ✅（全部数字本机复算）；**用户侧 🔶**（`dev1.csv` 真值缺失；两批波形不同源不可直比误报率；A 组参数改动未实跑）。
 
-- **上上轮任务（2026-10-31 第 181 轮，已交付·**文档类，未改代码**）**：用户指令——「在 `NILM_TUNING_GUIDE.md` 文档附录中增加一节，举例详细说明如何测试多档位如何使用派生网格验证测试」。
+- **第 181 轮任务（2026-10-31，已交付·**文档类，未改代码**）**：用户指令——「在 `NILM_TUNING_GUIDE.md` 文档附录中增加一节，举例详细说明如何测试多档位如何使用派生网格验证测试」。
   - **交付**：`NILM_TUNING_GUIDE.md` 附录由 1398 行扩到 **2209** 行，新增两节——
     - **H.28「多档位设备怎么用派生网格验证测试」**（原理层，8 小节）：H.28.0 三句话总纲（一份画像＝一档 / 派生网格＝复制成组 / 验证测试＝拿已知档位的真数据回放看"恰一份"）→ H.28.1 四层验证（画像自检、网格自检、回放判定矩阵、对账）→ H.28.2 例 1 三相四线全链路（含单份对照、3 份通过、5 份反例）→ H.28.3 例 2 三相三线＋虚拟中性点重构（接线/PT·CT/量纲先自检，3 份不够、5 份刚好）→ H.28.4 份数定法 → H.28.5 五种失败与处置 → H.28.6 禁做清单（每条带实测后果）→ H.28.7 一页纸。
     - **H.29「验收测试用例集」**（执行层，本轮新增 +372 行）：14 条编号用例——**A1–A7** 三相四线（画像自检 / 3 份网格自检 / 单份对照 / 3 份判定矩阵 / 对账 / 5 份负向 / 精确派生加分）、**B1–B5** 三相三线（接线与量纲自检 / 3 份不足 / 5 份通过 / 重构勾与不勾对照 / 对账）、**N1–N4** 负向（混档、网格＋`stage_free`、提 `min_confidence`、倍数太密）；每条给「命令 → 期望值 → 判据 → 怎么处置」；另有**测试记录表模板**、判定三档（✅通过 / ⚠有条件通过 / ❌不通过）、**复测矩阵**（改了什么只重跑哪几步）、一页纸 10 条命令 + 6 个"贴工位"数字。
@@ -40,7 +49,7 @@
   - **验证**：`nilm_check --tol-s 1.5` ⇒ 3 份 `profile 6 6 0 0 0 100% ✅ 可上线`（7 种算法全对）、5 份 `6 6 0 2 2 ⚠ 2 条带内误报`；`stage_window` 逐份数值复核（12 份，见 `REPORT_TEST.md` 第 181 轮第三节表）。
   - **文档**：`REPORT_TEST.md` 第 181 轮专题（含逐份窗口表、对账实录、用例覆盖表、4 条遗留）；`session/NILM_AC_session_complete.md` 第 181 轮节；本文件。
   - 验收状态：沙盒侧 ✅（全部期望值本机实跑）；**用户侧 🔶 待回报**（现场按 H.29 走一遍；两例均为合成数据、三相严格对称）。
-- **本任务·补（2026-10-31，同日追加，**文档类，未改代码**）**：用户问「设备画像提取中各算法参数如何设定、对应负荷辨识事件界面中该算法又如何设置」。
+- **第 181 轮·补（2026-10-31，同日追加，**文档类，未改代码**）**：用户问「设备画像提取中各算法参数如何设定、对应负荷辨识事件界面中该算法又如何设置」。
   - 交付：`NILM_TUNING_GUIDE.md` 再增 **H.30「设备画像提取的参数怎么填、负荷辨识事件里「设备画像匹配」怎么配（逐项对照手册）」**（+242 行，全 **2451** 行）：H.30.0 参数分布总表 + 三个"配了也不生效"的坑 → H.30.1 提取侧基准配置 8 项 → H.30.2 ①②③④ 四组（**pre/post 会跨界面生效**、`need = pre×max_scale + dur + 2×post×max_scale + 10`、四类典型组合）→ H.30.3 检测侧公共项 → H.30.4「设备画像匹配」16 项分 6 组 → H.30.5 三套预设 → H.30.6 配参六步 → H.30.7 12 条「现象→根因→改哪项」→ H.30.8 一页纸。
   - 取证结论：① `_profile_window_need()` 默认 **891 周波**（pre/post 10/50 × max_scale 8），`max_scale=1/2/4/8 ⇒ 121/231/451/891`，默认 `window_cycles=300` ⇒ 引擎自动扩窗并提示；② `auto_params` / `rel_tol_pct` / `min_delta_pct` **只作用于 6 种标量算法**，对画像匹配无效；③ 判据换算：`min_confidence 0.3 ⇔ D²/维 ≤ 2.41`、`d2_max 9 ⇔ 平均 |z| ≤ 3`、`stage_dim_max 9 ⇔ 单维 |z| ≤ 3`。
   - 文档：`REPORT_TEST.md` 第 181 轮·补专题；`session/…` 同节；本文件。
@@ -49,7 +58,7 @@
   - 已定位的边界：`POST /api/process/nilm_profile`（`app/server.py:2901–3010`）**内部把 5 类异常与 `except Exception` 全部转成 400** ⇒ 500 **不可能**从 handler 的 `try` 里出来，只可能来自 ① `try` **之前**的两条局部 import（`from elec_tool.nilm_profile import …`、`from tools.nilm_profile import build_cli_command as _profile_cmd`；`tools/` 无 `__init__.py`，靠仓库根在 `sys.path` 才能导入）② 中间件 `_SideRouter` / `current_side()` / `_abs_path` ③ **响应序列化**——FastAPI 的 `JSONResponse.render` 用 `json.dumps(..., allow_nan=False)`，**已实测**：路由返回 `NaN`、`Infinity` 或 `numpy` 标量 ⇒ 一律 **500 + 纯文本 "Internal Server Error"**（前端 `api()` 对非 JSON 的响应正好显示 `HTTP 500`，与用户症状一致）。
   - 已排除：空单元 / `1e400` / 只有电流列 / 提前结束的文件（分别返回 200/200/200/400）；`stage` 派生接口 200；`build_cli_command` 签名与调用一致（含 `merge_gap`）。
   - 下一步：让用户提供 **服务端 traceback**（uvicorn 控制台）或他们那份设备 CSV；用 `TestClient(raise_server_exceptions=True)` 复现取栈；若落在 NaN/Inf/非有限值 ⇒ 在 handler 返回前做**有限性清洗**（非有限项转 `null` 并在 `notes` 说明）＋给可读 400；若是局部 import 失败 ⇒ 把它们移进 `try` 或改模块级导入并加启动自检。
-- **上一任务（2026-10-31 第 180 轮，已交付、**改代码**·沙盒侧✅实测）**：用户指令——「按上述1-3点进行实施修改」＝第 179 轮交付末尾四问的第 1~3 项；**第 4 项（用已知某一档的总线数据做反向验证）用户未答 ⇒ 待验证**。
+- **第 180 轮任务（2026-10-31，已交付、**改代码**·沙盒侧✅实测）**：用户指令——「按上述1-3点进行实施修改」＝第 179 轮交付末尾四问的第 1~3 项；**第 4 项（用已知某一档的总线数据做反向验证）用户未答 ⇒ 待验证**。
   - **① 派生档位界面入口**：数据处理页「设备画像提取」新增 **④ 派生档位画像**（倍数 `0.4,0.7,1.2` / 输出目录 / ΔQ 缩放 / 谐波指数 + 「派生档位画像」「复制派生路径串」）；结果区给每档**可接受区间 / 候选门槛 min_d / 静默区 / 文件名** + `;` 路径串 + 等价 CLI 命令；事件表显示 `xx % 档` 与 `升档/降档`。后端 `POST /api/process/nilm_profile_stage`。
   - **② 方案 B（档位自由匹配）**：`match_event(..., stage_free=True)` 加权最小二乘解唯一缩放 `s*` → σ 随 s 缩放 → 形状残差；**s 只用 ΔI/ΔP 标定**（`STAGE_REF_FEATURES`；让 ΔQ/ΔIh 参与会把 s 拖走、单维否决失效）。新配置 `stage_free`(0) / `min_stage`(0.5) / `stage_min_scale`(0.2) / `stage_max_scale`(3.0) / `stage_dim_max`(9，**单维否决**，只在 stage_free 生效)；事件新增 `stage_scale` / `event_kind`（CSV 末尾两列）。运行中同向台阶 ⇒ `stage_up`/`stage_down`，`state` 不变、置信度不折半。
   - **③ `lambda_rel` 0.1→0.02**：`peak_ratio` 有效 σ 4.03×→2.01×、`d_ih` 1.25×→1.05×；认档窗口 0.70~1.30 → **0.72~1.28**；两条真实事件 conf 0.748→0.755 / 0.764→0.777；纯线性假负荷 5.57→7.04（conf 0.030）；9 条真实候选仍全拒。**回退＝把 `lambda_rel` 改回 0.1**。
@@ -370,6 +379,7 @@
 - 等用户执行 T-002 的 W/R/P 组（Windows 部署 / 真实数据对账 / 生产常驻）并回报实录
 
 ## 下一步（TODO）
+0. **第 184 轮待批准**：① 指南补 **H.32**（单相 / 分相设备的现场用法；本轮按用户「先别落笔」指令未动 `NILM_TUNING_GUIDE.md`，代码里原引用的 H.32 已改为指向 `REPORT_TEST.md` §184.5）；② `d_p/d_q` 单相重算方案评审（要不要给同一次候选算两套 ΔP）；③ 前端 jsdom 用例（`#np-phases` + 结果卡）；④ 真实单相设备录波复测（三相不平衡、CT 相位误差、启动冲击均未覆盖）
 1. **用户侧（阻塞项，模式 B）**：先跑 **T-007 的 U9 组**、**T-006 的 U8 组**、**T-005 的 U7 组**与 **T-004 的 U6 组**（用真实采集文件，期望见 `REPORT_TEST.md`），再跑 T-003 的 **S 组**（`python tools/verify_sources.py` 期望 PASS 5 / FAIL 0；`pytest tests/ -q` 期望 **204 passed**；两个终端跑 tcp_feeder / csv_appender + `cli.py live` 期望缺口 0），**T-003 的 U 组**（浏览器手点 7 步，界面下拉框，期望见 `REPORT_TEST.md`），再跑 T-002 的 W 组（Windows 部署，预计 10 分钟）与 R 组（真实数据对账，核心验收），按「结果回收格式」贴回；P 组（生产常驻）可选
 2. Agent 侧（收到实录后）：把三件套写入 T-002「结果 / 结论」，按 J-\* 逐条对账，回填 `README.md` §2/§3/§4 与 `NILM_DATA_DICT.md` 的 🔶 项（注明来源＋日期）
 2a. **第 175 轮待用户回报（画像匹配没跑起来的三条）**：① 把运行目录的代码更新到 v0.99.27（判定：事件 CSV 末列应有 `delta_ih_a`、画像 8 维）；② 总线侧 `profile_path` 只填一个存在的画像文件（升级后才支持 `A;B`）；③ 两侧 `nilm.quantity` 统一成 `i`、去掉两侧 `transform.invert_phases='A'`。改完复跑，期望：总线 06:38:17 `STOP confirmed ≈0.83`、分路 07:00:09 `START confirmed ≈0.50`。若仍未出现，再查 `summary.profile.profiles[].loaded/error` 与 `errors` 里的「该画像匹配未运行」提示
@@ -439,7 +449,7 @@
 - `REPORT_TEST.md` — **v0.8**（新增 **T-007** 第 9 轮间谐波/直流/事件：S1~S7 / F-29~F-31 / U9 组；v0.7：新增 **T-006** 第 8 轮数据处理子界面：S1~S7 / F-24~F-28 / U8 组；v0.6：新增 **T-005** 第 7 轮三功能：S1~S4 / F-17~F-21 / U7 组）：T-001（待回报）+ T-002（沙盒 A1~A10、B1/B2、用户侧 W/R/P）+ **T-003（沙盒 S1~S18 实录、四源对账表、F-01~F-10 修复、用户侧 S/U/D 三组执行包 + J-\* 判读 + 回收格式）**
 - `NILM_DATA_DICT.md` — v0.2（用户已确认 fs/列格式/PT/CT）；另有 v0.1 模板（🔶=116 处；用户已确认的 fs/列格式/PT/CT 待本轮翻 ✅）
 - `session/NILM_AC_session_complete.md` — 会话纪要（只追加）
-- 代码：`cli.py`（8 子命令入口，含 `resample`）、`elec_tool/`（算法核心 + `sources/` + `analysis/` + `resample.py` 离线重采样 + **`events.py` 事件检测**）、`tools/ui_r9_check.cjs`（间谐波/直流/事件 28 项端到端）、`tests/test_r9_events.py`、`tools/ui_r8_check.cjs`（数据处理子界面 29 项端到端）、`tests/test_r8_resample.py`、`app/server.py` + `app/static/`（Web）、`configs/default.json`（出厂模板）、**`tools/`（tcp_feeder / csv_appender / verify_sources / ui_dropdown_check.cjs / ui_r6_check.cjs / ui_r7_check.cjs）**、`tests/`（**236 项，15 个文件**；第 9 轮＝`test_r9_events.py`）、**`elec_tool/realtime_writer.py`**
+- 代码：`cli.py`（8 子命令入口，含 `resample`）、`elec_tool/`（算法核心 + `sources/` + `analysis/` + `resample.py` 离线重采样 + **`events.py` 事件检测**）、`tools/ui_r9_check.cjs`（间谐波/直流/事件 28 项端到端）、`tests/test_r9_events.py`、`tools/ui_r8_check.cjs`（数据处理子界面 29 项端到端）、`tests/test_r8_resample.py`、`app/server.py` + `app/static/`（Web）、`configs/default.json`（出厂模板）、**`tools/`（tcp_feeder / csv_appender / verify_sources / ui_dropdown_check.cjs / ui_r6_check.cjs / ui_r7_check.cjs）**、`tests/`（**565 passed / 1 skipped，56 个文件**；第 184 轮＝`test_r184_single_phase_profile.py`）、**`elec_tool/realtime_writer.py`**
 - 数据与产物（均 gitignore）：`data/`（输入 CSV，`cli.py gen-sample` 可重建样例）、`output/`（导出结果）、`configs/runtime.json`（界面保存的配置）
 - 运行环境：`.venv/`（gitignore，沙盒回收后需重建：`python3 -m venv .venv && .venv/bin/pip install -r requirements.txt`）
 - 分支：`arena/82e34fb8-nilm-calc-tool`（远端同名，已 push；第 9 轮提交＝`8539d8a`（feat）+ docs；第 8 轮提交＝`a6fd42d`（feat）+ `b6c7ca6`（docs）；第 6 轮 tip `f1966e8`；第 7 轮提交＝`f0fdea6` feat(r7) / `341fc9e` test(r7) / docs）｜基点 `main`=`27b28ea`

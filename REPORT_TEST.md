@@ -3221,3 +3221,156 @@ python tools/nilm_profile.py --derive-from output\nilm\profile_device_20261030_2
 2. **界面类结论基于静态源码**：本轮没有起服务点页面，控件存在性靠 `index.html/app.js` 的 `id` 判定；真实渲染（例如 `nt-common` 是否折叠）未截图验证。
 3. **P183-12 的 33/21 vs 34/22**：只跑了一次 `--soft-start` 样例；若样例生成器有随机性，需再跑两次确认。
 4. **未测**：H.29 的 14 条验收用例本轮未重跑（r181 已跑过，本轮只核参数与判据文字）。
+
+---
+
+# 第 184 轮（2026-11-03）：设备画像提取增加「设备单相 / 分相」支持——分析、实现与实测
+
+**用户原话**：「暂时不需要，先分析代码，考虑在基于设备画像提取算法中增加对设备单相画像提取的支持。」
+
+**性质**：**分析 + 已实现**（6 个产品文件 + 1 个测试文件；分析完成后未再请示即推进实现，见 §184.4.4 回退方式）。基线 `33e6701`（r183 交付）、代码 `v0.99.29` → 本轮 `v0.99.30`。
+
+## 0. 三句话结论
+
+1. **现状确实硬性假定三相**：事件定位只在「三相总有功/三相合成电流」上做（`detect_profile` 取 `p4[0]`/`i4[0]`），特征向量固定 8 维（`d_ia/d_ib/d_ic` + `d_p/d_q/peak_ratio/dur_cycles/d_ih`），`PHASE_MAPS` 只解决「接错相」、解决不了「那两相根本是别人的负荷」。
+2. **单相设备拿旧画像直接匹配必炸**：未接相的 μ≈0，σ 被绝对下限 0.02 A 托底 ⇒ 总线上任何一个他负荷在那两相投切，D² 就爆。实测（A 相 3 A 真启动 + B/C 相 2 A/−1.5 A 他负荷落在窗内）**D²/维 14.10、conf 0.001，真事件被拒**；把 `d_ib/d_ic` 跳过 ⇒ 3.39，仍被 ΔP 的窗污染拒。
+3. **跳维是必要条件、不是充分条件**：`d_p/d_q` 仍是**三相合成**口径、`d_ih` 是**三相平均**（单相设备的谐波只有真实值的 1/3）。所以本轮交付的是「单相设备**能被正确比较**」，不是「单相设备的 ΔP 口径已经精确」——现有限制写在 §184.5，不要对外宣称"单相支持已闭环"。
+
+## 184.1 现状：哪几处硬性假定三相
+
+| # | 位置（v0.99.29） | 现状 | 对单相设备的影响 |
+|---|---|---|---|
+| 1 | `detect_profile()` 的候选：`p4[0]` / `i4[0]` | 只用**三相总**（ΣP / 合成电流）做双窗、稳态、CUSUM 等候选 | 单相设备的台阶级台阶被另外两相的总量稀释；他负荷在三相任一处投切都会造成候选（这部分是**总线侧**的既有行为，与画像无关） |
+| 2 | `FEATURES`（8 维，3 个 ΔI 维） | 画像必须给出 `d_ia/d_ib/d_ic` 的 μ/σ | 未接相的 μ≈0、σ 只有 0.02 A 绝对下限（`_ABS_FLOOR`）⇒ 该维成为"最敏感维" |
+| 3 | `mahalanobis_diag()` 的对角 D² | 每维贡献相加，无"该维缺失"语义 | 未接相的任何抖动直接进 D² |
+| 4 | `skip` 机制（v0.93） | 只在**3p3w 无 B 相 CT** 时 `skip=("d_ib",)` | 是唯一的"某维不参与"通道，但没有"设备本来就没接这一相"的来源 |
+| 5 | `PHASE_MAPS`(6 种) / `remap_phases` | 解决「CT 接错相、A/B/C 互换」 | 不能表达"这台设备只接 A 相" |
+| 6 | 画像 schema `nilm_profile/1` | 只有 `pt_ct/wiring/quantity/unit/features…`，无相别字段 | 匹配侧无从知道该跳过哪些维 |
+| 7 | `CycleFeatures` 的 `q`（三相合成无功） | `d_q` 是三相之和 | AB/AC/BC 单相设备（线间 380 V）的无功与功率因数在合成口径下被其它两相摊薄 |
+
+## 184.2 单相设备到底缺什么
+
+1. **缺"这台设备接在哪几相"这一事实**——它决定了哪些 ΔI 维**根本不该参与**比较。
+2. **缺一个能自动判出来的手段**：现场经常只给三列（`时间,A相电压,A相电流`）或六列（3p4w 记录仪，另两相没接），人工填相别容易错。
+3. **缺一条可解释的提示链**：跳过之后要让人看到"跳了哪两维、为什么"，否则运维会以为软件"算错了"。
+
+> 结论：**不需要改特征维、不需要改 schema 主版本**。最小改动＝在画像里记一个 `phases` 字段，匹配时把未接相的 ΔI 维并进已有的 `skip` 通道。
+
+## 184.3 实测证据（改动前的现状基线）
+
+### 3.1 设备侧三列单相录波能否提取（能）
+
+`/tmp/r184/dev1ph.csv`：`时间,A相电压,A相电流`，A 相 5 A@0.5 s、0.15 s 后 8 A、再回 5 A。旧版 `build_profile` 可直接跑通（缺列按 0 播放，`ColumnMap._resolve_partial`），得到 `d_ia μ=3.0 σ=0.45`、`d_p μ=690 W`、`d_ib/d_ic μ=0 σ=0.02`——**问题不在提取，在匹配**。
+
+### 3.2 三组总线侧对照（同一份画像、同一段数据，只改相别）
+
+| 数据 | 目标事件 | 他负荷 | 现状（画像记 ABC） | 跳过未接相后 |
+|---|---|---|---|---|
+| `bus3ph1` | A 相 +3 A/+690 W @500 周波 | B 相 +2 A @700（**远离**窗口） | D²/维 **0.20**、conf **0.906**、confirmed；700 周波处被判 16.97/0.000 rejected（max=d_ib） | 同（本来就该中） |
+| `bus3ph2` | 同上 @500 | B 相 +2 A @505、C 相 −1.5 A @480（**落在前后窗内**） | D²/维 **14.10**、conf **0.001**、rejected（d_ib 贡献 92.4、d_p 19.8） | D²/维 **3.39**、conf **0.183**、仍 rejected |
+| `bus3ph3` | 同上 @2.0 s | B 相 +1 A @2.3 s（落在**后窗**） | D²/维 **3.564**、conf **0.1683**、rejected | D²/维 **0.823**、conf **0.6626**、**low_confidence + `window_crowded`**（ΔP 690→920） |
+
+第三行是本节最重要的一行：**跳维把 D² 从 3.56 压到 0.82，但事件仍标 `low_confidence`**，因为 ΔP 被邻窗他负荷污染了（690→920 W）。⇒ 跳维必要、不充分。
+
+### 3.3 另一组：同一画像、改 `phases=ABC` vs `A`（差分对照）
+
+`bus3ph2` 的 3.4 s 处 B 相他负荷（+1 A）事件：
+
+| 画像相别 | `d_ib` 实测 | D²/维 |
+|---|---|---|
+| `A`（跳过 d_ib/d_ic） | **0**（不参与） | **6.957** |
+| `ABC`（旧行为） | **94.28** | **17.004** |
+
+### 3.4 AB 相（线间 380 V）设备能否提取（能，但 ΔI 无符号）
+
+设备侧 3p4w 记录仪接 A-B 单相：`ia=+3·sin`、`ib=−3·sin`（同一电流在两相 CT 上反号），提取结果 `phases="AB"`、`d_ia μ=3.0`、`d_ib μ=3.0`、`d_p μ=1195 W`、`d_q≈0`。
+
+> **发现（写入限制）**：`d_ia/d_ib/d_ic` 来自**逐周波有效值**，与符号无关 ⇒ `+3 A` 与 `−3 A` 记成同一个数，"A-B 单相"与"两台各接一相的单相设备"在画像上不可分。要用无功/相角区分，得改 `CycleFeatures` 的口径，本轮不做。
+
+## 184.4 已实现的改动
+
+### 4.1 画像 schema（向后兼容）
+
+```json
+{"schema": "nilm_profile/1", "phases": "A", "phase_source": "auto",
+ "phase_stats": {"A": {"mu": 3.0, "sigma": 0.45, "active": true}, "...": {}}}
+```
+
+* `phases` 取值：`A/B/C/AB/AC/BC/ABC`（按 ABC 排序、大小写不敏感、`a,c` 与 `AC` 等价）；**字段缺省 ⇒ `ABC`**，旧画像行为完全不变。
+* `phase_source`：`auto`（按事件幅值自动判定）/ `manual`（人工 `--phases`）。
+* `phase_stats`：三相 ΔI 的 μ/σ 与是否判为"接了"，供界面对账与排障。
+* `validate_profile` 只在字段**存在**时校验（非法字符抛 `ProfileError`）；显式给空串视为错误。
+
+### 4.2 代码清单
+
+| 文件 | 改动 |
+|---|---|
+| `elec_tool/nilm_profile.py` | 新增 `PHASE_DIMS / PHASE_ROWS / PHASES_ALL / PROFILE_PHASE_NAMES`、`normalize_phases()`、`profile_phases()`、`profile_skip_dims()`、`detect_phases()`；`build_profile(..., phases="auto")` 写 `phases/phase_source/phase_stats` 并加 notes；`validate_profile` 归一 `phases`；`profile_summary` 暴露 4 个新键；`detect_profile` 把 `skip` 与 `profile_skip_dims(doc)` 合并；`amp` 兜底（三相 ΔI 全被跳过时仍用画像自己的合成幅值定候选门槛，避免 `min_d=0` 变成"任何台阶都成候选"） |
+| `elec_tool/nilm.py` | `_load_profiles()` 每槽追加两条提示：① 跳维清单（含 3p3w 无 B 相 CT 的 `d_ib`）；② 画像电流证据**只在 B 相**而本侧 3p3w 无 B 相 CT 时给"不要指望 ΔI、容易漏报/误认"的警告 |
+| `tools/nilm_profile.py` | `--phases {auto,ABC,A,B,C,AB,AC,BC}`；`build_cli_command(..., phases=)` **读 `doc["phases"]`**（不能用 argparse 默认值，否则自动判相时命令串漏写相别）；结果头打印「相别 X」 |
+| `app/server.py` | `POST /api/process/nilm_profile` 收 `phases`（非法 ⇒ 400），透传、写进 `command`、响应增 `phases/phase_skip/phase_stats` |
+| `app/static/index.html` | 「设备画像提取」① 组新增下拉 `#np-phases`（8 选项，默认 `auto`） |
+| `app/static/app.js` | `npPayload` 带 `phases`；`npRender` 增「设备相别」卡片（非 ABC 标红并列出跳过的维） |
+| `tests/test_r184_single_phase_profile.py` | 26 项（见 §184.6） |
+
+### 4.3 判定规则（`detect_phases`）
+
+对**启动/停止两个方向的所有事件**取各相 `|ΔI|` 的均值 μ_p 与标准差 σ_p：
+
+* 某相 `active` ⇔ `μ_p ≥ max(2 % × 最大相 μ, 3 σ_p)`——2 % 防"大电流设备的小相"被误判，3σ 防噪声相被误判；
+* 三相全为 0（无电流证据，例如纯有功维差异）⇒ 退回 `ABC`（不改变旧行为）；
+* 只一相显著 ⇒ 单相；多相显著 ⇒ 按实际相别组合（如 `AB`）。
+
+## 184.5 使用与限制（现场必读）
+
+1. **单相画像的 `d_p` 仍是"三相总有功"**：单相设备投运时，`d_p` 就等于该设备的有功（另两相没变），所以**单相场景下 `d_p` 反而更干净**；但若前后窗里有他负荷，`d_p` 一样会被污染（§3.2 第三行 690→920 W）。
+2. **`d_ih` 只取到真实值的 1/3**：`CycleFeatures.ih` 是三相平均。单相整流设备的谐波证据被摊薄，`d_ih` 维的判别力下降——画像 σ 的 15 %/2 A 下限仍在，不会因此"必然不匹配"，但**弱谐波设备不要指望这一维**。
+3. **`d_q` 同理**（三相合成），AB/AC/BC 线间设备的无功份额被摊薄；功率因数低的单相设备建议主要看 `d_ia + d_p`。
+4. **ΔI 无符号**：见 §3.4，`+3 A` 与 `−3 A` 不可分。
+5. **3p3w 无 B 相 CT**：若画像含 B 相，`nilm.py` 会把 `d_ib` 并进 skip 并给提示；但**"只在 B 相有电流证据"的画像在本侧等于没有 ΔI 证据**（剩 ΔP/ΔQ/峰值比/持续周波/ΔIh），能认但更容易漏报/误认——提示里已写明。
+6. **人工指定相别要复核**：`--phases B` 但数据里 A 相最显著时，画像 notes 会写「⚠ 指定的相别与数据里最显著的相别不一致」，先查接线 / 列映射。
+7. **跳维 ≠ 免疫邻窗他负荷**：见 §3.2/§3.3，仍要靠 `pre/post`、`window_crowded` 与 `min_confidence` 一起判。
+
+## 184.6 验证记录
+
+| 检查 | 方法 | 结果 |
+|---|---|---|
+| `normalize_phases` | 10 组输入（`auto/None/''/ABC/abc/A/a,c/AB/['B']/C/A`）+ 4 组非法 | 全对；非法抛 `ProfileError` |
+| `profile_skip_dims` | 无字段 / `ABC` / `A` / `AB` | `()` / `()` / `{d_ib,d_ic}` / `{d_ic}` |
+| `detect_phases` | 单相（A 相 3 A、B/C 噪声）、三相不平衡 3/2/1.2、全零 | `A` / `ABC` / `ABC` |
+| 三列单相 CSV 提取 | `tools/nilm_profile.py --file dev1ph.csv` | `phases=A`、`phase_source=auto`、`d_ia 3.00/0.45`、`d_p 690`、notes 含单相提示 |
+| 人工相别与数据不符 | `phases="B"`（数据是 A） | `phase_source=manual` + ⚠ 不一致提示 |
+| 显式 `ABC` | 三列 CSV + `--phases ABC` | 不跳维、不加单相提示（等价旧行为） |
+| 端到端匹配（差分对照） | 合成 A 相 3 A + B 相 1 A 同时投切 | `A` 画像 D² 8.47（1.41/维）conf 0.494 confirmed；`ABC` 画像 D² 31.14（3.89/维）conf 0.143 rejected（d_ib 贡献 22.7） |
+| 负向（跳维 ≠ 全收） | 只在 B 相投切的同幅值设备 vs `A` 画像 | 拒（最大贡献维 `d_ia`） |
+| 档位派生继承 | `derive_stage_profile(doc, 0.5)` | `phases` 继承、skip 一致 |
+| 引擎提示 | 单相画像 / `B` 相画像 × 3p3w（重构开/关）/ `AB` 相画像 × 3p3w | 提示文本与预期一致；重构后不再警告 |
+| 端点 | `POST /api/process/nilm_profile`（`phases=auto` / `D` / `ABC`） | 200（`phases=A`、`phase_skip=[d_ib,d_ic]`、命令含 `--phases A`）/ **400**「phases 只能含 A/B/C（或 auto / ABC）」/ 200（`ABC`、skip 空） |
+| 页面 | `GET /` 含 `#np-phases`；`node --check` | 1 处、语法 OK |
+| 回归 | `pytest -q tests` | **565 passed / 1 skipped**（164 s；改动前 539 passed + 1 skipped，本轮 +26 项新测试＝565） |
+
+### 6.1 本轮自己踩的坑（已修，留档）
+
+| 坑 | 现象 | 根因 / 修法 |
+|---|---|---|
+| 参数加错端点 | 全量测试 **9 个无关用例挂**（`test_r12_nilm` 的 `nilm_tune`、`test_r61`、`test_r86`），端点返回 400「NameError: name 'phases' is not defined」 | 用脚本按字符串替换时，把 `phases=phases` 插到了 `nilm_tune` 端点的 `dict(...)` 里（两个 `dict` 的收尾行文本相同）⇒ 改成锚定 `doc = await asyncio.to_thread(build_profile, …)` 这一行 |
+| 文档引用悬空 | 画像 notes 写「见 NILM_TUNING_GUIDE H.32」，但该节不存在 | 上轮已定"指南正文先别落笔" ⇒ 改为引用本报告 §184.5；H.32 留作待批准项 |
+| 测试数据写错位置 | 合成 B 相他负荷放在 520 周波，`min_stage=0.5×690 W` 把 230 W 的台阶直接滤掉，负向用例变成"没有候选" | 改成与目标同时刻投切（同窗），才能验证"跳维不等于全收" |
+| 空 `phases` 兼容 | `validate_profile` 原先对 `phases=""` 静默归一为 `ABC` | 改为：字段**缺省**才等价旧画像；**显式**给空串 ⇒ 报错（避免拼装 JSON 时误留 `""` 被悄悄当成三相） |
+
+## 184.7 未做 / 待批准
+
+1. **手册 H.32 未写**：用户上一轮明确「先别落笔」指南修正清单，本轮同样**未动 `NILM_TUNING_GUIDE.md`**。单相设备的现场用法目前只有本报告 §184.5。
+2. **`d_p`/`d_q` 单相重算**（方案，未实施）：在 `event_features` 里按画像 `phases` 只取本相 P/Q 求和，可让 AB/AC/BC 设备的无功口径回到"设备自身"。风险：需要把 `phases` 传进总线侧特征提取，等于给「同一次候选」算出两套 ΔP（三相合成 / 单相），事件表与 `min_delta` 门槛会分裂 ⇒ 建议先做方案评审。
+3. **ΔI 保留符号**：要改 `CycleFeatures` 输出（RMS→带符号基波相量），影响面覆盖 6 种标量算法与全部历史数据口径，**不做**。
+4. **前端未做 jsdom 端到端**：只做了 `node --check` + 起服务 `curl` 页面/端点；`tools/ui_*.check.cjs` 家族未加单相用例。
+5. **真实单相数据未验证**：全部数据为本机合成（6400 Hz、50 Hz、PT=CT=1）；现场三相不平衡、CT 相位误差、单相设备启动冲击未覆盖。
+
+## 184.8 一页纸
+
+* **改了什么**：画像里多一个 `phases`；匹配时自动跳过未接相的 ΔI 维；CLI/界面/接口三处可选 `--phases`（默认 `auto`，按事件幅值判定）。
+* **为什么要改**：单相设备画像的未接相 σ 只有 0.02 A，任何他负荷在那两相动一下就把 D² 顶爆（实测 14.10 vs 0.20）。
+* **改到哪一步**：跳维后同一份画像从"rejected 0.001"变成"confirmed 0.494"（差分对照）；但 ΔP 被邻窗污染时仍会 `low_confidence`（0.823/0.6626，`window_crowded`）。
+* **旧画像怎么办**：无 `phases` 字段 ⇒ 按 `ABC`，行为与 v0.99.29 逐位一致（26 项测试覆盖）。
+* **别宣称什么**：别宣称"单相设备的功率口径已对齐"——ΔP/ΔQ 仍是三相合成、ΔIh 仍是三相平均、ΔI 无符号。
+* **回退**：`git checkout -- elec_tool/nilm_profile.py elec_tool/nilm.py tools/nilm_profile.py app/server.py app/static/index.html app/static/app.js` + 删除 `tests/test_r184_single_phase_profile.py`。
