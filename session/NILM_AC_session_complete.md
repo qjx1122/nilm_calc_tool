@@ -802,3 +802,14 @@
 - 指南同步：H.30.2 ③ 追加「定量版：由启停过程时长算前后窗」（三波形系数表、post<D 连候选都不生成、pre 与过程时长无关、五步计算链、`dur_cycles ≤ post−1` 鸡生蛋陷阱、post 过大三代价）；H.30.0 分布表拆两行、H.30.3 标题改「分两处」（防布局文案过期）。
 - 交付：`REPORT_TEST.md` §186、`README.md` v0.99.33、`NILM_TUNING_GUIDE.md`（H.30.2/H.30.0/H.30.3）、`tools/ui_r186_check.cjs`、`tests/test_web_ui.py`（+1）、`STATUS.md`、本文件。
 - 仍未做（🔶待回报）：浏览器手点视觉确认（wp-group 嵌套观感）；前6公共组按用户列举序排在 6 面板**之后**，若要放组首说一声即调；历史 jsdom 工具 r24 的 `===6` 过期断言（v0.90 加画像后实际 7）未顺修。
+
+### 第 187 轮（2026-11-03）：离线 CSV 播放耗时超过数据时间（v0.99.34）
+
+- 用户指令：「当前播放离线数据源 CSV 文件速率耗时超过数据时间，修改代码，优化离线数据源播放速率」。
+- 定位链（沙盒实测）：① relative 秒合成文件库 bench"47.81×"但只 3 次结果 → 逐块打桩 `t[0]` 全 0、`data_t_end` 卡 0.0998 → **时间轴逐块归零（根因 B）**；② 绝对时刻文件 speed=1/4/8 恒≈1× → 节拍钟打桩 `wait_until` 累计仅 0.01 s（钟正确）→ cProfile `parse_timestamps` 54.24/58.08 s（**93 %**）、192 万行 strptime → **纯 `HH:MM:SS[.f]` 不进 v0.82 快路径（根因 A）**；③ 溯源 `_RE_SLASH_CLOCK` 要 `Y/M/D ` 前缀，纯时刻列逐行走 `datetime.strptime`（基准 1900 负 epoch、`mode=datetime` 不跨午夜），与 `00/00/00` 快路径（`_NO_DATE_BASE`/`clock_time`/展开）同格式两语义。
+- 修复：A＝`_RE_TIME_CLOCK` + `_parse_slash_clock` 认纯时间（统一 `_NO_DATE_BASE`、获得跨午夜展开与正 epoch）；`_parse_slash_clock_block` **numpy 向量化**（`np.char.partition` 切 head/frac → `np.unique` 整秒唯一值各解析一次 → inverse 映射 + 向量小数相加；head 解析失败/小数非数字整体退回慢路径，与逐值逐位一致、拒绝语义不变，20 万行 5~6 s→**217 ms**）。B＝`parse_timestamps(relative_base=…)` 按**文件首行**对齐（`iter_csv_blocks` seek 前读首行 → 3 个 `_rows_to_block` 调用点 → `_assemble`；缺省行为不变），`_file_time_range` / `wave_preview` 末段同零点（否则 relative 公共时间段 `t1≈0` 算不出交集）。缺口等待语义**保持**（两侧同步/公共时间段依赖数据时刻口径）。
+- 复测（服务端 REST 实录）：纯时间 30 s speed=8/4/1 → **3.93 s（7.63×）/ 7.65 s（3.92×）/ 30.17 s（0.99×）**（修前 28.45/27.09/30.27 s 恒≈1×）；relative 60 s speed=4 → **15.13 s（3.97×）** 且 `emits.voltage=61 harmonic=301`、`data_t_end=60`（修前曲线不出点）；库 bench abs30 **0.52×→11.75×**、relative 结果 3→**301**（10.31×）；缺口文件 speed=4 → 15.18 s ≈ 跨度/4（同步语义保持）。
+- 验证：新增 `tests/test_r187_playback_pace.py` **8 项**（快慢路径逐位一致/拒绝语义、基准统一与跨午夜、20 万行 <2 s、relative 跨块首值=k·640/fs 与整列一致、`_file_time_range` 首末同零点、8×/4× 墙钟+曲线出点、缺口等待语义）；既有 `test_r82 + test_pace_clock` 6 项保持；全量 **584 passed / 1 skipped**（190 s，增长来自 B 修复后冻结轴用例开始真正算到期量）。
+- **行为变更（有意）**：纯时刻列时间轴基准 1900 负 epoch → 与 `00/00/00` 相同的 1970+1 天正 epoch；`mode` datetime→clock_time 并获得跨午夜展开（`_file_time_range`/`wave_preview` 同步改、两端同口径）。
+- 交付：`REPORT_TEST.md` §187、`README.md` v0.99.34、`tests/test_r187_playback_pace.py`、`STATUS.md`、本文件。
+- 仍未做（🔶）：真实用户文件复验；8× 贴预算（3.93 vs 3.75 s）、4× 内稳定，新瓶颈 compute+broadcast；时标缺口仍按跨度等待（跳过缺口属产品决策）。
