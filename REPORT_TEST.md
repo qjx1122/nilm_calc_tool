@@ -3293,7 +3293,7 @@ python tools/nilm_profile.py --derive-from output\nilm\profile_device_20261030_2
 
 ```json
 {"schema": "nilm_profile/1", "phases": "A", "phase_source": "auto",
- "phase_stats": {"A": {"mu": 3.0, "sigma": 0.45, "active": true}, "...": {}}}
+ "phase_stats": {"A": {"mu_abs_di": 3.0, "sigma": 0.45, "active": true}, "...": {}}}
 ```
 
 * `phases` 取值：`A/B/C/AB/AC/BC/ABC`（按 ABC 排序、大小写不敏感、`a,c` 与 `AC` 等价）；**字段缺省 ⇒ `ABC`**，旧画像行为完全不变。
@@ -3438,3 +3438,127 @@ q_sig = q4[0] if not _rows else Σ q4[r]      # 无功序列同理
 * `README.md` 变更记录 **v0.99.30**；《设备画像提取与总线侧负荷辨识事件检测算法方案.md》§3.5 / §5.5 补相别字段与未接相维处理。
 * `tests/test_web_ui.py` 新增 `test_profile_phases_control_and_payload`（`#np-phases` 的 8 个选项与 `normalize_phases` 对得上、`app.js` 真的把它放进提取载荷、结果区有「设备相别」卡片）。
 * 全量 `pytest -q tests`：**572 passed / 1 skipped**。
+
+---
+
+## 184.11 双界面覆盖审计：单相画像在「数据处理界面」与「负荷辨识事件界面」到底支持到哪一步（2026-11-03，**只检查 + 活体验证，未改任何代码**）
+
+> 用户指令：「检查设备画像提取对设备单相画像提取功能是否已在**数据处理界面**及**负荷辨识事件界面**功能均已支持」。
+> 本节只给覆盖结论与证据，**不预设结论、不动代码**；要改的地方列在 §11.5，等用户点头。
+
+### 11.1 三句话结论
+
+1. **功能面：两个界面都已支持。** 提取侧可以选/自动判相别并写进画像（8 个选项、非法 400、等价命令带 `--phases`）；匹配侧**总线侧与分路侧共用同一套 `NilmDetector` / `_load_profiles` / `detect_profile`**，声明了相别的画像会自动跳维、候选台阶按本相取、状态行给出中文提示、B 相 × 3P3W 直接写"永远匹配不上"。
+2. **表现面：只覆盖了数据处理界面。** 负荷辨识页**没有相别控件，也没有相别字段**——相别只以"状态行里的一句红字提示"存在；事件表、事件 CSV、候选诊断 CSV、派生档位表**全部看不出相别或跳了哪几维**。
+3. **顺带查出 2 处真问题**（都不是"没实现"，是"说错/显示错"）：① I 口径下单相设备的**事件幅值**仍用三相合成 ΔI（实测本相 3.000 A 的事件显示成 **0.2746 A**）；② 指南 H.32.3 让用户"看结果区「各相 |ΔI| 均值」"，**该区块在界面上并不存在**（只有"人工指定 ≠ 自动判定"时提示文字里才打印这张表）。
+
+### 11.2 审计方法
+
+* 静态走查：`app/static/index.html`（1170–1198）、`app/static/app.js`（3255–3260、3350–3382、4660–4790）、`app/server.py`（2901–3010 提取端点、2625–2717 派生端点、766–810 分路侧路由）、`elec_tool/nilm.py`（596–665 加载、1091–1178 汇总、1031 幅值）、`elec_tool/nilm_profile.py`（69–112 相别工具、662–700 候选序列、1218–1262 档位派生）、`tools/nilm_profile.py`（51–52、177、277）。
+* 活体验证：`TestClient` 打 `POST /api/process/nilm_profile` 五态 + 非法态；`NilmDetector(cfg).summary()` 取负荷辨识侧真实下发结构；候选 CSV 表头实读。
+* 数据：`/tmp/r184b/dev1ph.csv`（三列单相、5→8 A）、`/tmp/r184b/p1.json`（`phases=A` 的真实产物）。
+
+### 11.3 覆盖矩阵
+
+| 能力 | 数据处理界面（提取） | 负荷辨识事件界面（匹配，总/分两侧） |
+|---|---|---|
+| 相别入口 | ✅ `#np-phases`（`index.html:1189–1198`，auto / ABC / A / B / C / AB / AC / BC，默认 auto）；**不受基准配置模式影响**——`ntSyncBaseUI` 的禁用清单（`app.js:4082`）里没有它 | ❌ 无控件（设计如此：相别只来自画像 JSON，改相别＝重提画像） |
+| 相别下发 | ✅ `npPayload` 带 `phases`（`app.js:4666`） | — |
+| 服务端校验 | ✅ `normalize_phases` 归一，非法 ⇒ 400（`server.py:2947–2950`） | — 画像 JSON 的 `phases` 由 `validate_profile` 校验 |
+| 写进画像 | ✅ `phases / phase_source / phase_stats`（`nilm_profile.py:1088–1093`） | — |
+| 命令行 | ✅ `--phases`（`tools/nilm_profile.py:177`）；等价命令仅非 ABC 时带（`:51–52`、`:255`） | — |
+| 结果区显示 | ✅「设备相别」卡，非 ABC 标红并列出跳过维（`app.js:4677–4679`） | ⚠ 只有状态行中文提示（`nilm.py:643`、`:1157`；前端 `app.js:3373` 渲染），**无结构化字段/徽标** |
+| 跳维生效 | — | ✅ `detect_profile` 合并 `profile_skip_dims`（`nilm_profile.py:671`） |
+| 候选台阶按本相 | — | ✅ `profile_phase_rows`（`:683–690`） |
+| 3P3W 冲突 | ⚠ 无专门校验；靠"指定相别 ≠ 自动判定"的通用告警兜（`:1060–1064`） | ✅ B 相画像 × 3P3W 无 B 相 CT ⇒「**永远匹配不上**」+ 跳过 `d_ib`（`nilm.py:635–650`） |
+| 分路侧 | — | ✅ 同一端点 + `_SideRouter` 改写（`server.py:799–800`）；页面右列是克隆 DOM、id 加 `-br`（`app.js:1203–1205`），`E('branch', …)` 取 `-br` |
+| 派生档位 | ⚠ JSON 继承 `phases`（`derive_stage_profile` 用 `deepcopy`），但派生接口与结果表**不显示**相别（`server.py:2712–2717`、`app.js:4764–4768`） | — |
+| 旧画像（无 `phases`） | — | ⚠ 按 ABC 匹配；界面**没有任何提示**说明"该画像没有相别字段、未跳维" |
+
+### 11.4 实测证据
+
+**A. 提取端点**（五态 + 非法态，同一份三列单相文件）
+
+```
+auto     200 phases=A    src=auto    skip=['d_ib','d_ic'] cmd=True  saved=A
+A        200 phases=A    src=manual  skip=['d_ib','d_ic'] cmd=True  saved=A
+AB       200 phases=AB   src=manual  skip=['d_ic']          cmd=True  saved=AB
+ABC      200 phases=ABC  src=manual  skip=[]                cmd=False saved=ABC
+<empty>  200 phases=A    src=auto    skip=['d_ib','d_ic'] cmd=True  saved=A
+D        400 phases 只能含 A/B/C（或 auto / ABC），当前 'D'
+```
+
+- `cmd=True/False` = 等价命令里是否出现 `--phases`；`saved` = 落盘 JSON 的 `phases`（与响应一致）。
+- `phase_stats` 实际键名是 **`mu_abs_di`**（不是 `mu`）——本文件 §184.4 的示例已按实况更正。
+
+**B. 派生档位端点**（对 `phases=A` 的画像派生 0.6× 与 1.4×）
+
+```
+base keys = [device_id, grid_ratio, path, window]                       ← 无 phases
+row0 keys = [amp, device_id, gate_pct, k_hi, k_lo, min_d, path, pct, scale, unit]  ← 无 phases
+derived profile_..._stage0.6.json  phases= A     ← 落盘继承正确
+derived profile_..._stage1.4.json  phases= A
+```
+
+**C. 负荷辨识侧真实下发结构**（`NilmDetector.summary()`，`phases=A` 的画像）
+
+```
+profile.profiles[0] 的键：candidates, device_id, device_state, error, features, has_harmonic,
+                          last, level, loaded, notes, path, summary        ← 无 phases / phase_skip
+profiles[0].notes：画像相别 A：匹配时跳过 d_ib、d_ic；候选台阶按本相取，ΔP/ΔQ 仍是三相求和口径（单相设备即其自身）
+summary.notes    ：设备画像匹配：设备 pump1ph（W 口径…）；对象＝A 相（候选台阶按本相序列取，ΔP/ΔQ 仍为三相求和）…
+旧画像（删掉 phases）：对象＝三相合成            ← 无"缺 phases 字段"的提示
+B 相 × 3p3w        ：summary.notes 含"永远匹配不上" = True
+候选诊断 CSV 表头  ：… 共 31 列，无 phases / skip / phase_any 列
+```
+
+**D. I 口径事件幅值（本相 vs 三合相成）**
+
+```
+A 相 5 A → 8 A，B/C 各 50 A 背景：
+  d_it（三相合成 √ΣI² 的差）= 0.2746 A
+  d_ia（本相）             = 3.0000 A
+```
+`nilm.py:1031`：`d_main = dp if use_p else f["d_it"]` ⇒ I 口径下事件表「ΔI (A)」列显示 **0.27 A**（画像 μ 是 3.0 A）。候选门槛与 D² 都用本相 3.0 A，**只误导人、不影响判定**；P 口径无此问题（`d_p` 三相求和，单相设备即其自身）。
+
+### 11.5 缺口清单（三档，附落地成本）
+
+**已支持（无需改）**：相别输入 / 下发 / 校验、画像字段、CLI、结果卡、跳维、按本相取候选、状态行提示、3P3W-B 警告、分路侧同源。
+
+**部分支持（4 项）**
+
+| 编号 | 现象 | 证据 | 建议（未实施） |
+|---|---|---|---|
+| P1 | `phase_stats`（各相 \|ΔI\| μ/σ）**不在界面显示**，但《NILM_TUNING_GUIDE.md》**H.32.3 让用户"看结果区「各相 \|ΔI\| 均值」"** ⇒ 文档指向不存在的显示 | `nilm_profile.py:1060–1064`（只有"人工指定≠自动"时才在提示里打印各相均值）vs `app.js:4677–4680`（卡片只有相别 + 跳过维） | 要么在 `npRender` 加一张三相小表（~15 行），要么把 H.32.3 改指向"提示行" |
+| P2 | 负荷辨识侧相别只有 notes 文本：`profiles[]` 无 `phases / phase_skip` | `nilm.py:1123–1128` | 该 dict 补 2 个键（3 行，无行为变化），前端即可做徽标 |
+| P3 | 派生档位接口/结果表不显示相别（JSON 继承是对的） | `server.py:2712–2717`、`app.js:4764–4768` | `base`/`rows` 各加 `phases`，表头加 1 列 |
+| P4 | 提取侧没有「B 相 × 3P3W」专门告警，只有通用"指定相别与数据最显著相别不一致" | `nilm_profile.py:1060–1064` | 提取时若 `wiring=3p3w ∧ ¬reconstruct_3w ∧ "B" ∈ phases` ⇒ 加一条 note（与匹配侧同措辞） |
+
+**未支持（3 项）**
+
+| 编号 | 现象 | 证据 | 影响 |
+|---|---|---|---|
+| N1 | 事件 CSV / 候选诊断 CSV 都没有相别或"跳过维"列；`c_d_ib / c_d_ic` 全 0 无法区分"跳过"与"真的没变化" | `nilm.py:47–54`、`:499–501` | 事后对账只能靠 `device_id` 回查画像 JSON；加 2 列会改表头，需走已有的 `_rotate_if_header_differs` 轮转 |
+| N2 | 旧画像（无 `phases`）在负荷辨识页**完全没有提示** | 实测：`对象＝三相合成`，无缺字段提示 | 用户不知道自己在用"三相口径"匹配单相设备（这正是 §184.3 里 D² 爆表的那个坑） |
+| N3 | 不能"就地改画像相别"（只能重提，或手工编辑 JSON） | 无端点、无界面入口 | 属新功能；要不要做请用户定 |
+
+**口径不一致（1 条，非界面问题）**：见 §11.4-D，I 口径事件幅值用三相合成 ΔI。改法有两种——① 按画像 `phases` 取本相 ΔI（会改变历史 CSV 里该列的量纲含义）；② 保留 `d_it`，另加一列 `delta_i_phase_a`。**均需用户确认**。
+
+**顺带（文案过期，2 处）**：`index.html:1170` 与 `app.js:3258` 的「检测对象（固定）」提示仍写"候选按**三相合成量**搜索"——v0.99.30 起，声明了相别的画像候选序列是**按本相**取的（`nilm_profile.py:683–690`）。事件对象仍是 `total`、这句话的前半段没错，后半段已不成立。
+
+### 11.6 结论与下一步（等用户决定）
+
+* **回答用户的问题**：功能上**已支持**（两个界面都能跑通单相画像；分路侧与总线侧同源，已实测）；**但负荷辨识事件界面的支持只到"状态行提示"这一层**，事件表 / CSV / 派生表都看不出相别，旧画像也没有"未声明相别"的提醒。
+* **优先级建议**（按"照做会错 → 看不出来 → 体验"）：
+  1. **C1（I 口径事件幅值）**——用户看事件表会把 3 A 的设备当成 0.27 A 的负荷；
+  2. **P1（H.32.3 指向不存在的显示）**——现场按指南排障会找不到东西；改文档 0 风险；
+  3. **N2（旧画像无提示）** + **P2（`profiles[]` 补 `phases`）**——各 3~10 行，直接决定"看不看得出来"；
+  4. **N1（CSV 加列）**、**P3（派生表）**、**P4（提取侧告警）**、**文案 2 处**；
+  5. **N3（就地改相别）**——新功能，单独评估。
+* **本节未改任何代码 / 文档正文**（仅更正本文件 §184.4 一处键名：`"mu"` → `"mu_abs_di"`）。
+
+### 11.7 本节未覆盖
+
+* 未在真实浏览器里点页面（静态契约 + 服务端实测；前端 DOM 由 `tests/test_web_ui.py` 的静态断言兜底）；
+* 未跑真实单相设备录波（§184.6 的遗留仍然有效）；
+* 未验证"同一台单相设备在两路（总线 + 分路）各自提取、相别不同"的现场情形。
