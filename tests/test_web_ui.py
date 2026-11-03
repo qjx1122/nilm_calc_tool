@@ -170,6 +170,59 @@ def test_canvas_prep_does_not_reread_scaled_height_attribute():
     assert len(reads) == 1 and "if (!cv.dataset.h)" in reads[0], reads
     assert not re.search(r"const height = h \|\| cv\.getAttribute", body)
 
+def test_nilm_config_two_layer_layout():
+    """v0.99.33（第 186 轮）：负荷辨识事件界面算法配置两层布局的静态契约。
+
+    大模块① 7 个算法公共配置（#nilm-common7 > #nilm-form，5 项）；
+    大模块② 7 个算法配置（#nilm-algos）＝ ②-1 前 6 个（#nilm-scalar-algos 动态 6 面板
+    ＋ #nilm-scalar-common > #nilm-form-scalar 前6公共 4 项 + #nilm-auto-out）
+    ＋ ②-2 画像（#nilm-profile-group > #nilm-profile-algo 动态 1 面板）。
+    jsdom 行为级见 tools/ui_r186_check.cjs。"""
+    # ── ① 层级与容器存在 ──
+    for i in ("nilm-common7", "nilm-form", "nilm-algos", "nilm-scalar-group", "nilm-scalar-algos",
+              "nilm-scalar-common", "nilm-form-scalar", "nilm-auto-out", "nilm-profile-group", "nilm-profile-algo"):
+        assert f'id="{i}"' in HTML, f"index.html 缺少 #{i}"
+    # 顺序断言＝层级（线性文档流里父组先开、子组在其内）：common7 < algos < scalar-group < scalar-algos
+    # < scalar-common < form-scalar < auto-out < profile-group < profile-algo
+    marks = ["id=\"nilm-common7\"", "id=\"nilm-form\"", "id=\"nilm-algos\"", "id=\"nilm-scalar-group\"",
+             "id=\"nilm-scalar-algos\"", "id=\"nilm-scalar-common\"", "id=\"nilm-form-scalar\"",
+             "id=\"nilm-auto-out\"", "id=\"nilm-profile-group\"", "id=\"nilm-profile-algo\""]
+    idx = [HTML.index(m) for m in marks]
+    assert idx == sorted(idx), f"两层布局顺序被破坏：{list(zip(marks, idx))}"
+    # common7 与 algos 同级（同缩进的 wp-group），scalar-group / profile-group 是 algos 的子组
+    c7 = HTML[HTML.index('id="nilm-common7"') - 40:HTML.index('id="nilm-common7"')]
+    ag = HTML[HTML.index('id="nilm-algos"') - 40:HTML.index('id="nilm-algos"')]
+    assert 'class="wp-group"' in c7 and 'class="wp-group"' in ag, "两大模块都应是 wp-group"
+
+    # ── ② 字段归属互斥且完整（9 个原字段拆 5 + 4） ──
+    seg_common = HTML[HTML.index('id="nilm-form"'):HTML.index('id="nilm-algos"')]
+    seg_scalar = HTML[HTML.index('id="nilm-form-scalar"'):HTML.index('id="nilm-auto-out"')]
+    for i in ("nilm-enabled", "nilm-save", "nilm-quantity", "nilm-window_cycles", "nilm-min_gap_cycles"):
+        assert f'id="{i}"' in seg_common, f"①组缺 {i}"
+    for i in ("nilm-rel_tol_pct", "nilm-min_delta_pct", "nilm-auto_params", "nilm-ch-total"):
+        assert f'id="{i}"' in seg_scalar, f"前6公共组缺 {i}"
+    # 互斥：前6公共的 4 项不得出现在①组段内，①组 5 项不得出现在前6公共段内
+    for i in ("nilm-rel_tol_pct", "nilm-min_delta_pct", "nilm-auto_params", "nilm-ch-A"):
+        assert f'id="{i}"' not in seg_common, f"{i} 错放在①组"
+    for i in ("nilm-enabled", "nilm-save", "nilm-window_cycles", "nilm-min_gap_cycles"):
+        assert f'id="{i}"' not in seg_scalar, f"{i} 错放在前6公共组"
+    # 检测量属于①组（7 算法共用，画像要求 quantity 一致）
+    assert 'id="nilm-quantity"' in seg_common and 'id="nilm-quantity"' not in seg_scalar
+
+    # ── ③ app.js：6+1 分容器填充 ──
+    assert "const scalarHost = E(side, 'nilm-scalar-algos')" in APPJS, "buildNilmForm 未按新容器填充前 6 个"
+    assert "const profileHost = E(side, 'nilm-profile-algo')" in APPJS, "buildNilmForm 未单列画像容器"
+    assert "filter(a => a !== 'profile')" in APPJS, "前 6 容器未排除 profile"
+    assert "profileHost.innerHTML = panelHtml('profile')" in APPJS, "画像面板未填入 #nilm-profile-algo"
+    # 脏标记绑定覆盖两大容器（前6公共在 #nilm-algos 深处）
+    assert re.search(r"\[E\(side, 'nilm-form'\), E\(side, 'nilm-algos'\)\]", APPJS), "bindNilmForm 绑定范围被改"
+
+    # ── ④ 灰显样式覆盖迁入 #nilm-form-scalar 的 rel_tol/min_delta ──
+    style = (ROOT / "app/static/style.css").read_text(encoding="utf-8")
+    assert "#nilm-form-scalar label.nilm-auto-off" in style, "style.css 缺 #nilm-form-scalar 灰显规则"
+    assert "#nilm-form-scalar-br label.nilm-auto-off" in style, "style.css 缺分路侧灰显规则"
+
+
 def test_profile_stage_free_is_select_and_gated_params():
     """v0.99.32：stage_free 后端只接受 0/1（config.py:923-924）⇒ 界面必须是列表框（number 输入能键入 2、1.5 被保存时 400）；
     且只有选 1（档位自由匹配）时 stage_min_scale / stage_max_scale / stage_dim_max 才可配置

@@ -809,27 +809,51 @@
       </div>
       <div class="panel">
         <h3>检测参数（保存后立即热生效；算法说明与参数含义见 README §负荷辨识）</h3>
-        <div class="row2" id="nilm-form">
-          <label class="check"><input type="checkbox" id="nilm-enabled"> 启用负荷辨识事件检测</label>
-          <label class="check"><input type="checkbox" id="nilm-save"> 事件落盘 CSV（output/nilm/nilm_events_&lt;日期&gt;.csv）</label>
-          <label>检测对象 <span class="toggle">
-            <label id="nilm-ch-total-lbl" title="I 口径（仅电流）没有跨相合并，只能单相检测：此项不参与"><input type="checkbox" id="nilm-ch-total"> 三相总</label>
-            <label><input type="checkbox" id="nilm-ch-A"> A 相</label>
-            <label><input type="checkbox" id="nilm-ch-B"> B 相</label>
-            <label><input type="checkbox" id="nilm-ch-C"> C 相</label></span></label>
-          <label class="f"><span class="lbl">检测量（v0.36）</span><select id="nilm-quantity">
-              <option value="auto">auto 自动：有电压用有功 P，数据源无电压时用电流有效值 I</option>
-              <option value="p">p 有功功率（需电压 + 电流）</option>
-              <option value="i">i 电流有效值（只需电流；绝对 W 阈值不生效，只用相对门槛）</option>
-            </select></label>
-          <label class="f"><span class="lbl">周波窗长（周波数，≥30）</span><input type="number" step="1" min="30" id="nilm-window_cycles"></label>
-          <label class="f"><span class="lbl">同算法同对象最小事件间隔（周波）</span><input type="number" step="1" min="0" id="nilm-min_gap_cycles"></label>
-          <label class="check" id="nilm-auto_params-lbl" title="v0.87/v0.88：总线侧、分路侧均可启用。勾选后各算法全部数值参数在运行时由当前周波窗数据自动推导（噪声 σ=差分 MAD、稳定周波=3τ+2、最短稳态=Allan 拐点、暂态时长=超限游程最长、显著性倍数 k=√(2·ln 一天周波数)、最小幅值=max(1.5kσ√(2/最短稳态), 4σ)；逐位重复数据自动识别保持长度），无需用调参工具计算后手填；下方各算法数值与相对门槛不参与，算法启停仍按勾选；两侧各自独立勾选"><input type="checkbox" id="nilm-auto_params"> 启用自适应算法参数（运行时按本侧周波窗数据自动计算各算法参数，无需手动填写；总线侧 / 分路侧均可启用）</label>
-          <label class="f"><span class="lbl">相对容差 rel_tol_pct（% 窗内 |P| 中位数；作用于容差/漂移/噪声类参数）</span><input type="number" step="0.1" min="0" max="50" id="nilm-rel_tol_pct"></label>
-          <label class="f"><span class="lbl">相对最小幅值 min_delta_pct（% 窗内 |P| 中位数；0＝只用各算法绝对值）</span><input type="number" step="0.1" min="0" max="100" id="nilm-min_delta_pct"></label>
+        <!-- 大模块①（v0.99.33）：7 个算法公共配置——以下 7 个算法全部生效 -->
+        <div class="wp-group" id="nilm-common7">
+          <div class="wp-group-title">① 7 个算法公共配置 <small class="note">（启用 / 落盘 / 检测量 / 周波窗长 / 最小事件间隔——下方 7 个算法全部生效）</small></div>
+          <div class="row2" id="nilm-form">
+            <label class="check"><input type="checkbox" id="nilm-enabled"> 启用负荷辨识事件检测</label>
+            <label class="check"><input type="checkbox" id="nilm-save"> 事件落盘 CSV（output/nilm/nilm_events_&lt;日期&gt;.csv）</label>
+            <label class="f"><span class="lbl">检测量（v0.36）</span><select id="nilm-quantity">
+                <option value="auto">auto 自动：有电压用有功 P，数据源无电压时用电流有效值 I</option>
+                <option value="p">p 有功功率（需电压 + 电流）</option>
+                <option value="i">i 电流有效值（只需电流；绝对 W 阈值不生效，只用相对门槛）</option>
+              </select></label>
+            <label class="f"><span class="lbl">周波窗长（周波数，≥30）</span><input type="number" step="1" min="30" id="nilm-window_cycles"></label>
+            <label class="f"><span class="lbl">同算法同对象最小事件间隔（周波）</span><input type="number" step="1" min="0" id="nilm-min_gap_cycles"></label>
+          </div>
         </div>
-        <div id="nilm-auto-out" class="notes" style="display:none"></div>
-        <div id="nilm-algos"></div>
+
+        <!-- 大模块②（v0.99.33）：7 个算法配置＝②-1 前 6 个（含其公共项）＋ ②-2 画像匹配 -->
+        <div class="wp-group" id="nilm-algos">
+          <div class="wp-group-title">② 7 个算法配置</div>
+
+          <div class="wp-group" id="nilm-scalar-group">
+            <div class="wp-group-title">前 6 个算法配置 <small class="note">（阈值差分 / 双滑窗均值差 / CUSUM 累积和 / GLR 广义似然比 / 稳态分段 (Hart) / 中值滤波差分）</small></div>
+            <div id="nilm-scalar-algos"></div>
+
+            <div class="wp-group" id="nilm-scalar-common">
+              <div class="wp-group-title">前 6 个算法公共配置 <small class="note">（检测对象 / 自适应 / 相对容差 / 相对最小幅值——只作用于这 6 个算法，画像匹配不受影响）</small></div>
+              <div class="row2" id="nilm-form-scalar">
+              <label>检测对象 <span class="toggle">
+                <label id="nilm-ch-total-lbl" title="I 口径（仅电流）没有跨相合并，只能单相检测：此项不参与"><input type="checkbox" id="nilm-ch-total"> 三相总</label>
+                <label><input type="checkbox" id="nilm-ch-A"> A 相</label>
+                <label><input type="checkbox" id="nilm-ch-B"> B 相</label>
+                <label><input type="checkbox" id="nilm-ch-C"> C 相</label></span></label>
+              <label class="check" id="nilm-auto_params-lbl" title="v0.87/v0.88：总线侧、分路侧均可启用。勾选后各算法全部数值参数在运行时由当前周波窗数据自动推导（噪声 σ=差分 MAD、稳定周波=3τ+2、最短稳态=Allan 拐点、暂态时长=超限游程最长、显著性倍数 k=√(2·ln 一天周波数)、最小幅值=max(1.5kσ√(2/最短稳态), 4σ)；逐位重复数据自动识别保持长度），无需用调参工具计算后手填；下方各算法数值与相对门槛不参与，算法启停仍按勾选；两侧各自独立勾选"><input type="checkbox" id="nilm-auto_params"> 启用自适应算法参数（运行时按本侧周波窗数据自动计算各算法参数，无需手动填写；总线侧 / 分路侧均可启用）</label>
+              <label class="f"><span class="lbl">相对容差 rel_tol_pct（% 窗内 |P| 中位数；作用于容差/漂移/噪声类参数）</span><input type="number" step="0.1" min="0" max="50" id="nilm-rel_tol_pct"></label>
+              <label class="f"><span class="lbl">相对最小幅值 min_delta_pct（% 窗内 |P| 中位数；0＝只用各算法绝对值）</span><input type="number" step="0.1" min="0" max="100" id="nilm-min_delta_pct"></label>
+              </div>
+              <div id="nilm-auto-out" class="notes" style="display:none"></div>
+            </div>
+          </div>
+
+          <div class="wp-group" id="nilm-profile-group">
+            <div class="wp-group-title">基于设备画像匹配算法配置</div>
+            <div id="nilm-profile-algo"></div>
+          </div>
+        </div>
         <div class="row" style="margin-top:10px"><button id="btn-nilm-save" class="savecfg-side" title="保存本侧负荷辨识算法参数到配置">保存总线侧配置</button><span id="nilm-form-note" class="mut"></span></div>
         <div class="row nilm-tune" style="margin-top:6px" title="v0.50：把 tools/nilm_tune.py --json 的输出叠加到当前运行配置：只改 nilm.quantity / rel_tol_pct / min_delta_pct 和各算法参数，其余不动；更新后的完整配置写到 output/nilm/nilm_tuned_config_<侧>_<时间戳>.json，默认不写配置文件">
           <label class="f"><span class="lbl">套用 nilm_tune 结果</span><input type="file" id="nilm-tune-file" accept=".json,application/json"></label>

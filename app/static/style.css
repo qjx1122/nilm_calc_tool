@@ -299,6 +299,9 @@ label.chk>.lbl>.note{color:var(--mut);opacity:.85;font-size:11.5px;line-height:1
 /* v0.87：自适应算法参数启用时灰显被自动推导覆盖的数值项 */
 .nilm-algo label.nilm-auto-off,#nilm-form label.nilm-auto-off,#nilm-form-br label.nilm-auto-off{opacity:.4}
 .nilm-algo label.nilm-auto-off input,#nilm-form label.nilm-auto-off input,#nilm-form-br label.nilm-auto-off input{background:#141b2d}
+/* v0.99.33：「前 6 个算法公共配置」组（rel_tol/min_delta 在 #nilm-form-scalar 内，不在 .nilm-algo 面板也不在 #nilm-form） */
+#nilm-form-scalar label.nilm-auto-off,#nilm-form-scalar-br label.nilm-auto-off{opacity:.4}
+#nilm-form-scalar label.nilm-auto-off input,#nilm-form-scalar-br label.nilm-auto-off input{background:#141b2d}
 /* v0.99.32：stage_free≠1（派生网格固定档位）时灰显三项档位参数（只在画像算法参数区出现，两列都覆盖） */
 .nilm-algo label.nilm-stage-off{opacity:.4}
 .nilm-algo label.nilm-stage-off input{background:#141b2d}

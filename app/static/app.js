@@ -3250,8 +3250,10 @@ function buildNilmForm(side = sideOf()) {
   const nl = NLs(side);
   if (nl.formBuilt) return;
   nl.formBuilt = true;
-  const host = E(side, 'nilm-algos');
-  host.innerHTML = Object.keys(NILM_ALGOS).map(a => {
+  const host = E(side, 'nilm-algos');                 // v0.99.33：外层分组容器（② 7 个算法配置）
+  const scalarHost = E(side, 'nilm-scalar-algos');    //   ②-1 前 6 个标量算法面板
+  const profileHost = E(side, 'nilm-profile-algo');   //   ②-2 画像匹配面板
+  const panelHtml = a => {
     const sp = NILM_ALGOS[a];
     const inputs = Object.keys(sp.params).map(k => {
       const cls = k.endsWith('_w') ? 'nilm-unit-w' : (k.endsWith('_a') ? 'nilm-unit-a' : '');
@@ -3268,7 +3270,9 @@ function buildNilmForm(side = sideOf()) {
     return `<div class="panel nilm-algo" data-algo="${a}" style="margin-top:8px"><h3 class="algohdr"><label class="check"><input type="checkbox" id="nilm-${a}-enabled"><span class="sw" style="color:${NILM_COLORS[a]}">■</span>${sp.name}</label></h3>
       <div class="algodesc mut">${sp.desc}</div>
       ${extra}<div class="row2">${inputs}</div></div>`;
-  }).join('');
+  };
+  scalarHost.innerHTML = Object.keys(NILM_ALGOS).filter(a => a !== 'profile').map(panelHtml).join('');
+  profileHost.innerHTML = panelHtml('profile');
   normalizeConfigForms(host);
   const opts = Object.keys(NILM_ALGOS).map(a => `<option value="${a}">${NILM_ALGOS[a].name}</option>`).join('');
   E(side, 'nilm-filter').insertAdjacentHTML('beforeend', opts); domTouched(E(side, 'nilm-filter'));
@@ -3298,6 +3302,7 @@ function nilmStageGate(side = sideOf()) {
 }
 
 function bindNilmForm(side) {
+  // v0.99.33：① 公共组 #nilm-form 与 ② 算法组 #nilm-algos（深度覆盖 6+1 面板与「前6公共」#nilm-form-scalar，二者都在 #nilm-algos 内）
   [E(side, 'nilm-form'), E(side, 'nilm-algos')].forEach(h => h && h.querySelectorAll('input, select').forEach(el => {
     const mark = () => { NLs(side).dirty = true; }; el.addEventListener('input', mark); el.addEventListener('change', mark);
   }));
