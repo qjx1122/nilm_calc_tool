@@ -791,3 +791,14 @@
 - 验证：`test_web_ui.py` 17 passed、`test_r180_stage_free.py` 25 passed、全量 **575 passed / 1 skipped**（136 s）；node 行为级（提取 gate 函数体 + mock DOM）**11 passed**（0 全禁带灰显 / 1 全放 / 非法值按 0 处 / 选项文案 / 两条回填路径调用）；接口实录 `PUT /api/config`：0/1→200 回显，0.5/1.5/2/-1→400。
 - 交付：`REPORT_TEST.md` §185；`README.md` v0.99.32；`NILM_TUNING_GUIDE.md` H.30.4 `stage_free` 行；`STATUS.md`；本文件。
 - 仍未做（🔶待用户回报）：浏览器手点确认列表框观感与灰显切换；⚠ 存量配置若写了 `stage_free: 0.5/1.5` 现会 `ConfigError`，需改 0/1；`phase_map`（同为 0..6 枚举）仍是 number 输入，用户未要求故未动。
+
+### 第 186 轮（2026-11-03）：负荷辨识事件页算法配置两层布局（v0.99.33）+ 指南 H.30.2 定量追加
+
+- 用户指令：「修改负荷辨识事件界面中算法配置布局，总体分为 2 大布局模块：1. 7 个算法公共配置模块；2. 7 个算法配置（再分前 6 个算法配置模块 ＋ 基于设备画像匹配算法配置模块；前 6 个又分 7 大模块：阈值差分 / 双滑窗均值差 / CUSUM / GLR / 稳态分段 (Hart) / 中值滤波差分 / 前 6 个算法公共配置模块）」；同轮确认上轮「前后窗 vs 过程时长定量分析」**需要**落指南。
+- 设计：原 `#nilm-form` 9 项按**作用域**拆——①组 5 项（启用 / 落盘 / 检测量 / 周波窗长 / 最小事件间隔）7 算法全生效（画像也吃 quantity 一致 / need 公式 / min_gap 去重）；前6公共组 4 项（检测对象 / 自适应 / rel_tol / min_delta）只作用 6 标量算法（画像固定 total、`nilmDimAuto` 排除 profile、指南 H.30.0 坑①）。6+1 面板保持 `.panel.nilm-algo` 原结构，只换容器。
+- 改动：① `index.html`——检测参数区重写为 `#nilm-common7`（wp-group，含 `#nilm-form` 5 项）＋ `#nilm-algos`（wp-group ②大组）内嵌 `#nilm-scalar-group`（`#nilm-scalar-algos` 空容器 ＋ `#nilm-scalar-common`：`#nilm-form-scalar` 4 项 ＋ `#nilm-auto-out`）与 `#nilm-profile-group`（`#nilm-profile-algo` 空容器）；9 字段原 HTML 逐字搬运。② `app.js buildNilmForm`——抽 `panelHtml(a)`，`scalarHost = keys.filter(a !== 'profile')`、`profileHost = panelHtml('profile')` 分容器填充；`bindNilmForm` 绑定范围代码不变（前6公共在 `#nilm-algos` 深处，深度查询覆盖）。③ `style.css`——补 `#nilm-form-scalar{,-br} label.nilm-auto-off` 灰显（rel_tol/min_delta 迁组后原选择器覆盖不到）。④ 新增 `tools/ui_r186_check.cjs`。
+- 兼容要点（本轮关键决策）：`#nilm-algos` 由「面板容器」变「②大组容器」但**深度选择器全部兼容**——`nilmDimAuto`/`nilmDimUnits`/`bindNilmForm` 与历史 jsdom 工具的 `.nilm-algo`、`label.nilm-auto-off` 查询均不断；自适应灰显行为实测与旧版一致（rel_tol/min_delta 仍灰、检测对象/自适应/算法启停勾选仍可用、①组 5 项不被灰显——它们在 `#nilm-algos` 外，与旧版相同）。
+- 验证：静态 `test_web_ui.py::test_nilm_config_two_layer_layout`（层级 10 id 顺序、字段互斥 5+4=9、分容器填充、绑定范围、灰显规则）⇒ 18 passed；jsdom 行为级 **36 passed**（两列结构/回填/自适应/脏标记三处/载荷/stage_free 联动）；全量 **576 passed / 1 skipped**（139 s）。
+- 指南同步：H.30.2 ③ 追加「定量版：由启停过程时长算前后窗」（三波形系数表、post<D 连候选都不生成、pre 与过程时长无关、五步计算链、`dur_cycles ≤ post−1` 鸡生蛋陷阱、post 过大三代价）；H.30.0 分布表拆两行、H.30.3 标题改「分两处」（防布局文案过期）。
+- 交付：`REPORT_TEST.md` §186、`README.md` v0.99.33、`NILM_TUNING_GUIDE.md`（H.30.2/H.30.0/H.30.3）、`tools/ui_r186_check.cjs`、`tests/test_web_ui.py`（+1）、`STATUS.md`、本文件。
+- 仍未做（🔶待回报）：浏览器手点视觉确认（wp-group 嵌套观感）；前6公共组按用户列举序排在 6 面板**之后**，若要放组首说一声即调；历史 jsdom 工具 r24 的 `===6` 过期断言（v0.90 加画像后实际 7）未顺修。

@@ -3666,3 +3666,49 @@ delta_i_a  = d_i_obs
 - **覆盖**：总线侧 + 分路侧（克隆列由 `bindNilm('branch')` 绑定同一 gate）；新建表、保存回显、套用 nilm_tune、画像「填入本侧」四条回填路径都过 gate；number 输入保留（`min_stage` 等不受影响，它两种模式都生效）。
 - **不在本次范围**：`min_stage` / `phase_map` 仍是数字输入（`phase_map` 后端本就拒非整数；用户未要求）；`nilm_tune` 结果套用链路不解析 `stage_free` 列表框（走后端合并，本就兼容）。
 - **缺口（🔶待用户回报）**：浏览器真实手点未做（沙盒无 jsdom），列表框观感 / 灰显切换建议用户在 preview 里点一次确认；`0.5/1.5` 收紧后，**存量非法配置文件**加载时会直接 `ConfigError`（此前会被截断成 0/1 静默工作）——如现场有此类文件需改成 0 或 1。
+
+## 186 负荷辨识事件界面：算法配置改两层布局（v0.99.33，2026-11-03）
+
+用户指令：「修改负荷辨识事件界面中算法配置布局，总体分为 2 大布局模块：1. 7 个算法公共配置模块；2. 7 个算法配置。其中 7 个算法配置又可分为 2 大模块：1. 前 6 个算法配置模块；2. 基于设备画像匹配算法配置模块。其中前 6 个算法配置模块又可分为以下 7 大模块：阈值差分 / 双滑窗均值差 / CUSUM 累积和 / GLR 广义似然比 / 稳态分段 (Hart) / 中值滤波差分 / 前 6 个算法公共配置模块。」（同轮另确认把第 186 轮前的「前后窗 vs 过程时长定量分析」追加进指南 H.30.2。）
+
+### 186.1 设计：字段按「作用域」归组
+
+原 `#nilm-form` 混装 9 项，实际作用域分两类——这正是拆组依据：
+
+| 归属 | 字段 | 作用域依据 |
+|---|---|---|
+| **① 7 个算法公共配置**（`#nilm-common7` > `#nilm-form`，5 项） | 启用、事件落盘、检测量、周波窗长、最小事件间隔 | 画像匹配同样吃：enabled/save 全局；检测量须与画像 `quantity` 一致；`window_cycles` 参与 need 公式（`nilm.py:859`）；`min_gap_cycles` 对画像同样去重（`last_end+gap`） |
+| **前 6 个算法公共配置**（②-1 内 `#nilm-scalar-common` > `#nilm-form-scalar`，4 项） | 检测对象、自适应算法参数、rel_tol_pct、min_delta_pct | 检测对象对画像固定 total（面板内注明"上方勾选只作用于其它算法"）；`nilmDimAuto` 明确排除 profile（`app.js` "画像匹配参数不由自适应推导"）；rel_tol/min_delta 只作用 6 标量算法（指南 H.30.0 坑①） |
+
+6 个算法面板与 1 个画像面板**保持原有 `.panel.nilm-algo` 结构不变**，只换容器：面板即"模块 1~6"，分组标题给出组名，避免每面板再包一层边框的视觉噪音。
+
+### 186.2 改动清单（3 个文件 + 1 个新 jsdom 工具）
+
+1. **`app/static/index.html`**：检测参数区重写为——`#nilm-common7`（wp-group，含 5 字段的 `#nilm-form`）＋ `#nilm-algos`（wp-group，②大组）内嵌 `#nilm-scalar-group`（含空容器 `#nilm-scalar-algos` ＋ `#nilm-scalar-common`：4 字段 `#nilm-form-scalar` ＋ `#nilm-auto-out`）与 `#nilm-profile-group`（含空容器 `#nilm-profile-algo`）。**9 个字段的原 HTML 逐字搬运**（含 title 长文案），只换缩进与分组。
+2. **`app/static/app.js`**：`buildNilmForm` 抽出 `panelHtml(a)`，`scalarHost.innerHTML = keys.filter(a !== 'profile').map(panelHtml)`、`profileHost.innerHTML = panelHtml('profile')`；`normalizeConfigForms(host)` 仍传 `#nilm-algos`（深度覆盖两容器）；`bindNilmForm` 绑定范围注释更新（`[nilm-form, nilm-algos]` 深度覆盖前6公共，**代码未改**——前6公共在 `#nilm-algos` 深处）。
+3. **`app/static/style.css`**：新增 `#nilm-form-scalar{,-br} label.nilm-auto-off` 灰显两行（rel_tol/min_delta 迁组后原 `#nilm-form …` 选择器覆盖不到）。
+4. **`tools/ui_r186_check.cjs`**（新增）：jsdom + 真实服务端的行为级检查 A~F 六组（见 186.3）。
+
+### 186.3 验证
+
+- **pytest 静态契约**：`test_web_ui.py` 新增 `test_nilm_config_two_layer_layout`——层级顺序（10 个 id 的文档流顺序）、字段互斥完整（5+4=9、无交叉、检测量属①组）、分容器填充（`filter(a !== 'profile')`、`panelHtml('profile')`）、绑定范围未改、灰显规则存在 ⇒ `test_web_ui.py` **18 passed**；既有 `test_r12::test_frontend_wiring`（`nilm-algos` 等 id 存在）、`test_r87`（auto 相关 id 存在）不受影响。
+- **jsdom 行为级**（`node tools/ui_r186_check.cjs`，打真实 :8000）**36 passed / 0 failed**：
+  - A 结构：总线/分路两列 `#nilm-scalar-algos` 恰 6 面板、`#nilm-profile-algo` 恰 1、`#nilm-algos` 深度合计 7；①组恰 5 字段、前6公共恰 7 控件（4 相 checkbox + 自适应 + rel_tol + min_delta）、两组互斥；层级 common7∥algos、scalar-common⊂scalar-group、profile-group∥scalar-group；`#nilm-auto-out` 在前6公共组内。
+  - B 回填：`fillNilmForm` 按 id 跨新容器回填检测量/周波/rel_tol/profile.d2_max/threshold.enabled，两列各 7 项全对。
+  - C 自适应：默认 0 灰显 → 勾选后 `label.nilm-auto-off` 40 个（>20）、含 checkbox 的 0 个（算法启停/检测对象/自适应仍可用）、rel_tol/min_delta 灰显+disabled、**①组 5 项不被灰显**（在 `#nilm-algos` 外，与旧行为一致）、推导面板显示、取消恢复。
+  - D 脏标记：改前6公共 rel_tol / ①组 周波窗长 / ②-2 profile 参数 ⇒ 三处都置脏。
+  - E 载荷：9 字段 + 7 算法 + channels 齐全。
+  - F `stage_free` 联动（第 185 轮）在 profile 面板迁入 `#nilm-profile-algo` 后仍 0 禁 1 放。
+- **兼容性**：jsdom 旧工具的选择器（`#nilm-algos .nilm-algo[...]`、`label.nilm-auto-off` 深度查询）全部兼容（面板仍在 `#nilm-algos` 深处）；`ui_r24` 的 `===6` 断言在 v0.90 加入画像后本就过期（实际 7），本轮不使其变差。
+- 全量 pytest：**576 passed / 1 skipped**（139 s）。
+
+### 186.4 指南同步（防文案过期 + 落实上轮「需要」）
+
+1. **H.30.2 ③ 追加「定量版：由启停过程时长算前后窗」**（第 186 轮前实测）：三波形系数表（线性 post≥1.2×D、指数尾 4~5τ、冲击 ≥2×D20 及各自症状）；post<D 连候选都不生成 + `max_scale` 只救候选不救特征；pre 与过程时长无关；五步计算链（`longest_transient` 独立量 T → ×f_nom → 波形系数 → 两上界 → need）；⚠ `dur_cycles ≤ post−1` 鸡生蛋陷阱；post 过大的三笔代价（延迟/自动扩窗/吃邻事件）。
+2. **H.30.0 分布表**：原「检测侧·公共项（算法列表上方）」一行拆为「7 算法公共（①）」「前 6 算法公共（② 内）」两行。
+3. **H.30.3 标题**：「算法列表上方那几个」→「v0.99.33 起分两处：① 7 个算法公共配置 ＋ ② 内前 6 个算法公共配置」。
+
+### 186.5 覆盖范围与缺口
+
+- **覆盖**：总线/分路两列同构（克隆机制沿用）；保存 / 套用 nilm_tune / 自适应 / 脏标记 / stage_free 联动四条链路在新容器下全部实测通过；旧 jsdom 工具选择器兼容。
+- **缺口（🔶待回报）**：① 浏览器真实手点确认两层分组的视觉观感（wp-group 嵌套边框）；② 检测对象位于 ②-1 末尾（前6公共组内、6 面板之后），画像面板在它**下方**——面板内「上方检测对象勾选」文案仍成立，但若你希望前6公共组放在 6 面板**之前**（先配公共再逐个调算法），说一声即调（纯 HTML 顺序调整）；③ `ui_r24`/`ui_r87` 等历史 jsdom 工具的个别过期断言（r24 的 `===6`）未顺修，与本轮无关。
