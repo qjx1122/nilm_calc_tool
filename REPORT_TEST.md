@@ -3436,4 +3436,5 @@ q_sig = q4[0] if not _rows else Σ q4[r]      # 无功序列同理
 * `elec_tool/nilm.py`：画像状态行「对象固定为三相合成」→ 按相别显示；B 相画像 + 3P3W 无 B 相 CT 改为明确写"**永远匹配不上**"（原来的措辞是"ΔI 不参与匹配"，容易被理解成还能凑合用）。
 * `NILM_TUNING_GUIDE.md` 新增 **H.32**（单相设备怎么做画像匹配：操作、跳维后的六维行为、四个坑、三条限制、三步验收）。
 * `README.md` 变更记录 **v0.99.30**；《设备画像提取与总线侧负荷辨识事件检测算法方案.md》§3.5 / §5.5 补相别字段与未接相维处理。
-* 全量 `pytest -q tests`：**569 passed / 1 skipped**（160 s）。
+* `tests/test_web_ui.py` 新增 `test_profile_phases_control_and_payload`（`#np-phases` 的 8 个选项与 `normalize_phases` 对得上、`app.js` 真的把它放进提取载荷、结果区有「设备相别」卡片）。
+* 全量 `pytest -q tests`：**570 passed / 1 skipped**。

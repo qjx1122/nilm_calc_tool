@@ -169,3 +169,15 @@ def test_canvas_prep_does_not_reread_scaled_height_attribute():
     reads = [ln for ln in body.splitlines() if "getAttribute('height')" in ln and not ln.strip().startswith("//")]
     assert len(reads) == 1 and "if (!cv.dataset.h)" in reads[0], reads
     assert not re.search(r"const height = h \|\| cv\.getAttribute", body)
+
+def test_profile_phases_control_and_payload(page):
+    """v0.99.30：设备画像提取的「设备相别」下拉——选项与后端 normalize_phases 一致，且确实进了载荷。"""
+    from elec_tool.nilm_profile import PHASES_ALL, normalize_phases
+    assert "np-phases" in page.selects, "index.html 缺少 #np-phases"
+    opts = set(page.selects["np-phases"])
+    assert opts == {"auto", "ABC", "A", "B", "C", "AB", "AC", "BC"}, f"#np-phases 选项 {sorted(opts)}"
+    for v in opts:                                   # 每个选项后端都认（auto → ""）
+        assert normalize_phases(v) in ("", "A", "B", "C", "AB", "AC", "BC", "ABC")
+    assert "phases:" in APPJS and "np-phases" in APPJS, "app.js 没把 #np-phases 放进提取载荷"
+    assert "设备相别" in APPJS, "app.js 结果区没有「设备相别」卡片"
+    assert set(PHASES_ALL) == {"A", "B", "C"}

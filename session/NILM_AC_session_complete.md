@@ -755,3 +755,4 @@
 - **测试**：`tests/test_r184_single_phase_profile.py` 由 26 → **30 项**（`profile_phase_rows`、P 序列 690 vs 920、I 序列 3.0 A vs 0 候选、引擎提示措辞；负向用例改为"根本不成候选或必须被拒"）。全量 **569 passed / 1 skipped**（160 s）。
 - **文档**：`REPORT_TEST.md` §184.9（更正 + 撤销待办）+ §184.10（候选序列按相别取，含 4 张实测对照）；`NILM_TUNING_GUIDE.md` 新增 **H.32**（2730 行）；`README.md` 变更记录 v0.99.30；方案文档 §3.5/§5.5 补相别字段与未接相维处理；`STATUS.md`。
 - **仍未做**：现场真实单相录波未验证；AB/AC/BC 线间设备在电压不平衡下的 ΔQ 未单独处理；前端未加 jsdom 自动化用例（`#np-phases` 只做静态 + 接口验证）。
+- **收口**：`tests/test_web_ui.py` 新增 `test_profile_phases_control_and_payload`（8 个选项 ↔ `normalize_phases`、`app.js` 载荷与「设备相别」卡片、`PHASES_ALL`），全量 **570 passed / 1 skipped**；`app/static/index.html` 的相别说明改为"候选台阶也按本相取（ΔP/ΔQ 三相求和、ΔIh 三相平均）"。提交 `864357f`（代码+测试）、`2fdaf40`（文档）并推送。
