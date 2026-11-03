@@ -103,6 +103,14 @@ def profile_skip_dims(doc: Dict[str, Any]) -> Tuple[str, ...]:
     return tuple(dim for p, dim in PHASE_DIMS.items() if p not in ph)
 
 
+def profile_phase_rows(doc: Dict[str, Any]) -> Tuple[int, ...]:
+    """画像相别对应的 ``p4/q4/i4`` 行号；**三相画像返回 ()**（调用方继续用 total 行，逐位保持旧行为）。"""
+    ph = profile_phases(doc)
+    if ph == PHASES_ALL:
+        return ()
+    return tuple(PHASE_ROWS[p] for p in ph)
+
+
 def detect_phases(samples: List[Dict[str, Any]]) -> Tuple[str, Dict[str, Dict[str, float]]]:
     """从逐事件特征自动判断设备接在哪几相（**只用于提取侧**，不影响已写出的画像）。
 
@@ -641,7 +649,8 @@ def detect_profile(p4: np.ndarray, q4: np.ndarray, i4: np.ndarray, profile: Dict
     """窗上运行一次画像匹配检测。返回按 onset 排序的候选结果列表（每项含 onset/end/pre/post/match/flags/accepted）。
 
     ``skip``：不参与匹配的特征名；三相三线两表法（transform.wiring=3p3w）本侧无 B 相电流，引擎传 ("d_ib",)，
-    此时 ΔI 合成幅值也只按 A/C 两相计算。
+    此时 ΔI 合成幅值也只按 A/C 两相计算。**画像声明了单相 / 分相（``phases``）时，未接相的 ΔI 维会自动并入 skip**，
+    并且候选台阶序列改为按所声明的相取（P 口径 Σp_ph、I 口径 √Σi_ph²、无功 Σq_ph）——三相画像仍用 total 行，逐位不变。
 
     prm：``d2_max``（每维平均 D² 上限）、``min_confidence``、``k_sigma``（候选门槛的噪声倍数）、``margin``（最优 / 次优 D² 比下限）、
     ``lambda_rel``（协方差收缩）、``state_check``（1/0）、``max_scale``（v0.99.15：多尺度候选搜索的最大倍数，1＝只用画像 pre/post 单尺度）。
@@ -664,11 +673,17 @@ def detect_profile(p4: np.ndarray, q4: np.ndarray, i4: np.ndarray, profile: Dict
     pre_n = int(profile.get("pre_cycles", 10)); post_n = int(profile.get("post_cycles", 50))
     groups = [profile[k] for k in ("startup", "shutdown") if profile.get(k)]
     ip = FEATURES.index("d_p")
+    # v0.99.30：候选序列也跟着画像相别走——单相 / 分相设备只在**自己那几相**上找台阶。
+    #   为什么必须这样（实测）：I 口径用三相合成电流 √(ΣI_ph²) 时，别的两相基流会把单相设备的增量压扁
+    #   （I_A=5 A、I_B=I_C=50 A 时 A 相 +3 A 只让合成量 70.887→71.162，Δ=0.275 A < min_d=1.5 A ⇒ **0 候选、静默漏报**）；
+    #   用本相电流则 Δ=3.0 A，正常出候选。P 口径同理：三相求和里别的相的投切会把 delta 抬高（690→920 W）。
+    #   三相画像 `_rows=()` ⇒ 仍用 total 行，与 v0.99.29 逐位一致。
+    _rows = profile_phase_rows(profile)
     if use_p:
-        x = p4[0]
+        x = p4[0] if not _rows else sum(p4[r] for r in _rows)
         amp = [abs(g["mu"][ip]) for g in groups]
     else:
-        x = i4[0]
+        x = i4[0] if not _rows else np.sqrt(sum(i4[r] ** 2 for r in _rows))
         amp = [math.sqrt(sum(g["mu"][FEATURES.index(k)] ** 2 for k in ("d_ia", "d_ib", "d_ic") if k not in skip)) for g in groups]
         if not any(a > 1e-12 for a in amp):        # v0.99.30：三相电流维全被跳过（如 B 相画像 + 3p3w 无 B 相 CT）
             #   仍用画像自身的三相合成幅值做候选门槛，否则 min_d=0 ⇒ 任何台阶都成候选
@@ -722,8 +737,9 @@ def detect_profile(p4: np.ndarray, q4: np.ndarray, i4: np.ndarray, profile: Dict
     q_cps: List[Tuple[int, float]] = []
     min_d_q = _ABS_FLOOR["d_q"]
     q_use = False
-    if q4 is not None and q4.shape[1] == x.size and float(np.ptp(q4[0])) > 0.0 and q_amp:
-        q_sig = q4[0]
+    _q_tot = q4[0] if (q4 is None or not _rows) else sum(q4[r] for r in _rows)   # v0.99.30：同上，按画像相别取无功
+    if q4 is not None and q4.shape[1] == x.size and float(np.ptp(_q_tot)) > 0.0 and q_amp:
+        q_sig = _q_tot
         # 门槛＝画像 |ΔQ| 的一半；但**不能为 0**：q 很干净时局部方差 → 0，thr=0 会把"零变化"的窗口也判成变点
         #   （合成例：台阶后第一段平台的 delta 恰为 0，照样 >= 0 ⇒ 冒出一个假变点把候选后窗截短）。用 _ABS_FLOOR 托底。
         min_d_q = max(0.5 * min(q_amp), _ABS_FLOOR["d_q"])
@@ -1043,7 +1059,9 @@ def build_profile(cfg, file: str, *, device_id: str = "device", labels: Optional
         notes.append(f"单相 / 分相画像（v0.99.30）：设备只接在 {'+'.join(ph_used)} 相，匹配时跳过 "
                      f"{'、'.join(skipped)}（{'、'.join(PHASE_DIMS[p] for p in PHASES_ALL if p not in ph_used)}）；"
                      f"相别来源＝{'人工指定' if ph_src == 'manual' else '按事件幅值自动判定'}。"
-                     f"注意 ΔP/ΔQ 仍是**三相合成**口径、ΔIh 是**三相平均**口径（单相设备的谐波只有真实值的 1/3），"
+                     f"口径提示：ΔP/ΔQ 是**三相求和**（单相设备的增量就等于它自身，不会被其它两相摊薄）；"
+                     f"ΔIh 是**三相平均**（单相设备只贡献 1/3，而 σ 的 2 A 绝对下限相当于真实 6 A，"
+                     f"所以小谐波单相设备的这一维判别力偏弱，两侧口径一致、不影响可比性）；"
                      f"限制与用法见 REPORT_TEST.md 第 184 轮 §184.5")
     if ph_src == "manual" and ph_auto != ph_used:
         _ph_txt = ", ".join("%s=%.3g A" % (p, ph_stats[p]["mu"]) for p in PHASES_ALL)

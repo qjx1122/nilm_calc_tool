@@ -22,8 +22,8 @@ import pytest
 from elec_tool.config import AppConfig
 from elec_tool.nilm import NilmDetector
 from elec_tool.nilm_profile import (FEATURES, ProfileError, build_profile, derive_stage_profile, detect_phases,
-                                    detect_profile, fit_group, normalize_phases, profile_phases, profile_skip_dims,
-                                    save_profile, validate_profile)
+                                    detect_profile, fit_group, normalize_phases, profile_phase_rows, profile_phases,
+                                    profile_skip_dims, save_profile, validate_profile)
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FS, F, T0 = 6400.0, 50.0, 1791878400.0
@@ -199,7 +199,9 @@ def test_detect_profile_single_phase_still_rejects_other_load():
     i[0] = np.sqrt((i[1:] ** 2).sum(axis=0))
     res = detect_profile(p, q, i, _single_phase_doc("A"), PRM, use_p=True)
     assert not [r for r in res if r["accepted"]]
-    assert any("d_ia" == r["match"]["d2_dim_name"] for r in res if r["onset"] == 500)
+    # v0.99.30 起候选序列按本相取 ⇒ B 相的台阶在 A 相序列上根本不成候选（更彻底）；万一成候选也必须被拒（d_ia≈0）
+    cands = [r for r in res if r["onset"] == 500]
+    assert not cands or all(r["status"] == "rejected" for r in cands)
 
 
 # ---------------------------------------------------------------- 引擎提示
@@ -226,10 +228,10 @@ def test_engine_note_single_phase(tmp_path):
 def test_engine_note_b_phase_on_3p3w(tmp_path):
     det = _engine_with_profile(tmp_path, "B", wiring="3p3w", reconstruct=False)
     notes = det._profiles[0]["notes"]
-    assert any("只在 B 相" in n and "ΔI 不参与匹配" in n for n in notes)
+    assert any("B 相单相" in n and "永远匹配不上" in n for n in notes)
     # 重构之后 B 相由 Ia/Ic 算出，不再警告
     det2 = _engine_with_profile(tmp_path, "B", wiring="3p3w", reconstruct=True)
-    assert not any("只在 B 相" in n for n in det2._profiles[0]["notes"])
+    assert not any("永远匹配不上" in n for n in det2._profiles[0]["notes"])
 
 
 def test_engine_note_ab_profile_on_3p3w_keeps_a_phase(tmp_path):
@@ -238,3 +240,50 @@ def test_engine_note_ab_profile_on_3p3w_keeps_a_phase(tmp_path):
     notes = det._profiles[0]["notes"]
     assert any("跳过 d_ic、d_ib" in n or "跳过 d_ib、d_ic" in n for n in notes)
     assert not any("只在 B 相" in n for n in notes)
+
+
+# ---------------------------------------------------------------- 候选序列按画像相别取（v0.99.30 补）
+def test_profile_phase_rows():
+    assert profile_phase_rows({}) == ()              # 旧画像 / 三相：沿用 total 行
+    assert profile_phase_rows({"phases": "ABC"}) == ()
+    assert profile_phase_rows({"phases": "A"}) == (1,)
+    assert profile_phase_rows({"phases": "AC"}) == (1, 3)
+
+
+def test_candidate_series_follows_phase_p():
+    """P 口径：单相画像的候选 delta 只含本相（690 W），不受 B 相他负荷（+230 W）影响。"""
+    p, q, i = _bus_series()
+    a = [r for r in detect_profile(p, q, i, _single_phase_doc("A"), PRM, use_p=True) if r["onset"] == 500]
+    t = [r for r in detect_profile(p, q, i, _single_phase_doc("ABC"), PRM, use_p=True) if r["onset"] == 500]
+    assert a and abs(a[0]["delta"] - 690.0) < 1e-6            # 本相序列
+    assert t and abs(t[0]["delta"] - 920.0) < 1e-6            # 三相 total 序列（旧行为）
+
+
+def test_candidate_series_follows_phase_i():
+    """I 口径：三相合成电流把单相设备的 3 A 压成 0.275 A（背景 50 A）⇒ 0 候选；
+    按本相电流则正常出候选（旧版本对 I 口径的单相设备是**静默漏报**）。"""
+    L = 1200
+    p = np.zeros((4, L)); q = np.zeros((4, L)); i = np.full((4, L), 50.0)
+    i[1] = 5.0
+    i[1, 500:] += 3.0
+    i[0] = np.sqrt((i[1:] ** 2).sum(axis=0))
+    assert abs((i[0, 510] - i[0, 490]) - 0.275) < 0.01        # 合成量只涨 0.275 A
+    doc = _single_phase_doc("A")
+    doc["quantity"] = "i"
+    doc["startup"]["mu"][FEATURES.index("d_p")] = 0.0          # I 口径画像不看 ΔP
+    doc["startup"]["sigma"][FEATURES.index("d_p")] = 5.0
+    hit = [r for r in detect_profile(p, q, i, doc, PRM, use_p=False) if r["onset"] == 500]
+    assert hit and abs(hit[0]["delta"] - 3.0) < 1e-6           # 本相序列的台阶就是 3 A
+    assert hit[0]["status"] in ("confirmed", "low_confidence")
+
+    doc3 = _single_phase_doc("ABC")
+    doc3["quantity"] = "i"
+    doc3["startup"]["mu"][FEATURES.index("d_p")] = 0.0
+    doc3["startup"]["sigma"][FEATURES.index("d_p")] = 5.0
+    assert not detect_profile(p, q, i, doc3, PRM, use_p=False)  # 旧行为：连候选都没有
+
+
+def test_engine_note_single_phase_wording(tmp_path):
+    det = _engine_with_profile(tmp_path, "A")
+    n = det._profiles[0]["notes"]
+    assert any("三相求和" in s for s in n) and any("d_ib" in s for s in n)
