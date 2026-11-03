@@ -287,3 +287,30 @@ def test_engine_note_single_phase_wording(tmp_path):
     det = _engine_with_profile(tmp_path, "A")
     n = det._profiles[0]["notes"]
     assert any("三相求和" in s for s in n) and any("d_ib" in s for s in n)
+
+
+def test_legacy_profile_without_phases_uses_total_series():
+    """旧画像（无 phases 字段）必须与 v0.99.29 完全一致：不跳维、候选台阶取三相 total。"""
+    p, q, i = _bus_series()
+    doc = _single_phase_doc(None)                       # 不写 phases
+    assert "phases" not in doc and profile_skip_dims(doc) == ()
+    r = [x for x in detect_profile(p, q, i, doc, PRM, use_p=True) if x["onset"] == 500]
+    assert r and abs(r[0]["delta"] - 920.0) < 1e-6       # total 序列（含 B 相他负荷）
+
+
+def test_two_phase_profile_sums_declared_phases():
+    """两相画像（AB）：只跳 C 相；候选台阶取 A+B 两相之和（A 690 W + B 230 W ⇒ 920 W，A 单独则 690 W）。"""
+    L = 1200
+    p = np.full((4, L), 1000.0); q = np.zeros((4, L)); i = np.full((4, L), 5.0)
+    p[1, 500:] += 690.0; i[1, 500:] += 3.0
+    p[2, 500:] += 230.0; i[2, 500:] += 1.0
+    p[0] = p[1:].sum(axis=0)
+    i[0] = np.sqrt((i[1:] ** 2).sum(axis=0))
+    ab = _single_phase_doc("AB")
+    assert profile_skip_dims(ab) == ("d_ic",)
+    d_ab = [r for r in detect_profile(p, q, i, ab, PRM, use_p=True) if r["onset"] == 500]
+    d_a = [r for r in detect_profile(p, q, i, _single_phase_doc("A"), PRM, use_p=True) if r["onset"] == 500]
+    d_abc = [r for r in detect_profile(p, q, i, _single_phase_doc("ABC"), PRM, use_p=True) if r["onset"] == 500]
+    assert d_ab and abs(d_ab[0]["delta"] - 920.0) < 1e-6
+    assert d_a and abs(d_a[0]["delta"] - 690.0) < 1e-6
+    assert d_abc and abs(d_abc[0]["delta"] - 920.0) < 1e-6      # ABC 走 total 行，与 AB 同值

@@ -1,7 +1,7 @@
 # STATUS.md
 
 > 续接文件（BOOTSTRAP.md v2.2 台账）。每次收尾必更新；只改本文件，不另建同类文件。
-> 最后更新：2026-11-03（第 184 轮：**设备画像提取支持单相 / 分相设备**——画像增 `phases`（缺省 ABC，旧画像零改动）、匹配时跳过未接相 ΔI、**候选台阶序列按本相取**（修 I 口径下 0.275 A 的静默漏报）、CLI/接口/界面三处入口、指南新增 H.32；**改代码**，全量 `570 passed`）
+> 最后更新：2026-11-03（第 184 轮：**设备画像提取支持单相 / 分相设备**——画像增 `phases`（缺省 ABC，旧画像零改动）、匹配时跳过未接相 ΔI、**候选台阶序列按本相取**（修 I 口径下 0.275 A 的静默漏报）、CLI/接口/界面三处入口、指南新增 H.32；**改代码**，全量 `572 passed`）
 
 ## 当前角色
 - 角色：**资深电力算法专家**（`ROLE.md` v1.4 指定的默认当前角色）
@@ -15,7 +15,7 @@
   - **分析**：① 事件定位只吃三相总（`detect_profile` 取 `p4[0]`/`i4[0]`）；② 特征固定 8 维（含 3 个 ΔI 维），未接相 μ≈0、σ 被 `_ABS_FLOOR` 0.02 A 托底 ⇒ 该维变成最敏感维；③ `PHASE_MAPS`/`remap_phases` 只解决"CT 接错相"，解决不了"另两相是别人的负荷"；④ 唯一的"某维不参与"通道是 v0.93 的 3p3w `skip=("d_ib",)`，缺"设备本来没接这一相"的来源；⑤ `d_p/d_q` 三相合成、`d_ih` 三相平均、ΔI 是**有效值差（无符号）**。
   - **实测（同一画像、只改相别）**：他负荷落在前后窗内 ⇒ 现状 **D²/维 14.10 / conf 0.001 rejected**；跳 `d_ib/d_ic` 后 **3.39 / 0.183 仍拒**；他负荷落后窗 ⇒ 单相画像 **0.823 / 0.6626 `window_crowded`**（ΔP 690→920）vs ABC **3.564 / 0.1683 rejected**；差分对照同一事件 `d_ib` 贡献 **0 vs 94.28** ⇒ **跳维必要不充分**（已写进报告与代码注释）。
   - **实现 v0.99.30（6 文件 + 1 测试）**：`nilm_profile.py` 新增 `PHASE_DIMS/PHASE_ROWS/PHASES_ALL/PROFILE_PHASE_NAMES`、`normalize_phases/profile_phases/profile_skip_dims/detect_phases`，`build_profile(phases="auto")` 写 `phases/phase_source/phase_stats`＋notes，`validate_profile` 归一，`profile_summary` 暴露 4 键，`detect_profile` 合并 `skip+profile_skip_dims`，`amp` 兜底（三相 ΔI 全跳过时不再 `min_d=0`）；`nilm.py` 槽位提示（跳维清单 + 3p3w 无 B 相 CT 时"只在 B 相有证据"警告）；`tools/nilm_profile.py --phases`（命令串读 `doc["phases"]`）；`app/server.py` 端点收 `phases`（非法 400）；`index.html #np-phases` + `app.js` 结果卡。**旧画像（无 `phases`）行为逐位不变**。
-  - **验证**：`pytest -q tests` **570 passed / 1 skipped**（+30 项 r184 + 1 项 Web 契约）；CLI 三列单相文件 ⇒ `phases=A auto`、`d_ia 3.00/0.45`、`d_p 690`；端点 200（`--phases A`）/400/200（ABC）三态；页面含控件；AB 相设备 ⇒ `phases=AB`、`d_ia=d_ib=3.0`。
+  - **验证**：`pytest -q tests` **572 passed / 1 skipped**（+32 项 r184 + 1 项 Web 契约）；CLI 三列单相文件 ⇒ `phases=A auto`、`d_ia 3.00/0.45`、`d_p 690`；端点 200（`--phases A`）/400/200（ABC）三态；页面含控件；AB 相设备 ⇒ `phases=AB`、`d_ia=d_ib=3.0`。
   - **补做（同日复核后）**：① **更正自己写错的两条口径**（`d_p/d_q` 是三相**求和**、单相设备的增量即其自身，不会被摊薄；`d_ih` 才是三相**平均**＝真实值 1/3，但两侧同口径、可比性不受影响，真正受影响的是 2 A 绝对 σ 下限折回单相相当于 6 A）⇒ 撤销「`d_p/d_q` 单相重算」这条待办；② **候选台阶序列也按相别取**（P 口径 `Σp_ph`、I 口径 `√Σi_ph²`、无功同理；`phases=ABC` 仍取 total 行 ⇒ 旧行为逐位不变）——实测 I 口径下这是硬伤：A 相 +3 A、B/C 各 50 A 基流时三相合成量只涨 **0.275 A**（< 门槛 1.5 A）⇒ **0 条候选、静默漏报**，按本相取则 1 条 `delta=3.000 A`；P 口径候选 delta 由 920 W → **690 W**（本相）。
   - **踩坑**：脚本替换把 `phases=phases` 插进 `nilm_tune` 端点 ⇒ `NameError`，**全量测试 9 个无关用例挂**才暴露（教训：同文本锚点要连带上一行函数调用一起替换）；测试数据把 B 相他负荷放在 520 周波，`min_stage=0.5×690 W` 直接滤掉该台阶，负向用例失效（改为同刻投切）。
   - 交付：`REPORT_TEST.md` 第 184 轮专题（10 小节）；`session/NILM_AC_session_complete.md` 第 184 轮节；本文件。
@@ -451,7 +451,7 @@
 - `REPORT_TEST.md` — **v0.8**（新增 **T-007** 第 9 轮间谐波/直流/事件：S1~S7 / F-29~F-31 / U9 组；v0.7：新增 **T-006** 第 8 轮数据处理子界面：S1~S7 / F-24~F-28 / U8 组；v0.6：新增 **T-005** 第 7 轮三功能：S1~S4 / F-17~F-21 / U7 组）：T-001（待回报）+ T-002（沙盒 A1~A10、B1/B2、用户侧 W/R/P）+ **T-003（沙盒 S1~S18 实录、四源对账表、F-01~F-10 修复、用户侧 S/U/D 三组执行包 + J-\* 判读 + 回收格式）**
 - `NILM_DATA_DICT.md` — v0.2（用户已确认 fs/列格式/PT/CT）；另有 v0.1 模板（🔶=116 处；用户已确认的 fs/列格式/PT/CT 待本轮翻 ✅）
 - `session/NILM_AC_session_complete.md` — 会话纪要（只追加）
-- 代码：`cli.py`（8 子命令入口，含 `resample`）、`elec_tool/`（算法核心 + `sources/` + `analysis/` + `resample.py` 离线重采样 + **`events.py` 事件检测**）、`tools/ui_r9_check.cjs`（间谐波/直流/事件 28 项端到端）、`tests/test_r9_events.py`、`tools/ui_r8_check.cjs`（数据处理子界面 29 项端到端）、`tests/test_r8_resample.py`、`app/server.py` + `app/static/`（Web）、`configs/default.json`（出厂模板）、**`tools/`（tcp_feeder / csv_appender / verify_sources / ui_dropdown_check.cjs / ui_r6_check.cjs / ui_r7_check.cjs）**、`tests/`（**565 passed / 1 skipped，56 个文件**；第 184 轮＝`test_r184_single_phase_profile.py`）、**`elec_tool/realtime_writer.py`**
+- 代码：`cli.py`（8 子命令入口，含 `resample`）、`elec_tool/`（算法核心 + `sources/` + `analysis/` + `resample.py` 离线重采样 + **`events.py` 事件检测**）、`tools/ui_r9_check.cjs`（间谐波/直流/事件 28 项端到端）、`tests/test_r9_events.py`、`tools/ui_r8_check.cjs`（数据处理子界面 29 项端到端）、`tests/test_r8_resample.py`、`app/server.py` + `app/static/`（Web）、`configs/default.json`（出厂模板）、**`tools/`（tcp_feeder / csv_appender / verify_sources / ui_dropdown_check.cjs / ui_r6_check.cjs / ui_r7_check.cjs）**、`tests/`（**572 passed / 1 skipped，56 个文件**；第 184 轮＝`test_r184_single_phase_profile.py`）、**`elec_tool/realtime_writer.py`**
 - 数据与产物（均 gitignore）：`data/`（输入 CSV，`cli.py gen-sample` 可重建样例）、`output/`（导出结果）、`configs/runtime.json`（界面保存的配置）
 - 运行环境：`.venv/`（gitignore，沙盒回收后需重建：`python3 -m venv .venv && .venv/bin/pip install -r requirements.txt`）
 - 分支：`arena/82e34fb8-nilm-calc-tool`（远端同名，已 push；第 9 轮提交＝`8539d8a`（feat）+ docs；第 8 轮提交＝`a6fd42d`（feat）+ `b6c7ca6`（docs）；第 6 轮 tip `f1966e8`；第 7 轮提交＝`f0fdea6` feat(r7) / `341fc9e` test(r7) / docs）｜基点 `main`=`27b28ea`

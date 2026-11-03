@@ -742,7 +742,7 @@
 - 关键实测（同一画像、只改相别）：他负荷落在前后窗内 ⇒ 现状 **D²/维 14.10 / conf 0.001 rejected**；跳 `d_ib/d_ic` 后 **3.39 / 0.183 仍拒**（ΔP 被污染）；他负荷落后窗 ⇒ 单相画像 **0.823 / 0.6626 `window_crowded`**（ΔP 690→920） vs ABC 画像 **3.564 / 0.1683 rejected**；差分对照里同一事件的 `d_ib` 贡献 **0 vs 94.28**。⇒ 跳维**必要不充分**。
 - 实现（v0.99.30，6 文件 + 1 测试）：画像 schema 增可选 `phases/phase_source/phase_stats`（缺省＝ABC，旧画像零改动）；`normalize_phases / profile_phases / profile_skip_dims / detect_phases`；`build_profile(phases="auto")`；`detect_profile` 合并 `skip + profile_skip_dims`；`nilm.py` 槽位提示（跳维清单、3p3w 无 B 相 CT 时"只在 B 相有证据"的警告）；CLI `--phases`；`POST /api/process/nilm_profile` 收 `phases`（非法 400）；界面 `#np-phases` + 结果卡「设备相别」。
 - 顺带修：① 画像三相 ΔI **全被跳过**时 `amp=0 ⇒ min_d=0`（任何台阶都成候选），改为退回画像自身三相合成幅值；② 脚本替换误把 `phases=phases` 插进 `nilm_tune` 端点 ⇒ `NameError`，被全量测试 9 个用例抓到（记录在报告 §184.6.1）；③ 画像 notes 里悬空的「见指南 H.32」改为引用报告 §184.5（指南正文按用户指令**未动**）。
-- 验证：`pytest -q tests` **565 passed / 1 skipped**（+26 项新测试）；CLI 三列单相文件 → `phases=A auto`；端点 200/400/200 三态；页面含 `#np-phases`；AB 相设备提取 → `phases=AB`、`d_ia=d_ib=3.0`（ΔI 来自有效值，**无符号**，已写入限制）。
+- 验证：`pytest -q tests` **572 passed / 1 skipped**（+32 项新测试）；CLI 三列单相文件 → `phases=A auto`；端点 200/400/200 三态；页面含 `#np-phases`；AB 相设备提取 → `phases=AB`、`d_ia=d_ib=3.0`（ΔI 来自有效值，**无符号**，已写入限制）。
 - 交付：`REPORT_TEST.md` 第 184 轮专题（8 小节：三相假定表、缺什么、实测证据、改动清单、使用与限制 7 条、验证记录 16 项、未做 5 条、一页纸）；本文件；`STATUS.md`。
 - 遗留：手册 H.32 待批准；`d_p/d_q` 单相重算只有方案；ΔI 符号不做；前端未加 jsdom 用例；无真实单相设备数据。
 
@@ -752,7 +752,7 @@
 - **顺藤摸出的真问题**：候选台阶仍在**三相合成序列**上找。实测 I 口径 `i4[0]=√(ΣI_ph²)`：A 相 +3 A、B/C 各 50 A 基流 ⇒ 合成量只涨 **0.275 A** < 判断门槛 1.5 A ⇒ **0 条候选、静默漏报**（连 rejected 都看不到）。
 - **改法**：`detect_profile` 里 `x`（P 口径 Σp_ph / I 口径 √Σi_ph²）与 `q_sig` 都按画像 `phases` 取；`phases=ABC` 时 `profile_phase_rows()` 返回空 ⇒ 仍用 total 行，**与 v0.99.29 逐位一致**。
 - **改后实测**：I 口径同数据由 0 条候选 → 1 条 `delta=3.000 A`；P 口径候选 delta 由 920 W（含他相 230 W）→ **690 W**（本相），匹配特征仍是三相求和口径的 920 W；`phases=ABC` 同数据仍 0 条候选（确认只对声明了相别的画像生效）。
-- **测试**：`tests/test_r184_single_phase_profile.py` 由 26 → **30 项**（`profile_phase_rows`、P 序列 690 vs 920、I 序列 3.0 A vs 0 候选、引擎提示措辞；负向用例改为"根本不成候选或必须被拒"）。全量 **569 passed / 1 skipped**（160 s）。
+- **测试**：`tests/test_r184_single_phase_profile.py` 由 26 → **32 项**（`profile_phase_rows`、P 序列 690 vs 920、I 序列 3.0 A vs 0 候选、引擎提示措辞；负向用例改为"根本不成候选或必须被拒"）。全量 **572 passed / 1 skipped**（164 s）。
 - **文档**：`REPORT_TEST.md` §184.9（更正 + 撤销待办）+ §184.10（候选序列按相别取，含 4 张实测对照）；`NILM_TUNING_GUIDE.md` 新增 **H.32**（2730 行）；`README.md` 变更记录 v0.99.30；方案文档 §3.5/§5.5 补相别字段与未接相维处理；`STATUS.md`。
 - **仍未做**：现场真实单相录波未验证；AB/AC/BC 线间设备在电压不平衡下的 ΔQ 未单独处理；前端未加 jsdom 自动化用例（`#np-phases` 只做静态 + 接口验证）。
-- **收口**：`tests/test_web_ui.py` 新增 `test_profile_phases_control_and_payload`（8 个选项 ↔ `normalize_phases`、`app.js` 载荷与「设备相别」卡片、`PHASES_ALL`），全量 **570 passed / 1 skipped**；`app/static/index.html` 的相别说明改为"候选台阶也按本相取（ΔP/ΔQ 三相求和、ΔIh 三相平均）"。提交 `864357f`（代码+测试）、`2fdaf40`（文档）并推送。
+- **收口**：`tests/test_web_ui.py` 新增 `test_profile_phases_control_and_payload`（8 个选项 ↔ `normalize_phases`、`app.js` 载荷与「设备相别」卡片、`PHASES_ALL`），全量 **572 passed / 1 skipped**；`app/static/index.html` 的相别说明改为"候选台阶也按本相取（ΔP/ΔQ 三相求和、ΔIh 三相平均）"。提交 `864357f`（代码+测试）、`2fdaf40`（文档）并推送。

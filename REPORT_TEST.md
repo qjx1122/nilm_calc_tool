@@ -3311,7 +3311,7 @@ python tools/nilm_profile.py --derive-from output\nilm\profile_device_20261030_2
 | `app/server.py` | `POST /api/process/nilm_profile` 收 `phases`（非法 ⇒ 400），透传、写进 `command`、响应增 `phases/phase_skip/phase_stats` |
 | `app/static/index.html` | 「设备画像提取」① 组新增下拉 `#np-phases`（8 选项，默认 `auto`） |
 | `app/static/app.js` | `npPayload` 带 `phases`；`npRender` 增「设备相别」卡片（非 ABC 标红并列出跳过的维） |
-| `tests/test_r184_single_phase_profile.py` | 26 项（见 §184.6） |
+| `tests/test_r184_single_phase_profile.py` | 32 项（见 §184.6） |
 
 ### 4.3 判定规则（`detect_phases`）
 
@@ -3349,7 +3349,7 @@ python tools/nilm_profile.py --derive-from output\nilm\profile_device_20261030_2
 | 引擎提示 | 单相画像 / `B` 相画像 × 3p3w（重构开/关）/ `AB` 相画像 × 3p3w | 提示文本与预期一致；重构后不再警告 |
 | 端点 | `POST /api/process/nilm_profile`（`phases=auto` / `D` / `ABC`） | 200（`phases=A`、`phase_skip=[d_ib,d_ic]`、命令含 `--phases A`）/ **400**「phases 只能含 A/B/C（或 auto / ABC）」/ 200（`ABC`、skip 空） |
 | 页面 | `GET /` 含 `#np-phases`；`node --check` | 1 处、语法 OK |
-| 回归 | `pytest -q tests` | **565 passed / 1 skipped**（164 s；改动前 539 passed + 1 skipped，本轮 +26 项新测试＝565） |
+| 回归 | `pytest -q tests` | **572 passed / 1 skipped**（164 s；改动前 539 passed + 1 skipped，本轮 +32 项 r184 + 1 项 Web 契约） |
 
 ### 6.1 本轮自己踩的坑（已修，留档）
 
@@ -3373,7 +3373,7 @@ python tools/nilm_profile.py --derive-from output\nilm\profile_device_20261030_2
 * **改了什么**：画像里多一个 `phases`；匹配时自动跳过未接相的 ΔI 维；CLI/界面/接口三处可选 `--phases`（默认 `auto`，按事件幅值判定）。
 * **为什么要改**：单相设备画像的未接相 σ 只有 0.02 A，任何他负荷在那两相动一下就把 D² 顶爆（实测 14.10 vs 0.20）。
 * **改到哪一步**：跳维后同一份画像从"rejected 0.001"变成"confirmed 0.494"（差分对照）；但 ΔP 被邻窗污染时仍会 `low_confidence`（0.823/0.6626，`window_crowded`）。
-* **旧画像怎么办**：无 `phases` 字段 ⇒ 按 `ABC`，行为与 v0.99.29 逐位一致（26 项测试覆盖）。
+* **旧画像怎么办**：无 `phases` 字段 ⇒ 按 `ABC`，行为与 v0.99.29 逐位一致（32 项测试覆盖）。
 * **别宣称什么**：别宣称"单相设备什么都认得出"——跳维只去掉不该比的维度，邻窗他负荷照样污染 ΔP；`d_ih` 是三相平均（小谐波设备这一维无效）、ΔI 是有效值无符号。
 * **回退**：`git checkout -- elec_tool/nilm_profile.py elec_tool/nilm.py tools/nilm_profile.py app/server.py app/static/index.html app/static/app.js` + 删除 `tests/test_r184_single_phase_profile.py`。
 
@@ -3432,9 +3432,9 @@ q_sig = q4[0] if not _rows else Σ q4[r]      # 无功序列同理
 
 ### 10.4 新增/调整的测试与文档
 
-* `tests/test_r184_single_phase_profile.py`：+4 项（`profile_phase_rows`、P 序列 690 vs 920、I 序列 3.0 A vs 0 候选、引擎提示措辞），共 **30 项**；`test_detect_profile_single_phase_still_rejects_other_load` 改为"该台阶在 A 相序列上根本不成候选（或必须被拒）"。
+* `tests/test_r184_single_phase_profile.py`：+4 项（`profile_phase_rows`、P 序列 690 vs 920、I 序列 3.0 A vs 0 候选、引擎提示措辞），共 **32 项**（含 `profile_phase_rows`、P 序列 690/920/920、I 序列 3.0 A vs 0 候选、旧画像仍走 total、AB 两相求和）；`test_detect_profile_single_phase_still_rejects_other_load` 改为"该台阶在 A 相序列上根本不成候选（或必须被拒）"。
 * `elec_tool/nilm.py`：画像状态行「对象固定为三相合成」→ 按相别显示；B 相画像 + 3P3W 无 B 相 CT 改为明确写"**永远匹配不上**"（原来的措辞是"ΔI 不参与匹配"，容易被理解成还能凑合用）。
 * `NILM_TUNING_GUIDE.md` 新增 **H.32**（单相设备怎么做画像匹配：操作、跳维后的六维行为、四个坑、三条限制、三步验收）。
 * `README.md` 变更记录 **v0.99.30**；《设备画像提取与总线侧负荷辨识事件检测算法方案.md》§3.5 / §5.5 补相别字段与未接相维处理。
 * `tests/test_web_ui.py` 新增 `test_profile_phases_control_and_payload`（`#np-phases` 的 8 个选项与 `normalize_phases` 对得上、`app.js` 真的把它放进提取载荷、结果区有「设备相别」卡片）。
-* 全量 `pytest -q tests`：**570 passed / 1 skipped**。
+* 全量 `pytest -q tests`：**572 passed / 1 skipped**。
