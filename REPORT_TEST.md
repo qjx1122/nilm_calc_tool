@@ -3623,3 +3623,46 @@ delta_i_a  = d_i_obs
   界面「提示」区、CLI 的 `⚠` 行、`profile.notes` 与 `summary.notes` 都会出现同一句；判据与 `detect_phases()` 完全一致，可现场对账。
 * 《指南》H.32.1 的「结果区」行与 H.32.3 第一行同步改指向（提示行 / 「原始画像 JSON」的 `phase_stats`）。
 * 测试：`test_build_profile_from_three_column_csv` 增断言（提示里含「各相 |ΔI| 均值」且 `phase_stats["A"].mu_abs_di > 0`、`B == 0`）。
+
+## 185 负荷辨识事件界面：`stage_free` 改列表框 + 三项档位参数联动可配（v0.99.32，2026-11-03）
+
+用户指令：「检查基于设备画像匹配算法中**档位自由匹配配置**是否取值只有 0（派生网格：固定档位）和 1（档位自由匹配：一份画像覆盖任意档位），如果是，则改成**列表框**选择，且只有选择档位自由匹配配置时，才可配置 `stage_min_scale` / `stage_max_scale` / `stage_dim_max` 这 3 个配置」。
+
+### 185.1 检查结论（改前）
+
+| 侧 | 位置 | 改前状态 | 结论 |
+|---|---|---|---|
+| 后端校验 | `elec_tool/config.py:923-924` | `int(fv) not in (0, 1)` ⇒ 拒 2 / -1；**但 `int(0.5)==0`、`int(1.5)==1`、`int(-0.5)==0` 会被截断放行** | **意图上只有 0/1，但对小数有洞**（`phase_map` 有 `int(fv) != fv` 整数校验，`stage_free` 没有） |
+| 后端默认 | `elec_tool/config.py:800` | `stage_free: 0` | 与列表框默认项一致 |
+| 前端渲染 | `app.js buildNilmForm`（改前 3253-3254） | 所有算法参数一律 `<input type="number">`，`stage_free` 可键入 2、1.5、任意数（保存时才 400） | **不是列表框** ⇒ 满足「如果是，则改」条件 |
+| 前端门控 | — | `stage_min_scale/stage_max_scale/stage_dim_max` 恒可编辑，与 `stage_free` 取值无关 | 后端 `stage_range` 只进 `_fit_stage`、单维否决带 `if stage_free`（`nilm_profile.py:814`），0 时这三项**完全不参与判定**，界面却可改 ⇒ 满足联动门控条件 |
+
+### 185.2 改动（3 个文件 + 1 处后端收紧）
+
+1. **`app/static/app.js`**：
+   - `NILM_ALGOS.profile` 新增 `selects: { stage_free: [['0','0 派生网格（固定档位）'], ['1','1 档位自由匹配（一份画像覆盖任意档位）']] }`，`stage_free` 标签改为「档位自由匹配配置」；
+   - `buildNilmForm`：参数有 `selects` 定义时渲染 `<select>`（含 option），否则仍渲染 number 输入 —— 机制是通用的，后续其它枚举参数可直接复用；
+   - 新增 **`nilmStageGate(side)`**：按 `stage_free` 是否为 `'1'` 启用/禁用三项输入框，并给 label 打 `nilm-stage-off` 灰显 + title 提示；在 **bind（建表后）、fill（回填，含 dirty 早退路径）** 共 3 处调用（程序赋值 `el.value=…` 不触发 `change`，必须显式调）；
+   - `bindNilmForm` 给下拉注册 `change → nilmStageGate`；总线/分路两列分别经 `buildNilmForm('bus')` / `bindNilm('branch')` 走到同一逻辑。
+2. **`app/static/style.css`**：新增 `.nilm-algo label.nilm-stage-off{opacity:.4}` + 灰底（对齐既有 `nilm-auto-off` 观感）。
+3. **`elec_tool/config.py`（后端收紧）**：`stage_free` 校验加 `int(fv) != fv` —— `0.5/1.5/-1.5` 从「截断放行、静默当 0/1 用」改为 **400**，与「取值只有 0/1」的约定和界面列表框口径一致。
+4. **`tests/test_web_ui.py`**：新增 `test_profile_stage_free_is_select_and_gated_params`（7 组断言）：后端 0/1 合法、2/-1/0.5 拒；列表框选项恰为 0/1 且文案含「派生网格」「档位自由匹配」；`sp.selects` 渲染分支存在；`nilmStageGate` 函数体处理三项且按 `!free` 禁用；≥3 处调用；`change` 注册；`nilm-stage-off` 样式存在。
+
+### 185.3 验证
+
+- **pytest**：`tests/test_web_ui.py` **17 passed**；`tests/test_r180_stage_free.py` **25 passed**（既有 stage_free 用例不受影响）；全量 **575 passed / 1 skipped**（136 s）。
+- **接口实录**（TestClient 打真实 `PUT /api/config`）：
+
+| `stage_free` | 结果 |
+|---|---|
+| `0` | 200，回显 0 |
+| `1` | 200，回显 1 |
+| `0.5` / `1.5` / `2` / `-1` | **400** `必须是 0（固定档位）或 1（档位自由匹配）`（0.5/1.5 是本轮收紧后才拒的） |
+
+- **行为级**（node 提取 `nilmStageGate` 函数体 + mock DOM，11 项）：`stage_free=0` ⇒ 三项 `disabled=true`、label 带 `nilm-stage-off`、有 title；`stage_free=1` ⇒ 三项可用、无灰显；非法值 `2` 按非自由档位处理；选项恰 0/1；`fillNilmForm` 回填与 dirty 早退路径均调用 gate —— **11 passed / 0 failed**。
+
+### 185.4 覆盖范围与缺口
+
+- **覆盖**：总线侧 + 分路侧（克隆列由 `bindNilm('branch')` 绑定同一 gate）；新建表、保存回显、套用 nilm_tune、画像「填入本侧」四条回填路径都过 gate；number 输入保留（`min_stage` 等不受影响，它两种模式都生效）。
+- **不在本次范围**：`min_stage` / `phase_map` 仍是数字输入（`phase_map` 后端本就拒非整数；用户未要求）；`nilm_tune` 结果套用链路不解析 `stage_free` 列表框（走后端合并，本就兼容）。
+- **缺口（🔶待用户回报）**：浏览器真实手点未做（沙盒无 jsdom），列表框观感 / 灰显切换建议用户在 preview 里点一次确认；`0.5/1.5` 收紧后，**存量非法配置文件**加载时会直接 `ConfigError`（此前会被截断成 0/1 静默工作）——如现场有此类文件需改成 0 或 1。

@@ -782,3 +782,12 @@
 - **测试**：r184 由 26 → **34 项**；全量 **574 passed / 1 skipped**（`test_sources.py::test_tcp_binary_frames` 曾偶发失败一次，单独重跑与复跑全量均通过，与本次改动无关）。
 - **文档**：`REPORT_TEST.md` 新增 **§184.10**（候选序列，含 4 张对照表）与 **§184.12**（事件幅值修正）；`NILM_TUNING_GUIDE.md` 新增 **H.32**（单相设备怎么做画像匹配）并补「事件幅值（v0.99.31 修正）」；`README.md` 变更记录 **v0.99.30 / v0.99.31**；方案文档 §3.5 补相别字段、候选序列与事件输出口径；`STATUS.md`。
 - **仍未做**：现场真实单相录波验证；AB/AC/BC 线间设备在电压不平衡下的 ΔQ；前端 jsdom 端到端（`#np-phases` 目前只有 pytest 静态契约 + 接口实测）。
+
+### 第 185 轮（2026-11-03）：负荷辨识事件页 `stage_free` 改列表框 + 三项档位参数联动可配（v0.99.32）
+
+- 用户指令：「检查基于设备画像匹配算法中档位自由匹配配置是否取值只有 0（派生网格：固定档位）和 1（档位自由匹配：一份画像覆盖任意档位），如果是，则改成列表框选择，且只有选择档位自由匹配配置时，才可配置 `stage_min_scale` / `stage_max_scale` / `stage_dim_max` 这 3 个配置」。
+- 检查：**是**——后端 `config.py:923-924` 意图只收 0/1（默认 0），但 `int(0.5)==0`、`int(1.5)==1` 会被截断放行；前端 `buildNilmForm` 把 `stage_free` 与三项档位参数全部渲染成 number 输入、恒可编辑（后端 0 时 `stage_range` 只进 `_fit_stage`、单维否决带 `if stage_free`，三项完全不参与判定）。
+- 改动：① `app.js`——`NILM_ALGOS.profile.selects.stage_free` 两选项（`0 派生网格（固定档位）` / `1 档位自由匹配（一份画像覆盖任意档位）`），`buildNilmForm` 对带 `selects` 的参数渲染 `<select>`（通用机制，后续枚举参数可复用）；新增 `nilmStageGate(side)`——只有选 1 时三项 `disabled=false`，否则禁用 + `nilm-stage-off` 灰显 + title 提示；在 bind / fill（含 dirty 早退）共 3 处调用（程序赋值不触发 `change`），`change` 事件注册于 `bindNilmForm`（总线、分路两列同逻辑）。② `style.css`——`.nilm-algo label.nilm-stage-off` 灰显（对齐 `nilm-auto-off` 观感）。③ `config.py`——`stage_free` 校验补 `int(fv) != fv`：0.5/1.5/-0.5 由「截断放行、静默当 0/1 用」改为 400。④ `tests/test_web_ui.py`——新增 `test_profile_stage_free_is_select_and_gated_params`（后端 0/1 合法、2/-1/0.5 拒；选项恰为 0/1 且文案含关键词；渲染分支；gate 函数体三项 + `!free` 禁用；≥3 处调用；change 注册；灰显样式）。
+- 验证：`test_web_ui.py` 17 passed、`test_r180_stage_free.py` 25 passed、全量 **575 passed / 1 skipped**（136 s）；node 行为级（提取 gate 函数体 + mock DOM）**11 passed**（0 全禁带灰显 / 1 全放 / 非法值按 0 处 / 选项文案 / 两条回填路径调用）；接口实录 `PUT /api/config`：0/1→200 回显，0.5/1.5/2/-1→400。
+- 交付：`REPORT_TEST.md` §185；`README.md` v0.99.32；`NILM_TUNING_GUIDE.md` H.30.4 `stage_free` 行；`STATUS.md`；本文件。
+- 仍未做（🔶待用户回报）：浏览器手点确认列表框观感与灰显切换；⚠ 存量配置若写了 `stage_free: 0.5/1.5` 现会 `ConfigError`，需改 0/1；`phase_map`（同为 0..6 枚举）仍是 number 输入，用户未要求故未动。
