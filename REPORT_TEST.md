@@ -2993,3 +2993,231 @@ python tools/nilm_profile.py --derive-from output\nilm\profile_device_20261030_2
 3. **原始 10 kHz 波形缺失**：逐周波 σ、`min_delta` 均为重建推断。
 4. **参数改动未实跑**：`min_confidence=0.42`（66→7）、`min_gap=180 000` 的收益是按事件表逐条扫描推算，下一轮需真跑复测。
 5. **500 错误**：与本次无关，仍未定位（见 STATUS）。
+
+---
+
+# 第 183 轮（2026-11-03）：`NILM_TUNING_GUIDE.md` 全量复核——对照代码 v0.99.29 的 16 条问题
+
+**用户原话**：「结合当前最新版本代码，重新检查 NILM_TUNING_GUIDE.md 文档每章节各部分内容，分析是否有问题。」
+
+**性质**：只读复核，**未改代码、未改指南正文**（修正清单见 §7，等确认后一次性落笔）。基线 `1588626`（r182 交付，指南 2663 行）、代码 `v0.99.29`。
+
+## 0. 结论摘要（先看 6 行）
+
+1. **1 条硬伤会让人照着做却找不到控件**：v0.99.23 已取消「启用 PT/CT」开关，但指南仍有 **15 处**写"勾选启用 / 两侧都勾"（P183-01，含开头 §0、附录 B、附录 H.30 与整个附录 I）。
+2. **1 条硬伤会让参数调错方向**：`profile.lambda_rel` 默认值写成 **0.1**，代码是 **0.02**；实测同一画像 λ=0.1 得窗口 0.62~1.38×、λ=0.02 得 0.67~1.33×（P183-03）。
+3. **1 条整段逻辑已成死代码**：工具首行永远打印「口径 一次侧(PT/CT)」（`scaled = bool(cfg.transform.enabled)`，而 `enabled` 恒 True），指南却有 3 处按"会打印二次侧"写排障（P183-02）。
+4. **画像算法（第 7 种）的描述落后 6 个版本**：`dur_cycles` 定义、终点规则、`min_d` 口径、σ 绝对下限、CSV 列数、8 个新参数全部缺（P183-05~08、P183-04）。
+5. **界面已改两步法，指南仍写一步勾选**：调参页现在是「第 ① 步 设备侧估幅值 → 第 ② 步 总线侧量噪声 → 第 ③ 步 套用」，勾选框文案也换了（P183-11）。
+6. **§I.3 的"等价命令"在新装机器上直接崩**：`--config configs\runtime.json` 在未保存过总线侧配置时抛裸 traceback（退出码 1），且界面实际生成的命令里**不含** `--wiring/--reconstruct-3w`（P183-10）。
+
+## 1. 复核方法与覆盖
+
+| 手段 | 做法 | 覆盖 |
+|---|---|---|
+| 逐节通读 | 指南 2663 行按 §0–§8、附录 A–I 分 22 段读完，逐段记"可被代码证伪的断言" | 全文 |
+| 参数默认值机器比对 | 脚本抽 `NILM_ALGO_DEFAULTS` + `NilmConfig` 默认值，与文档"默认 X"逐条人工复核（区间写法不自动抓） | 7 种算法 × 全部参数 + `nilm.*` 9 项 |
+| CLI 参数存在性 | 扫文档全部 `--flag`（49 个）与 5 个工具源码的 `add_argument` 比对 | 49/49 存在（仅 `--help` 未在文档出现，非缺陷） |
+| API 路径 | 扫文档 `/api/*` 与 `app/server.py` 路由比对 | 全部存在；`/api/branch/nilm/tune/apply` 由 `_SideRouter`（766–800）改写，非缺陷 |
+| 界面控件 | 按 `<input id=...>`／`<button id=...>` 而不是文字命中判定（`grep "启用 PT/CT"` 只命中隐藏注释，会误判） | 调参区 988–1130、画像区 1118–1250、负荷辨识区 |
+| 数值实跑 | `stage_window`（λ 对比）、`gen_nilm_sample.py --soft-start`（H.4‴ 数字）、`nilm_tune.py`（口径行 / JSON `scaled` / 缺配置崩溃） | 4 组 |
+
+## 2. 逐章核对表
+
+| 章节（行号） | 结论 | 编号 |
+|---|---|---|
+| §0 先搞懂 3 句话（12–26） | ⚠ 单位提醒仍在讲"启用 PT/CT 才按一次侧" | 01、02 |
+| §1 开工前准备（27–51） | ✅ | — |
+| §2 打开 PowerShell（52–64） | ✅ | — |
+| §3 量噪声（65–121） | ✅ 12 个 CLI 参数全对；`--config configs\default.json` 可直接跑 | — |
+| §4 真值表（122–141） | ✅ | — |
+| §5 回放+对账（142–246，含 5-B / 5-C） | ✅ 算法数、`--set` 写法、对账列均对 | — |
+| §6 第五步微调（247–278） | ⚠ "二次侧 W 当一次侧填"这一整类失效 | 02（L261） |
+| §7 写进生产（279–352） | ⚠ §7-2′ 未提 `auto_params` 开启时的 `warning`（`server.py:1852–1855`） | 14 |
+| 附录 A（353–381） | ❌ 标题"6 种"；profile 行 λ 错、缺 8 个参数 | 04、15、03 |
+| 附录 B（382–399） | ⚠ 排障行"检查 `transform.enabled` 与变比" | 01（L393） |
+| 附录 C（400–451） | ✅ 全部命令可执行（样例日期只是文件名） | — |
+| 附录 F（452–490） | ✅ I 口径参数、`--min-load-a`、单相限制均对 | — |
+| 附录 D（491–500） | ✅ | — |
+| 附录 E（501–538） | ✅ 公式与 `suggest` 实算一致（`min_d=max(Δ/2,6σ)`、`k=max(min_d/4,0.5σ)`、`h=max(2(min_d−k),5σ)`） | — |
+| 附录 G（539–761） | ✅ G.0–G.8（参数表逐项对 `NILM_ALGO_DEFAULTS`）；❌ G.9 | 05–08、16 |
+| 附录 H（762–2454） | ✅ H.0–H.12、H.14、H.16–H.23、H.26–H.29；⚠ H.4‴(L904)、H.13(L1040–1050)、H.15(L1046)、H.24(L1869)、H.30(L2225/L2243)、H.31.4(L2570) | 01、09、11、12、13 |
+| 附录 I（1106–1273） | ❌ P183-01 六处 + 两步法流程 + 等价命令 | 01、10、11 |
+
+> 说明：✅ 表示"逐字核对过且未发现与当前代码矛盾"；不代表现场实测。
+
+## 3. 问题清单
+
+### P183-01【高】「启用 PT/CT」在 15 处仍是操作前提，界面已无此控件
+
+- **现状**：以下位置要求读者"勾选启用 PT/CT / 两侧都勾"：
+  `L23`（§0 单位提醒）、`L393`（附录 B）、`L554`（§5 口径）、`L793`（H.2 输出说明）、`L1027`（H.12 排障）、`L1101`（I.0 口径要求）、`L1118`（I.0 事实 4）、`L1141`/`L1147`（I.2 表与正文）、`L1224`（I.5）、`L1250`（I.7）、`L1271`（I.8 一页纸）、`L1869`（H.24 检查表）、`L2225`/`L2243`（H.30.1）。
+- **代码依据**：`elec_tool/config.py:169–191`——`TransformConfig.enabled` 注释写明"v0.99.23：恒为 True（保留字段只为兼容旧配置）"，`__post_init__` 把 `enabled=False` 折算成 `PT=CT=1`；`validate()` 也再折一次。界面侧 `app/static/index.html:1007` 该 checkbox 是 `<input id="nt-base-ptct" ... checked hidden>`，可见文案已改成「PT/CT 变比在下一行填写（默认 1＝不换算）」；负荷辨识页与画像页均无对应勾选框。
+- **为何是硬伤**：读者按 I.2 会去找一个不存在的勾选框；按 I.8 一页纸会以为"没勾"是口径不一致的原因，从而把真问题（变比填错 / 一侧填 1 一侧填 100）漏掉。
+- **建议改法**：统一改成"PT/CT **始终参与换算**，两侧填本侧真实变比；不需要换算就填 1（等效旧版'不启用'）"。`L2243` 的"界面默认不启用 = PT=CT=1"改为"出厂 PT=CT=1（等效不换算）"。
+- **自相矛盾证据**：指南 H.22（`L1311`）标题就是「v0.99.23：PT/CT 不再有『启用』开关」，同一文件里两种说法并存。
+
+### P183-02【高】「口径 二次侧」这条输出分支已经不可达，3 处排障逻辑连带失效
+
+- **现状**：`L793` 写"首行输出会写明「口径 一次侧(PT/CT)」**或「二次侧」**"；`L1027` 排障表写"首行「口径 二次侧」但现场参数是一次侧 ⇒ `--config` 里 `transform.enabled=false`"；`L23`/`L261`/`L554` 同样以"一次/二次"二分描述。
+- **代码依据**：`elec_tool/nilm_tuning.py:624` `"scaled": bool(cfg.transform.enabled)`；`TransformConfig.enabled` 恒 True（P183-01）⇒ `out["scaled"]` 恒 `True` ⇒ `tools/nilm_tune.py:121` 的三元表达式永远走「一次侧(PT/CT)」。
+- **实测**：用出厂 `configs/default.json`（PT=CT=1）跑 `nilm_tune.py`，首行仍为 `口径 一次侧(PT/CT)`，JSON `"scaled": true`。
+- **建议改法**：① 指南改为"首行恒显示「口径 一次侧(PT/CT)」，后面可加变比数值（如 `PT=1, CT=1` 时与二次侧数值相同）"；`L1027` 整行替换为"变比填错（一侧 1 一侧 100）⇒ ΔI 差 100 倍"。② 代码建议把首行改成 `口径 一次侧(PT=…, CT=…)`，一次讲清——否则"一次侧"三个字在 PT=CT=1 时等于没说。
+
+### P183-03【高】`profile.lambda_rel` 默认值写错（0.1 vs 0.02）
+
+- **位置**：`L365`（附录 A profile 行"`lambda_rel`（协方差收缩，默认 0.1，一般不动）"）、`L725`（G.9(b)③ 参数列"`lambda_rel`（默认 0.1）"）。
+- **代码依据**：`elec_tool/config.py` `NILM_ALGO_DEFAULTS["profile"]["lambda_rel"] = 0.02`（v0.99.29 改；`elec_tool/nilm_profile.py:263/381` 函数默认值同为 0.02）。
+- **实测影响**（同一份 μΔIa 3.24 A / σ 0.486 A、μΔP 500 W 的画像，`stage_window` 默认参数）：
+
+| λ | 可接受区间 | 区间比 `k_hi/k_lo` | `min_d` |
+|---|---|---|---|
+| 0.1（文档写的） | 0.62~1.38× | 2.226 | 250.0 W |
+| **0.02（代码）** | **0.67~1.33×** | **1.985** | 250.0 W |
+
+- **连带**：H.28 例 1 的 1.985 与 G.9 附近 `STAGE_GRID_RATIO = 1.857`（代码常量，注释写"λ=0.1 时的窗口比"）并存——指南读者会以为两者矛盾，其实一个是实测值、一个是 λ=0.1 时代的兜底常量。
+- **建议改法**：两处改 0.02，并加一句"λ 越小窗口越窄（每维 σ 收缩得越少⇒越严）"；`STAGE_GRID_RATIO` 那句注明"仅作兜底，实际一律用 `stage_grid_ratio()` 实测"。
+
+### P183-04【中】附录 A 的 profile 行只列 8 个参数，实有 14 个
+
+- **现状**：`L365` 列了 `enabled / profile_path / d2_max / min_confidence / k_sigma / margin / lambda_rel / state_check`。
+- **代码依据**：`NILM_ALGO_DEFAULTS["profile"]` 15 个键（含 `enabled`），即 **14 个数值参数**：另缺 `phase_map`(1)、`max_scale`(8)、`min_scale`(0.25)、`min_stage`(0.5)、`stage_free`(0)、`stage_min_scale`(0.2)、`stage_max_scale`(3.0)、`stage_dim_max`(9)；界面 `app/static/app.js` `NILM_ALGOS.profile.params` 也是这 14 个。
+- **建议改法**：附录 A 只留一行"其余 8 个见 H.30.4（权威表）＋一句话：前 4 个管候选（`max_scale/min_scale/min_stage`）、后 4 个管档位（`stage_*`）＋`phase_map` 管相序"。不重复抄默认值，避免第三次漂移。
+
+### P183-05【中】G.9(a)④：`dur_cycles` 的 σ 绝对下限写"2 周波"，代码是 5
+
+- **位置**：`L716`「绝对下限：0.02 A / 5 W / 5 var / 0.1 / **2 周波** / 2 A 谐波电流」。
+- **代码依据**：`elec_tool/nilm_profile.py` `_ABS_FLOOR = {..., "dur_cycles": 5.0, ...}`，注释写明"v0.92.5：dur_cycles 下限 2→5 周波（在线终点估计对噪声敏感，单样本画像 σ=2 时 10 周波偏差就贡献 25）"。
+- **同段遗漏**：`template_spread` 有下限 **0.25**（`fit_group`：`"template_spread": max(tspread, 0.25)`，v0.99.19），文档只写"记录 RMS 散布"，没说下限——而 H.30/H.31 都用它当轨迹折扣的基准。
+- **建议改法**：改 5 周波；补"`template_spread` 不低于 0.25（样本少时防止轨迹判别一票否决）"。
+
+### P183-06【中】G.9(a)③：`dur_cycles` 定义还是 v0.92.2 的"进入 ±20 % 带"
+
+- **位置**：`L713`「`dur_cycles` ＝ 从起点到"进入事件后电平 ±20 % 带"的周波数」。
+- **代码依据**：`transition_end`（`nilm_profile.py:435–473`，v0.99.23）——先做长度 `w=max(1,min(25,post_n//20))` 的滑动**中值平滑**，终点＝平滑轨迹**首次进入** `±0.2·|Δ|` 带并**连续保持** `hold=max(3,min(250,post_n//10))` 周波的那个周波；从未保持则退回"最后一次越带的下一周波"；封顶 `onset+post_n−1`。`build_profile`（`nilm_profile.py:907–912`）与在线候选（`:506`）、标签定位（`:694`）、自动定位（`:797`）**四处共用**。
+- **为何要改**：这是 H.21（`L1303`，同文件）已正确描述过的规则，G.9 没跟着改——同一份文档里两处对"终点"的定义不同。
+
+### P183-07【中】G.9(b)①：候选门槛写死"一半"、终点同样过时
+
+- **位置**：`L723`「`min_d` ＝ 画像里启动 / 停止 |ΔP| 最小者的一半……终点 ＝ onset 后首个进入事件后电平 ±20 % 带的周波（封顶 `post_cycles`）」。
+- **代码依据**：`detect_profile`（`nilm_profile.py:589`）`min_d = float(prm.get("min_stage", 0.5)) * min(amp)`——**`min_stage` 可配**，v0.99.29 档位自由匹配时建议 0.2~0.3，否则低于 0.5× 的档位连候选都不生成（H.30.4 已按新口径写，G.9 没改）。终点同上（`transition_end`，P183-06）。
+- **建议改法**：`min_d = min_stage × min(启动/停止幅值)`，默认 0.5＝旧行为；终点一句改为"`transition_end`（平滑＋首次进带并保持），见 H.21"。
+
+### P183-08【中】G.9(c)：事件 CSV 附加列写 7 个，实为 9 个
+
+- **位置**：`L731`「事件 CSV `nilm_events_*.csv` 末尾多 6 列……v0.99.26 起再加一列 `delta_ih_a`」。
+- **代码依据**：`elec_tool/nilm.py:52` 列尾为 `device_id, confidence, d2, profile_direction, status, quality_flags, delta_ih_a, stage_scale, event_kind`（注释"v0.90 画像匹配附加列；v0.99.26：delta_ih_a；v0.99.29：档位倍数 / 事件类型"）；实测 `tmp/nilm/nilm_events_20261031.csv` 共 **32 列**，末三列正是 `delta_ih_a, stage_scale, event_kind`。
+- **建议改法**：补"v0.99.29 起再加 `stage_scale`（该事件是画像档位的几倍）与 `event_kind`（start/stop/stage_up/stage_down，非画像算法为空）"。
+
+### P183-09【中】H.13 的「界面项 ↔ 命令行参数」表缺整个「公共配置」组
+
+- **现状**：`L1040–1051` 只映射了 `--file / --t-start / --t-end / --duration / --config / --quantity / --channel / --min-load-* / --apply`。
+- **界面现状**：调参页顶部新增 `nt-common`「公共配置 · 读波形数据与口径」（`index.html:991–1035`）：采样率 fs、额定频率 f_nom、PT 变比、CT 变比、接线方式、3P3W 重构、电流极性反转、分相极性、离线文件列映射、检测量、检测对象。
+- **代码依据**：其中接线/极性有 CLI 覆盖参数（`tools/nilm_tune.py:62–68`：`--wiring/--reconstruct-3w/--invert-current/--invert-phases`），而 **fs / f_nom / PT / CT / 列映射没有 CLI 覆盖参数**（argparse 里不存在 `--pt/--ct/--fs/--f-nom/--colmap`），只能靠 `--config`（或界面写出的 `output/nilm/nilm_tune_base.json`）复现。
+- **影响**：读者想"界面里改了 PT/CT，命令行怎么复现"会找不到答案；也会有人以为 `--wiring` 不需要（其实用 `configs/default.json` 当基准时必须给）。
+- **建议改法**：表里补 5 行——`接线方式→--wiring`、`3P3W 重构→--reconstruct-3w`、`电流极性反转→--invert-current`、`分相极性→--invert-phases`、`fs/f_nom/PT/CT/列映射→无 CLI 参数，写进基准配置（独立基准会落 output/nilm/nilm_tune_base.json，用 --config 指向它即复现）`。
+
+### P183-10【中】§I.3「等价命令」在新装机器上崩、且与界面实际生成的命令不同
+
+- **现状**：`L1176`（例 1）/`L1178`（例 2）各一条 `--config configs\runtime.json`，并说"界面结果区会自动给一条一模一样的"。
+- **实测 1（崩）**：仓库里 `configs/` 只有 `default.json` / `branch.json`（`runtime.json` 是界面保存后才生成）。此时
+  `python tools/nilm_tune.py --file … --config configs/runtime.json --min-load-w 22000`
+  ⇒ `ConfigError: 配置文件不存在：configs/runtime.json` 的**裸 traceback**，**退出码 1**（不是文档 §H.6 承诺的"⚠ ＋ 码 2"）。原因：`tools/nilm_tune.py:85` 的 `load_or_default(cfg_path, strict=bool(a.config))` 写在 `try` 之外。
+- **实测 2（命令不同）**：界面等价命令由 `build_cli_command(...)` 生成（`app/server.py:2813–2816`），参数里**没有** `wiring/reconstruct_3w/invert_*`；`--config` 在「独立基准配置」时指向 `output/nilm/nilm_tune_base.json`（`:2799–2807`），在「沿用某侧」时指向该侧持久化配置。所以界面给的命令与 `L1178` 那条字面不同（大概率更短、没有 `--wiring`）。
+- **建议改法**：① 文档改为 `--config configs\default.json --wiring 3p3w --reconstruct-3w`（新装即可跑），并注明"若已保存总线侧配置，可换成 `configs\runtime.json` 并省掉 `--wiring`"；② 删掉/改写"一模一样"的说法，改为"界面给的命令以本页基准配置为 `--config`，接线在基准配置里"。③ 代码建议把 `load_or_default` 挪进 `try`，返回码 2 ＋ 一句"配置文件不存在，请先在界面保存该侧配置或改用 configs/default.json"。
+
+### P183-11【中】H.15 / §I.3 的"勾选估计最小关心负荷"流程已被两步法取代
+
+- **现状**：`L1046`（H.13 表最后几行之一）「从文件投切台阶估计最小关心负荷（勾选）」；`L1087`（H.15）「波形文件选设备侧 → 勾『从文件投切台阶估计最小关心负荷』→ 量噪声 → 结果区点『填入输入框』」；`L1167`（I.3 第 5 条）同样。
+- **界面现状**：`index.html` 里该区已按 **第 ① 步（可选）· 设备侧文件 → 估计最小关心负荷**（按钮 `#btn-nt-est-dev`「① 估计最小关心负荷并填入第 ② 步」，`:1042–1050`）／**第 ② 步 · 总线侧稳态背景文件 → 量噪声**（`:1056`）／**第 ③ 步** 分组。同页勾选框的真实文案是「**直接从本步所选文件估计最小关心负荷**（仅当本步文件就是单设备含启停录波时勾选；**总线侧背景文件请勿勾选，改用第 ① 步**）」（`:1079`）。
+- **影响**：读者按 `L1167` 在**第 ② 步**对总线侧文件勾选，恰好是界面明确劝阻的用法（`app.js:4196` 的两步法注释也说明第 ① 步专管幅值）。
+- **建议改法**：三步走——① 第 ① 步选设备侧文件、点「① 估计最小关心负荷并填入第 ② 步」；② 第 ② 步换总线侧背景文件、基准配置「沿用总线侧运行配置」、点「量噪声并给出参数」；③ 第 ③ 步「套用目标」选总线侧 → 「套用到运行配置」。`L1046` 的界面项文案同步换成新文案。
+
+### P183-12【低】H.4‴ 的软启样例数字与当前样例生成器不一致
+
+- **位置**：`L904`「`min_steady_cycles` 抬到 **33**（斜坡上最长伪稳态平台 **21** 周波）」，同句 `427 / 650 / 740`。
+- **实测**：`python tools/gen_nilm_sample.py --soft-start` + `nilm_tune.py --min-load-w 1000` ⇒ **34 / 22**，`427 / 650 / 740` 一致（`+1` 与 `+1` 的差来自伪平台周波数取整/放宽路径）。
+- **建议改法**：改成"≈33~34 / ≈21~22"或直接照抄最新一次实跑值。
+
+### P183-13【低】H.31.4 引用了不存在的函数名，机制描述也过强（上轮引入）
+
+- **位置**：H.31.4「**文件头假事件的成因**：`_window()`（`nilm_profile.py:80-124`）在 `onset < pre_n` 时 `a0=max(0, onset-pre_n)=0`，前窗被压成**一个点**」。
+- **代码依据**：`nilm_profile.py` 里**没有** `_window()`；对应实现是 `event_features()`（`:67–124`，`a0,a1 = max(0,onset-pre_n), onset` 在 `:82`）。当 `onset>0` 时前窗是 `[0, onset)`，长度＝`onset`（**短于** `pre_n`），只有 `onset==0` 时切片为空、走 `_median(..., p4[0, max(0,onset-1)])` 的单点回退。所以"一个点"只在首采样成立，通常应是"前窗被截短、前后窗不对称，Δ 被系统性放大"。
+- **建议改法**：函数名改 `event_features()`，行号 `67–124`；机制改成"前窗被截短到 `[0,onset)`（`onset=0` 时退化为单点 `p4[0,0]`），前后窗长度不对称 ⇒ 文件头首个候选的 Δ 与 D² 都不可信"。
+
+### P183-14【低】§7-2′ 未提 `auto_params` 开启时接口返回的 `warning`
+
+- **位置**：`L311–327`。
+- **代码依据**：`app/server.py:1852–1855`——目标侧 `nilm.auto_params=True` 时返回
+  `"warning": "目标侧已启用「自适应算法参数」：…已写入配置但检测时不参与…请取消勾选…"`，返回体还有 `auto_params` 字段。
+- **建议改法**：在"返回 `changes / saved_to / config`"那句里补 `warning`（"自适应参数开着时套用的数值参数不参与检测"），并链到 H.30.0 坑②。
+
+### P183-15【低】附录 A 标题"6 种算法"，表里 7 行
+
+- **位置**：`L353` 标题 + `L365` profile 行。
+- **建议改法**：标题改「7 种算法（6 种标量 + 设备画像匹配）一句话」，或保留标题但加注"第 7 种见末行，参数权威表在 H.30.4"。
+
+### P183-16【低】G.9 导语仍写"量 7 个特征"
+
+- **位置**：`L704`「找台阶 → 量 **7 个**特征 → 和画像比」。
+- **代码依据**：`FEATURES` 8 项（v0.99.26 加 `d_ih`）；同节 `L708` 已写"v0.99.26 起 8 维"。
+- **建议改法**：导语改"量 8 个特征（旧画像 7 维）"。
+
+## 4. 实跑取证
+
+**4.1 λ 对窗口的影响**（`stage_window`，画像 μΔIa=3.240/σ=0.486、μΔP=500/σ=75）
+
+| λ | `k_lo~k_hi` | 比值 | `min_d` | `k_gate` |
+|---|---|---|---|---|
+| 0.1 | 0.62~1.38× | 2.226 | 250.0 W | 0.5 |
+| 0.02 | 0.67~1.33× | **1.985** | 250.0 W | 0.5 |
+
+⇒ 指南 `L365/L725` 的 0.1 是旧默认；H.28 例 1 的 `1.985` 恰好等于 λ=0.02 的区间比，可作为"λ 已改"的旁证。
+
+**4.2 口径行**：`configs/default.json`（PT=CT=1）⇒ 首行 `口径 一次侧(PT/CT)`、JSON `"scaled": true`（P183-02）。
+
+**4.3 缺 `runtime.json`**：`--config configs/runtime.json` ⇒ `ConfigError` 裸栈、退出码 **1**（P183-10）。
+
+**4.4 软启样例**：`427 周波 / 650 / 740 / min_steady 34 / 伪平台 22`（P183-12）。
+
+## 5. 已核对无误的部分（可作为"没白读"的清单）
+
+- CLI 49 个 `--flag` 全部存在于对应工具；`--min-load-auto / --custom-time* / --wiring / --reconstruct-3w / --invert-* / --save-config` 的语义与文档一致。
+- `nilm_tune.py --json` 的字段（`file/channel/quantity/scaled/t_range/min_load_*/measure/suggest/algorithms/transient`）与 `L921–933` 的 JSON 节选一致；`suggest` 里确实**没有** profile 行（`NILM_SCALAR_ALGOS` 只含 6 种）。
+- 附录 E 的四条公式与 `nilm_tuning.py:403–480` 逐项吻合（`min_d / tol / k / h / tol10 / rel_tol_pct 夹 0.05–5 / min_delta_pct>50→0`）。
+- G.0–G.8 的参数名与默认值全部与 `NILM_ALGO_DEFAULTS` 相同（`min_delta_w 50 / settle_tol_w 20 / max_rise_cycles 40 / settle_cycles 5 / pre-post 10 / k_sigma 3 / drift 10 / threshold_w 200 / glr window 15 / thr 25 / noise 10 / tol_w 30 / min_steady 10 / max_transient 100 / median_cycles 5`）。
+- 附录 A 全局表 5 项默认值对（`window_cycles 300 / min_gap_cycles 10 / rel_tol_pct 1.0 / min_delta_pct 0 / MAX_PROFILES 8`）。
+- H.28（多档位派生网格）与 H.29（验收用例）里的数值可被 `stage_window / stage_grid_ratio` 复现：例 1 窗口 0.67~1.33×、`min_d 250.003 W`、间距 1.985；例 1 界面 ④ 组字段（倍数/输出目录/ΔQ 缩放/ih_exp）与 `server.py:2628–2712` 的请求体一致。
+- H.30.4 的 14 个参数与 `app.js NILM_ALGOS.profile.params` 完全一致（含 `stage_dim_max` 的单维否决语义）。
+- API：`POST /api/nilm/tune/apply`（`hot=true / persist=false`、非法值 400、`changes/saved_to/config`）与 §7-2′ 一致；`/api/branch/*` 由 `_SideRouter` 改写，文档里的分路侧写法正确。
+- §5-B 指纹对账、`nilm_check.py` 的 7 行算法表（含 profile 行与"关闭"提示）、`--tol-s` 语义均与 `tools/nilm_check.py:113–125` 一致。
+
+## 6. 代码侧顺带发现（不影响本轮结论，建议登记待修）
+
+| # | 位置 | 问题 |
+|---|---|---|
+| C1 | `elec_tool/nilm_profile.py:475–476` | `_two_window_candidates` docstring 写「`\|median(后) − median(前)\|`」，实现是**均值**（cumsum 求 mean）。指南 G.9(a) 写 mean 是对的，**代码注释错**。 |
+| C2 | `elec_tool/config.py:711` | `limits_secondary` 的注释仍写"若 `transform.enabled` 则检测时自动乘 PT/CT 折算到一次侧"——v0.99.23 起恒换算，注释应删条件。 |
+| C3 | `tools/nilm_tune.py:17` | 模块 docstring「启用 PT/CT 时为一次侧 W / A」同上。 |
+| C4 | `tools/nilm_tune.py:85` | `load_or_default(strict=True)` 在 `try` 之外 ⇒ 配置文件不存在时裸 traceback / 退出码 1（P183-10）。 |
+| C5 | `app/static/index.html:1007` | 残留 `hidden` 的 `nt-base-ptct` 复选框（`checked hidden`），只作为占位保留；建议删掉或改成纯文本，免得后人 grep 到又以为有开关。 |
+
+## 7. 建议修正清单（按严重度，**未执行**）
+
+| 序 | 动作 | 影响行数（估） |
+|---|---|---|
+| 1 | P183-01 + P183-02：15 处「启用 PT/CT」与「二次侧」统一改为"恒换算、填 1 等效不换算" | 15 行改写 + §H.22 加一句交叉引用 |
+| 2 | P183-03：`L365`、`L725` 的 `lambda_rel` 0.1 → 0.02，加一句窗口比说明 | 2 行 |
+| 3 | P183-05~08 + P183-16：G.9 四段（σ 下限 5 周波 / `transition_end` / `min_stage` / CSV 9 列 / 7→8 维） | 1 段重写 + 3 行改数 |
+| 4 | P183-11 + P183-09 + P183-10：H.13/H.15/I.3 改成两步法、补公共配置映射、改等价命令（含代码 catch） | 3 段重写 + 1 处代码 |
+| 5 | P183-04 + P183-15：附录 A 标题与 profile 行收敛到 H.30.4 | 2 行 |
+| 6 | P183-12/13/14：样例数字、H.31.4 函数名、§7-2′ warning | 3 行 |
+
+> 建议顺序：1 → 2 → 3 先做（都是"照做会错"），4 需要同时动代码（catch ConfigError），5/6 收尾。
+
+## 8. 未覆盖 / 遗留
+
+1. **未逐字复核**：附录 D（491–500）只核了"用哪一侧"的结论与 `data/` 目录约定，没核采样率/时标细节；§1 的安装步骤（PowerShell 版本、`requirements.txt` 内容）未在本沙盒 Windows 复现。
+2. **界面类结论基于静态源码**：本轮没有起服务点页面，控件存在性靠 `index.html/app.js` 的 `id` 判定；真实渲染（例如 `nt-common` 是否折叠）未截图验证。
+3. **P183-12 的 33/21 vs 34/22**：只跑了一次 `--soft-start` 样例；若样例生成器有随机性，需再跑两次确认。
+4. **未测**：H.29 的 14 条验收用例本轮未重跑（r181 已跑过，本轮只核参数与判据文字）。
