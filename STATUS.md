@@ -390,7 +390,7 @@
 - 等用户执行 T-002 的 W/R/P 组（Windows 部署 / 真实数据对账 / 生产常驻）并回报实录
 
 ## 下一步（TODO）
-0. **第 184 轮·补：剩余项等用户批准后再改**（按优先级）：① ~~C1 I 口径单相事件幅值~~ **已修（v0.99.31）**；② **P1** 指南 H.32.3 改指向（0 风险）或界面加「各相 |ΔI| 均值」小表；③ **N2** 旧画像无 `phases` 时在状态行提示 + **P2** `summary.profile.profiles[]` 补 `phases/phase_skip`；④ **N1** 事件/候选 CSV 加 `phases`、`skipped_dims` 两列（走 `_rotate_if_header_differs` 轮转）；⑤ **P3** 派生表加相别列、**P4** 提取侧加「B 相 × 3P3W」告警、修 `index.html:1170`/`app.js:3258` 两处过期文案；⑥ **N3** 就地改画像相别＝新功能，单独评估。
+0. **第 184 轮·补：剩余项等用户批准后再改**（按优先级）：① ~~C1 I 口径单相事件幅值~~ **已修（v0.99.31）**；② ~~P1 指南 H.32.3 指向不存在的显示~~ **已修（v0.99.31：提示行固定打印各相 \|ΔI\| 均值 + 指南改指向）**；③ **N2** 旧画像无 `phases` 时在状态行提示 + **P2** `summary.profile.profiles[]` 补 `phases/phase_skip`；④ **N1** 事件/候选 CSV 加 `phases`、`skipped_dims` 两列（走 `_rotate_if_header_differs` 轮转）；⑤ **P3** 派生表加相别列、**P4** 提取侧加「B 相 × 3P3W」告警、修 `index.html:1170`/`app.js:3258` 两处过期文案；⑥ **N3** 就地改画像相别＝新功能，单独评估。
 0b. **第 184 轮收尾**：① 前端 jsdom 用例（`#np-phases` + 结果卡，`tools/ui_*.check.cjs` 家族）；② 真实单相设备录波复测（三相不平衡、CT 相位误差、启动冲击、PT/CT≠1 均未覆盖）；③ 线间设备（AB/AC/BC）在电压不平衡下的 ΔQ 口径；④ 若现场出现「单相设备跨相变动」（A→B 换相），当前按固定相别匹配会漏——需另立专题（先看真实数据再定）
 1. **用户侧（阻塞项，模式 B）**：先跑 **T-007 的 U9 组**、**T-006 的 U8 组**、**T-005 的 U7 组**与 **T-004 的 U6 组**（用真实采集文件，期望见 `REPORT_TEST.md`），再跑 T-003 的 **S 组**（`python tools/verify_sources.py` 期望 PASS 5 / FAIL 0；`pytest tests/ -q` 期望 **204 passed**；两个终端跑 tcp_feeder / csv_appender + `cli.py live` 期望缺口 0），**T-003 的 U 组**（浏览器手点 7 步，界面下拉框，期望见 `REPORT_TEST.md`），再跑 T-002 的 W 组（Windows 部署，预计 10 分钟）与 R 组（真实数据对账，核心验收），按「结果回收格式」贴回；P 组（生产常驻）可选
 2. Agent 侧（收到实录后）：把三件套写入 T-002「结果 / 结论」，按 J-\* 逐条对账，回填 `README.md` §2/§3/§4 与 `NILM_DATA_DICT.md` 的 🔶 项（注明来源＋日期）

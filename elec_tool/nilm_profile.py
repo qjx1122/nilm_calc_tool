@@ -1054,6 +1054,8 @@ def build_profile(cfg, file: str, *, device_id: str = "device", labels: Optional
     else:
         ph_used, ph_src = ph_auto, "auto"
         ph_req = ph_used
+    # v0.99.31：各相 |ΔI| 均值随结果一起给出（判相靠它复核；《NILM_TUNING_GUIDE.md》H.32.3 让现场"看各相 |ΔI| 均值"）
+    _ph_txt = "、".join("%s=%.3g A" % (ph, ph_stats[ph]["mu"]) for ph in PHASES_ALL)
     if ph_used != PHASES_ALL:
         skipped = [PROFILE_PHASE_NAMES[p] for p in PHASES_ALL if p not in ph_used]
         notes.append(f"单相 / 分相画像（v0.99.30）：设备只接在 {'+'.join(ph_used)} 相，匹配时跳过 "
@@ -1062,9 +1064,9 @@ def build_profile(cfg, file: str, *, device_id: str = "device", labels: Optional
                      f"口径提示：ΔP/ΔQ 是**三相求和**（单相设备的增量就等于它自身，不会被其它两相摊薄）；"
                      f"ΔIh 是**三相平均**（单相设备只贡献 1/3，而 σ 的 2 A 绝对下限相当于真实 6 A，"
                      f"所以小谐波单相设备的这一维判别力偏弱，两侧口径一致、不影响可比性）；"
+                     f"各相 |ΔI| 均值：{_ph_txt}（某相 ≥ max(2 %×最大相, 3×离散度) 才判为接线，其余算噪声）；"
                      f"限制与用法见《NILM_TUNING_GUIDE.md》H.32 与 REPORT_TEST.md 第 184 轮 §184.5")
     if ph_src == "manual" and ph_auto != ph_used:
-        _ph_txt = ", ".join("%s=%.3g A" % (p, ph_stats[p]["mu"]) for p in PHASES_ALL)
         notes.append(f"⚠ 指定的相别 {ph_used} 与数据里最显著的相别 {ph_auto} 不一致：请复核接线 / 列映射"
                      f"（各相 |ΔI| 均值：{_ph_txt}）；若确认设备就在 {ph_used} 相、其余相是噪声，可忽略本提示")
     # v0.91.2：一致性检查——方向与 ΔI 符号相反（标签时刻偏差 / 前后窗跨事件）、ΔP 与 ΔI 异号（P 极性可疑）

@@ -122,6 +122,9 @@ def test_build_profile_from_three_column_csv(tmp_path):
     doc = build_profile(_cfg(), f, device_id="pump1ph", labels=f"{T0 + 2.0:.3f},开",
                         pre_cycles=10, post_cycles=50)
     assert doc["phases"] == "A" and doc["phase_source"] == "auto"
+    # v0.99.31：判相依据（各相 |ΔI| 均值）随结果给出——《指南》H.32.3 让现场看这一行
+    assert any("各相 |ΔI| 均值" in n and "A=" in n for n in doc["notes"])
+    assert doc["phase_stats"]["A"]["mu_abs_di"] > 0 and doc["phase_stats"]["B"]["mu_abs_di"] == 0
     assert doc["phase_stats"]["A"]["active"] and not doc["phase_stats"]["B"]["active"]
     assert set(profile_skip_dims(doc)) == {"d_ib", "d_ic"}
     assert any("单相 / 分相画像" in n for n in doc["notes"])
