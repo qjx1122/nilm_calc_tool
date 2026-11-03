@@ -1,7 +1,7 @@
 # STATUS.md
 
 > 续接文件（BOOTSTRAP.md v2.2 台账）。每次收尾必更新；只改本文件，不另建同类文件。
-> 最后更新：2026-11-03（第 184 轮·补：**双界面单相覆盖审计**——功能面两侧已支持、表现面只到数据处理页；查出 I 口径事件幅值口径不一致 + 指南 H.32.3 指向不存在的显示；**只检查未改代码**）。上一轮：第 184 轮 **设备画像提取支持单相 / 分相设备**——画像增 `phases`（缺省 ABC，旧画像零改动）、匹配时跳过未接相 ΔI、**候选台阶序列按本相取**（修 I 口径下 0.275 A 的静默漏报）、CLI/接口/界面三处入口、指南新增 H.32；**改代码**，全量 `572 passed`。
+> 最后更新：2026-11-03（第 184 轮：**设备画像提取支持单相 / 分相设备**——画像增 `phases`（缺省 ABC，旧画像零改动）、匹配时跳过未接相 ΔI、**候选台阶序列按本相取**（修 I 口径下 0.275 A 的静默漏报）、**事件幅值也按本相取**（v0.99.31）、CLI/接口/界面三处入口、指南新增 H.32；**改代码**，全量 `574 passed`）
 
 ## 当前角色
 - 角色：**资深电力算法专家**（`ROLE.md` v1.4 指定的默认当前角色）
@@ -11,20 +11,21 @@
   - 说明：更早任务用户显式指定过模式 B（仅对「补齐台账骨架」生效）；此后各任务用户均跳过模式澄清，故一律按上述混合模式执行并在此声明。第 5 轮（界面下拉框检查）沙盒侧＝jsdom 驱动真实页面打真实服务端 + REST 空值语义实录，**已✅实录**；用户侧＝浏览器手点 U 组 7 步，**🔶待回报**。**第 6 轮（四功能）**沙盒侧＝pytest 25 项 + jsdom 30 项 + REST/CLI 实录，**已✅实录**；用户侧＝浏览器手点 U6 组 8 步，**🔶待回报**。**第 7 轮（三功能）**沙盒侧＝pytest 18 项 + jsdom 39 项 + CLI/源层实录，**已✅实录**；用户侧＝U7 组 8 步，**🔶待回报**。**第 9 轮（间谐波/直流/事件）**沙盒侧＝pytest 13 项 + jsdom 28 项 + live preview 实跑，**已✅实录**；用户侧＝U9 组 6 步，**🔶待回报**。**第 10 轮（离线列映射开关）**沙盒侧＝pytest 8 项 + jsdom 15 项 + REST 实录，**已✅实录**；用户侧＝U10 组 6 步，**🔶待回报**。**第 11 轮（时标 UTC 开关）**沙盒侧＝pytest 6 项 + 双时区全量 + jsdom 11 项，**已✅实录**；用户侧＝U11 组 5 步，**🔶待回报**。**第 12 轮（负荷辨识）**沙盒侧＝pytest 8 项 + jsdom 16 项 + 引擎/CSV 实录，**已✅实录**；用户侧＝U12 组 5 步，**🔶待回报**
 
 ## 当前目标
-- **本任务·补（2026-11-03 第 184 轮·补，已交付·**只检查，未改代码**）**：用户指令「检查设备画像提取对设备单相画像提取功能是否已在**数据处理界面**及**负荷辨识事件界面**功能均已支持」。
+- **本任务·补（2026-11-03 第 184 轮·补，已交付·**审计 + 修 1 处口径**）**：用户指令「检查设备画像提取对设备单相画像提取功能是否已在**数据处理界面**及**负荷辨识事件界面**功能均已支持」。
   - **结论**：① **功能面两个界面都已支持**——提取侧 8 选项相别 + 非法 400 + 等价命令带 `--phases`；匹配侧总线/分路共用同一 `NilmDetector`（分路侧走 `_SideRouter` 路径改写 + `-br` 克隆 DOM），声明相别后自动跳维、**候选台阶按本相取**、状态行两条中文提示、B 相×3P3W 写"永远匹配不上"。② **表现面只覆盖数据处理界面**——负荷辨识页无相别控件也无相别字段，只有状态行红字；事件表 / 事件 CSV / 候选诊断 CSV / 派生档位表**全都看不出相别**；旧画像（无 `phases`）无任何提示。
   - **活体实测**：提取端点五态 `auto/A/AB/ABC/空` ⇒ `phases=A/A/AB/ABC/A`、`skip` 对应、`--phases` 只在非 ABC 出现、落盘 JSON 一致；`"D"` ⇒ 400。派生端点 `base/rows` **无 phases** 但派生 JSON 继承 `A`。负荷辨识侧 `summary.profile.profiles[0]` 键里**无 phases/phase_skip**，相别只在 `notes`。候选 CSV 31 列无相别列。
   - **顺带查出 2 处真问题**：① `nilm.py:1031` I 口径事件幅值仍用三相合成 `d_it`——实测 A 相 5→8 A、B/C 各 50 A 时 **0.2746 A** vs 本相 **3.0000 A**（候选门槛/D² 用的是 3.0 A ⇒ 只误导人、不影响判定；P 口径无此问题）；② 指南 **H.32.3** 让用户"看结果区「各相 \|ΔI\| 均值」"，**该区块界面上不存在**（只有"人工指定≠自动判定"时才在提示里打印各相均值）。
   - **文案过期 2 处**：`index.html:1170`、`app.js:3258` 仍写"候选按**三相合成量**搜索"（v0.99.30 起声明相别的画像按本相取；事件对象仍为 total，前半句仍对）。
   - **勘误**：本文件与 `REPORT_TEST.md §184.4` 示例里 `phase_stats` 键名写成 `mu`，实际落盘是 **`mu_abs_di`**（已更正 `REPORT_TEST.md`）。
   - 交付：`REPORT_TEST.md` **§184.11**（覆盖矩阵 13 项 + 四段实测 + 缺口分三档 P1–P4/N1–N3 + 修复成本与优先级）；本文件；`session/NILM_AC_session_complete.md`。
-  - **等用户点头才动手**：C1（I 口径事件幅值，两种改法各有代价）、P1（改文档 0 风险 / 或界面加三相小表）、N2+P2（旧画像提示 + `profiles[]` 补 `phases`）、N1（CSV 加列，需表头轮转）、P3/P4/文案、N3（就地改相别＝新功能）。
+  - **C1 已修复（v0.99.31，§184.12）**：事件幅值 / CSV `delta_i_a` 在画像声明相别时按设备所接相的电流合成量取（实测 0.2746 A → 3.0 A）；三相画像 / 旧画像逐位不变；新增 2 项测试（撤改动即失败，实测 0.27455310483929907）。**其余待点头**、P1（改文档 0 风险 / 或界面加三相小表）、N2+P2（旧画像提示 + `profiles[]` 补 `phases`）、N1（CSV 加列，需表头轮转）、P3/P4/文案、N3（就地改相别＝新功能）。
 - **本任务（2026-11-03 第 184 轮，已交付·**改代码**，沙盒侧✅）**：用户原话「暂时不需要，先分析代码，考虑在基于设备画像提取算法中增加对设备单相画像提取的支持。」
   - **分析**：① 事件定位只吃三相总（`detect_profile` 取 `p4[0]`/`i4[0]`）；② 特征固定 8 维（含 3 个 ΔI 维），未接相 μ≈0、σ 被 `_ABS_FLOOR` 0.02 A 托底 ⇒ 该维变成最敏感维；③ `PHASE_MAPS`/`remap_phases` 只解决"CT 接错相"，解决不了"另两相是别人的负荷"；④ 唯一的"某维不参与"通道是 v0.93 的 3p3w `skip=("d_ib",)`，缺"设备本来没接这一相"的来源；⑤ `d_p/d_q` 三相合成、`d_ih` 三相平均、ΔI 是**有效值差（无符号）**。
   - **实测（同一画像、只改相别）**：他负荷落在前后窗内 ⇒ 现状 **D²/维 14.10 / conf 0.001 rejected**；跳 `d_ib/d_ic` 后 **3.39 / 0.183 仍拒**；他负荷落后窗 ⇒ 单相画像 **0.823 / 0.6626 `window_crowded`**（ΔP 690→920）vs ABC **3.564 / 0.1683 rejected**；差分对照同一事件 `d_ib` 贡献 **0 vs 94.28** ⇒ **跳维必要不充分**（已写进报告与代码注释）。
   - **实现 v0.99.30（6 文件 + 1 测试）**：`nilm_profile.py` 新增 `PHASE_DIMS/PHASE_ROWS/PHASES_ALL/PROFILE_PHASE_NAMES`、`normalize_phases/profile_phases/profile_skip_dims/detect_phases`，`build_profile(phases="auto")` 写 `phases/phase_source/phase_stats`＋notes，`validate_profile` 归一，`profile_summary` 暴露 4 键，`detect_profile` 合并 `skip+profile_skip_dims`，`amp` 兜底（三相 ΔI 全跳过时不再 `min_d=0`）；`nilm.py` 槽位提示（跳维清单 + 3p3w 无 B 相 CT 时"只在 B 相有证据"警告）；`tools/nilm_profile.py --phases`（命令串读 `doc["phases"]`）；`app/server.py` 端点收 `phases`（非法 400）；`index.html #np-phases` + `app.js` 结果卡。**旧画像（无 `phases`）行为逐位不变**。
-  - **验证**：`pytest -q tests` **572 passed / 1 skipped**（+32 项 r184 + 1 项 Web 契约）；CLI 三列单相文件 ⇒ `phases=A auto`、`d_ia 3.00/0.45`、`d_p 690`；端点 200（`--phases A`）/400/200（ABC）三态；页面含控件；AB 相设备 ⇒ `phases=AB`、`d_ia=d_ib=3.0`。
+  - **验证**：`pytest -q tests` **574 passed / 1 skipped**（+34 项 r184 + 1 项 Web 契约；含 v0.99.31 事件幅值修复的 2 项）；CLI 三列单相文件 ⇒ `phases=A auto`、`d_ia 3.00/0.45`、`d_p 690`；端点 200（`--phases A`）/400/200（ABC）三态；页面含控件；AB 相设备 ⇒ `phases=AB`、`d_ia=d_ib=3.0`。
   - **补做（同日复核后）**：① **更正自己写错的两条口径**（`d_p/d_q` 是三相**求和**、单相设备的增量即其自身，不会被摊薄；`d_ih` 才是三相**平均**＝真实值 1/3，但两侧同口径、可比性不受影响，真正受影响的是 2 A 绝对 σ 下限折回单相相当于 6 A）⇒ 撤销「`d_p/d_q` 单相重算」这条待办；② **候选台阶序列也按相别取**（P 口径 `Σp_ph`、I 口径 `√Σi_ph²`、无功同理；`phases=ABC` 仍取 total 行 ⇒ 旧行为逐位不变）——实测 I 口径下这是硬伤：A 相 +3 A、B/C 各 50 A 基流时三相合成量只涨 **0.275 A**（< 门槛 1.5 A）⇒ **0 条候选、静默漏报**，按本相取则 1 条 `delta=3.000 A`；P 口径候选 delta 由 920 W → **690 W**（本相）。
+  - **补做②（同日再复核，§184.10 + §184.12，v0.99.31）**：候选台阶序列按相别取（I 口径静默漏报修复，实测 0.2746 A → 3.0 A 出候选）；**事件幅值 / CSV `delta_i_a`** 也按设备所接相取（原先把 3 A 的单相设备显示成 0.2746 A，与画像 μ 差 11 倍；判定不受影响）；r184 测试 26 → **34 项**，全量 **574 passed / 1 skipped**。
   - **踩坑**：脚本替换把 `phases=phases` 插进 `nilm_tune` 端点 ⇒ `NameError`，**全量测试 9 个无关用例挂**才暴露（教训：同文本锚点要连带上一行函数调用一起替换）；测试数据把 B 相他负荷放在 520 周波，`min_stage=0.5×690 W` 直接滤掉该台阶，负向用例失效（改为同刻投切）。
   - 交付：`REPORT_TEST.md` 第 184 轮专题（10 小节）；`session/NILM_AC_session_complete.md` 第 184 轮节；本文件。
   - 验收状态：沙盒侧 ✅（合成数据、PT=CT=1）；**用户侧 🔶 未验证**（无真实单相设备录波；三相不平衡 / CT 相位误差 / 启动冲击未覆盖）。
@@ -389,7 +390,7 @@
 - 等用户执行 T-002 的 W/R/P 组（Windows 部署 / 真实数据对账 / 生产常驻）并回报实录
 
 ## 下一步（TODO）
-0. **第 184 轮·补：等用户批准后再改**（按优先级）：① **C1** I 口径单相事件幅值用本相 ΔI（改 `nilm.py:1031`；会改变历史 CSV 该列量纲含义）或另加一列；② **P1** 指南 H.32.3 改指向（0 风险）或界面加「各相 |ΔI| 均值」小表；③ **N2** 旧画像无 `phases` 时在状态行提示 + **P2** `summary.profile.profiles[]` 补 `phases/phase_skip`；④ **N1** 事件/候选 CSV 加 `phases`、`skipped_dims` 两列（走 `_rotate_if_header_differs` 轮转）；⑤ **P3** 派生表加相别列、**P4** 提取侧加「B 相 × 3P3W」告警、修 `index.html:1170`/`app.js:3258` 两处过期文案；⑥ **N3** 就地改画像相别＝新功能，单独评估。
+0. **第 184 轮·补：剩余项等用户批准后再改**（按优先级）：① ~~C1 I 口径单相事件幅值~~ **已修（v0.99.31）**；② **P1** 指南 H.32.3 改指向（0 风险）或界面加「各相 |ΔI| 均值」小表；③ **N2** 旧画像无 `phases` 时在状态行提示 + **P2** `summary.profile.profiles[]` 补 `phases/phase_skip`；④ **N1** 事件/候选 CSV 加 `phases`、`skipped_dims` 两列（走 `_rotate_if_header_differs` 轮转）；⑤ **P3** 派生表加相别列、**P4** 提取侧加「B 相 × 3P3W」告警、修 `index.html:1170`/`app.js:3258` 两处过期文案；⑥ **N3** 就地改画像相别＝新功能，单独评估。
 0b. **第 184 轮收尾**：① 前端 jsdom 用例（`#np-phases` + 结果卡，`tools/ui_*.check.cjs` 家族）；② 真实单相设备录波复测（三相不平衡、CT 相位误差、启动冲击、PT/CT≠1 均未覆盖）；③ 线间设备（AB/AC/BC）在电压不平衡下的 ΔQ 口径；④ 若现场出现「单相设备跨相变动」（A→B 换相），当前按固定相别匹配会漏——需另立专题（先看真实数据再定）
 1. **用户侧（阻塞项，模式 B）**：先跑 **T-007 的 U9 组**、**T-006 的 U8 组**、**T-005 的 U7 组**与 **T-004 的 U6 组**（用真实采集文件，期望见 `REPORT_TEST.md`），再跑 T-003 的 **S 组**（`python tools/verify_sources.py` 期望 PASS 5 / FAIL 0；`pytest tests/ -q` 期望 **204 passed**；两个终端跑 tcp_feeder / csv_appender + `cli.py live` 期望缺口 0），**T-003 的 U 组**（浏览器手点 7 步，界面下拉框，期望见 `REPORT_TEST.md`），再跑 T-002 的 W 组（Windows 部署，预计 10 分钟）与 R 组（真实数据对账，核心验收），按「结果回收格式」贴回；P 组（生产常驻）可选
 2. Agent 侧（收到实录后）：把三件套写入 T-002「结果 / 结论」，按 J-\* 逐条对账，回填 `README.md` §2/§3/§4 与 `NILM_DATA_DICT.md` 的 🔶 项（注明来源＋日期）
@@ -460,7 +461,7 @@
 - `REPORT_TEST.md` — **v0.8**（新增 **T-007** 第 9 轮间谐波/直流/事件：S1~S7 / F-29~F-31 / U9 组；v0.7：新增 **T-006** 第 8 轮数据处理子界面：S1~S7 / F-24~F-28 / U8 组；v0.6：新增 **T-005** 第 7 轮三功能：S1~S4 / F-17~F-21 / U7 组）：T-001（待回报）+ T-002（沙盒 A1~A10、B1/B2、用户侧 W/R/P）+ **T-003（沙盒 S1~S18 实录、四源对账表、F-01~F-10 修复、用户侧 S/U/D 三组执行包 + J-\* 判读 + 回收格式）**
 - `NILM_DATA_DICT.md` — v0.2（用户已确认 fs/列格式/PT/CT）；另有 v0.1 模板（🔶=116 处；用户已确认的 fs/列格式/PT/CT 待本轮翻 ✅）
 - `session/NILM_AC_session_complete.md` — 会话纪要（只追加）
-- 代码：`cli.py`（8 子命令入口，含 `resample`）、`elec_tool/`（算法核心 + `sources/` + `analysis/` + `resample.py` 离线重采样 + **`events.py` 事件检测**）、`tools/ui_r9_check.cjs`（间谐波/直流/事件 28 项端到端）、`tests/test_r9_events.py`、`tools/ui_r8_check.cjs`（数据处理子界面 29 项端到端）、`tests/test_r8_resample.py`、`app/server.py` + `app/static/`（Web）、`configs/default.json`（出厂模板）、**`tools/`（tcp_feeder / csv_appender / verify_sources / ui_dropdown_check.cjs / ui_r6_check.cjs / ui_r7_check.cjs）**、`tests/`（**572 passed / 1 skipped，56 个文件**；第 184 轮＝`test_r184_single_phase_profile.py`）、**`elec_tool/realtime_writer.py`**
+- 代码：`cli.py`（8 子命令入口，含 `resample`）、`elec_tool/`（算法核心 + `sources/` + `analysis/` + `resample.py` 离线重采样 + **`events.py` 事件检测**）、`tools/ui_r9_check.cjs`（间谐波/直流/事件 28 项端到端）、`tests/test_r9_events.py`、`tools/ui_r8_check.cjs`（数据处理子界面 29 项端到端）、`tests/test_r8_resample.py`、`app/server.py` + `app/static/`（Web）、`configs/default.json`（出厂模板）、**`tools/`（tcp_feeder / csv_appender / verify_sources / ui_dropdown_check.cjs / ui_r6_check.cjs / ui_r7_check.cjs）**、`tests/`（**574 passed / 1 skipped，56 个文件**；第 184 轮＝`test_r184_single_phase_profile.py`）、**`elec_tool/realtime_writer.py`**
 - 数据与产物（均 gitignore）：`data/`（输入 CSV，`cli.py gen-sample` 可重建样例）、`output/`（导出结果）、`configs/runtime.json`（界面保存的配置）
 - 运行环境：`.venv/`（gitignore，沙盒回收后需重建：`python3 -m venv .venv && .venv/bin/pip install -r requirements.txt`）
 - 分支：`arena/82e34fb8-nilm-calc-tool`（远端同名，已 push；第 9 轮提交＝`8539d8a`（feat）+ docs；第 8 轮提交＝`a6fd42d`（feat）+ `b6c7ca6`（docs）；第 6 轮 tip `f1966e8`；第 7 轮提交＝`f0fdea6` feat(r7) / `341fc9e` test(r7) / docs）｜基点 `main`=`27b28ea`
