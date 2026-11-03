@@ -180,7 +180,12 @@ def file_info(base: AppConfig, path: str) -> Dict[str, Any]:
         if info.fs_est == info.fs_est and info.fs_est > 0:    # 非 NaN
             fs_est = float(info.fs_est)
         if last_ts:
-            i1 = parse_timestamps(last_ts, cfg.columns.timestamp_unit, tz_h)
+            # v0.99.34：relative_s 文件末段与首段同一零点（否则 t1≈0，预览时间轴范围塌缩）
+            try:
+                _rb = float(str(first_ts[0]).strip()) if first_ts else None
+            except (TypeError, ValueError):
+                _rb = None
+            i1 = parse_timestamps(last_ts, cfg.columns.timestamp_unit, tz_h, relative_base=_rb)
             if i1.t.size:
                 t1 = float(i1.t[-1])
     # 时标 0.1 ms 量化会让推算值带小数尾巴（6400.011…）：与配置值相差 <0.5% 时按配置值；与最近整数相差 <0.5% 时取整；

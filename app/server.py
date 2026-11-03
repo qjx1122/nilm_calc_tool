@@ -1081,7 +1081,13 @@ def _file_time_range(cfg: AppConfig, path: str) -> Dict[str, Any]:
     if ts_c is None:
         raise ConfigError(f"文件没有时间列，无法计算公共时间段（可改用自定义播放时间）：{p}")
     i0 = parse_timestamps(first, cfg.columns.timestamp_unit, tz_h)
-    i1 = parse_timestamps(list(last), cfg.columns.timestamp_unit, tz_h)
+    # v0.99.34：relative_s（相对秒）文件的首/末段必须同一零点——末段若各自减本段首值，
+    # t1≈0 ⇒ 公共时间段算成"没有交集"（播放轴已按文件首行对齐，这里同口径）
+    try:
+        _rb = float(str(first[0]).strip()) if first else None
+    except (TypeError, ValueError):
+        _rb = None
+    i1 = parse_timestamps(list(last), cfg.columns.timestamp_unit, tz_h, relative_base=_rb)
     if not i0.t.size or not i1.t.size:
         raise ConfigError(f"无法解析文件时标：{p}")
     return {"path": p, "rows": n, "t0": float(i0.t[0]), "t1": float(i1.t[-1]) + 1.0 / fs, "custom_time": False, "fs": fs}

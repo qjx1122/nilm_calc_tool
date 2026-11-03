@@ -42,6 +42,11 @@ class ParseError(ValueError):
 # strptime 对这两类都解析失败。
 _RE_SLASH_CLOCK = re.compile(
     r"^\s*(\d{1,4})[/-](\d{1,2})[/-](\d{1,4})[ T](\d{1,2}):(\d{2}):(\d{2})(?:\.(\d+))?\s*$")
+# 纯时间写法 HH:MM:SS[.ffff]（现场"时刻"列主流之一）。v0.99.34：此前它不进 v0.82 整秒缓存快路径，
+# 每行走 datetime.strptime（1970-01-01 起算、且每行 ~28 µs）——30 s/6400 Hz 文件解析耗时 54 s、
+# 播放墙钟超过数据时间、倍速被拖到 ≈1×；且 strptime 基准(1900/1970)与 0/00/00 快路径(_NO_DATE_BASE)
+# 不一致、无日期跨午夜不展开、负 epoch 在 Windows 有 localtime 风险（F-40）。现与 0/00/00 完全同语义。
+_RE_TIME_CLOCK = re.compile(r"^\s*(\d{1,2}):(\d{2}):(\d{2})(?:\.(\d+))?\s*$")
 
 # 无日期（日期段全 0）时的时间基准：epoch 日 0（1970-01-01 00:00:00 UTC）。
 # 这样 t 仍是「epoch 秒」语义（界面按 时:分:秒 显示正确），而绝对日期由
@@ -68,7 +73,16 @@ def _parse_slash_clock(s: str, tz_offset_h: float) -> Optional[Tuple[float, bool
     """
     m = _RE_SLASH_CLOCK.match(s)
     if not m:
-        return None
+        # 纯时间 HH:MM:SS[.f]：与 0/00/00 前缀完全同语义（_NO_DATE_BASE 基准 + 无日期标记，
+        # 由 parse_timestamps 做跨午夜展开）——两端口径一致，纯时间文件不再走 strptime 慢路径
+        mt = _RE_TIME_CLOCK.match(s)
+        if not mt:
+            return None
+        hh, mm, ss, frac = mt.groups()
+        if int(hh) > 23 or int(mm) > 59 or int(ss) > 60:
+            return None
+        tod = int(hh) * 3600.0 + int(mm) * 60.0 + int(ss) + (float("0." + frac) if frac else 0.0)
+        return _NO_DATE_BASE + tod - tz_offset_h * 3600.0, True
     a, b, c, hh, mm, ss, frac = m.groups()
     frac_s = (float("0." + frac) if frac else 0.0)
     tod = int(hh) * 3600.0 + int(mm) * 60.0 + int(ss) + frac_s
@@ -96,28 +110,39 @@ def _parse_slash_clock_block(vals: Sequence[str], tz_offset_h: float) -> Optiona
     ``float("0." + frac)`` 相加——带日期写法结果与逐值解析逐位相同，无日期写法只差浮点加法顺序（≤ 1 ulp，≈1e-11 s）。
     """
     s0 = str(vals[0]).strip()
-    if not _RE_SLASH_CLOCK.match(s0):
+    pure_time = bool(_RE_TIME_CLOCK.match(s0))
+    if not pure_time and not _RE_SLASH_CLOCK.match(s0):
         return None
-    cache: Dict[str, Tuple[float, bool]] = {}
-    out: List[float] = []
-    no_date = 0
-    for v in vals:
-        s = str(v).strip()
-        head, dot, frac = s.rpartition(".")
-        if not dot:
-            head, frac = s, ""
-        hit = cache.get(head)
-        if hit is None:
-            r = _parse_slash_clock(head, tz_offset_h)
-            if r is None or (frac and not frac.isdigit()):
+    # v0.99.34（numpy 向量化，语义与原逐值实现逐位一致）：
+    #   按 "." 切成 (head, sep, frac) → head 取唯一值逐个走 _parse_slash_clock（同一秒只解析一次）
+    #   → 按 inverse 映射回基值 + 小数秒。纯时间 HH:MM:SS[.f] 同时放行（此前逐行 strptime，
+    #   30 s 文件解析 54 s、播放超过数据时间）。任一 head 解析失败 / 小数段非数字 → None 走慢路径（保持既有拒绝语义）。
+    try:
+        arr = np.asarray(vals)
+        if arr.dtype.kind not in ("U", "S"):
+            arr = np.asarray([str(v) for v in vals])
+        arr = np.char.strip(arr.astype(str))
+        parts = np.char.partition(arr, ".")           # shape (n, 3)：head / sep / frac
+        heads, fracs = parts[:, 0], parts[:, 2]
+        uniq, inv = np.unique(heads, return_inverse=True)
+        bases = np.empty(len(uniq), dtype=np.float64)
+        nd_of = np.zeros(len(uniq), dtype=np.int64)
+        for j, h in enumerate(uniq):
+            r = _parse_slash_clock(str(h), tz_offset_h)
+            if r is None:
                 return None
-            hit = cache[head] = r
-        elif frac and not frac.isdigit():
-            return None
-        base, nd = hit
-        out.append(base + (float("0." + frac) if frac else 0.0))
-        no_date += int(nd)
-    fmt = "Y/M/D HH:MM:SS.f(无日期=0/00/00)" if no_date else "Y/M/D HH:MM:SS.f"
+            bases[j], nd = r
+            nd_of[j] = int(nd)
+        frac_f = np.char.add("0.", fracs).astype(np.float64)   # "" → "0." → 0.0；"5x" → ValueError
+        out = (bases[inv] + frac_f).tolist()
+        counts = np.bincount(inv, minlength=len(uniq))
+        no_date = int((nd_of * counts).sum())
+    except (ValueError, TypeError):                   # 小数段非数字等 → 慢路径处理/按既有语义报错
+        return None
+    if pure_time:
+        fmt = "HH:MM:SS.f(无日期)"
+    else:
+        fmt = "Y/M/D HH:MM:SS.f(无日期=0/00/00)" if no_date else "Y/M/D HH:MM:SS.f"
     return out, no_date, fmt
 
 
@@ -170,7 +195,8 @@ def _flag_degenerate_clock(t: np.ndarray, notes: List[str]) -> None:
 
 
 def parse_timestamps(values: Sequence[str], unit: str = "auto",
-                     tz_offset_h: float = 0.0) -> TimestampInfo:
+                     tz_offset_h: float = 0.0,
+                     relative_base: Optional[float] = None) -> TimestampInfo:
     """把时间戳列解析为 epoch 秒数组。
 
     unit: auto / s / ms / us / ns / datetime
@@ -178,6 +204,9 @@ def parse_timestamps(values: Sequence[str], unit: str = "auto",
                  默认 0（即把字符串当 UTC 处理）——若用户数据为北京时间需设 8，
                  但注意：**所有电气量计算只用时间差**，时区偏移不影响任何计算结果，
                  只影响界面显示的绝对时刻。
+    relative_base: v0.99.34 —— relative_s（相对秒）模式的零点。缺省＝本块首个值（旧行为）；
+                 流式分块读取时应传**文件首行时标值**：否则每块都减本块首值 ⇒ 时间轴逐块归零
+                 （曲线只出首尾点、节拍钟限速失效、事件时标全错）。
     """
     notes: List[str] = []
     vals = list(values)
@@ -210,7 +239,12 @@ def parse_timestamps(values: Sequence[str], unit: str = "auto",
         scale = {"s": 1.0, "ms": 1e-3, "us": 1e-6, "ns": 1e-9, "relative_s": 1.0}.get(mode, 1.0)
         t = numeric * scale
         if mode == "relative_s":
-            t = t - t[0]
+            if relative_base is not None and np.isfinite(float(relative_base)):
+                t = t - float(relative_base)      # v0.99.34：文件级零点（跨块/首尾采样同一基准）
+                notes[-1] = (notes[-1].split("；")[0] + "；绝对时刻以**文件首个样本**为 0 点"
+                             "（分块解析按文件首行对齐，时间轴不逐块归零）")
+            else:
+                t = t - t[0]
         # 合理性闸门：换算后应是 epoch 秒（~1e9）或相对秒（~0 起）。
         # 超出 1e11（≈公元 5138 年）或非有限值，说明**时间戳根本没被正确取到**——
         # TCP 二进制帧最常见于 struct_fmt/struct_fields 与真实协议不一致（字节序/字段顺序/类型），
@@ -361,7 +395,8 @@ def parse_rows(rows: Sequence[Sequence[str]], colmap: ColumnMap, sampling: Sampl
 def _assemble(data: np.ndarray, ts_raw: List[str], colmap: ColumnMap, sampling: SamplingConfig,
               source: str, seq: int, bad_cells: List[Tuple[int, int, str]],
               tz_offset_h: float, unmapped: Optional[List[str]] = None,
-              layout: Optional[Dict[str, Optional[int]]] = None) -> Tuple[SampleBlock, Dict[str, object]]:
+              layout: Optional[Dict[str, Optional[int]]] = None,
+              relative_base: Optional[float] = None) -> Tuple[SampleBlock, Dict[str, object]]:
     """data 已是标准列序（0=时间戳占位，1..6=ua,ia,ub,ib,uc,ic）。unmapped 列出未映射字段：
     通道按 0 播放（不参与插值），时间戳未映射则合成时间轴。"""
     notes: List[str] = []
@@ -377,7 +412,7 @@ def _assemble(data: np.ndarray, ts_raw: List[str], colmap: ColumnMap, sampling: 
     if "timestamp" in unmapped or not ts_raw:
         ts_raw = []
     if ts_raw:
-        ts_info = parse_timestamps(ts_raw, colmap.timestamp_unit, tz_offset_h)
+        ts_info = parse_timestamps(ts_raw, colmap.timestamp_unit, tz_offset_h, relative_base=relative_base)
         notes.extend(ts_info.notes)
         _, fs_notes = check_fs(ts_info.fs_est, sampling)
         notes.extend(fs_notes)
@@ -666,6 +701,30 @@ def iter_csv_blocks(path: str, colmap: ColumnMap, sampling: SamplingConfig,
         size = os.path.getsize(path)
         data_lo = len(first_line_bytes) if header is not None else 0    # 数据区起始字节（表头行之后）
 
+        # v0.99.34：取**文件首行**时标数值作 relative_s（相对秒）的跨块零点——数值时标且 <1e8 时
+        # parse_timestamps 判为相对秒，若各块各自减本块首值会把时间轴逐块归零（曲线只出首尾点、
+        # 节拍钟限速失效、事件时标全错）。这里读一次首行（seek 前，与播放起点定位互不影响）。
+        ts_base: Optional[float] = None
+        _ts_c0 = (idx_map or {}).get("timestamp")
+        if _ts_c0 is not None:
+            _first_row: Optional[List[str]] = None
+            if header is None and first:
+                _first_row = first                  # 无表头：首行即第一条数据行（已在 buf 里）
+            else:
+                try:
+                    with open(path, "rb") as _fb:
+                        _fb.seek(data_lo)
+                        _line = _fb.readline()
+                    _first_row = next(csv.reader([_line.decode(enc, errors="replace")], delimiter=delimiter))
+                except Exception:
+                    _first_row = None
+            if _first_row is not None and _ts_c0 < len(_first_row):
+                try:
+                    _tok = str(_first_row[_ts_c0]).strip()
+                    ts_base = float(_tok) if _tok else None   # 非数值时标（datetime 等）→ None，行为不变
+                except ValueError:
+                    ts_base = None
+
         def _rewrap(byte_pos: int):
             """把读取位置切到 byte_pos（必须是行首），返回新的 csv.reader。"""
             import io as _io
@@ -737,7 +796,7 @@ def iter_csv_blocks(path: str, colmap: ColumnMap, sampling: SamplingConfig,
         # 否则第一块会异常大（之前实测 2014～8000 行），两侧同步/倍速节拍都会被它打乱
         while len(buf) >= block_samples:
             head, buf = buf[:block_samples], buf[block_samples:]
-            blk, info = _rows_to_block(head, colmap, sampling, idx_map, path, seq, tz_offset_h, row_offset)
+            blk, info = _rows_to_block(head, colmap, sampling, idx_map, path, seq, tz_offset_h, row_offset, ts_base=ts_base)
             if keep_rows:
                 info["rows"] = head; info["header"] = header
             row_offset += len(head)
@@ -752,7 +811,7 @@ def iter_csv_blocks(path: str, colmap: ColumnMap, sampling: SamplingConfig,
                 continue
             buf.append(row)
             if len(buf) >= block_samples:
-                blk, info = _rows_to_block(buf, colmap, sampling, idx_map, path, seq, tz_offset_h, row_offset)
+                blk, info = _rows_to_block(buf, colmap, sampling, idx_map, path, seq, tz_offset_h, row_offset, ts_base=ts_base)
                 if keep_rows:
                     info["rows"] = buf; info["header"] = header
                 row_offset += len(buf)
@@ -763,7 +822,7 @@ def iter_csv_blocks(path: str, colmap: ColumnMap, sampling: SamplingConfig,
                 if max_blocks and produced >= max_blocks:
                     return
         if buf:
-            blk, info = _rows_to_block(buf, colmap, sampling, idx_map, path, seq, tz_offset_h, row_offset)
+            blk, info = _rows_to_block(buf, colmap, sampling, idx_map, path, seq, tz_offset_h, row_offset, ts_base=ts_base)
             if keep_rows:
                 info["rows"] = buf; info["header"] = header
             yield blk, info
@@ -771,8 +830,10 @@ def iter_csv_blocks(path: str, colmap: ColumnMap, sampling: SamplingConfig,
 
 def _rows_to_block(rows: List[List[str]], colmap: ColumnMap, sampling: SamplingConfig,
                    idx_map: Optional[Dict[str, Optional[int]]], source: str, seq: int,
-                   tz_offset_h: float, row_offset: int = 0) -> Tuple[SampleBlock, Dict[str, object]]:
-    """row_offset：本块首行在文件中的数据行序号——时间戳未映射时用它合成连续时间轴（t = 行号 / fs）。"""
+                   tz_offset_h: float, row_offset: int = 0,
+                   ts_base: Optional[float] = None) -> Tuple[SampleBlock, Dict[str, object]]:
+    """row_offset：本块首行在文件中的数据行序号——时间戳未映射时用它合成连续时间轴（t = 行号 / fs）。
+    ts_base：文件首行时标数值（relative_s 跨块零点，v0.99.34）。"""
     if idx_map is None:
         idx_map = colmap.layout(None)
     unmapped = colmap.unmapped(idx_map)
@@ -807,7 +868,8 @@ def _rows_to_block(rows: List[List[str]], colmap: ColumnMap, sampling: SamplingC
                     std[r, new_c] = float(cell)
                 except ValueError:
                     bad.append((r, c, cell))
-    blk, info = _assemble(std, ts_raw, colmap, sampling, source, seq, bad, tz_offset_h, unmapped, idx_map)
+    blk, info = _assemble(std, ts_raw, colmap, sampling, source, seq, bad, tz_offset_h, unmapped, idx_map,
+                          relative_base=ts_base)
     if ts_c is None and row_offset and blk.n:
         blk = SampleBlock(t=(row_offset + np.arange(blk.n, dtype=np.float64)) / sampling.fs, u=blk.u, i=blk.i,
                           scaled=blk.scaled, source=blk.source, seq=blk.seq)
