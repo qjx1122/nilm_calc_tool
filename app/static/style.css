@@ -379,7 +379,7 @@ input.flash{animation:ntflash 1.5s ease-out}
 .np-evsrc{margin-top:4px;font-size:11.5px}
 .np-tbl tr.np-stat td.np-stat:first-child{background:#17251f}
 
-/* 智能问答助手 v0.99.39：会话管理 + 自适应问答双栏；安全 Markdown 与提案确认卡 */
+/* 智能问答助手 v0.99.40：具体模型选择、动态云端 API 档案与自适应问答侧栏 */
 .assistant-launcher{position:fixed;right:22px;bottom:82px;z-index:30;border:1px solid #4485e8;background:linear-gradient(135deg,#1d4ed8,#2563eb);box-shadow:0 6px 22px #0008;border-radius:24px;padding:10px 16px;font-weight:700}
 .assistant-launcher[hidden]{display:none}
 .assistant-panel,.assistant-panel *{box-sizing:border-box}
@@ -524,6 +524,20 @@ input.flash{animation:ntflash 1.5s ease-out}
 .assistant-local-model-field small{grid-column:1/-1;color:var(--mut);font-size:10px;line-height:1.4}
 .assistant-local-model-field small.is-error{color:var(--bad)}
 .assistant-config-grid>label.check{flex-direction:row;align-items:center;color:var(--fg)}
+.assistant-profile-help{margin:4px 0 8px;color:var(--mut);font-size:11px;line-height:1.5}
+.assistant-cloud-profiles{display:flex;flex-direction:column;gap:8px;margin:8px 0}
+.assistant-cloud-profile{min-width:0;padding:10px;border:1px solid var(--line);border-radius:8px;background:#101827}
+.assistant-cloud-profile-heading{display:flex;align-items:center;gap:8px;margin-bottom:8px;color:var(--fg);font-size:12px}
+.assistant-cloud-profile-heading strong{overflow-wrap:anywhere}
+.assistant-cloud-profile-heading small{color:var(--mut);font-size:10px}
+.assistant-cloud-profile-heading button{margin-left:auto;flex:0 0 auto}
+.assistant-cloud-profile-fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+.assistant-cloud-profile-fields label{display:flex;min-width:0;flex-direction:column;gap:4px;color:var(--mut);font-size:11px}
+.assistant-cloud-profile-fields label.check{flex-direction:row;align-items:center;color:var(--fg)}
+.assistant-cloud-profile-fields .assistant-cloud-profile-endpoint{grid-column:1/-1}
+.assistant-profile-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:4px 0 12px}
+.assistant-profile-actions span{color:var(--mut);font-size:10px}
+.assistant-profile-actions span.is-error{color:var(--bad)}
 .assistant-settings h3{display:block;margin:12px 0 4px;padding-bottom:4px;border-bottom:1px solid var(--line)}
 .assistant-wide{display:flex;flex-direction:column;gap:4px;color:var(--mut);font-size:11px}
 .assistant-page-permissions{margin:10px 0;padding:8px;border:1px solid var(--line);border-radius:7px;font-size:11px}
@@ -561,8 +575,10 @@ input.flash{animation:ntflash 1.5s ease-out}
   .assistant-shell{padding:9px}
   .assistant-workspace{grid-template-columns:230px minmax(0,1fr);gap:8px}
   .assistant-session-pane{padding:8px}
-  .assistant-chat-header{gap:8px}
-  .assistant-model-choice select{width:168px;max-width:24vw}
+  .assistant-chat-header{gap:8px;flex-wrap:wrap}
+  .assistant-title-group{flex:1 1 220px;min-width:130px}
+  .assistant-model-choice{flex:1 1 160px}
+  .assistant-model-choice select{width:168px;max-width:100%}
   .assistant-privacy{font-size:9px}
 }
 @media(max-width:680px){
@@ -592,7 +608,8 @@ input.flash{animation:ntflash 1.5s ease-out}
   .assistant-drop-hint{max-width:100%}
   .assistant-settings[open]{inset:5px;padding:7px}
   .assistant-settings-header h2{font-size:16px}
-  .assistant-config-grid{grid-template-columns:1fr}
+  .assistant-config-grid,.assistant-cloud-profile-fields{grid-template-columns:1fr}
+  .assistant-cloud-profile-fields .assistant-cloud-profile-endpoint{grid-column:auto}
   .assistant-view-checks{grid-template-columns:repeat(2,minmax(0,1fr))}
   .assistant-tool-permissions .assistant-view-checks{grid-template-columns:1fr}
   .assistant-doc-pane{min-height:390px;padding:0 6px 8px}

@@ -4945,7 +4945,7 @@ function normalizeConfigForms(root = document) {
 window.normalizeConfigForms = normalizeConfigForms;
 
 /* ------------------------------------------------------------------ 智能问答：同源 REST/SSE、无第三方渲染依赖 */
-const ASSISTANT_UI = { config: null, views: [], documents: [], localModels: [], activeDocumentId: null, conversations: [], activeId: null, busy: false, controller: null, adminToken: '', operatorToken: '', operator: null, contextConversationId: null, draggingConversationId: null, pendingImages: [], initialized: false };
+const ASSISTANT_UI = { config: null, views: [], documents: [], localModels: [], cloudProfilesDraft: [], activeDocumentId: null, conversations: [], activeId: null, busy: false, controller: null, adminToken: '', operatorToken: '', operator: null, contextConversationId: null, draggingConversationId: null, pendingImages: [], initialized: false };
 const ASSISTANT_IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp']);
 const ASSISTANT_IMAGE_MAX_BYTES = 3 * 1024 * 1024;
 const ASSISTANT_IMAGE_TOTAL_MAX_BYTES = 5 * 1024 * 1024;
@@ -4989,7 +4989,7 @@ function assistantSyncLauncher() {
 }
 function assistantUpdateBusy() {
   const busy = ASSISTANT_UI.busy;
-  ['assistant-send', 'assistant-new', 'assistant-clear-context', 'assistant-delete-conversation', 'assistant-clear-context-menu', 'assistant-rename-conversation', 'assistant-model-type', 'assistant-attach-image', 'assistant-image-input'].forEach(id => { const el = assistantEl(id); if (el) el.disabled = busy; });
+  ['assistant-send', 'assistant-new', 'assistant-clear-context', 'assistant-delete-conversation', 'assistant-clear-context-menu', 'assistant-rename-conversation', 'assistant-model-type', 'assistant-model-name', 'assistant-attach-image', 'assistant-image-input'].forEach(id => { const el = assistantEl(id); if (el) el.disabled = busy; });
   const send = assistantEl('assistant-send'), stop = assistantEl('assistant-stop'), thinking = assistantEl('assistant-thinking');
   if (send) send.style.display = busy ? 'none' : '';
   if (stop) stop.style.display = busy ? '' : 'none';
@@ -5183,6 +5183,46 @@ function assistantNearMessagesBottom(list, threshold = 72) {
   if (!list) return true;
   return list.scrollHeight - list.clientHeight - list.scrollTop <= threshold;
 }
+function assistantRenderModelNameSelector(conv = assistantCurrentConversation()) {
+  const select = assistantEl('assistant-model-name'); if (!select) return;
+  while (select.firstChild) select.removeChild(select.firstChild);
+  const cfg = ASSISTANT_UI.config || {};
+  const backend = conv && conv.backend || (assistantEl('assistant-model-type') || {}).value || 'builtin';
+  const addOption = (value, label, disabled = false) => {
+    const option = document.createElement('option'); option.value = value; option.textContent = label; option.disabled = disabled; select.appendChild(option);
+  };
+  if (backend === 'builtin') {
+    addOption('builtin', '内置知识库（本地文档）');
+    select.value = 'builtin'; select.disabled = true; return;
+  }
+  if (backend === 'local') {
+    const discovered = Array.isArray(ASSISTANT_UI.localModels) ? ASSISTANT_UI.localModels : [];
+    const configured = typeof cfg.local_model === 'string' ? cfg.local_model.trim() : '';
+    const selected = conv && conv.modelName || configured || discovered[0] || '';
+    if (conv && !conv.modelName && selected) conv.modelName = selected;
+    const models = Array.from(new Set([...discovered, configured, selected].filter(name => typeof name === 'string' && name.trim())));
+    if (!models.length) addOption('', '请在设置中配置本地模型', true);
+    else models.forEach(name => addOption(name, name));
+    select.value = selected;
+    select.disabled = ASSISTANT_UI.busy;
+    return;
+  }
+  const defaultModel = typeof cfg.cloud_model === 'string' && cfg.cloud_model ? cfg.cloud_model : '默认云端模型';
+  addOption('__default__', `默认：${defaultModel}${cfg.cloud_api_key_set ? '' : '（未配置 API Key）'}`);
+  const profiles = Array.isArray(cfg.cloud_api_profiles) ? cfg.cloud_api_profiles : [];
+  profiles.forEach(profile => {
+    if (!profile || typeof profile.id !== 'string') return;
+    const label = [profile.name, profile.model].filter(Boolean).join(' · ') || profile.id;
+    addOption(profile.id, label + (profile.api_key_set ? '' : '（未配置 API Key）'));
+  });
+  const selected = conv && conv.cloudProfileId || '__default__';
+  if (selected !== '__default__' && !profiles.some(profile => profile && profile.id === selected)) {
+    addOption(selected, `已删除的配置：${selected}（请重新选择）`, true);
+  }
+  if (conv && !conv.cloudProfileId) conv.cloudProfileId = selected;
+  select.value = selected;
+  select.disabled = ASSISTANT_UI.busy;
+}
 function assistantRenderConversation(options = {}) {
   const list = assistantEl('assistant-messages'); if (!list) return;
   const previousScrollTop = list.scrollTop;
@@ -5195,13 +5235,27 @@ function assistantRenderConversation(options = {}) {
   if (followBottom) list.scrollTop = list.scrollHeight;
   else list.scrollTop = previousScrollTop;
   const model = assistantEl('assistant-model-type'); if (model && conv) model.value = conv.backend || 'builtin';
+  assistantRenderModelNameSelector(conv);
   assistantRenderConversationList(); assistantSetPrivacy();
 }
-function assistantNewConversation(backend) {
+function assistantSetConversationBackend(conv, backend) {
+  const cfg = ASSISTANT_UI.config || {};
+  conv.backend = backend;
+  if (backend === 'local') conv.modelName = String(cfg.local_model || ASSISTANT_UI.localModels[0] || '');
+  else delete conv.modelName;
+  if (backend === 'cloud') conv.cloudProfileId = '__default__';
+  else delete conv.cloudProfileId;
+}
+function assistantNewConversation(backend, selection = null) {
   if (ASSISTANT_UI.busy) return null;
   const model = backend || (assistantEl('assistant-model-type') && assistantEl('assistant-model-type').value) || 'builtin';
+  const cfg = ASSISTANT_UI.config || {};
   const now = Date.now();
   const conv = { id: assistantUid(), title: '新对话', backend: model, messages: [], createdAt: now, updatedAt: now, customTitle: false };
+  if (model === 'local') conv.modelName = selection && typeof selection.modelName === 'string'
+    ? selection.modelName : String(cfg.local_model || ASSISTANT_UI.localModels[0] || '');
+  if (model === 'cloud') conv.cloudProfileId = selection && typeof selection.cloudProfileId === 'string'
+    ? selection.cloudProfileId : '__default__';
   ASSISTANT_UI.conversations.unshift(conv);
   if (ASSISTANT_UI.conversations.length > 30) ASSISTANT_UI.conversations.length = 30;
   ASSISTANT_UI.activeId = conv.id;
@@ -5541,6 +5595,55 @@ function assistantRenderToolChecks(selected) {
     label.appendChild(input); label.appendChild(name); root.appendChild(label);
   });
 }
+function assistantRenderCloudProfiles() {
+  const root = assistantEl('assistant-cloud-profiles'); if (!root) return;
+  while (root.firstChild) root.removeChild(root.firstChild);
+  const profiles = ASSISTANT_UI.cloudProfilesDraft;
+  if (!profiles.length) {
+    const empty = document.createElement('div'); empty.className = 'assistant-profile-help';
+    empty.textContent = '尚未添加额外云端配置；默认云端模型仍可单独使用。'; root.appendChild(empty);
+  }
+  profiles.forEach((profile, index) => {
+    const card = document.createElement('section'); card.className = 'assistant-cloud-profile';
+    const heading = document.createElement('div'); heading.className = 'assistant-cloud-profile-heading';
+    const title = document.createElement('strong'); title.textContent = profile.name || `云端配置 ${index + 1}`; heading.appendChild(title);
+    const keyStatus = document.createElement('small'); keyStatus.textContent = profile.api_key_set ? 'API Key 已配置（不回显）' : '尚未配置 API Key'; heading.appendChild(keyStatus);
+    const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'danger'; remove.textContent = '删除';
+    remove.setAttribute('aria-label', `删除云端配置 ${profile.name || index + 1}`);
+    remove.addEventListener('click', () => {
+      if (!window.confirm(`删除云端配置“${profile.name || `配置 ${index + 1}`}”？保存后将同时清除服务进程内存中的对应 API Key。`)) return;
+      ASSISTANT_UI.cloudProfilesDraft = ASSISTANT_UI.cloudProfilesDraft.filter(item => item.id !== profile.id);
+      assistantRenderCloudProfiles();
+    });
+    heading.appendChild(remove); card.appendChild(heading);
+    const fields = document.createElement('div'); fields.className = 'assistant-cloud-profile-fields';
+    const addField = (labelText, field, type, placeholder, wide = false) => {
+      const label = document.createElement('label'); if (wide) label.className = 'assistant-cloud-profile-endpoint';
+      const caption = document.createElement('span'); caption.textContent = labelText; label.appendChild(caption);
+      const input = document.createElement('input'); input.type = type; input.value = String(profile[field] || '');
+      input.placeholder = placeholder; input.dataset.cloudProfileField = field;
+      input.autocomplete = type === 'password' ? 'new-password' : 'off';
+      input.addEventListener('input', () => {
+        profile[field] = input.value;
+        if (field === 'name') title.textContent = input.value || `云端配置 ${index + 1}`;
+      });
+      label.appendChild(input); fields.appendChild(label);
+    };
+    addField('显示名称', 'name', 'text', '例如：DeepSeek 生产环境');
+    addField('HTTPS API 地址', 'base_url', 'url', 'https://api.example.com/v1', true);
+    addField('模型 ID', 'model', 'text', '例如：deepseek-chat');
+    addField('API Key', 'api_key', 'password', profile.api_key_set ? '留空＝保留当前值；不会回显' : '输入云端 API Key');
+    const clearLabel = document.createElement('label'); clearLabel.className = 'check';
+    const clearInput = document.createElement('input'); clearInput.type = 'checkbox'; clearInput.checked = !!profile.clear_api_key;
+    clearInput.addEventListener('change', () => { profile.clear_api_key = clearInput.checked; });
+    const clearText = document.createElement('span'); clearText.textContent = '清除服务进程内存中的 API Key';
+    clearLabel.appendChild(clearInput); clearLabel.appendChild(clearText); fields.appendChild(clearLabel);
+    card.appendChild(fields); root.appendChild(card);
+  });
+  const status = assistantEl('assistant-cloud-profile-status');
+  if (status) { status.textContent = `已添加 ${profiles.length} / 10 项；保存需要管理员口令。`; status.classList.remove('is-error'); }
+  const add = assistantEl('assistant-cloud-profile-add'); if (add) add.disabled = profiles.length >= 10;
+}
 function assistantFillConfigForm(cfg) {
   const setValue = (id, value) => { const el = assistantEl(id); if (el) el.value = value == null ? '' : String(value); };
   const setCheck = (id, value) => { const el = assistantEl(id); if (el) el.checked = !!value; };
@@ -5548,6 +5651,11 @@ function assistantFillConfigForm(cfg) {
   setValue('assistant-timeout', cfg.timeout_s); setValue('assistant-temperature', cfg.temperature); setValue('assistant-max-tokens', cfg.max_tokens);
   setValue('assistant-local-url', cfg.local_base_url); setValue('assistant-local-model', cfg.local_model);
   setValue('assistant-cloud-url', cfg.cloud_base_url); setValue('assistant-cloud-model', cfg.cloud_model);
+  ASSISTANT_UI.cloudProfilesDraft = (Array.isArray(cfg.cloud_api_profiles) ? cfg.cloud_api_profiles : []).map(profile => ({
+    id: String(profile.id || ''), name: String(profile.name || ''), base_url: String(profile.base_url || ''),
+    model: String(profile.model || ''), api_key_set: !!profile.api_key_set, api_key: '', clear_api_key: false,
+  }));
+  assistantRenderCloudProfiles();
   setCheck('assistant-rag-enabled', cfg.rag_enabled); setValue('assistant-rag-top-k', cfg.rag_top_k); setValue('assistant-rag-threshold', cfg.rag_similarity_threshold);
   setCheck('assistant-log-queries', cfg.log_queries); setValue('assistant-sensitive-terms', '');
   setCheck('assistant-tools-enabled', cfg.tools_enabled); setCheck('assistant-cloud-tools-enabled', cfg.cloud_tools_enabled);
@@ -5585,7 +5693,7 @@ function assistantRenderLocalModels(data) {
     models.forEach(name => { const option = document.createElement('option'); option.value = name; option.textContent = name; select.appendChild(option); });
   }
   ASSISTANT_UI.localModels = models;
-  assistantSyncLocalModelPicker();
+  assistantSyncLocalModelPicker(); assistantRenderModelNameSelector();
   const state = data && data.status;
   if (state === 'ready') assistantSetFeedback('assistant-local-models-status', `已读取 ${models.length} 个本地模型；也可手动输入其他名称。`);
   else if (state === 'empty') assistantSetFeedback('assistant-local-models-status', '服务未返回模型列表；当前名称保留，仍可手动输入。');
@@ -5633,7 +5741,11 @@ async function assistantLoadConfig() {
     ASSISTANT_UI.views = Array.isArray(data.views) ? data.views : [];
     assistantFillConfigForm(ASSISTANT_UI.config);
     const conv = assistantCurrentConversation();
-    if (conv && !conv.messages.length && ASSISTANT_UI.config.default_model_type) { conv.backend = ASSISTANT_UI.config.default_model_type; const model = assistantEl('assistant-model-type'); if (model) model.value = conv.backend; }
+    if (conv && !conv.messages.length && ASSISTANT_UI.config.default_model_type) {
+      assistantSetConversationBackend(conv, ASSISTANT_UI.config.default_model_type);
+      const model = assistantEl('assistant-model-type'); if (model) model.value = conv.backend;
+    }
+    assistantRenderModelNameSelector(conv);
     assistantRenderConversationList(); assistantSetPrivacy(); assistantSyncLauncher();
     assistantSetFeedback('assistant-config-message', '配置已读取；API Key 不会回显。');
     await assistantLoadLocalModels();
@@ -5772,6 +5884,8 @@ async function assistantSubmit() {
   let reader = null;
   try {
     const payload = { prompt, history, model_type: conv.backend || 'builtin', stream: true };
+    if (conv.backend === 'local') payload.model_name = conv.modelName || (ASSISTANT_UI.config && ASSISTANT_UI.config.local_model) || '';
+    if (conv.backend === 'cloud' && conv.cloudProfileId && conv.cloudProfileId !== '__default__') payload.cloud_profile_id = conv.cloudProfileId;
     if (selectedImages.length) payload.images = selectedImages.map(image => ({ mime_type: image.mime_type, data: image.data }));
     const response = await fetch(assistantApiUrl('/api/assistant/chat'), { method: 'POST', headers: assistantOperatorHeaders({ 'Content-Type': 'application/json' }), signal: controller.signal,
       body: JSON.stringify(payload) });
@@ -5808,17 +5922,45 @@ async function assistantSubmit() {
 function assistantChangeBackend() {
   const select = assistantEl('assistant-model-type'), conv = assistantCurrentConversation(); if (!select) return;
   const next = ['builtin', 'local', 'cloud'].includes(select.value) ? select.value : 'builtin';
-  if (conv && conv.backend === next) { assistantSetPrivacy(); return; }
+  if (conv && conv.backend === next) { assistantRenderModelNameSelector(conv); assistantSetPrivacy(); return; }
   if (conv && conv.messages.length) {
-    const message = '切换模型后会新建一个独立会话，当前对话将保留并仍使用原模型。继续切换？';
-    if (!window.confirm(message)) { select.value = conv.backend || 'builtin'; assistantSetPrivacy(); return; }
+    const message = '切换后端会新建一个独立会话，当前对话将保留并仍使用原模型。继续切换？';
+    if (!window.confirm(message)) {
+      select.value = conv.backend || 'builtin'; assistantRenderModelNameSelector(conv); assistantSetPrivacy(); return;
+    }
     assistantNewConversation(next);
   } else {
-    if (conv) conv.backend = next; else assistantNewConversation(next);
+    if (conv) assistantSetConversationBackend(conv, next); else assistantNewConversation(next);
     assistantRenderConversation();
   }
   assistantSetPrivacy();
   if (ASSISTANT_UI.operatorToken) assistantVerifyOperator();
+}
+function assistantChangeModelName() {
+  const select = assistantEl('assistant-model-name'), conv = assistantCurrentConversation();
+  if (!select || !conv) return;
+  if (ASSISTANT_UI.busy) { assistantRenderModelNameSelector(conv); return; }
+  let selection;
+  if (conv.backend === 'local') {
+    const modelName = String(select.value || '').trim();
+    if (!modelName || modelName === conv.modelName) return;
+    selection = { modelName };
+  } else if (conv.backend === 'cloud') {
+    const cloudProfileId = String(select.value || '__default__');
+    if (cloudProfileId === (conv.cloudProfileId || '__default__')) return;
+    selection = { cloudProfileId };
+  } else return;
+  if (conv.messages.length) {
+    if (!window.confirm('切换具体模型后会新建一个独立会话，当前对话及其模型保持不变。继续切换？')) {
+      assistantRenderModelNameSelector(conv); return;
+    }
+    assistantNewConversation(conv.backend, selection);
+  } else {
+    if (conv.backend === 'local') conv.modelName = selection.modelName;
+    else conv.cloudProfileId = selection.cloudProfileId;
+    assistantRenderConversation();
+  }
+  assistantSetPrivacy();
 }
 async function assistantSaveConfig() {
   const previousLocalUrl = String(ASSISTANT_UI.config && ASSISTANT_UI.config.local_base_url || '').trim();
@@ -5838,6 +5980,20 @@ async function assistantSaveConfig() {
     enabled_tools: Array.from(document.querySelectorAll('#assistant-enabled-tool-checks input[data-tool-id]:checked')).map(el => el.dataset.toolId),
     visible_views: Array.from(document.querySelectorAll('#assistant-visible-views input[data-view-id]:checked')).map(el => el.dataset.viewId),
   };
+  const profileSecrets = {}, profilesToClear = [];
+  const incompleteProfile = ASSISTANT_UI.cloudProfilesDraft.find(profile =>
+    !String(profile.name || '').trim() || !String(profile.base_url || '').trim() || !String(profile.model || '').trim());
+  if (incompleteProfile) {
+    assistantSetFeedback('assistant-cloud-profile-status', '每个额外云端配置都必须填写显示名称、HTTPS API 地址和模型 ID；未完成的配置请删除或补齐。', true);
+    return;
+  }
+  payload.cloud_api_profiles = ASSISTANT_UI.cloudProfilesDraft.map(profile => {
+    if (profile.api_key) profileSecrets[profile.id] = profile.api_key;
+    else if (profile.clear_api_key) profilesToClear.push(profile.id);
+    return { id: profile.id, name: String(profile.name).trim(), base_url: String(profile.base_url).trim(), model: String(profile.model).trim() };
+  });
+  payload.cloud_api_profile_secrets = profileSecrets;
+  payload.clear_cloud_api_profile_secrets = profilesToClear;
   const sensitiveTerms = get('assistant-sensitive-terms').value.split(/\r?\n/).map(s => s.trim()).filter(Boolean).slice(0, 30);
   if (sensitiveTerms.length) payload.sensitive_terms = sensitiveTerms;
   else if (get('assistant-clear-sensitive-terms').checked) payload.sensitive_terms = [];
@@ -5853,10 +6009,11 @@ async function assistantSaveConfig() {
     const localUrlChanged = previousLocalUrl !== String(ASSISTANT_UI.config && ASSISTANT_UI.config.local_base_url || '').trim();
     const active = assistantCurrentConversation();
     if (active && !active.messages.length && ASSISTANT_UI.config.default_model_type) {
-      active.backend = ASSISTANT_UI.config.default_model_type;
+      assistantSetConversationBackend(active, ASSISTANT_UI.config.default_model_type);
       const modelSelect = assistantEl('assistant-model-type'); if (modelSelect) modelSelect.value = active.backend;
     }
-    assistantFillConfigForm(ASSISTANT_UI.config); assistantRenderConversationList(); assistantSetPrivacy(); assistantSyncLauncher();
+    assistantFillConfigForm(ASSISTANT_UI.config); assistantRenderModelNameSelector(active);
+    assistantRenderConversationList(); assistantSetPrivacy(); assistantSyncLauncher();
     assistantSetFeedback('assistant-config-message', '设置已保存到服务端本地配置；API Key 不会回显，环境变量优先。');
     if (localUrlChanged) await assistantRefreshLocalModels();
   } catch (e) { assistantSetFeedback('assistant-config-message', '保存失败：' + e.message, true); }
@@ -5952,7 +6109,26 @@ function assistantInit() {
     });
   }
   const model = assistantEl('assistant-model-type'); if (model) model.addEventListener('change', assistantChangeBackend);
-  const newButton = assistantEl('assistant-new'); if (newButton) newButton.addEventListener('click', () => { const current = assistantCurrentConversation(); assistantNewConversation(current ? current.backend : (model && model.value) || 'builtin'); });
+  const modelName = assistantEl('assistant-model-name'); if (modelName) modelName.addEventListener('change', assistantChangeModelName);
+  const addCloudProfile = assistantEl('assistant-cloud-profile-add'); if (addCloudProfile) addCloudProfile.addEventListener('click', () => {
+    if (ASSISTANT_UI.cloudProfilesDraft.length >= 10) {
+      assistantSetFeedback('assistant-cloud-profile-status', '额外云端配置最多 10 项。', true); return;
+    }
+    ASSISTANT_UI.cloudProfilesDraft.push({ id: assistantUid(), name: '', base_url: '', model: '', api_key_set: false, api_key: '', clear_api_key: false });
+    assistantRenderCloudProfiles();
+    const firstInput = assistantEl('assistant-cloud-profiles') && assistantEl('assistant-cloud-profiles').querySelector('.assistant-cloud-profile input');
+    if (firstInput) firstInput.focus();
+  });
+  const newButton = assistantEl('assistant-new'); if (newButton) newButton.addEventListener('click', () => {
+    const current = assistantCurrentConversation();
+    const currentProfile = current && current.cloudProfileId;
+    const profileStillExists = !currentProfile || currentProfile === '__default__'
+      || (Array.isArray(ASSISTANT_UI.config && ASSISTANT_UI.config.cloud_api_profiles)
+        && ASSISTANT_UI.config.cloud_api_profiles.some(profile => profile && profile.id === currentProfile));
+    const selection = current && current.backend === 'local' ? { modelName: current.modelName }
+      : current && current.backend === 'cloud' ? { cloudProfileId: profileStillExists ? (currentProfile || '__default__') : '__default__' } : null;
+    assistantNewConversation(current ? current.backend : (model && model.value) || 'builtin', selection);
+  });
   const clearContext = assistantEl('assistant-clear-context'); if (clearContext) clearContext.addEventListener('click', () => assistantClearContext());
   const rename = assistantEl('assistant-rename-conversation'); if (rename) rename.addEventListener('click', () => assistantRenameConversation());
   const deleteConversation = assistantEl('assistant-delete-conversation'); if (deleteConversation) deleteConversation.addEventListener('click', () => assistantRemoveConversation());

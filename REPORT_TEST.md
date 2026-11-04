@@ -3971,3 +3971,23 @@ delta_i_a  = d_i_obs
   - jsdom 覆盖事件同步与滚动路由，但不模拟浏览器原生 `<select>` 弹出层、真实鼠标滚轮惯性或目标浏览器布局；不得据此宣称用户浏览器已验收。仓库 `tmp/` 未读取、未修改、未暂存或提交。
 - 是否进入 REPORT.md（稳定结论）：否（纯 UI / 前端交互修复，不涉及稳定 NILM 算法结论）。
 - 遗留问题：请在目标浏览器确认候选可点击展开、选中后可保存、列表外模型名仍可手填；在生成中从底部滚到较早消息后确认不跳回，并在会话栏、配置 / 文档区及空白处验证滚轮。真实 Ollama / OpenAI-compatible 服务、浏览器外观与现场网络仍待用户环境实测。
+
+## [2026-11-04] 专题：智能问答具体模型选择、多云端 API 档案与滚动复验
+- 类型：用户专题 / 功能实现与 UI 回归验证专题
+- 目标与假设：除复核助手滚动容器、流式消息阅读位置、嵌套滚动与空白区 wheel 路由外，新增问答头部的具体模型选择和云端 API 动态配置。实施假设为：本地显示发现 / 管理员配置的模型；cloud 保留旧单一云端字段作为默认档案，额外最多 10 个命名档案，每档一个 OpenAI-compatible HTTPS endpoint、模型 ID 与 API Key；模型切换创建独立会话；API Key 仅服务进程内存保存、不写盘、不回传；档案写操作受管理员口令保护。
+- 方法 / 实现：
+  - `AssistantService` 新增 `cloud_api_profiles` 普通配置字段；校验 profile ID 唯一且不含保留值、显示名 / endpoint / model ID 长度和控制字符、云端地址 HTTPS 规则、最多 10 档。额外 profile API Key 独立存于 `_cloud_profile_secrets` 内存映射，配置保存只写 metadata；公开配置仅返回 `api_key_set` 布尔状态。管理员可增加、更新、清密钥、删除；删档同步移除该 ID 的内存密钥，重启后需要重新输入。
+  - 聊天服务端对 local 请求校验并使用 `model_name`，仍只请求管理员配置的 local endpoint；cloud 请求只接受服务端档案 ID，禁止客户端覆盖 `model_name`、endpoint 或 Key。档案 ID 命中服务端 metadata 后才路由 endpoint / model / Key；legacy default 继续使用 `cloud_base_url` / `cloud_model` / `cloud_api_key` 与旧环境变量。
+  - 问答头部增加独立“问答后端 / 具体模型”选择器：local 候选合并服务发现列表与默认模型，cloud 显示默认和命名档案；具体模型变化时有消息的对话会确认并新建会话，原会话保留其 model / profile。设置区添加 profile 卡片、密钥状态、增改删和清 key；密钥使用 password 输入框并仅在管理员 PUT 中独立提交。
+  - 扩展 `tests/test_assistant.py` / `tests/test_server.py`，覆盖 profile 校验、管理员鉴权、默认配置兼容、密钥不回传 / 不落盘 / 重启失效、清除和删档、local model override、cloud ID 路由及不接受客户端 cloud model override。扩展 `tests/test_web_ui.py` 与 `tools/ui_assistant_check.cjs`，覆盖两个选择器、独立会话、动态加档、API Key 单独提交、聊天 payload 只带选中模型 / 档案 ID及滚动回归。
+  - 更新 README §3.6、v0.99.40 变更记录与 `docs/智能问答助手说明.md`，用 `.venv/bin/python tools/generate_assistant_docs.py` 同步使用 / 部署手册；未新增同类报告文件。
+- 用户执行命令：无；没有连接真实本地模型或云端 API；没有可用 Chromium / Firefox / Playwright / Puppeteer，因此本轮仍无法进行真实浏览器视觉与原生鼠标滚轮验收。
+- 结果 / 结论：
+  - `.venv/bin/pytest tests/test_assistant.py tests/test_server.py tests/test_web_ui.py -q`：**75 passed / 1 warning**（约 10.2 s）；唯一 warning 为既有 Starlette/httpx `TestClient` 弃用提示。
+  - 当前源码全量 `.venv/bin/pytest -q`：**620 passed / 1 skipped / 1 warning**（140.23 s）；同一既有 deprecation warning。
+  - `node tools/ui_assistant_check.cjs`：**PASS 121 checks**；包含消息流式期间上翻 / 底部跟随、标题 / 空白区与嵌套滚动，以及 local / cloud 具体模型切换、旧会话保留、动态云端档案与密钥单独提交。
+  - `node --check app/static/app.js`、harness `node --check`、定向 `py_compile`、`git diff --check` 均通过；生成的四份手册 `--check` 均 `OK`（软件设计 42,713 字、软件使用 223,483 字、软件部署 45,589 字、调参验证 142,220 字）。
+  - 重启后的 live preview `0.0.0.0:8001` 中 `/`、`/static/app.js`、`/static/style.css` 均 HTTP 200 并含新 UI / 档案标记。此为服务与资源 smoke check，不是浏览器滚轮 / 布局实测。
+  - 本轮未连接真实模型、provider、目标浏览器、Windows 或现场网络；`tmp/` 用户数据未读取、修改、暂存或提交。
+- 是否进入 REPORT.md（稳定结论）：否（配置与 UI 实现及滚动回归，不产生新的稳定 NILM 算法结论）。
+- 遗留问题：目标浏览器需手测原生选择器、响应式 header 两个下拉框、消息滚轮和嵌套滚动边界；真实 Ollama / cloud provider 需验证具体 model ID 与 endpoint 的兼容性、权限与网络策略。额外 profile Key 在服务重启后刻意不恢复，管理员需重新配置；云端请求已有隐私 / 敏感内容边界仍适用。

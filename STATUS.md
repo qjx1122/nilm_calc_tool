@@ -1,7 +1,7 @@
 # STATUS.md
 
 > 续接文件（BOOTSTRAP.md v2.2 台账）。每次收尾必更新；只改本文件，不另建同类文件。
-> 最后更新：2026-11-04（第 197 轮实现与沙盒验证完成：候选原生下拉 + 手动输入保留、流式期间滚动保持与侧栏 wheel 路由；定向 73 passed、隔离全量 618 passed / 1 skipped、jsdom 99 checks；live preview HTTP smoke 200；实现提交 `cb23f2d`、专题 / 会话提交 `b18653d` 与收尾状态提交 `43049f5` 已推送至活动分支；真实目标浏览器 / 模型未验；`tmp/` 未触碰）
+> 最后更新：2026-11-04（第198轮收尾待提交：智能问答具体模型选择 / 云端 API 档案与滚动复验；固定分支 active；不触碰 `tmp/`）
 > （上轮第 195 轮已完成并推送：本地模型名可编辑并支持发现 / 刷新；真实模型与浏览器现场验收待用户环境）
 > （第 186 轮 两层布局 v0.99.33，`576 passed`）
 > （第 185 轮 `stage_free` 列表框 v0.99.32，`575 passed`）
@@ -9,14 +9,20 @@
 
 ## 当前角色
 - 角色：**资深电力算法专家**（`ROLE.md` v1.4 指定的默认当前角色）
-- 本任务级覆盖：**工程实现工程师**（`ROLE.md` 已定义；只对第 197 轮助手本地模型候选下拉 / 滚动故障修复与回归生效）
-- 生效范围：本地模型候选选择 UI、会话消息滚动 / 设置区滚轮交互及相应测试
+- 本任务级覆盖：**工程实现工程师**（`ROLE.md` 已定义；第 198 轮智能问答模型选择、云端配置档案与滚动复验）
+- 生效范围：助手 local / cloud 模型名选择、动态云端 API 档案、配置密钥安全，以及消息 / 会话 / 设置 / 文档滚动与流式阅读位置
 - 默认执行模式：**模式 A（沙盒自执行）**；真实模型、目标浏览器与部署网络未连接时只报告未实测，不臆断现场验收。保持 `tmp/` 原样且排除提交。
 - 历史任务执行模式基线（本任务单独声明为模式 A）：**混合**——沙盒侧（模式 A）写码 + 合成信号解析解自验证 + live preview 实跑，**已有实录**；用户侧（模式 B）Windows 部署 / 真实数据对账 / 生产常驻，**只出执行包，未获实录不下结论**（执行包见 `REPORT_TEST.md` T-002 的 W/R/P 三组）
   - 说明：更早任务用户显式指定过模式 B（仅对「补齐台账骨架」生效）；历史任务若用户跳过模式澄清，曾按上述混合模式执行；每个新任务仍以当前任务登记的角色与模式为准。第 5 轮（界面下拉框检查）沙盒侧＝jsdom 驱动真实页面打真实服务端 + REST 空值语义实录，**已✅实录**；用户侧＝浏览器手点 U 组 7 步，**🔶待回报**。**第 6 轮（四功能）**沙盒侧＝pytest 25 项 + jsdom 30 项 + REST/CLI 实录，**已✅实录**；用户侧＝浏览器手点 U6 组 8 步，**🔶待回报**。**第 7 轮（三功能）**沙盒侧＝pytest 18 项 + jsdom 39 项 + CLI/源层实录，**已✅实录**；用户侧＝U7 组 8 步，**🔶待回报**。**第 9 轮（间谐波/直流/事件）**沙盒侧＝pytest 13 项 + jsdom 28 项 + live preview 实跑，**已✅实录**；用户侧＝U9 组 6 步，**🔶待回报**。**第 10 轮（离线列映射开关）**沙盒侧＝pytest 8 项 + jsdom 15 项 + REST 实录，**已✅实录**；用户侧＝U10 组 6 步，**🔶待回报**。**第 11 轮（时标 UTC 开关）**沙盒侧＝pytest 6 项 + 双时区全量 + jsdom 11 项，**已✅实录**；用户侧＝U11 组 5 步，**🔶待回报**。**第 12 轮（负荷辨识）**沙盒侧＝pytest 8 项 + jsdom 16 项 + 引擎/CSV 实录，**已✅实录**；用户侧＝U12 组 5 步，**🔶待回报**
 
 ## 当前目标
-- **本任务（2026-11-04 第 197 轮实现与沙盒验证完成：助手本地模型选择 / 滚动修复）**：修复模型候选下拉操作异常和助手界面鼠标滚轮浏览问题。
+- **本任务（2026-11-04 第 198 轮已实现 / 待提交推送：智能问答模型选择、云端档案与滚动复验）**：按用户要求，在复核助手滚轮 / 流式阅读行为之外，新增具体模型名称选择及动态云端 API 配置档案。
+  - **角色 / 模式**：工程实现工程师（默认角色仍为资深电力算法专家）；模式 A；固定活动分支 `arena/82e34fb8-nilm-calc-tool`；严禁读取、修改、暂存或提交 `tmp/`。
+  - **实现 / 安全边界**：问答头部单独选择 backend 和具体模型；local 显示本地发现 / 管理员配置的模型名，通过 `model_name` 路由但 endpoint 仍由服务端配置。cloud 保留旧 `cloud_base_url` / `cloud_model` / `cloud_api_key` 默认项，支持最多 10 个命名档案；每档一个 HTTPS OpenAI-compatible endpoint + model ID。客户端只传 profile ID，不能指定云端 URL / model_name / Key；服务端查档路由。profile API Key 单独由管理员 PUT、只存在服务进程内存、不写普通 config、不回传；删档 / 清 key 会移除内存 Key，重启需重新输入。模型切换对有消息会话确认并创建独立会话。
+  - **滚动复验 / 限制**：覆盖消息区流式上翻 / 底部跟随 / 完成重绘、会话列表、设置 / 文档内外层滚动、标题和空白区 wheel。`tools/ui_assistant_check.cjs` 共 **121 checks**，包含滚动与模型选择回归；HTTP preview `/`、JS、CSS 均 **200**。本环境无 Chromium / Firefox / Playwright / Puppeteer，未完成真实浏览器布局、原生选择器与滚轮实测，不作现场通过声明。
+  - **文档 / 验证**：更新 README v0.99.40、`docs/智能问答助手说明.md`、生成的使用 / 部署手册；四份手册 `--check` 全 `OK`。定向 assistant / server / web pytest **75 passed / 1 warning**；全量 `.venv/bin/pytest -q` **620 passed / 1 skipped / 1 warning**（140.23 s）；JS `node --check`、定向 `py_compile`、`git diff --check` 通过。唯一 warning 为既有 Starlette/httpx `TestClient` 弃用提醒。
+  - **台账 / 下一步**：专题已追加 `REPORT_TEST.md`，会话纪要已追加 `session/NILM_AC_session_complete.md`。现在复核明确文件列表、提交到当前活动分支并推送；真实模型 / 云端 provider、目标浏览器与现场网络仍待用户环境验收。
+- **上一任务（2026-11-04 第 197 轮已实现并推送：助手本地模型选择 / 滚动修复）**：修复模型候选下拉操作异常和助手界面鼠标滚轮浏览问题。
   - **角色 / 模式**：工程实现工程师（默认当前角色仍为资深电力算法专家）；模式 A；只在活动分支 `arena/82e34fb8-nilm-calc-tool` 修改；不触碰 `tmp/`。
   - **根因 / 实现**：模型名原为 `<input list> + datalist`，原生候选没有明确可点击展开入口；改为独立原生 `#assistant-local-model-select`，并保留可编辑 `#assistant-local-model`，选择与输入双向同步，空 / 错 / 刷新均不覆盖手填值，仍使用既有服务端发现 / 管理员刷新 / `local_model` 保存流程。消息增量 `assistantRefreshMessage()` 与请求结束重绘都曾强制滚到底，且消息区设置了 `scroll-behavior:smooth`；现仅在原本接近底部（≤72 px）时跟随、完成重绘保留阅读位置，并由面板级 wheel 处理聊天 / 会话标题空白、嵌套内容边界与相应滚动容器；相关区域显式设置纵向 overflow、`min-height:0`、内层 overscroll。
   - **回归 / 验证**：`tests/test_web_ui.py` **22 passed**；定向助手 / 服务 / UI pytest **73 passed / 1 warning**（10.24 s）；从 `git archive HEAD` + 明确补丁构建且不含仓库 `tmp/` 的隔离全量 pytest **618 passed / 1 skipped / 1 warning**（137.50 s）；jsdom **99 checks passed**，覆盖候选同步 / 手动模型保存、刷新 / 空列表保值、流式阅读位置、底部跟随、聊天 / 会话 / 嵌套设置滚轮路由。JS `node --check`、`tests/test_web_ui.py` py_compile 与 HTTP smoke 均通过；preview 首页 / JS / CSS HTTP 200。唯一 warning 是既有 Starlette/httpx TestClient 弃用提醒。
@@ -586,7 +592,7 @@
 - 第 191 轮智能问答 v0.99.38：`app/assistant_tools.py`（8 项闭集工具 / 参数 schema）、`app/assistant.py` / `app/server.py`（令牌 + scope、提案与服务端复核、受控业务 API、审计）、`app/static/index.html` / `app.js` / `style.css`（操作员验证、提案有效期 / 状态 / 二次确认）；回归 `tests/test_assistant.py`、`tests/test_server.py`、`tests/test_web_ui.py`、`tools/ui_assistant_check.cjs`；说明文档与报告见 `README.md` §3.6 / §11、`docs/智能问答助手说明.md`、`REPORT_TEST.md`、本文件与 `session/NILM_AC_session_complete.md`。
 - 第 189 轮智能问答 v0.99.37：`app/assistant_docs.py`（白名单完整文档与代码 / 两侧模板参数表）、`docs/智能问答助手说明.md`、`app/assistant.py` / `app/server.py`（builtin/local/cloud RAG、参数优先排序、`GET /api/assistant/documents`）、`app/static/index.html` / `app.js` / `style.css`（固定复合侧栏与移动标签）；测试 `tests/test_assistant.py`、`tests/test_server.py`、`tests/test_web_ui.py`、`tools/ui_assistant_check.cjs`；专题记录 `REPORT_TEST.md` 与 `session/NILM_AC_session_complete.md`。
 - 第 188 轮智能问答 v0.99.36：`app/assistant.py`（builtin / local-cloud 适配 / RAG / 脱敏 / 限流）、`app/server.py`（`/api/assistant/*` 与服务端脱敏判据）、`app/static/index.html` / `app.js` / `style.css`（右侧抽屉）；运行数据 `output/assistant/`（gitignore）
-- `README.md` — 程序版本仍 **v0.99.38**；第 194 轮同步管理员 / 操作员令牌生成、scope 判读与服务环境注入说明；第 192 轮四份静态手册生成流程；第 191 轮智能问答受控提案 / scope / fail-closed / 云端默认关闭；第 189 轮固定复合侧栏及参数文档索引保留
+- `README.md` — 当前 **v0.99.40**；第 198 轮智能问答具体模型选择、云端命名档案与最新验证汇总见 §3.6 / §11；保留管理员与操作员令牌、scope 判读、受控工具、固定复合侧栏及参数文档等历史说明
 - 历史 README 索引 — **v0.8**（§3.1 增「间谐波 / 直流偏置 / 事件 子界面」小节含假设与可配置项表、§3.4 `/api/events*` 与 WS `event`、§11 第 9 轮；v0.7：§3.1 增「数据处理子界面：离线波形 CSV 重采样」小节、§3.2 8 子命令、§3.4 4 个 `/api/process/resample*` 接口；v0.6：§3.1 增「实时落盘＋播放起点＋悬停取值」小节、§3.4 `/api/realtime`、§4.2 播放起点字段与 CLI、§8 七层验证）：§0 快速开始、§1 验收对照、**§2 本地部署（详细）**、**§3 运行说明（Web/CLI/库/REST 四种；§3.1 含数据源面板逐源可编辑/置灰字段表、两个保存入口语义对照、空值语义与 6 步手工点检清单）**、**§4 四种数据源详解（配置·三入口·实测·注意事项·验证，含 §4.6 四源对账表与 §4.8 一键复现）**、§5 数据目录、§6 配置结构、§7 输出产物、§8 五层验证、§9 生产推荐流程、§10 台账索引、§11 交付说明
 - `REPORT.md` — **v0.8**（新增 C-19 间谐波分组分辨率前提、C-20 事件状态机四规则；v0.7：新增 C-18 重采样时间轴/时标规则；v0.6：新增 C-16 三出口共用提取规则与按日期分文件、C-17 播放起点定位代价与可诊断）：稳定结论 C-01~C-08（电气量计算）+ C-09~C-12（四源等价性 / 切换前 drain / float32 禁存 epoch 秒与可诊断降级 / 无硬件验证路径）+ **C-13（界面层验证方法 + 深合并接口空值语义 + 推送覆盖用户输入）**；§3.3 十五类量口径；§5 六条实录教训
 - `REPORT_TEST.md` — **v0.8**（新增 **T-007** 第 9 轮间谐波/直流/事件：S1~S7 / F-29~F-31 / U9 组；v0.7：新增 **T-006** 第 8 轮数据处理子界面：S1~S7 / F-24~F-28 / U8 组；v0.6：新增 **T-005** 第 7 轮三功能：S1~S4 / F-17~F-21 / U7 组）：T-001（待回报）+ T-002（沙盒 A1~A10、B1/B2、用户侧 W/R/P）+ **T-003（沙盒 S1~S18 实录、四源对账表、F-01~F-10 修复、用户侧 S/U/D 三组执行包 + J-\* 判读 + 回收格式）**

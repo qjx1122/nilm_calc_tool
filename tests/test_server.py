@@ -485,16 +485,22 @@ def test_assistant_api_protects_configuration_secrets(client, tmp_path, monkeypa
     denied = client.put("/api/assistant/config", json={"enabled": False})
     assert denied.status_code == 403
     secret = "never-return-this-cloud-key"
+    profile_secret = "never-return-profile-cloud-key"
+    profile = {"id": "server-profile", "name": "API profile", "base_url": "https://api.profile.example/v1", "model": "profile-model"}
     saved = client.put("/api/assistant/config", headers={"X-Assistant-Admin-Token": "server-admin-test"},
-                       json={"cloud_api_key": secret, "enabled": True, "sensitive_terms": ["INTERNAL-PROJECT-ALPHA"]})
+                       json={"cloud_api_key": secret, "cloud_api_profiles": [profile],
+                             "cloud_api_profile_secrets": {"server-profile": profile_secret},
+                             "enabled": True, "sensitive_terms": ["INTERNAL-PROJECT-ALPHA"]})
     assert saved.status_code == 200, saved.text
     assert saved.json()["config"]["cloud_api_key_set"] is True
+    assert saved.json()["config"]["cloud_api_profiles"] == [{**profile, "api_key_set": True}]
     assert "sensitive_terms" not in saved.json()["config"]
-    assert secret not in saved.text
+    assert secret not in saved.text and profile_secret not in saved.text
     private = client.get("/api/assistant/config/private", headers={"X-Assistant-Admin-Token": "server-admin-test"})
     assert private.status_code == 200 and private.json()["config"]["sensitive_terms"] == ["INTERNAL-PROJECT-ALPHA"]
-    assert secret not in private.text
-    assert secret not in (tmp_path / "assistant" / "config.json").read_text(encoding="utf-8")
+    assert secret not in private.text and profile_secret not in private.text
+    persisted = (tmp_path / "assistant" / "config.json").read_text(encoding="utf-8")
+    assert secret not in persisted and profile_secret not in persisted
 
 
 def test_assistant_local_model_catalog_api_is_cached_and_refresh_is_admin_only(client, tmp_path, monkeypatch):

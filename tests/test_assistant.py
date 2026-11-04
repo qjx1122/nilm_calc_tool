@@ -89,6 +89,67 @@ def test_admin_config_keeps_api_keys_out_of_json_and_public_view(tmp_path, monke
         service.update_config({"sensitive_terms": [123]}, "test-admin-token")
 
 
+def test_named_cloud_profiles_keep_keys_memory_only_and_route_by_server_id(tmp_path, monkeypatch):
+    admin = "cloud-profile-admin-token"
+    monkeypatch.setenv("ELEC_TOOL_ASSISTANT_ADMIN_TOKEN", admin)
+    service = AssistantService(data_dir=str(tmp_path))
+    profile = {"id": "provider-alt", "name": "备用服务", "base_url": "https://api.alt.example/v1", "model": "reasoner-32k"}
+    default_secret = "default-cloud-secret-value"
+    profile_secret = "profile-cloud-secret-value"
+
+    public = service.update_config({
+        "cloud_base_url": "https://api.default.example/v1", "cloud_model": "default-chat",
+        "cloud_api_key": default_secret, "cloud_api_profiles": [profile],
+        "cloud_api_profile_secrets": {"provider-alt": profile_secret},
+    }, admin)
+    assert public["cloud_model"] == "default-chat"  # 旧的单一云端配置继续兼容
+    assert public["cloud_api_key_set"] is True
+    assert public["cloud_api_profiles"] == [{**profile, "api_key_set": True}]
+    assert profile_secret not in json.dumps(public) and default_secret not in json.dumps(public)
+    persisted = (tmp_path / "config.json").read_text(encoding="utf-8")
+    assert profile_secret not in persisted and default_secret not in persisted
+    saved_profiles = json.loads(persisted)["cloud_api_profiles"]
+    assert saved_profiles == [profile] and "api_key" not in json.dumps(saved_profiles)
+
+    default_plan = service.prepare_chat({"prompt": "解释配置范围", "model_type": "cloud", "rag_enabled": False})
+    assert (default_plan["base_url"], default_plan["model"], default_plan["api_key"]) == (
+        "https://api.default.example/v1", "default-chat", default_secret)
+    profile_plan = service.prepare_chat({"prompt": "解释配置范围", "model_type": "cloud",
+                                         "cloud_profile_id": "provider-alt", "rag_enabled": False})
+    assert (profile_plan["base_url"], profile_plan["model"], profile_plan["api_key"]) == (
+        profile["base_url"], profile["model"], profile_secret)
+    assert profile_secret not in json.dumps(public)
+
+    local_plan = service.prepare_chat({"prompt": "解释配置范围", "model_type": "local",
+                                       "model_name": "qwen2.5:14b", "rag_enabled": False})
+    assert local_plan["model"] == "qwen2.5:14b"
+    with pytest.raises(AssistantError, match="云端模型只能"):
+        service.prepare_chat({"prompt": "测试", "model_type": "cloud", "model_name": "client-chosen",
+                              "rag_enabled": False})
+    with pytest.raises(AssistantError, match="不存在"):
+        service.prepare_chat({"prompt": "测试", "model_type": "cloud", "cloud_profile_id": "unknown",
+                              "rag_enabled": False})
+    with pytest.raises(AssistantError, match="ID 格式"):
+        service.update_config({"cloud_api_profiles": [{**profile, "id": "bad\\nprofile"}]}, admin)
+    with pytest.raises(AssistantError, match="HTTPS"):
+        service.update_config({"cloud_api_profiles": [{**profile, "base_url": "http://example.com/v1"}]}, admin)
+    with pytest.raises(AssistantError, match="必须通过独立字段"):
+        service.update_config({"cloud_api_profiles": [{**profile, "api_key": profile_secret}]}, admin)
+
+    service.update_config({"cloud_api_profiles": [profile], "cloud_api_profile_secrets": {}}, admin)
+    assert service.public_config()["cloud_api_profiles"][0]["api_key_set"] is True  # 空输入保留内存 Key
+    service.update_config({"cloud_api_profile_secrets": {}, "clear_cloud_api_profile_secrets": ["provider-alt"]}, admin)
+    assert service.public_config()["cloud_api_profiles"][0]["api_key_set"] is False
+    with pytest.raises(AssistantError, match="尚未设置 API Key"):
+        service.prepare_chat({"prompt": "测试", "model_type": "cloud", "cloud_profile_id": "provider-alt",
+                              "rag_enabled": False})
+    reloaded = AssistantService(data_dir=str(tmp_path))
+    assert reloaded.public_config()["cloud_api_profiles"] == [{**profile, "api_key_set": False}]
+    service.update_config({"cloud_api_profiles": []}, admin)
+    assert service.public_config()["cloud_api_profiles"] == []
+    assert not service._cloud_profile_secrets
+
+
 def test_local_model_catalog_parses_openai_response_and_bypasses_proxies(tmp_path, monkeypatch):
     import urllib.request
 

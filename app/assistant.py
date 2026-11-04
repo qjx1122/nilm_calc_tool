@@ -48,6 +48,8 @@ MAX_DOCS = 100
 LOCAL_MODEL_DISCOVERY_TIMEOUT_S = 5.0
 LOCAL_MODEL_DISCOVERY_MAX_BYTES = 1_000_000
 LOCAL_MODEL_DISCOVERY_MAX_MODELS = 200
+MAX_CLOUD_API_PROFILES = 10
+CLOUD_PROFILE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 MAX_KB_BYTES = 20_000_000
 MAX_PROMPT_CHARS = 12_000
 MAX_ASSISTANT_IMAGES = 3
@@ -92,6 +94,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "local_model": "qwen2.5:7b",
     "cloud_base_url": "https://api.deepseek.com/v1",
     "cloud_model": "deepseek-chat",
+    "cloud_api_profiles": [],
     "timeout_s": 90,
     "temperature": 0.2,
     "max_tokens": 2048,
@@ -220,6 +223,51 @@ def _validate_base_url(value: Any, model_type: str) -> str:
     return url
 
 
+def _validate_cloud_api_profiles(value: Any) -> List[Dict[str, str]]:
+    """Validate administrator-managed OpenAI-compatible cloud endpoints.
+
+    Profile metadata is safe to persist; API keys are deliberately carried in a
+    separate, process-memory-only map and are never accepted inside a profile.
+    """
+    if not isinstance(value, list):
+        raise AssistantError(400, "cloud_api_profiles 必须是配置数组")
+    if len(value) > MAX_CLOUD_API_PROFILES:
+        raise AssistantError(400, f"云端 API 配置最多 {MAX_CLOUD_API_PROFILES} 项")
+    profiles: List[Dict[str, str]] = []
+    seen = set()
+    for index, item in enumerate(value, 1):
+        if not isinstance(item, dict):
+            raise AssistantError(400, f"第 {index} 个云端 API 配置格式无效")
+        if any(key in item for key in ("api_key", "api_key_secret", "secret", "cloud_api_key")):
+            raise AssistantError(400, "云端 API Key 必须通过独立字段提交，不能放入配置档案")
+        profile_id = item.get("id")
+        if not isinstance(profile_id, str) or not CLOUD_PROFILE_ID_RE.fullmatch(profile_id):
+            raise AssistantError(400, "云端配置 ID 格式无效")
+        if profile_id == "__default__" or profile_id in seen:
+            raise AssistantError(400, "云端配置 ID 不能重复或使用保留值")
+        seen.add(profile_id)
+        name = item.get("name")
+        if not isinstance(name, str):
+            raise AssistantError(400, f"第 {index} 个云端配置必须填写显示名称")
+        name = name.strip()
+        if (not name or len(name) > 80
+                or any(ord(char) < 32 or ord(char) == 127 for char in name)):
+            raise AssistantError(400, "云端配置显示名称必须是 1–80 字符的单行文本")
+        base_url = item.get("base_url")
+        if not isinstance(base_url, str) or len(base_url) > 2048:
+            raise AssistantError(400, "云端 API 地址必须是文本且不能超过 2048 字符")
+        base_url = _validate_base_url(base_url, "cloud")
+        model = item.get("model")
+        if not isinstance(model, str):
+            raise AssistantError(400, f"第 {index} 个云端配置必须填写模型 ID")
+        model = model.strip()
+        if (not model or len(model) > 160
+                or any(ord(char) < 32 or ord(char) == 127 for char in model)):
+            raise AssistantError(400, "云端模型 ID 必须是 1–160 字符的单行文本")
+        profiles.append({"id": profile_id, "name": name, "base_url": base_url, "model": model})
+    return profiles
+
+
 def _extract_local_model_names(payload: Any) -> List[str]:
     """Extract model identifiers from OpenAI ``data`` or Ollama ``models`` payloads."""
     entries: Any = payload if isinstance(payload, list) else []
@@ -331,6 +379,9 @@ class AssistantService:
             "base_url": "", "status": "idle", "models": [], "error": "", "updated_at": None,
         }
         self._secrets: Dict[str, str] = {"local_api_key": "", "cloud_api_key": ""}
+        # Extra cloud profile keys are intentionally process-memory-only; profile metadata
+        # alone is stored in config.json and returned to the browser.
+        self._cloud_profile_secrets: Dict[str, str] = {}
         self._requests: Dict[str, Deque[float]] = defaultdict(deque)
         self._tool_requests: Dict[str, Deque[float]] = defaultdict(deque)
         self._pending_tools: Dict[str, Dict[str, Any]] = {}
@@ -408,6 +459,11 @@ class AssistantService:
         for key in ("local_model", "cloud_model"):
             value = str(cfg.get(key) or DEFAULT_CONFIG[key]).strip()
             cfg[key] = value[:160] if value and len(value) <= 160 and "\n" not in value and "\r" not in value else DEFAULT_CONFIG[key]
+        try:
+            cfg["cloud_api_profiles"] = _validate_cloud_api_profiles(cfg.get("cloud_api_profiles", []))
+        except AssistantError:
+            # Malformed persisted profile metadata cannot create an arbitrary endpoint.
+            cfg["cloud_api_profiles"] = []
 
         def safe_int(value: Any, default: int, low: int, high: int) -> int:
             try:
@@ -484,6 +540,10 @@ class AssistantService:
             cfg["sensitive_terms_configured"] = bool(self._config["sensitive_terms"])
             cfg["visible_views"] = list(self._config["visible_views"])
             cfg["cloud_api_key_set"] = bool(self._env_secret("ELEC_TOOL_ASSISTANT_CLOUD_API_KEY") or self._secrets["cloud_api_key"])
+            cfg["cloud_api_profiles"] = [
+                {**profile, "api_key_set": bool(self._cloud_profile_secrets.get(profile["id"]))}
+                for profile in self._config.get("cloud_api_profiles", [])
+            ]
             cfg["local_api_key_set"] = bool(self._env_secret("ELEC_TOOL_ASSISTANT_LOCAL_API_KEY") or self._secrets["local_api_key"])
             cfg["admin_configurable"] = self._admin_token_configured()
             cfg["operator_tokens_configured"] = bool(self._operator_token_records())
@@ -551,6 +611,38 @@ class AssistantService:
                 if not isinstance(views, list) or len(views) > len(VIEW_IDS) or any(str(x) not in VIEW_IDS for x in views):
                     raise AssistantError(400, "visible_views 含无效业务页面")
                 cfg["visible_views"] = sorted(set(map(str, views)))
+            next_profile_secrets = None
+            profile_secret_fields = {"cloud_api_profile_secrets", "clear_cloud_api_profile_secrets"}
+            if "cloud_api_profiles" in payload or any(key in payload for key in profile_secret_fields):
+                profiles = (_validate_cloud_api_profiles(payload["cloud_api_profiles"])
+                            if "cloud_api_profiles" in payload
+                            else _validate_cloud_api_profiles(cfg.get("cloud_api_profiles", [])))
+                if "cloud_api_profiles" in payload:
+                    cfg["cloud_api_profiles"] = profiles
+                allowed_profile_ids = {profile["id"] for profile in profiles}
+                next_profile_secrets = {
+                    profile_id: secret for profile_id, secret in self._cloud_profile_secrets.items()
+                    if profile_id in allowed_profile_ids
+                }
+                incoming_profile_secrets = payload.get("cloud_api_profile_secrets", {})
+                if not isinstance(incoming_profile_secrets, dict) or len(incoming_profile_secrets) > MAX_CLOUD_API_PROFILES:
+                    raise AssistantError(400, "云端 API Key 配置格式无效")
+                for profile_id, secret in incoming_profile_secrets.items():
+                    if not isinstance(profile_id, str) or profile_id not in allowed_profile_ids:
+                        raise AssistantError(400, "云端 API Key 对应的配置档案不存在")
+                    if not isinstance(secret, str) or len(secret) > 4096:
+                        raise AssistantError(400, "云端 API Key 必须是文本且不能超过 4096 字符")
+                    if secret:
+                        next_profile_secrets[profile_id] = secret
+                clear_profile_ids = payload.get("clear_cloud_api_profile_secrets", [])
+                if (not isinstance(clear_profile_ids, list) or len(clear_profile_ids) > MAX_CLOUD_API_PROFILES
+                        or any(not isinstance(profile_id, str) or profile_id not in allowed_profile_ids
+                               for profile_id in clear_profile_ids)):
+                    raise AssistantError(400, "待清除的云端 API Key 配置档案无效")
+                if set(clear_profile_ids) & {key for key, secret in incoming_profile_secrets.items() if secret}:
+                    raise AssistantError(400, "同一云端配置不能同时设置并清除 API Key")
+                for profile_id in clear_profile_ids:
+                    next_profile_secrets.pop(profile_id, None)
             for name in ("local_api_key", "cloud_api_key"):
                 if name in payload:
                     secret = payload[name]
@@ -562,6 +654,8 @@ class AssistantService:
                 if payload.get(field) is True:
                     self._secrets[name] = ""
             self._config = self._sanitize_config(cfg)
+            if next_profile_secrets is not None:
+                self._cloud_profile_secrets = next_profile_secrets
             self._save_config()
             return self.public_config()
 
@@ -1276,6 +1370,8 @@ class AssistantService:
         with self._lock:
             cfg = dict(self._config)
             cfg["sensitive_terms"] = list(self._config["sensitive_terms"])
+            api_key_secrets = dict(self._secrets)
+            cloud_profile_secrets = dict(self._cloud_profile_secrets)
         if not cfg["enabled"]:
             raise AssistantError(503, "智能问答功能已关闭，请联系管理员")
         prompt = payload.get("prompt")
@@ -1316,9 +1412,35 @@ class AssistantService:
         model_field = "local_model" if model_type == "local" else "cloud_model"
         base_url = _validate_base_url(cfg[base_field], model_type)
         model = cfg[model_field]
+        if model_type == "local" and "model_name" in payload:
+            selected_model = payload["model_name"]
+            if (not isinstance(selected_model, str) or not selected_model.strip()
+                    or len(selected_model.strip()) > 160
+                    or any(ord(char) < 32 or ord(char) == 127 for char in selected_model)):
+                raise AssistantError(400, "本地模型名称必须是 1–160 字符的单行文本")
+            model = selected_model.strip()
+        if model_type == "cloud" and "model_name" in payload:
+            raise AssistantError(400, "云端模型只能通过管理员配置的云端档案选择")
         env_key = "ELEC_TOOL_ASSISTANT_LOCAL_API_KEY" if model_type == "local" else "ELEC_TOOL_ASSISTANT_CLOUD_API_KEY"
         secret_key = f"{model_type}_api_key"
-        api_key = self._env_secret(env_key) or self._secrets.get(secret_key, "")
+        if model_type == "cloud":
+            profile_id = payload.get("cloud_profile_id", "")
+            if not isinstance(profile_id, str) or len(profile_id) > 64:
+                raise AssistantError(400, "云端配置档案 ID 无效")
+            profile_id = profile_id.strip()
+            if profile_id and profile_id != "__default__":
+                profile = next((item for item in cfg.get("cloud_api_profiles", []) if item["id"] == profile_id), None)
+                if profile is None:
+                    raise AssistantError(400, "所选云端 API 配置不存在或已删除，请重新选择配置")
+                base_url = _validate_base_url(profile["base_url"], "cloud")
+                model = profile["model"]
+                api_key = cloud_profile_secrets.get(profile_id, "")
+                if not api_key:
+                    raise AssistantError(400, "所选云端 API 配置尚未设置 API Key，请在管理员配置中设置")
+            else:
+                api_key = self._env_secret(env_key) or api_key_secrets.get(secret_key, "")
+        else:
+            api_key = self._env_secret(env_key) or api_key_secrets.get(secret_key, "")
         if model_type == "cloud" and not api_key:
             raise AssistantError(400, "云端 API Key 尚未配置；请在问答设置中配置，或设置 ELEC_TOOL_ASSISTANT_CLOUD_API_KEY")
         if not model:

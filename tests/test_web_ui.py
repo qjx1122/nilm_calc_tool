@@ -282,7 +282,7 @@ def test_assistant_ui_contract_and_safe_markdown_renderer(page):
         "assistant-launcher", "assistant-panel", "assistant-session-pane", "assistant-session-search",
         "assistant-conversation-list", "assistant-session-context-menu", "assistant-rename-conversation",
         "assistant-clear-context-menu", "assistant-delete-conversation", "assistant-new", "assistant-clear-context",
-        "assistant-model-type", "assistant-session-toggle", "assistant-close", "assistant-privacy-note",
+        "assistant-model-type", "assistant-model-name", "assistant-session-toggle", "assistant-close", "assistant-privacy-note",
         "assistant-doc-search", "assistant-doc-list", "assistant-doc-content", "assistant-doc-status",
         "assistant-messages", "assistant-thinking", "assistant-form", "assistant-prompt", "assistant-stop",
         "assistant-image-input", "assistant-image-previews", "assistant-attach-image", "assistant-settings-open",
@@ -343,6 +343,25 @@ def test_assistant_local_model_picker_is_editable_and_uses_same_origin_discovery
     assert "assistant-local-model-select" in render_js and "select.appendChild(option)" in render_js
     assert "assistantSyncLocalModelPicker();" in render_js
     assert "modelInput.value =" not in render_js, "刷新候选不得覆盖当前手填值"
+
+
+def test_assistant_model_name_picker_and_dynamic_cloud_profile_editor(page):
+    for element_id in ("assistant-model-name", "assistant-cloud-profiles", "assistant-cloud-profile-add", "assistant-cloud-profile-status"):
+        assert element_id in page.ids, f"缺少模型选择 / 云端档案管理元素 #{element_id}"
+    assert "具体模型" in HTML and 'id="assistant-model-name"' in HTML
+    assert "额外云端 API 配置档案" in HTML and "API Key 仅存服务进程内存" in HTML
+    start = APPJS.index("/* ------------------------------------------------------------------ 智能问答")
+    end = APPJS.index("async function init() {", start)
+    assistant_js = APPJS[start:end]
+    assert "function assistantRenderModelNameSelector" in assistant_js
+    assert "assistantChangeModelName" in assistant_js
+    assert "payload.model_name = conv.modelName" in assistant_js
+    assert "payload.cloud_profile_id = conv.cloudProfileId" in assistant_js
+    assert "payload.cloud_api_profiles = ASSISTANT_UI.cloudProfilesDraft.map" in assistant_js
+    assert "payload.cloud_api_profile_secrets = profileSecrets" in assistant_js
+    assert "payload.clear_cloud_api_profile_secrets = profilesToClear" in assistant_js
+    assert "X-Assistant-Admin-Token" in assistant_js, "云端 API 档案保存必须走管理员配置接口"
+    assert "profile.api_key_set" in assistant_js and "input.type = type" in assistant_js
 
 
 def test_assistant_scroll_containers_preserve_reader_position_during_streaming():

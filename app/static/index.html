@@ -1565,11 +1565,16 @@
         <header class="assistant-chat-header">
           <button id="assistant-session-toggle" class="assistant-session-toggle" type="button" aria-controls="assistant-session-pane" aria-expanded="true" aria-label="显示或隐藏会话列表">☰ 会话</button>
           <div class="assistant-title-group"><h2 id="assistant-title">智能问答助手</h2><div class="assistant-subtitle">平台参数优先 · RAG 调参辅助 · 受控操作先预览、确认后执行</div></div>
-          <label class="assistant-model-choice">问答模型
-            <select id="assistant-model-type" aria-label="选择问答模型">
+          <label class="assistant-model-choice">问答后端
+            <select id="assistant-model-type" aria-label="选择问答后端">
               <option value="builtin">内置知识库</option>
               <option value="local">本地大模型</option>
               <option value="cloud">云端大模型</option>
+            </select>
+          </label>
+          <label class="assistant-model-choice">具体模型
+            <select id="assistant-model-name" aria-label="选择具体模型" disabled>
+              <option value="">由后端配置决定</option>
             </select>
           </label>
           <button id="assistant-close" class="assistant-close" type="button" aria-label="关闭智能问答助手">关闭</button>
@@ -1655,13 +1660,17 @@
               <label>可选 API Key<input id="assistant-local-key" type="password" autocomplete="new-password" placeholder="留空＝保持现值；服务端环境变量优先"></label>
               <label class="check"><input id="assistant-clear-local-key" type="checkbox"> 清除内存中的本地 API Key</label>
             </div>
-            <h3>云端 OpenAI 兼容接口</h3>
+            <h3>默认云端 OpenAI 兼容接口</h3>
             <div class="assistant-config-grid">
               <label>HTTPS API 地址<input id="assistant-cloud-url" type="url" placeholder="https://api.deepseek.com/v1"></label>
               <label>模型名称<input id="assistant-cloud-model" type="text" placeholder="deepseek-chat"></label>
               <label>API Key<input id="assistant-cloud-key" type="password" autocomplete="new-password" placeholder="不会回显；环境变量优先"></label>
-              <label class="check"><input id="assistant-clear-cloud-key" type="checkbox"> 清除内存中的云端 API Key</label>
+              <label class="check"><input id="assistant-clear-cloud-key" type="checkbox"> 清除内存中的默认云端 API Key</label>
             </div>
+            <h3>额外云端 API 配置档案（最多 10 项）</h3>
+            <p class="assistant-profile-help">每个档案对应一个 HTTPS OpenAI-compatible API 地址、模型 ID 与 API Key。同一服务要切换多个模型时可分别添加档案。API Key 仅存服务进程内存，重启后需重新输入；留空会保留当前密钥。</p>
+            <div id="assistant-cloud-profiles" class="assistant-cloud-profiles" aria-label="额外云端 API 配置列表"></div>
+            <div class="assistant-profile-actions"><button id="assistant-cloud-profile-add" type="button">＋ 添加云端 API 配置</button><span id="assistant-cloud-profile-status" role="status"></span></div>
             <h3>管理员附加知识（RAG）</h3>
             <div class="assistant-config-grid">
               <label class="check"><input id="assistant-rag-enabled" type="checkbox"> 启用本地知识检索</label>

@@ -37,6 +37,7 @@ let config = {
   enabled: true, default_model_type: 'builtin',
   local_base_url: 'http://127.0.0.1:11434/v1', local_model: 'qwen-local',
   cloud_base_url: 'https://api.example.test/v1', cloud_model: 'cloud-model',
+  cloud_api_profiles: [{ id: 'cloud-alt', name: '备用云端', base_url: 'https://api.alt.example/v1', model: 'alt-chat', api_key_set: true }],
   timeout_s: 90, temperature: 0.2, max_tokens: 2048,
   rag_enabled: true, rag_top_k: 4, rag_similarity_threshold: 0.08,
   log_queries: false, sensitive_terms_configured: true, sensitive_terms_count: 1, visible_views: ['overview'],
@@ -88,7 +89,21 @@ window.fetch = async (url, options = {}) => {
   if (url === '/api/assistant/config' && options.method === 'PUT') {
     if (options.headers['X-Assistant-Admin-Token'] !== 'admin') throw new Error('管理员口令请求头缺失');
     lastConfigPayload = JSON.parse(options.body);
-    config = { ...config, ...lastConfigPayload, cloud_api_key_set: !!lastConfigPayload.cloud_api_key, admin_configurable: true };
+    const safePayload = { ...lastConfigPayload };
+    delete safePayload.cloud_api_key; delete safePayload.local_api_key;
+    delete safePayload.cloud_api_profile_secrets; delete safePayload.clear_cloud_api_profile_secrets;
+    const priorProfiles = Array.isArray(config.cloud_api_profiles) ? config.cloud_api_profiles : [];
+    const profileSecrets = lastConfigPayload.cloud_api_profile_secrets || {};
+    const profilesToClear = lastConfigPayload.clear_cloud_api_profile_secrets || [];
+    const cloudProfiles = (lastConfigPayload.cloud_api_profiles || priorProfiles).map(profile => ({
+      ...profile,
+      api_key_set: !!profileSecrets[profile.id] || (!profilesToClear.includes(profile.id)
+        && !!priorProfiles.find(existing => existing.id === profile.id && existing.api_key_set)),
+    }));
+    config = { ...config, ...safePayload, cloud_api_profiles: cloudProfiles,
+      cloud_api_key_set: lastConfigPayload.cloud_api_key ? true
+        : lastConfigPayload.clear_cloud_api_key ? false : config.cloud_api_key_set,
+      admin_configurable: true };
     return jsonResponse({ ok: true, config });
   }
   if (url === '/api/assistant/tools/confirm' && options.method === 'POST') {
@@ -210,10 +225,16 @@ check($('assistant-launcher').hidden, '配置读取前问答入口应默认隐�
   check(window.__assistantState.conversations.length === 2, '切换模型未新建会话');
   check(window.__assistantState.conversations[0].backend === 'local', '新会话未采用所选模型');
   check(window.__assistantState.conversations[1].messages.length === 2, '内置文档会话没有保留');
+  const modelName = $('assistant-model-name');
+  check(Array.from(modelName.options).some(option => option.value === 'qwen-local'), '具体模型下拉没有包含管理员配置的本地模型');
+  check(Array.from(modelName.options).some(option => option.value === 'llama3.2:latest'), '具体模型下拉没有包含本地发现模型');
+  modelName.value = 'llama3.2:latest'; modelName.dispatchEvent(new window.Event('change'));
+  check(window.__assistantState.conversations[0].modelName === 'llama3.2:latest', '本地模型名称选择没有写入当前会话');
   $('assistant-prompt').value = '如何查看画像参数？';
   await window.assistantSubmit();
   messages = $('assistant-messages');
   check(messages.querySelectorAll('.assistant-message').length === 2, '本地模型会话没有显示用户与助手消息');
+  check(lastChatPayload.model_name === 'llama3.2:latest', '本地聊天请求没有携带所选模型名称');
   check(!!messages.querySelector('h2') && !!messages.querySelector('strong') && !!messages.querySelector('pre code'), 'Markdown 标题/强调/代码块未渲染');
   check(!messages.querySelector('img, a[href^="javascript:"]'), '不可信 Markdown 被解释成活动 HTML');
   check(messages.textContent.includes('<img src=x onerror=alert(1)>'), '原始 HTML 应作为普通文本展示');
@@ -235,6 +256,12 @@ check($('assistant-launcher').hidden, '配置读取前问答入口应默认隐�
   check(messageScroll.top === messages.scrollHeight - messages.clientHeight, '用户停留在底部时，流式更新没有继续跟随最新内容');
   messageScroll.top = 180; window.assistantRenderConversation({ preserveScroll: true });
   check(messageScroll.top === 180, '最终重绘未保留非底部阅读位置');
+  modelName.value = 'qwen-local'; modelName.dispatchEvent(new window.Event('change'));
+  check(window.__assistantState.conversations.length === 3, '切换具体本地模型未创建独立会话');
+  check(window.__assistantState.conversations[0].modelName === 'qwen-local' && !window.__assistantState.conversations[0].messages.length, '新模型会话未使用所选模型或不为空');
+  check(window.__assistantState.conversations[1].modelName === 'llama3.2:latest' && window.__assistantState.conversations[1].messages.length === 2, '切换具体模型破坏或更改了旧会话');
+  $('assistant-prompt').value = '使用另一个模型继续提问'; await window.assistantSubmit();
+  check(lastChatPayload.model_name === 'qwen-local', '新模型会话请求没有路由到所选模型');
   const sessionScroll = mockScrollArea($('assistant-conversation-list'), 900, 300, 40);
   const sessionWheel = new window.WheelEvent('wheel', { deltaY: 60, bubbles: true, cancelable: true });
   check(!window.document.querySelector('.assistant-session-heading').dispatchEvent(sessionWheel) && sessionScroll.top === 100, '在会话标题 / 空白区使用滚轮没有转发到会话列表');
@@ -249,19 +276,46 @@ check($('assistant-launcher').hidden, '配置读取前问答入口应默认隐�
   check(!$('assistant-doc-content').dispatchEvent(noInnerOverflowWheel) && settingsScroll.top === 260, '内层文档没有溢出时，滚轮没有滚动外层设置面板');
   $('assistant-settings-close').click();
 
-  // 切换云端模型必须先确认并创建新会话，内置和本地会话均保留。
+  // 切换云端后端会创建独立会话；右侧具体模型列表包含默认模型和命名云端档案。
   model.value = 'cloud'; model.dispatchEvent(new window.Event('change'));
-  check(window.__assistantState.conversations.length === 3, '切换模型未新建独立会话');
-  check(window.__assistantState.conversations[0].backend === 'cloud', '新会话未采用所选模型');
-  check(window.__assistantState.conversations[1].backend === 'local' && window.__assistantState.conversations[1].messages.length === 2, '本地模型会话没有保留');
-  check(window.__assistantState.conversations[2].backend === 'builtin' && window.__assistantState.conversations[2].messages.length === 2, '内置文档会话没有保留');
+  check(window.__assistantState.conversations.length === 4, '切换后端未新建独立会话');
+  check(window.__assistantState.conversations[0].backend === 'cloud', '新会话未采用所选后端');
+  check(window.__assistantState.conversations[1].backend === 'local' && window.__assistantState.conversations[1].modelName === 'qwen-local' && window.__assistantState.conversations[1].messages.length === 2, '本地模型会话没有保留');
+  check(window.__assistantState.conversations[2].backend === 'local' && window.__assistantState.conversations[2].modelName === 'llama3.2:latest' && window.__assistantState.conversations[2].messages.length === 2, '旧本地模型会话没有保留');
+  check(window.__assistantState.conversations[3].backend === 'builtin' && window.__assistantState.conversations[3].messages.length === 2, '内置文档会话没有保留');
+  check(Array.from(modelName.options).some(option => option.value === '__default__' && option.textContent.includes('cloud-model')), '云端模型列表没有默认模型名称');
+  check(Array.from(modelName.options).some(option => option.value === 'cloud-alt' && option.textContent.includes('alt-chat')), '云端模型列表没有命名档案');
+  modelName.value = 'cloud-alt'; modelName.dispatchEvent(new window.Event('change'));
+  check(window.__assistantState.conversations[0].cloudProfileId === 'cloud-alt', '云端档案选择没有写入当前会话');
 
   // 配置保存必须带管理员口令，且密钥输入只作为 POST/PUT 参数，不回填页面。
   $('assistant-admin-token').value = 'admin'; $('assistant-admin-token').dispatchEvent(new window.Event('input'));
   const refreshModelsButton = $('assistant-refresh-local-models');
   localModelSelect.value = 'qwen2.5:7b'; localModelSelect.dispatchEvent(new window.Event('change'));
+  $('assistant-cloud-profile-add').click();
+  const profileCards = Array.from($('assistant-cloud-profiles').querySelectorAll('.assistant-cloud-profile'));
+  const addedProfileCard = profileCards[profileCards.length - 1];
+  const setProfileField = (fieldName, value) => {
+    const input = Array.from(addedProfileCard.querySelectorAll('[data-cloud-profile-field]'))
+      .find(item => item.dataset.cloudProfileField === fieldName);
+    input.value = value; input.dispatchEvent(new window.Event('input', { bubbles: true }));
+  };
+  const addedProfileSecret = 'temporary-named-cloud-secret';
+  setProfileField('name', 'Test provider');
+  setProfileField('base_url', 'https://api.test-provider.example/v1');
+  setProfileField('model', 'test-model-v2');
+  setProfileField('api_key', addedProfileSecret);
   await window.assistantSaveConfig();
   check(lastConfigPayload.local_model === 'qwen2.5:7b', '下拉选中的本地模型未沿用既有配置保存字段');
+  check(lastConfigPayload.cloud_api_profiles.length === 2, '动态添加的云端档案没有一起保存');
+  const addedProfile = lastConfigPayload.cloud_api_profiles.find(profile => profile.name === 'Test provider');
+  check(!!addedProfile && addedProfile.model === 'test-model-v2' && addedProfile.base_url === 'https://api.test-provider.example/v1', '动态档案的名称 / endpoint / 模型 ID 保存错误');
+  check(lastConfigPayload.cloud_api_profile_secrets[addedProfile.id] === addedProfileSecret, '动态云端 API Key 没有单独提交');
+  check(!JSON.stringify(lastConfigPayload.cloud_api_profiles).includes(addedProfileSecret), '云端 API Key 错误地放进档案元数据');
+  check(!JSON.stringify(config).includes(addedProfileSecret), '配置返回值回显了云端 API Key');
+  const savedProfileCard = Array.from($('assistant-cloud-profiles').querySelectorAll('.assistant-cloud-profile'))
+    .find(card => card.textContent.includes('Test provider'));
+  check(!!savedProfileCard && !savedProfileCard.querySelector('[data-cloud-profile-field="api_key"]').value, '保存后动态档案的 API Key 输入框未清空');
   localModelInput.value = 'my-custom-local-model'; localModelInput.dispatchEvent(new window.Event('input'));
   const waitForLocalRefresh = async () => {
     for (let i = 0; i < 100 && refreshModelsButton.disabled; i++) await new Promise(resolve => setTimeout(resolve, 10));
@@ -346,12 +400,24 @@ check($('assistant-launcher').hidden, '配置读取前问答入口应默认隐�
   check(window.__assistantState.pendingImages.length === 0, '发送后待发截图没有从 composer 清除');
 
   model.value = 'cloud'; model.dispatchEvent(new window.Event('change'));
+  check(Array.from(modelName.options).some(option => option.textContent.includes('Test provider') && option.textContent.includes('test-model-v2')), '保存后的动态云端档案没有进入问答模型选择器');
+  modelName.value = addedProfile.id; modelName.dispatchEvent(new window.Event('change'));
+  check(window.__assistantState.conversations[0].cloudProfileId === addedProfile.id, '动态云端档案切换没有生效');
   const cloudJpeg = new window.File([new Uint8Array([0xff, 0xd8, 0xff, 0x00])], 'waveform.jpg', { type: 'image/jpeg' });
   await window.assistantAddImageFiles([cloudJpeg]);
   $('assistant-prompt').value = '请分析截图中的电流变化';
   await window.assistantSubmit();
-  check(lastChatPayload.model_type === 'cloud' && lastChatPayload.images[0].mime_type === 'image/jpeg', '截图未随云端视觉模型请求发送');
+  check(lastChatPayload.model_type === 'cloud' && lastChatPayload.cloud_profile_id === addedProfile.id
+    && lastChatPayload.images[0].mime_type === 'image/jpeg', '云端截图请求未携带所选云端档案或截图');
   check(confirmMessages.some(message => message.includes('截图内容不经过文本敏感词扫描')), '云端截图发送前没有二次确认 / 隐私提示');
+  const namedCloudConversation = window.__assistantState.conversations[0];
+  modelName.value = '__default__'; modelName.dispatchEvent(new window.Event('change'));
+  check(window.__assistantState.conversations[0].backend === 'cloud'
+    && window.__assistantState.conversations[0].cloudProfileId === '__default__'
+    && !window.__assistantState.conversations[0].messages.length, '切换云端档案后没有建立默认模型独立会话');
+  check(window.__assistantState.conversations[1].id === namedCloudConversation.id
+    && window.__assistantState.conversations[1].cloudProfileId === addedProfile.id
+    && window.__assistantState.conversations[1].messages.length === 2, '切换云端档案破坏或修改了旧会话');
 
   // 会话列表按当前顺序分最近 / 历史，支持搜索、重命名、右键菜单、删除和拖拽排序。
   for (let i = 0; i < 4; i++) window.assistantNewConversation('builtin');
