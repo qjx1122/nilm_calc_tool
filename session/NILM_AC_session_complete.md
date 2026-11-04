@@ -923,3 +923,12 @@
 - 验证方式 / 覆盖范围 / 缺口：定向 `.venv/bin/pytest tests/test_assistant.py tests/test_server.py tests/test_web_ui.py -q` **75 passed / 1 warning**；全量 `.venv/bin/pytest -q` **620 passed / 1 skipped / 1 warning**（140.23 s，既有 Starlette/httpx `TestClient` deprecation）；`node tools/ui_assistant_check.cjs` **121 checks**；两个 JS `node --check`、定向 `py_compile`、`git diff --check` 通过。四份生成手册 `.venv/bin/python tools/generate_assistant_docs.py --check` 全 `OK`；preview `0.0.0.0:8001` 首页 / JS / CSS HTTP 200。无 Chromium / Firefox / Playwright / Puppeteer，本轮没有原生滚轮或真实布局的浏览器验收。
 - 未决问题：真实本地模型 / 云端 API provider、目标浏览器原生下拉 / 滚轮 / 移动布局、Windows 与现场网络 / HTTPS 尚未验；额外档案 Key 重启后不恢复，管理员需通过设置界面重新输入。沙盒 HTTP / jsdom 不能代表现场网络或视觉验收。仓库 `tmp/` 未读取、修改、暂存或提交。
 - 相关文件/分支：`app/assistant.py`、`app/static/{index.html,app.js,style.css}`、`tests/test_assistant.py`、`tests/test_server.py`、`tests/test_web_ui.py`、`tools/ui_assistant_check.cjs`、`README.md`、`docs/智能问答助手说明.md`、生成的 `docs/软件使用文档.md` / `docs/软件部署说明文档.md`、`STATUS.md`、`REPORT_TEST.md`；分支 `arena/82e34fb8-nilm-calc-tool`。
+
+## [2026-11-04] 会话纪要
+- 目标：当智能问答助手界面无法在当前视口内完整显示全部内容时，增加可用的外层滚动条，避免标题、输入控件或面板底部被裁切。
+- 本会话角色：资深电力算法专家（默认）＋工程实现工程师（第 199 轮任务级覆盖）；模式 A；活动分支 `arena/82e34fb8-nilm-calc-tool`。
+- 完成项：`.assistant-shell` 在内容高度超出视口时显示纵向滚动条，提供清晰的滚动条颜色 / 宽度与键盘可聚焦的无障碍 region；主布局设置最小高度（桌面 420px、窄屏 480px、极窄屏 540px），并解除工作区 / 问答列的裁切，让短屏、窄屏下的头部与输入区可通过外层滚动访问。保留消息、会话与设置内部滚动；内层到边界后将滚轮交给外层。设置覆盖层打开时锁定被遮挡主面板滚动，关闭时解除。更新 README v0.99.41、助手说明、生成的使用 / 部署手册、Python 静态契约与 jsdom 滚动回归。
+- 关键决策：不把所有内容改为单一滚动区；长对话仍优先在消息区内滚动，设置文档优先在其内部滚动；仅在视口整体不足、内层滚动区到边界时才滚动助手外层。设置覆盖层不应因外层滚动而移出视口，因此打开时锁定外层并复位滚动位置。`tmp/` 保持原样，不读取、不修改、不暂存、不提交。
+- 验证方式 / 覆盖范围 / 缺口：定向 pytest **75 passed / 1 warning**（12.39 s）；全量 pytest **620 passed / 1 skipped / 1 warning**（149.72 s）；jsdom **133 checks**，覆盖消息与设置滚动边界传递、设置打开锁定 / 关闭解除；四份生成手册 `--check` 全 `OK`；JS 语法、Python 编译、`git diff --check` 通过；live preview 首页与 JS / CSS HTTP 200（服务 / 资源 smoke check）。未进行真实浏览器视觉、键盘或触屏验收，jsdom 不模拟真实浏览器滚动条。
+- 未决问题：请用户在目标浏览器缩短窗口 / 使用窄屏验证滚动条视觉、鼠标 / 触控滚动与键盘聚焦行为；特殊浏览器操作系统可能按系统设置自动隐藏滚动条。
+- 相关文件/分支：`app/static/style.css`、`app/static/index.html`、`app/static/app.js`、`tests/test_web_ui.py`、`tools/ui_assistant_check.cjs`、`README.md`、`docs/智能问答助手说明.md`、`docs/软件使用文档.md`、`docs/软件部署说明文档.md`、`STATUS.md`、`REPORT_TEST.md`；分支 `arena/82e34fb8-nilm-calc-tool`。

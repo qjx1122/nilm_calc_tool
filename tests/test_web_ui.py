@@ -371,6 +371,18 @@ def test_assistant_scroll_containers_preserve_reader_position_during_streaming()
         assert rule, f"缺少 {selector} 滚动容器"
         assert "overflow-y:auto" in rule.group(1), f"{selector} 应可纵向滚轮滚动"
         assert "overscroll-behavior-y:contain" in rule.group(1), f"{selector} 应在侧栏内处理滚动"
+    shell_rule = re.search(r"\.assistant-shell\{([^}]*)\}", css)
+    assert shell_rule and "overflow-y:auto" in shell_rule.group(1), "助手外层在视口受限时必须能纵向滚动"
+    assert "scrollbar-width:auto" in shell_rule.group(1) and "scrollbar-color:#3d527a #111827" in shell_rule.group(1), "助手外层滚动条应有清晰可见的轨道和滑块"
+    assert ".assistant-shell::-webkit-scrollbar{width:10px}" in css
+    workspace_rule = re.search(r"\.assistant-workspace\{([^}]*)\}", css)
+    assert workspace_rule and "flex:1 0 420px" in workspace_rule.group(1) and "min-height:420px" in workspace_rule.group(1), "主布局不能在短视口下被 flex 压缩裁切"
+    assert "overflow:visible" in workspace_rule.group(1), "主布局不能裁剪溢出的头部 / 输入控件"
+    chat_rule = re.search(r"\.assistant-chat-pane\{([^}]*)\}", css)
+    assert chat_rule and "overflow:visible" in chat_rule.group(1), "问答列溢出的控件必须交给外层滚动条访问"
+    assert ".assistant-workspace{position:relative;display:block;flex-basis:480px;min-height:480px}" in css
+    assert ".assistant-workspace{flex-basis:540px;min-height:540px}" in css
+    assert 'id="assistant-shell"' in HTML and 'tabindex="0"' in HTML, "外层滚动容器应可键盘聚焦"
     messages_rule = re.search(r"\.assistant-messages\{([^}]*)\}", css)
     assert messages_rule and "scroll-behavior:smooth" not in messages_rule.group(1), "流式更新不能用平滑自动滚动抢占滚轮"
     start = APPJS.index("/* ------------------------------------------------------------------ 智能问答")
@@ -379,6 +391,9 @@ def test_assistant_scroll_containers_preserve_reader_position_during_streaming()
     assert "function assistantNearMessagesBottom" in assistant_js
     assert "options.preserveScroll" in assistant_js
     assert "function assistantHandlePanelWheel(event)" in assistant_js
+    assert "function assistantScrollByWheel(target, event)" in assistant_js
+    assert "assistantScrollByWheel(assistantEl('assistant-shell'), event)" in assistant_js
+    assert "if (inOpenSettings) { if (event.cancelable) event.preventDefault(); return; }" in assistant_js
     assert "panel.addEventListener('wheel', assistantHandlePanelWheel, { passive: false })" in assistant_js
     refresh = assistant_js[assistant_js.index("function assistantRefreshMessage(msg) {"):assistant_js.index("function assistantFormatConversationTime(")]
     assert "assistantNearMessagesBottom(list)" in refresh and "if (followBottom) list.scrollTop = list.scrollHeight" in refresh

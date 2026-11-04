@@ -178,6 +178,14 @@ check($('assistant-launcher').hidden, '配置读取前问答入口应默认隐�
   $('assistant-doc-search').value = ''; $('assistant-doc-search').dispatchEvent(new window.Event('input'));
   check($('assistant-doc-list').querySelectorAll('button').length === 2, '清除搜索后文档目录未恢复');
   check(style.includes('.assistant-panel{position:fixed;inset:0 0 0 auto;'), '助手 CSS 未定位到当前页面固定侧栏');
+  check(html.includes('id="assistant-shell"') && style.includes('.assistant-shell{position:relative;display:flex;'), '助手缺少外层可滚动面板');
+  check(style.includes('overflow-y:auto;overscroll-behavior-y:contain;scrollbar-width:auto;scrollbar-color:#3d527a #111827'), '受限视口时外层滚动条没有启用或对比度不足');
+  check(style.includes('.assistant-shell::-webkit-scrollbar{width:10px}'), 'WebKit 浏览器外层滚动条宽度样式缺失');
+  check(html.includes('role="region" aria-label="智能问答助手内容，可滚动浏览全部界面" tabindex="0"'), '外层滚动区域缺少键盘可达的无障碍标记');
+  check(style.includes('.assistant-shell.settings-open{overflow-y:hidden}'), '设置覆盖层打开时应锁定被覆盖的外层滚动');
+  check(style.includes('.assistant-workspace{display:grid;grid-template-columns:260px minmax(0,1fr);flex:1 0 420px;min-height:420px;gap:12px;overflow:visible}'), '短视口下助手主布局会被压缩或裁切');
+  check(style.includes('.assistant-workspace{position:relative;display:block;flex-basis:480px;min-height:480px}'), '窄屏布局没有为外层滚动条保留完整高度');
+  check(style.includes('.assistant-workspace{flex-basis:540px;min-height:540px}'), '极窄屏布局没有为换行后的控件保留高度');
   check(style.includes('.assistant-workspace{display:grid;grid-template-columns:260px minmax(0,1fr)'), '双栏会话 / 问答布局缺失');
   check(style.includes('@media(max-width:680px)') && style.includes('.assistant-session-toggle{display:inline-flex'), '窄屏会话栏切换样式缺失');
   check(style.includes('.assistant-session-title{display:block;width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap'), '长会话标题省略样式缺失');
@@ -256,6 +264,10 @@ check($('assistant-launcher').hidden, '配置读取前问答入口应默认隐�
   check(messageScroll.top === messages.scrollHeight - messages.clientHeight, '用户停留在底部时，流式更新没有继续跟随最新内容');
   messageScroll.top = 180; window.assistantRenderConversation({ preserveScroll: true });
   check(messageScroll.top === 180, '最终重绘未保留非底部阅读位置');
+  const shellScroll = mockScrollArea($('assistant-shell'), 1200, 500, 100);
+  messageScroll.top = messages.scrollHeight - messages.clientHeight;
+  const outerAfterMessages = new window.WheelEvent('wheel', { deltaY: 80, bubbles: true, cancelable: true });
+  check(!messages.dispatchEvent(outerAfterMessages) && shellScroll.top === 180, '消息区滚动到底后没有把滚轮交给助手外层面板');
   modelName.value = 'qwen-local'; modelName.dispatchEvent(new window.Event('change'));
   check(window.__assistantState.conversations.length === 3, '切换具体本地模型未创建独立会话');
   check(window.__assistantState.conversations[0].modelName === 'qwen-local' && !window.__assistantState.conversations[0].messages.length, '新模型会话未使用所选模型或不为空');
@@ -267,6 +279,7 @@ check($('assistant-launcher').hidden, '配置读取前问答入口应默认隐�
   check(!window.document.querySelector('.assistant-session-heading').dispatchEvent(sessionWheel) && sessionScroll.top === 100, '在会话标题 / 空白区使用滚轮没有转发到会话列表');
 
   $('assistant-settings-open').click();
+  check($('assistant-shell').classList.contains('settings-open'), '设置面板打开后没有锁定外层滚动位置');
   const settingsScroll = mockScrollArea(window.document.querySelector('.assistant-settings-body'), 1000, 300, 100);
   mockScrollArea($('assistant-doc-content'), 600, 200, 400);
   const settingsWheel = new window.WheelEvent('wheel', { deltaY: 80, bubbles: true, cancelable: true });
@@ -274,7 +287,11 @@ check($('assistant-launcher').hidden, '配置读取前问答入口应默认隐�
   mockScrollArea($('assistant-doc-content'), 200, 200, 0);
   const noInnerOverflowWheel = new window.WheelEvent('wheel', { deltaY: 80, bubbles: true, cancelable: true });
   check(!$('assistant-doc-content').dispatchEvent(noInnerOverflowWheel) && settingsScroll.top === 260, '内层文档没有溢出时，滚轮没有滚动外层设置面板');
+  settingsScroll.top = 700; shellScroll.top = 100;
+  const outerAfterSettings = new window.WheelEvent('wheel', { deltaY: 80, bubbles: true, cancelable: true });
+  check(!$('assistant-doc-content').dispatchEvent(outerAfterSettings) && shellScroll.top === 100, '设置覆盖层滚动到底后不应把被覆盖的助手面板移出视口');
   $('assistant-settings-close').click();
+  check(!$('assistant-settings').open && !$('assistant-shell').classList.contains('settings-open'), '设置区关闭按钮无效或外层滚动锁未解除');
 
   // 切换云端后端会创建独立会话；右侧具体模型列表包含默认模型和命名云端档案。
   model.value = 'cloud'; model.dispatchEvent(new window.Event('change'));

@@ -5480,6 +5480,11 @@ function assistantToggleSettings(open) {
   const nextOpen = typeof open === 'boolean' ? open : !settings.open;
   settings.open = nextOpen;
   if (toggle) toggle.setAttribute('aria-expanded', String(nextOpen));
+  const shell = assistantEl('assistant-shell');
+  if (shell) {
+    shell.classList.toggle('settings-open', nextOpen);
+    if (nextOpen) shell.scrollTop = 0;
+  }
   if (nextOpen) { const close = assistantEl('assistant-settings-close'); if (close) close.focus(); }
   else if (toggle) toggle.focus();
 }
@@ -5489,6 +5494,7 @@ function assistantTogglePanel(open) {
   panel.hidden = !nextOpen; panel.setAttribute('aria-hidden', String(!nextOpen));
   if (launcher) launcher.setAttribute('aria-expanded', String(nextOpen));
   if (nextOpen) {
+    const shell = assistantEl('assistant-shell'); if (shell) shell.scrollTop = 0;
     assistantToggleSettings(false); assistantCloseSessionContextMenu();
     assistantSetSessionsCollapsed(assistantIsCompactViewport());
     const prompt = assistantEl('assistant-prompt'); if (prompt) prompt.focus();
@@ -5496,6 +5502,18 @@ function assistantTogglePanel(open) {
     assistantToggleSettings(false); assistantCloseSessionContextMenu();
     if (launcher && !launcher.hidden) launcher.focus();
   }
+}
+function assistantScrollByWheel(target, event) {
+  if (!target) return false;
+  const max = Math.max(0, target.scrollHeight - target.clientHeight);
+  if (max <= 1) return false;
+  const top = Number(target.scrollTop) || 0;
+  const amount = event.deltaY * (event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? Math.max(1, target.clientHeight) : 1);
+  const next = Math.max(0, Math.min(max, top + amount));
+  if (next === top) return false;
+  target.scrollTop = next;
+  if (event.cancelable) event.preventDefault();
+  return true;
 }
 function assistantHandlePanelWheel(event) {
   if (!event || event.defaultPrevented || !event.deltaY || event.ctrlKey || event.shiftKey || Math.abs(event.deltaX || 0) > Math.abs(event.deltaY)) return;
@@ -5510,25 +5528,21 @@ function assistantHandlePanelWheel(event) {
     const canMove = event.deltaY < 0 ? top > 0 : top < max - 1;
     if (canMove) {
       if (!passedInnerScroll) return; // 原生滚动优先处理最近的可滚动区域。
-      const amount = event.deltaY * (event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? Math.max(1, node.clientHeight) : 1);
-      node.scrollTop = Math.max(0, Math.min(max, top + amount));
-      if (node.scrollTop !== top && event.cancelable) event.preventDefault();
-      return;
+      if (assistantScrollByWheel(node, event)) return;
     }
     passedInnerScroll = true;
   }
   const settings = assistantEl('assistant-settings'), sessionPane = assistantEl('assistant-session-pane');
-  const target = settings && settings.open && settings.contains(event.target)
+  const inOpenSettings = !!(settings && settings.open && settings.contains(event.target));
+  const target = inOpenSettings
     ? assistantEl('assistant-settings-body')
     : sessionPane && sessionPane.contains(event.target)
       ? assistantEl('assistant-conversation-list')
       : assistantEl('assistant-messages');
-  if (!target) return;
-  const max = Math.max(0, target.scrollHeight - target.clientHeight), top = Number(target.scrollTop) || 0;
-  if (max <= 1) return;
-  const amount = event.deltaY * (event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? Math.max(1, target.clientHeight) : 1);
-  target.scrollTop = Math.max(0, Math.min(max, top + amount));
-  if (target.scrollTop !== top && event.cancelable) event.preventDefault();
+  if (assistantScrollByWheel(target, event)) return;
+  if (inOpenSettings) { if (event.cancelable) event.preventDefault(); return; }
+  // 内层滚动区到边界后，继续滚动整个助手侧栏，避免短视口中的底部控件被困在裁切区外。
+  assistantScrollByWheel(assistantEl('assistant-shell'), event);
 }
 function assistantRenderDocumentList() {
   const root = assistantEl('assistant-doc-list'); if (!root) return;

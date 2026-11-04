@@ -379,14 +379,19 @@ input.flash{animation:ntflash 1.5s ease-out}
 .np-evsrc{margin-top:4px;font-size:11.5px}
 .np-tbl tr.np-stat td.np-stat:first-child{background:#17251f}
 
-/* 智能问答助手 v0.99.40：具体模型选择、动态云端 API 档案与自适应问答侧栏 */
+/* 智能问答助手 v0.99.41：受限视口外层滚动条与嵌套滚轮传递 */
 .assistant-launcher{position:fixed;right:22px;bottom:82px;z-index:30;border:1px solid #4485e8;background:linear-gradient(135deg,#1d4ed8,#2563eb);box-shadow:0 6px 22px #0008;border-radius:24px;padding:10px 16px;font-weight:700}
 .assistant-launcher[hidden]{display:none}
 .assistant-panel,.assistant-panel *{box-sizing:border-box}
 .assistant-panel{position:fixed;inset:0 0 0 auto;z-index:29;width:min(1120px,100vw);height:100vh;height:100dvh;max-height:100vh;max-height:100dvh;padding:0;border-left:1px solid #3a4a6d;border-radius:14px 0 0 14px;background:#0f1420;color:var(--fg);box-shadow:-18px 0 60px #0008;overflow:hidden}
 .assistant-panel[hidden]{display:none!important}
-.assistant-shell{position:relative;display:flex;flex-direction:column;width:100%;height:100%;max-height:100vh;max-height:100dvh;padding:12px;overflow:hidden}
-.assistant-workspace{display:grid;grid-template-columns:260px minmax(0,1fr);flex:1 1 auto;min-height:0;gap:12px;overflow:hidden}
+.assistant-shell{position:relative;display:flex;flex-direction:column;width:100%;height:100%;max-height:100vh;max-height:100dvh;padding:12px;overflow-x:hidden;overflow-y:auto;overscroll-behavior-y:contain;scrollbar-width:auto;scrollbar-color:#3d527a #111827}
+.assistant-shell::-webkit-scrollbar{width:10px}
+.assistant-shell::-webkit-scrollbar-thumb{background:#3d527a;border-radius:5px}
+.assistant-shell::-webkit-scrollbar-track{background:#111827}
+.assistant-shell:focus-visible{outline:2px solid #4e8de8;outline-offset:-2px}
+.assistant-shell.settings-open{overflow-y:hidden}
+.assistant-workspace{display:grid;grid-template-columns:260px minmax(0,1fr);flex:1 0 420px;min-height:420px;gap:12px;overflow:visible}
 .assistant-session-pane{display:flex;flex-direction:column;gap:9px;min-width:0;min-height:0;padding:11px;border:1px solid var(--line);border-radius:11px;background:#111827;overflow:hidden}
 .assistant-session-heading{display:flex;justify-content:space-between;align-items:center;min-height:42px}
 .assistant-session-heading h2{margin:0;color:#eaf1ff;font-size:16px}
@@ -414,7 +419,7 @@ input.flash{animation:ntflash 1.5s ease-out}
 .assistant-session-actions{flex:0 0 28px;width:28px;min-width:28px;margin-right:4px;padding:3px;border:0;background:transparent;color:#9baed0;font-size:19px;line-height:1;cursor:pointer}
 .assistant-session-actions:hover{background:#263755;color:#fff}
 .assistant-session-empty{padding:12px 5px;color:var(--mut);font-size:11px;line-height:1.6}
-.assistant-chat-pane{position:relative;display:flex;flex-direction:column;gap:8px;min-width:0;min-height:0;overflow:hidden}
+.assistant-chat-pane{position:relative;display:flex;flex-direction:column;gap:8px;min-width:0;min-height:0;overflow:visible}
 .assistant-chat-header{display:flex;flex:0 0 auto;align-items:center;gap:12px;min-width:0;padding:4px 0 10px;border-bottom:1px solid var(--line)}
 .assistant-title-group{flex:1 1 auto;min-width:160px}
 .assistant-title-group h2{margin:0;color:#f2f5fc;font-size:19px;line-height:1.3}
@@ -585,7 +590,7 @@ input.flash{animation:ntflash 1.5s ease-out}
   .assistant-launcher{right:12px;bottom:72px}
   .assistant-panel{border-radius:0}
   .assistant-shell{padding:6px}
-  .assistant-workspace{position:relative;display:block}
+  .assistant-workspace{position:relative;display:block;flex-basis:480px;min-height:480px}
   .assistant-chat-pane{width:100%;height:100%;gap:6px}
   .assistant-session-pane{position:absolute;inset:0 auto 0 0;z-index:35;width:min(300px,84vw);border-color:#50678f;box-shadow:12px 0 40px #0009}
   .assistant-panel.sessions-collapsed .assistant-session-pane{display:none}
@@ -616,6 +621,7 @@ input.flash{animation:ntflash 1.5s ease-out}
   .assistant-doc-content{min-height:180px;max-height:42vh}
 }
 @media(max-width:420px){
+  .assistant-workspace{flex-basis:540px;min-height:540px}
   .assistant-chat-header{flex-wrap:wrap}
   .assistant-title-group{order:1;flex:1 1 calc(100% - 100px)}
   .assistant-session-toggle{order:0}

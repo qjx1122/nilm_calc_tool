@@ -3991,3 +3991,22 @@ delta_i_a  = d_i_obs
   - 本轮未连接真实模型、provider、目标浏览器、Windows 或现场网络；`tmp/` 用户数据未读取、修改、暂存或提交。
 - 是否进入 REPORT.md（稳定结论）：否（配置与 UI 实现及滚动回归，不产生新的稳定 NILM 算法结论）。
 - 遗留问题：目标浏览器需手测原生选择器、响应式 header 两个下拉框、消息滚轮和嵌套滚动边界；真实 Ollama / cloud provider 需验证具体 model ID 与 endpoint 的兼容性、权限与网络策略。额外 profile Key 在服务重启后刻意不恢复，管理员需重新配置；云端请求已有隐私 / 敏感内容边界仍适用。
+
+## [2026-11-04] 专题：智能问答助手受限视口整体滚动条
+- 类型：用户专题 / UI 交互与回归验证专题
+- 目标与假设：用户要求在助手界面不能同时显示全部界面内容时增加滚动条，确保短屏 / 窄屏下头部、会话、问答、输入和设置入口仍可访问。保留既有同页固定侧栏及消息、会话、设置各自的内层滚动。
+- 方法 / 实现：
+  - 将 `.assistant-shell` 设为外层按需纵向滚动容器，设置可辨认的滚动条轨道 / 滑块，并加 `tabindex=0` 与可访问标签，让滚动区域支持键盘聚焦。
+  - 主工作区设置 420px 最小高度、窄屏 480px、极窄屏 540px，避免 flex 在短视口中把控制项压缩或裁切；工作区和问答列允许溢出传递给 shell。
+  - 内层消息 / 会话 / 设置滚动区仍优先处理滚轮；到达边界后将滚轮转给 shell。设置覆盖层打开时锁住被覆盖主界面的外层滚动，设置关闭时解除，并在打开设置或面板时重置外层滚动位置。
+  - `tests/test_web_ui.py` 增加外层 overflow、滚动条对比度、最小高度、窄屏策略和键盘可达静态契约；`tools/ui_assistant_check.cjs` 以模拟滚动尺寸回归消息 / 设置边界到外层的传递及设置覆盖层锁定。
+  - README 与助手使用说明更新为 v0.99.41；四份生成手册重新生成并以 `--check` 验证。
+- 用户执行命令：无；本环境未提供可用的真实浏览器渲染 / 滚动条视觉验收。
+- 结果 / 结论：
+  - 定向 `.venv/bin/pytest tests/test_assistant.py tests/test_server.py tests/test_web_ui.py -q`：**75 passed / 1 warning**（12.39 s）；warning 为既有 Starlette/httpx `TestClient` deprecation。
+  - 全量 `.venv/bin/pytest -q`：**620 passed / 1 skipped / 1 warning**（149.72 s）；同一既有弃用 warning。
+  - `node tools/ui_assistant_check.cjs`：**PASS 133 checks**；`node --check app/static/app.js`、`node --check tools/ui_assistant_check.cjs`、定向 Python `py_compile` 通过。
+  - `.venv/bin/python tools/generate_assistant_docs.py --check` 四份手册全 `OK`（设计 42,713、使用 224,310、部署 45,672、调参验证 142,220 字符）；`git diff --check` 通过。
+  - live preview `/`、`/static/app.js`、`/static/style.css` 均 HTTP 200 且含本轮滚动标记；这是服务 / 静态资源 smoke check，不代表真实浏览器布局或原生滚动条验收。
+- 是否进入 REPORT.md（稳定结论）：否（助手界面布局与滚动行为，不涉及稳定 NILM 算法结论）。
+- 遗留问题：需用户在目标浏览器用较矮窗口、窄屏、消息 / 会话列表及长设置文档实测实际滚动条显示、触控 / 鼠标滚轮与键盘访问；jsdom 不能验证浏览器原生滚动条外观。`tmp/` 用户数据不读取、不修改、不暂存或提交。
