@@ -994,4 +994,5 @@
 - 关键决策：无 composer 后端下拉时，默认后端以已有管理员 `assistant-default-backend` 设置为准；对已存在的会话保留各自 backend、modelName / cloudProfileId，点“新建对话”使用设置默认后端，避免更改历史会话路由。具体模型的可见 label 删除但以 `aria-label` 保持屏幕阅读器可辨识。悬浮球位置作为当前页面运行态，不新增浏览器持久化。
 - 验证方式 / 覆盖范围 / 缺口：定向助手 pytest **46 passed**；`node tools/ui_assistant_check.cjs` **188 checks**（含拖动定位、视口边界、拖动 click 抑制、缩放后夹限、后端默认及旧会话、默认后端变化后重验操作员令牌、模型选择器显隐与附件标签）；JS 语法、测试 Python 编译、四份生成手册 `--check` 和显式文件范围 `git diff --check` 通过。未运行全量 pytest；真实浏览器拖动 / 触屏与底部视觉、原生键盘验收未做。
 - 未决问题：待用户在目标浏览器验证拖动手感、视口缩放后的定位、点击 / 键盘打开行为和桌面 / 窄屏 composer 布局；如有问题按浏览器、OS、视口和复现步骤继续修正。`tmp/` 未读取、修改、暂存或提交。
+- 提交 / 推送：commit `a67c137`（`feat: make assistant launcher draggable and simplify composer`）已推送到活动分支 `arena/82e34fb8-nilm-calc-tool`；提交显式列出 12 个文件，排除 `tmp/`。
 - 相关文件/分支：`app/static/app.js`、`app/static/index.html`、`app/static/style.css`、`tests/test_web_ui.py`、`tools/ui_assistant_check.cjs`、`README.md`、`docs/智能问答助手说明.md`、生成的 `docs/软件使用文档.md` / `docs/软件部署说明文档.md`、`STATUS.md`、`REPORT_TEST.md`、本文件；固定活动分支 `arena/82e34fb8-nilm-calc-tool`。
