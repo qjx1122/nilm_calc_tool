@@ -1,7 +1,7 @@
 # STATUS.md
 
 > 续接文件（BOOTSTRAP.md v2.2 台账）。每次收尾必更新；只改本文件，不另建同类文件。
-> 最后更新：2026-11-04（第 197 轮实现与沙盒验证完成：候选原生下拉 + 手动输入保留、流式期间滚动保持与侧栏 wheel 路由；定向 73 passed、隔离全量 618 passed / 1 skipped、jsdom 99 checks；live preview HTTP smoke 200；实现 `cb23f2d`、台账 `b18653d` 两笔提交已创建，待推送；真实目标浏览器 / 模型未验；`tmp/` 未触碰）
+> 最后更新：2026-11-04（第 197 轮实现与沙盒验证完成：候选原生下拉 + 手动输入保留、流式期间滚动保持与侧栏 wheel 路由；定向 73 passed、隔离全量 618 passed / 1 skipped、jsdom 99 checks；live preview HTTP smoke 200；实现提交 `cb23f2d`、专题 / 会话提交 `b18653d` 与收尾状态提交 `43049f5` 已推送至活动分支；真实目标浏览器 / 模型未验；`tmp/` 未触碰）
 > （上轮第 195 轮已完成并推送：本地模型名可编辑并支持发现 / 刷新；真实模型与浏览器现场验收待用户环境）
 > （第 186 轮 两层布局 v0.99.33，`576 passed`）
 > （第 185 轮 `stage_free` 列表框 v0.99.32，`575 passed`）
@@ -20,7 +20,7 @@
   - **角色 / 模式**：工程实现工程师（默认当前角色仍为资深电力算法专家）；模式 A；只在活动分支 `arena/82e34fb8-nilm-calc-tool` 修改；不触碰 `tmp/`。
   - **根因 / 实现**：模型名原为 `<input list> + datalist`，原生候选没有明确可点击展开入口；改为独立原生 `#assistant-local-model-select`，并保留可编辑 `#assistant-local-model`，选择与输入双向同步，空 / 错 / 刷新均不覆盖手填值，仍使用既有服务端发现 / 管理员刷新 / `local_model` 保存流程。消息增量 `assistantRefreshMessage()` 与请求结束重绘都曾强制滚到底，且消息区设置了 `scroll-behavior:smooth`；现仅在原本接近底部（≤72 px）时跟随、完成重绘保留阅读位置，并由面板级 wheel 处理聊天 / 会话标题空白、嵌套内容边界与相应滚动容器；相关区域显式设置纵向 overflow、`min-height:0`、内层 overscroll。
   - **回归 / 验证**：`tests/test_web_ui.py` **22 passed**；定向助手 / 服务 / UI pytest **73 passed / 1 warning**（10.24 s）；从 `git archive HEAD` + 明确补丁构建且不含仓库 `tmp/` 的隔离全量 pytest **618 passed / 1 skipped / 1 warning**（137.50 s）；jsdom **99 checks passed**，覆盖候选同步 / 手动模型保存、刷新 / 空列表保值、流式阅读位置、底部跟随、聊天 / 会话 / 嵌套设置滚轮路由。JS `node --check`、`tests/test_web_ui.py` py_compile 与 HTTP smoke 均通过；preview 首页 / JS / CSS HTTP 200。唯一 warning 是既有 Starlette/httpx TestClient 弃用提醒。
-  - **文档 / 交付**：实现提交 `cb23f2d` 与专题 / 会话 / 状态台账提交 `b18653d` 已创建；本任务专题已追加 `REPORT_TEST.md`、会话纪要已追加 `session/NILM_AC_session_complete.md`；两笔提交待推送。HTTP 200 与 jsdom 只证明服务 / 静态资源 / 模拟行为，不代表真实浏览器原生下拉、滚轮惯性、目标模型或现场网络验收。
+  - **文档 / 交付**：实现提交 `cb23f2d`、专题 / 会话提交 `b18653d`、状态收尾提交 `43049f5` 均已推送到 `origin/arena/82e34fb8-nilm-calc-tool`；本任务专题与会话记录已分别追加到指定台账。HTTP 200 与 jsdom 只证明服务 / 静态资源 / 模拟行为，不代表真实浏览器原生下拉、滚轮惯性、目标模型或现场网络验收。
   - **缺口 / 下一步**：需用户在目标浏览器验证候选弹层与选中保存、列表外名称手填；流式生成时从底部滚到前文不跳回；会话栏、设置 / 文档区与空白处可滚轮浏览。未连接 Ollama / OpenAI-compatible 服务；`tmp/` 未读、未改、未暂存或提交。
 - **上一任务（2026-11-04 第 196 轮已完成并推送：智能问答整体布局重构）**：按固定会话管理左栏 + 自适应问答右栏重排同页侧栏。验收点包括：会话标题搜索、最近 / 历史分组、时间、切换、右键重命名 / 删除、拖拽排序、长标题省略；右栏标题 / 三种后端 / 关闭、可滚动消息流、安全 Markdown、思考与超时提示、多行输入；粘贴 / 拖放截图分析；令牌及口令均收进「配置与附加知识库」。
   - **角色 / 模式**：工程实现工程师（当前默认角色仍为资深电力算法专家）；模式 A；只在活动分支 `arena/82e34fb8-nilm-calc-tool` 修改，排除 `tmp/`。
