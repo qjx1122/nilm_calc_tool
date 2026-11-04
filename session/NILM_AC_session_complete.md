@@ -959,3 +959,12 @@
 - 验证方式 / 覆盖范围 / 缺口：`.venv/bin/python -m pytest -o addopts='' tests/test_web_ui.py -q` **23 passed**（0.22 s）；排除仓库 `tmp/` 的隔离源码副本全量 pytest **620 passed / 1 skipped / 1 warning**（155.29 s，唯一 warning 为既有 Starlette/httpx TestClient deprecation）；`node tools/ui_assistant_check.cjs` **142 checks**，`node --check`（app.js + harness）、`py_compile` 通过；生成文档 `--check` 四份 OK（42,713 / 226,846 / 45,973 / 142,220 字符），`git diff --check` 通过。无可用真实 Chromium / Firefox / Playwright / Puppeteer，目标浏览器滚动条视觉、滚轮 / 键盘手动验收未做。
 - 未决问题：请用户在目标浏览器重新展开本地文档 / 完整参数，复验滚动条是否出现、文档内层到边界后是否可继续下滚、表单后半内容是否可达、标题 / 关闭按钮和 Tab 聚焦行为；窄屏和系统 overlay scrollbar 显示策略未验。未连真实模型 / 现场网络；仓库 `tmp/` 用户运行数据未读取或修改。
 - 相关文件 / 分支：`app/static/style.css`、`app/static/index.html`、`app/static/app.js`、`tests/test_web_ui.py`、`tools/ui_assistant_check.cjs`、`README.md`、`docs/智能问答助手说明.md`、生成的四份 `docs/软件*.md`、`REPORT_TEST.md`、`STATUS.md`、`session/NILM_AC_session_complete.md`；分支 `arena/82e34fb8-nilm-calc-tool`。
+
+## [2026-11-04] 会话纪要
+- 目标：重新审查智能问答助手多个界面代码，确认是否仍有 scrollbar 未显示或嵌套滚轮中断，导致后续内容不可达的问题。
+- 本会话角色：资深电力算法专家（`ROLE.md` 默认角色）＋工程实现工程师（第 203 轮任务级覆盖）；模式 A；活动分支 `arena/82e34fb8-nilm-calc-tool`。
+- 完成项：核查外层 shell、会话 / 消息、设置滚动 viewport、帮助文档目录 / 正文、图片预览、审计列表、Markdown / proposal / audit 内层块的 overflow、尺寸约束与 wheel 路由。代码层未发现明确的 overflow 缺失或父子滚动链断点；发现内层 scrollbar 可见性不一致（部分使用 thin / 透明轨道，部分依赖浏览器默认），OS overlay scrollbar 可能闲置淡出，但这不代表内容本身不可滚。更新 `STATUS.md`、`REPORT_TEST.md`；未改助手源代码。
+- 关键决策：把“内容可滚”与“滚动条闲置时常驻可见”分开判断。主要滚动区域都有 overflow / 父级兜底；设置 wrapper 和外层 shell 已有明确高对比样式。没有真实浏览器不把静态 CSS / jsdom 结果宣称为视觉验收，需用户目标环境复验。`tmp/` 用户数据严禁读取、修改、暂存或提交。
+- 验证方式 / 覆盖范围 / 缺口：`.venv/bin/python -m pytest -o addopts='' tests/test_web_ui.py -q` **23 passed**；`node tools/ui_assistant_check.cjs` **142 checks**；`node --check app/static/app.js`、`node --check tools/ui_assistant_check.cjs` 通过。环境无 Chromium / Firefox / Playwright / Puppeteer，未验证原生 scrollbar 外观、触屏、窄屏和滚轮惯性。没有运行全量 pytest（本轮未改代码）。
+- 未决问题：请用户在目标浏览器检查长列表 / 长消息 / 展开帮助文档和完整参数 / 审计区、短视口 / 窄屏，并回报浏览器、OS、视口尺寸及现象；尤其区分系统 overlay scrollbar 自动隐藏与无法滚动。`tmp/` 未读未改。
+- 相关文件 / 分支：审查 `app/static/style.css`、`app/static/index.html`、`app/static/app.js`；测试 `tests/test_web_ui.py`、`tools/ui_assistant_check.cjs`；台账 `STATUS.md`、`REPORT_TEST.md`、本文件；活动分支 `arena/82e34fb8-nilm-calc-tool`。

@@ -4064,3 +4064,19 @@ delta_i_a  = d_i_obs
   - 这些是 Python 测试、静态 CSS / HTML 契约及 jsdom 行为模拟；不代表真实浏览器 layout、原生 scrollbar 外观或键盘 / 鼠标现场验收。
 - 是否进入 REPORT.md（稳定结论）：否（属于 UI 滚动行为修复，没有新的 NILM 算法或稳定工程结论）。
 - 遗留问题：请用户在实际目标浏览器重新展开帮助文档 / 参数清单，确认滚动条可见、滚轮可从文档内层传到后续设置、关闭按钮可达，并可用 Tab 聚焦设置区；窄屏及系统 overlay scrollbar 是否自动淡出仍待实测。真实浏览器未提供；仓库 `tmp/` 未读取、修改、暂存或提交。
+
+## [2026-11-04] 专题：智能问答助手多界面滚动问题代码复审
+- 类型：用户专题 / UI 滚动与可达性代码审计
+- 目标与假设：重新检查智能问答助手几个界面，确认是否仍有因 scrollbar 未显示 / 嵌套滚动链断开，造成后续内容无法向下访问的问题。审计区分“代码允许滚动”与“目标浏览器常驻显示 scrollbar”，不能以静态 CSS 或 jsdom 代替现场视觉验收。
+- 方法 / 覆盖范围：
+  - 对照 `app/static/style.css`、`index.html`、`app.js` 中 `.assistant-shell`、会话列表、消息、设置 wrapper、本地文档目录 / 正文、图片预览、审计列表与 Markdown / proposal / audit `<pre>`、表格等区域的 overflow、最大 / 最小高度、flex 约束、父级裁剪和 wheel 处理。
+  - 检查嵌套内容到边界后的路由：助手 wheel handler 对文档列表 / 正文、设置 wrapper、审计、图片预览、会话、消息做显式处理；在设置 / 消息 / shell 父级之间转交。代码块和表格等未逐一列入 handler 的普通嵌套节点由浏览器原生 scroll chaining 处理；静态 / jsdom 不能模拟其原生滚动。
+  - 搜索浏览器可执行文件 / Playwright、Puppeteer、Selenium 依赖；环境只有 jsdom，无可用 Chromium / Firefox / Playwright / Puppeteer。
+- 用户执行命令（含实录路径；本节无用户命令则注明）：无用户命令；实际浏览器现场操作待用户执行并回报浏览器、OS、窗口尺寸和复现步骤。
+- 结果 / 结论：
+  - **代码层未发现明确的内容不可滚动断点**：外层 `.assistant-shell` 有有限视口高度、`overflow-y:auto` 和 shell 兜底；会话 / 消息区为 flex 子项且 `min-height:0` 并启用纵向滚动；设置 overlay 内 `.assistant-settings-scroll` 为 `position:absolute; inset:0; overflow-y:scroll`，全部设置 / 本地文档均位于其内；目录 `max-height:190px`、正文 `min-height:190px; max-height:50vh` 且两轴 `overflow:auto`；审计列表、待发截图预览、受限高度代码 / 审计 / 提案块也有相应 overflow。
+  - **仍存在可发现性差异，不等于不可滚**：会话、消息、文档列表 / 正文部分使用 `scrollbar-width:thin` 与透明轨道；审计、预览及一些 Markdown 内层使用浏览器默认 scrollbar。OS / 浏览器的 overlay scrollbar 可能在闲置时淡出，因此用户可能暂时看不到滚动提示；鼠标 / 触控滚动仍可触发内容滚动。设置 wrapper 与外层 shell 的颜色 / WebKit scrollbar 样式更明确。
+  - `.venv/bin/python -m pytest -o addopts='' tests/test_web_ui.py -q`：**23 passed**；`node tools/ui_assistant_check.cjs`：**PASS 142 checks**；app.js 与 harness `node --check` 通过；本轮仅为代码审计，未修改助手源代码。
+  - 上述自动化只证明当前静态契约与模拟行为；本环境没有原生浏览器布局 / scrollbar 工具，故不声称目标浏览器视觉、原生 wheel / 触屏或窄屏现场验收通过。
+- 是否进入 REPORT.md（稳定结论）：否（前端代码审计，没有新的稳定 NILM 算法结论）。
+- 遗留问题：用户需在目标浏览器依次检查长会话、消息、帮助文档 / 参数、审计区、短视口和窄屏的实际滚动条与 wheel / 触控滚动，并确认内层到边界后父级接管、设置后续内容可达。若 bar 闲置自动隐藏，应区分系统 overlay 策略与真正不可滚动；若仍复现，提供浏览器 / OS / 视口与复现步骤继续定位。`tmp/` 严格未读、未改、未暂存、未提交。

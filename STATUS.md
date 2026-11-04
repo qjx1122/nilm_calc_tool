@@ -1,7 +1,8 @@
 # STATUS.md
 
 > 续接文件（BOOTSTRAP.md v2.2 台账）。每次收尾必更新；只改本文件，不另建同类文件。
-> 最后更新：2026-11-04（第202轮复核展开本地文档后的设置滚动；固定分支 active；排除 `tmp/`）
+> 最后更新：2026-11-04（第203轮复查助手各滚动界面代码；固定分支 active；排除 `tmp/`）
+> （第 203 轮：助手多界面滚动代码审查与回归已完成；未发现代码层不可滚动断点，目标浏览器 scrollbar 视觉待用户复验）
 > （第 202 轮：设置独立滚动区复修与沙盒回归已完成；目标浏览器现场复验待用户）
 > （第 186 轮 两层布局 v0.99.33，`576 passed`）
 > （第 185 轮 `stage_free` 列表框 v0.99.32，`575 passed`）
@@ -9,14 +10,18 @@
 
 ## 当前角色
 - 角色：**资深电力算法专家**（`ROLE.md` v1.4 指定的默认当前角色）
-- 本任务级覆盖：**工程实现工程师**（`ROLE.md` 已定义；第 202 轮配置与附加知识库独立滚动区复修）
-- 生效范围：展开本地文档 / 完整平台参数后的设置面板明确高度 scroll viewport、滚轮传递与键盘访问
+- 本任务级覆盖：**工程实现工程师**（`ROLE.md` 已定义；第 203 轮智能问答助手多界面滚动审查）
+- 生效范围：会话 / 消息 / 文档 / 设置 / 审计 / 附图预览 / 窄屏外层的内容可达性、滚动条与滚轮传递
 - 默认执行模式：**模式 A（沙盒自执行）**；真实模型、目标浏览器与部署网络未连接时只报告未实测，不臆断现场验收。保持 `tmp/` 原样且排除提交。
 - 历史任务执行模式基线（本任务单独声明为模式 A）：**混合**——沙盒侧（模式 A）写码 + 合成信号解析解自验证 + live preview 实跑，**已有实录**；用户侧（模式 B）Windows 部署 / 真实数据对账 / 生产常驻，**只出执行包，未获实录不下结论**（执行包见 `REPORT_TEST.md` T-002 的 W/R/P 三组）
   - 说明：更早任务用户显式指定过模式 B（仅对「补齐台账骨架」生效）；历史任务若用户跳过模式澄清，曾按上述混合模式执行；每个新任务仍以当前任务登记的角色与模式为准。第 5 轮（界面下拉框检查）沙盒侧＝jsdom 驱动真实页面打真实服务端 + REST 空值语义实录，**已✅实录**；用户侧＝浏览器手点 U 组 7 步，**🔶待回报**。**第 6 轮（四功能）**沙盒侧＝pytest 25 项 + jsdom 30 项 + REST/CLI 实录，**已✅实录**；用户侧＝浏览器手点 U6 组 8 步，**🔶待回报**。**第 7 轮（三功能）**沙盒侧＝pytest 18 项 + jsdom 39 项 + CLI/源层实录，**已✅实录**；用户侧＝U7 组 8 步，**🔶待回报**。**第 9 轮（间谐波/直流/事件）**沙盒侧＝pytest 13 项 + jsdom 28 项 + live preview 实跑，**已✅实录**；用户侧＝U9 组 6 步，**🔶待回报**。**第 10 轮（离线列映射开关）**沙盒侧＝pytest 8 项 + jsdom 15 项 + REST 实录，**已✅实录**；用户侧＝U10 组 6 步，**🔶待回报**。**第 11 轮（时标 UTC 开关）**沙盒侧＝pytest 6 项 + 双时区全量 + jsdom 11 项，**已✅实录**；用户侧＝U11 组 5 步，**🔶待回报**。**第 12 轮（负荷辨识）**沙盒侧＝pytest 8 项 + jsdom 16 项 + 引擎/CSV 实录，**已✅实录**；用户侧＝U12 组 5 步，**🔶待回报**
 
 ## 当前目标
-- **本任务（2026-11-04 第 202 轮：复核展开文档后仍未滚动的问题）**：用户反馈 v0.99.43 展开“浏览本地帮助文档与完整平台参数清单”后仍无滚动条且后续内容不可达。
+- **本任务（2026-11-04 第 203 轮：智能问答助手多界面滚动复审）**：用户要求重新检查智能问答助手几个界面的代码，判断是否仍存在因 scrollbar 未显示 / 滚动链断开而导致后续内容不可达的问题。
+  - **角色 / 模式**：工程实现工程师（沿用资深电力算法专家默认角色）；模式 A；活动分支 `arena/82e34fb8-nilm-calc-tool`；`tmp/` 不读取、不修改、不暂存、不提交。
+  - **审查范围**：外层 shell、会话列表、消息、文档目录与正文、设置滚动 wrapper、审计记录、附图预览，以及 Markdown 内部可滚动代码 / 表格；核对高度约束、overflow、scrollbar 样式、wheel 路由与焦点可达性。
+  - **审查结论 / 状态**：未发现消息、会话、文档、设置、审计、预览或 Markdown 内容区存在代码层 overflow 缺失 / 明确滚动链断点；`assistant-settings-scroll` 与外层 shell 有高对比强制滚动条，若干内层区域仍使用透明轨道或浏览器默认样式，OS overlay 策略可能在闲置时隐藏视觉 scrollbar，但这不等于 wheel/touch 滚动不可用。定向 pytest **23 passed**、jsdom **142 checks**、JS 语法通过。无真实浏览器 / Playwright，未验目标浏览器的原生 scrollbar、窄屏和滚轮视觉；必须由用户现场复验，不能称完全通过。
+- **上一任务（2026-11-04 第 202 轮已完成并推送：展开帮助文档后的设置独立滚动区复修）**：用户反馈 v0.99.43 展开“浏览本地帮助文档与完整平台参数清单”后仍无滚动条且后续内容不可达。
   - **角色 / 模式**：工程实现工程师（沿用资深电力算法专家默认角色）；模式 A；固定活动分支 `arena/82e34fb8-nilm-calc-tool`；不读取、修改、暂存或提交 `tmp/`。
   - **代码检查 / 根因**：把 scrollport 从 `.assistant-settings-body` 移到特殊 `<details>` 元素本身仍未在用户实际界面生效。复修改为在定位的设置 overlay 内放置普通 block 独立 wrapper，并用 `position:absolute; inset:0` 明确约束其高度，避免依赖 `<details>` / flex 的自动尺寸。
   - **实现目标**：展开本地帮助文档后，独立 wrapper 可滚动访问设置后续内容；滚动条持续显示，文档内层到边界后滚轮传递到 wrapper，标题 / 关闭按钮保持可见，设置边界不滚动底层助手 shell；wrapper 可键盘聚焦。
@@ -325,6 +330,7 @@
 - 范围边界：~~本 session 不写业务代码~~ ❌**已失效**（该边界属上一任务；本任务即为写代码）；仍然遵守：不新建台账外散文件、不把数据/产物入库
 
 ## 已完成
+- **第 203 轮（2026-11-04，智能问答多界面滚动问题代码复审）**：检查 `.assistant-shell`、`.assistant-conversation-list`、`.assistant-messages`、设置 wrapper、文档目录 / 正文、图片预览、审计列表与 Markdown / proposal / audit 代码块的 overflow、尺寸约束和 wheel 路由。未发现代码层明确无法滚动 / 父子滚动断链；发现部分内层列表 / 消息 / 文档区仅用 `scrollbar-width:thin` + 透明轨道，其他小区域依赖浏览器默认 scrollbar，所以 OS overlay 策略下闲置时视觉指示可能消失，但并非内容不可滚。`tests/test_web_ui.py` **23 passed**；`node tools/ui_assistant_check.cjs` **142 checks**；JS / harness 语法通过。未安装 / 找到 Chromium、Firefox、Playwright 或 Puppeteer；真实 scrollbar 视觉、窄屏和原生 wheel 未验，待用户目标浏览器复验。源码未改；`tmp/` 未读未改。
 - **第 202 轮（2026-11-04，智能问答设置独立滚动区 v0.99.44）**：基于用户反馈 v0.99.43 展开本地帮助 / 完整平台参数后仍无 scrollbar，将滚动区改为 overlay 内 `position:absolute; inset:0` 的普通 `#assistant-settings-scroll`，并更新嵌套 wheel 传递、键盘 region、sticky header 和窄屏样式。`tests/test_web_ui.py` **23 passed**；不含仓库 `tmp/` 的隔离副本全量 **620 passed / 1 skipped / 1 warning**；jsdom **142 checks**；四份生成手册、语法、py_compile / diff 检查通过。真实浏览器视觉 / 键盘验收待用户环境；`tmp/` 未读未改。
 - **第 195 轮（2026-11-04，助手本地模型候选列表）**：本地 `assistant-local-model` 改为可编辑文本 + `datalist`；服务启动异步预取、初始配置读取缓存、管理员手动刷新；服务端只访问经本地 URL 校验的模型地址，绕过代理，读取 OpenAI `/models` 并回退 Ollama `/api/tags`。候选加载 / 空列表 / 请求失败均不抹掉当前手填值，配置保存及聊天流程保持不变。`tests/test_assistant.py tests/test_server.py tests/test_web_ui.py` **70 passed / 1 warning**；jsdom **62 checks**；Python / JS 语法与 diff 检查通过。真实本地模型、用户浏览器视觉和现场网络仍待外部验收；未触碰 `tmp/`。
 - **第 193 轮（2026-11-04，助手管理员与受控工具操作文档）**：面向实施、交付、现场运维扩充 `docs/智能问答助手说明.md`，说明管理员口令与操作员令牌分工、Linux / PowerShell / systemd 注入环境、UI 工具总开关 / allow-list / 云端独立开关、scope、预览确认与排障；新增文档回归。`tests/test_assistant.py` **18 passed**，命令语法 / 路径和 `git diff --check` 通过；未触碰 `tmp/`。
@@ -501,6 +507,7 @@
 - [x] 2026-10-12 **第 7 轮三功能**：曲线实时落盘 `output/realtime/<曲线>_<日期>.csv` / 离线播放起点（5 模式）/ 曲线悬停取值；`tests/test_r7_features.py` 18 项 + `tools/ui_r7_check.cjs` PASS 39 + 旧 harness 30/74 + 全量 **204 passed, 1 skipped**；README v0.6 / REPORT_TEST T-005 / REPORT C-16、C-17
 
 ## 进行中
+- **第 203 轮滚动问题复审（代码审查完成，用户浏览器现场视觉待验）**：逐项核对外层 shell、消息 / 会话、设置 / 本地文档、审计 / 附图和 Markdown 内层滚动；未发现 overflow 声明缺失或代码层明确断链。部分内层 scrollbar 使用 `thin` + 透明轨道或浏览器默认样式，OS overlay scrollbar 可能闲置隐藏；这属于视觉可发现性限制，不证明内容无法滚动。`tests/test_web_ui.py` 23 passed、jsdom 142 checks、JS 语法通过；无可用真实浏览器，需用户目标环境复验。
 - **第 202 轮设置滚动区（代码交付完成，现场复验待用户）**：请在目标浏览器打开“配置与附加知识库”并展开本地帮助文档 / 完整平台参数，检查 scrollbar 是否可见、文档内层到边界后可继续下滚、后续设置可达、Tab 焦点与 sticky 关闭入口正常。jsdom 和 CSS 契约不是现场视觉验收；OS overlay scrollbar 可能自动淡出。
 - **第 195 轮助手本地模型候选列表**：沙盒实现与回归已完成；待用户在真实 Ollama / OpenAI-compatible 服务上验证启动候选加载、管理员刷新、手动输入 / 保存及浏览器视觉。未连接现场服务前不声称实机验收通过。
 - **第 191 轮 v0.99.38 智能问答受控工具**：实现 / 沙盒回归 / 文档已完成；待用户环境验收令牌配置、总线与分路工具确认、真实模型及浏览器视觉。仓库 `tmp/` 保持在当前工作区原状，排除在本任务文件变更之外。
@@ -515,6 +522,7 @@
 - 等用户执行 T-002 的 W/R/P 组（Windows 部署 / 真实数据对账 / 生产常驻）并回报实录
 
 ## 下一步（TODO）
+- **第 203 轮目标浏览器复验（待用户）**：在目标浏览器分别检查会话列表 / 长对话 / 长文档与参数 / 审计记录 / 短视口及窄屏；确认 overflow 时 scrollbar 外观、鼠标 / 触控滚动、嵌套区到边界后父区接管、设置后续内容可达与关闭入口保持可见。若 scrollbar 闲置自动隐藏，先滚动 / 聚焦确认内容仍可达；记录浏览器、OS、视口尺寸和复现步骤后再决定是否需针对性修复。静态契约 / jsdom 不能代替现场验收。
 - **第 202 轮现场复验（阻塞项）**：用户在目标浏览器展开“浏览本地帮助文档与完整平台参数清单”，回报滚动条是否可见、长文档内滚动与父区交接、下方配置可达、键盘焦点和关闭入口；若仍有问题，以浏览器 / OS 及窗口尺寸为前提继续定位。未获得用户现场复验前，不声称已经解决视觉验收。
 - **第 195 轮助手本地模型候选列表（沙盒交付完成）**：用户侧可在真实本地模型服务已启动后检查 lifespan 预取、加载配置时的候选列表、管理员刷新按钮、任意手填值的保存 / 聊天；确认模型服务失败或无模型时不清输入，并按现场反馈修正。当前未获得 Ollama / OpenAI-compatible 服务与浏览器实录。
 - **第 194 轮令牌文档同步**：README、助手专用说明和生成的使用 / 部署手册已同步并完成沙盒验证；若目标环境反馈差异，依据不含秘密的状态、令牌长度和 scope 信息继续排查。Windows PowerShell / 服务管理器与现场部署仍待部署方验证，不要要求用户把真实令牌贴到聊天。
@@ -543,6 +551,7 @@
 10. **T-004 遗留**：自定义播放时间目前只对 `csv_file` 生效（`csv_tail` 若现场文件也是 0/00/00 写法需扩展）；趋势历史随「重新启动数据源」清空，跨运行/跨进程的 24 h 需落盘（SQLite/滚动 CSV）；`history_hours`/`history_max_points` 未上界面；曲线横轴跨午夜不显示日期；自定义起始时间按本地时区（若现场要 UTC 需加 `tz` 字段）
 
 ## 决策记录 / 踩坑
+- 2026-11-04｜**第 203 轮（滚动可用性与滚动条可见性分开判定）**：所有主要助手面板均有 overflow / 尺寸约束或明确父级滚动兜底；未见“无 scrollbar 所以内容不可滚”的代码断点。内层透明轨道 / overlay scrollbar 可能降低 affordance，但不等价于无法用 wheel/touch/键盘滚动。没有真实浏览器时不得把 CSS / jsdom 的结果写成视觉验收通过；需用户提供浏览器、OS、视口和实录。
 - 2026-11-04｜**第 202 轮（设置滚动区必须是明确边界的普通元素）**：第 200 轮 `.assistant-settings-body` 与第 201 轮 `<details>` 自身均未通过用户的展开帮助文档复验；滚动 affordance 和溢出处理应放在定位 overlay 内单独的普通 `div`，以 `position:absolute; inset:0` 建立明确 scroll viewport，不能只对 CSS / jsdom 契约验收。嵌套文档仍优先内滚，边界才路由 wrapper；系统 overlay scrollbar 和真实浏览器布局需用户复验。
 - 2026-11-04｜**第 195 轮（本地模型候选列表实现与沙盒验证）**：管理员本地模型名使用原生 `input[list] + datalist`，不限制手输；页面只请求本应用相对 API。FastAPI lifespan 启动异步预取，GET 仅返回缓存，管理员 POST 刷新通过令牌授权；读取复用本地 URL 白名单、`urllib` 空代理，每端点 5 s 超时、响应 1 MB 上限，最多 200 个候选；先读 OpenAI `/models`，需要时退回 Ollama `/api/tags`。前端不因刷新成功的空列表或失败改写输入；相同 URL 刷新失败保留旧候选。保存新 URL 后自动刷新。三类 pytest 70 passed、jsdom 62 checks、语法 / diff 检查通过；真实服务 / 浏览器尚未验收；不触碰 `tmp/`。
 - 2026-11-04｜**第 194 轮（令牌生成文档排障补充）**：PowerShell `$env:` 与 shell `export` 只对当前终端及子进程有效；由服务管理器启动的进程须在对应环境 / secret 中配置，不能把另一个终端的变量当成已注入。scope 必须是注册表里的纯文本；未知 scope 被过滤会导致“身份通过但无工具”，与“操作员令牌无效或已撤销”（无匹配记录）不同。`GET /api/assistant/config.operator_tokens_configured` 只确认至少一条格式有效记录，不证明用户输入的 token 匹配。文档从 README 源重生成；不改执行逻辑、不触碰 `tmp/`。
@@ -597,6 +606,7 @@
 - 2026-10-10｜历史决策（更早任务，仍有效）：分支策略用平台固定 session 分支；不编造项目事实（`ROLE.md` 背景只作推断引用）；KPI 通用数学定义属数学事实可写死；✅ 必须同行带来源、经验阈值必须显式标「经验推测」
 
 ## 关键文件路径
+- 第 203 轮滚动审计：重点审阅 `app/static/style.css`、`app/static/index.html`、`app/static/app.js`；自动回归 `tests/test_web_ui.py`、`tools/ui_assistant_check.cjs`；专题 / 会话 / 决策见 `REPORT_TEST.md`、`session/NILM_AC_session_complete.md`、本文件。
 - 第 202 轮配置 / 文档滚动：`app/static/style.css`、`app/static/index.html`、`app/static/app.js`；回归 `tests/test_web_ui.py`、`tools/ui_assistant_check.cjs`；说明 `README.md` §3.6 / §11、`docs/智能问答助手说明.md` 与四份生成手册；台账 `REPORT_TEST.md`、`session/NILM_AC_session_complete.md`、本文件。
 - 第 195 轮助手本地模型候选列表：`app/assistant.py`（本地模型端点与解析）、`app/server.py`（启动预取 / 模型列表 API）、`app/static/index.html` / `app/static/app.js` / `app/static/style.css`（可编辑下拉、加载与刷新）、`tests/test_assistant.py` / `tests/test_server.py` / `tests/test_web_ui.py` / `tools/ui_assistant_check.cjs`（后端解析、API、静态与 jsdom 回归）。
 - `BOOTSTRAP.md` / `ROLE.md` — 协议 v2.2 与角色库 v1.4（默认角色：资深电力算法专家）
