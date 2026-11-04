@@ -88,6 +88,130 @@ def test_admin_config_keeps_api_keys_out_of_json_and_public_view(tmp_path, monke
         service.update_config({"sensitive_terms": [123]}, "test-admin-token")
 
 
+def test_local_model_catalog_parses_openai_response_and_bypasses_proxies(tmp_path, monkeypatch):
+    import urllib.request
+
+    admin = "local-model-admin-token"
+    monkeypatch.setenv("ELEC_TOOL_ASSISTANT_ADMIN_TOKEN", admin)
+    service = AssistantService(data_dir=str(tmp_path / "openai-catalog"))
+    service.update_config({"local_api_key": "local-catalog-key"}, admin)
+    calls = []
+
+    class FakeResponse:
+        def __init__(self, data):
+            self.data = json.dumps(data).encode("utf-8")
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self, limit):
+            return self.data[:limit]
+
+    class FakeOpener:
+        def open(self, request, timeout):
+            calls.append((request, timeout))
+            return FakeResponse({"data": [
+                {"id": "qwen2.5:7b"}, {"id": "qwen2.5:7b"}, {"name": " llama3.2:latest "},
+                {"id": "bad\nname"}, {"id": "x" * 161}, None,
+            ]})
+
+    def fake_build_opener(*handlers):
+        assert len(handlers) == 1 and isinstance(handlers[0], urllib.request.ProxyHandler)
+        assert handlers[0].proxies == {}, "本地模型发现必须绕过 HTTP_PROXY / HTTPS_PROXY"
+        return FakeOpener()
+
+    monkeypatch.setattr(urllib.request, "build_opener", fake_build_opener)
+    refreshed = service.refresh_local_models(admin)
+    assert refreshed["status"] == "ready"
+    assert refreshed["models"] == ["qwen2.5:7b", "llama3.2:latest"]
+    assert len(calls) == 1
+    request, timeout = calls[0]
+    assert request.full_url == "http://127.0.0.1:11434/v1/models"
+    assert request.get_method() == "GET" and request.get_header("Authorization") == "Bearer local-catalog-key"
+    assert timeout == 5.0
+    assert service.local_model_catalog()["models"] == refreshed["models"]
+
+
+def test_local_model_catalog_falls_back_to_ollama_tags_and_keeps_cache_on_error(tmp_path, monkeypatch):
+    import urllib.error
+    import urllib.request
+
+    admin = "local-model-admin-token"
+    monkeypatch.setenv("ELEC_TOOL_ASSISTANT_ADMIN_TOKEN", admin)
+    service = AssistantService(data_dir=str(tmp_path / "ollama-catalog"))
+    calls = []
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self, _limit):
+            return b'{"models":[{"name":"llama3.2:latest"},{"model":"qwen2.5:7b"}]}'
+
+    class FakeOpener:
+        def open(self, request, timeout):
+            calls.append((request.full_url, timeout))
+            if request.full_url.endswith("/v1/models"):
+                raise urllib.error.HTTPError(request.full_url, 404, "not found", {}, None)
+            return FakeResponse()
+
+    monkeypatch.setattr(urllib.request, "build_opener", lambda *_handlers: FakeOpener())
+    refreshed = service.refresh_local_models(admin)
+    assert calls == [
+        ("http://127.0.0.1:11434/v1/models", 5.0),
+        ("http://127.0.0.1:11434/api/tags", 5.0),
+    ]
+    assert refreshed["status"] == "ready" and refreshed["models"] == ["llama3.2:latest", "qwen2.5:7b"]
+
+    monkeypatch.setattr(service, "_fetch_local_models", lambda _url: (_ for _ in ()).throw(
+        AssistantError(502, "读取本地模型列表失败；请检查本地服务地址、服务状态和 API Key")))
+    with pytest.raises(AssistantError, match="读取本地模型列表失败"):
+        service.refresh_local_models(admin)
+    after_error = service.local_model_catalog()
+    assert after_error["status"] == "error"
+    assert after_error["models"] == ["llama3.2:latest", "qwen2.5:7b"], "刷新失败不应清除上次候选"
+
+
+def test_local_model_catalog_requires_admin_and_startup_prefetch_is_nonblocking(tmp_path, monkeypatch):
+    import threading
+    import time
+
+    admin = "local-model-admin-token"
+    monkeypatch.setenv("ELEC_TOOL_ASSISTANT_ADMIN_TOKEN", admin)
+    service = AssistantService(data_dir=str(tmp_path / "startup-catalog"))
+    with pytest.raises(AssistantError) as denied:
+        service.refresh_local_models("wrong-token")
+    assert denied.value.status_code == 403
+    with pytest.raises(AssistantError) as unsafe:
+        service.refresh_local_models(admin, "http://8.8.8.8/v1")
+    assert unsafe.value.status_code == 400
+    service.update_config({"local_model": "manual-custom-model"}, admin)
+    assert service.prepare_chat({"prompt": "测试自定义模型", "model_type": "local"})["model"] == "manual-custom-model"
+
+    completed = threading.Event()
+    calls = []
+    def fake_fetch(base_url):
+        calls.append(base_url)
+        completed.set()
+        return ["startup-model"]
+    monkeypatch.setattr(service, "_fetch_local_models", fake_fetch)
+    service.start_local_model_discovery()
+    assert completed.wait(2), "启动预取线程未完成"
+    deadline = time.monotonic() + 2
+    while service.local_model_catalog()["status"] == "loading" and time.monotonic() < deadline:
+        time.sleep(0.005)
+    service.start_local_model_discovery()
+    assert calls == ["http://127.0.0.1:11434/v1"]
+    assert service.local_model_catalog()["status"] == "ready"
+    assert service.local_model_catalog()["models"] == ["startup-model"]
+
+
 def test_builtin_channel_is_zero_configuration_and_retrieves_bundled_docs(tmp_path, monkeypatch):
     monkeypatch.delenv("ELEC_TOOL_ASSISTANT_BACKEND", raising=False)
     monkeypatch.delenv("ELEC_TOOL_ASSISTANT_ENABLED", raising=False)

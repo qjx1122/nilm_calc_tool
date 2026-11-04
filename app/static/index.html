@@ -1620,7 +1620,12 @@
             <h3>本地 OpenAI 兼容接口</h3>
             <div class="assistant-config-grid">
               <label>服务地址<input id="assistant-local-url" type="url" placeholder="http://127.0.0.1:11434/v1"></label>
-              <label>模型名称<input id="assistant-local-model" type="text" placeholder="qwen2.5:7b"></label>
+              <div class="assistant-local-model-field">
+                <label for="assistant-local-model">模型名称（可选择或手动输入）<input id="assistant-local-model" type="text" list="assistant-local-model-options" placeholder="qwen2.5:7b" autocomplete="off"></label>
+                <button id="assistant-refresh-local-models" type="button" title="从配置的本地模型服务重新读取候选模型">刷新模型列表</button>
+                <datalist id="assistant-local-model-options"></datalist>
+                <small id="assistant-local-models-status" role="status" aria-live="polite">页面加载后读取；手动刷新需管理员口令，也可自由手动输入。</small>
+              </div>
               <label>可选 API Key<input id="assistant-local-key" type="password" autocomplete="new-password" placeholder="留空＝保持现值；服务端环境变量优先"></label>
               <label class="check"><input id="assistant-clear-local-key" type="checkbox"> 清除内存中的本地 API Key</label>
             </div>

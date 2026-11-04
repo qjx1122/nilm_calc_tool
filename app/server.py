@@ -1214,6 +1214,10 @@ def _start_branch_if_enabled(bus_cfg: AppConfig, pace_clock=None, br_cfg: Option
 @asynccontextmanager
 async def lifespan(_app: "FastAPI"):
     await _startup()
+    try:
+        assistant_service.start_local_model_discovery()
+    except Exception as exc:
+        log.warning("智能问答本地模型列表启动预取未能启动：%s", type(exc).__name__)
     yield
     for r in RUNNERS.values():
         r.stop(quiet=True)
@@ -1693,6 +1697,23 @@ async def put_assistant_config(payload: Dict[str, Any], request: Request) -> Any
     try:
         cfg = assistant_service.update_config(payload, request.headers.get("x-assistant-admin-token", ""))
         return {"ok": True, "config": cfg}
+    except AssistantError as exc:
+        return JSONResponse(status_code=exc.status_code, content={"ok": False, "error": exc.message})
+
+
+@app.get("/api/assistant/local-models")
+async def get_assistant_local_models() -> Dict[str, Any]:
+    """Return the cached local model catalog; never contact a model service from this public read route."""
+    return assistant_service.local_model_catalog()
+
+
+@app.post("/api/assistant/local-models/refresh")
+async def refresh_assistant_local_models(request: Request, payload: Optional[Dict[str, Any]] = None) -> Any:
+    """Administrator-only refresh; accepts a validated unsaved URL to support edit-before-save workflows."""
+    try:
+        base_url = payload.get("base_url") if isinstance(payload, dict) else None
+        return await asyncio.to_thread(assistant_service.refresh_local_models,
+                                       request.headers.get("x-assistant-admin-token", ""), base_url)
     except AssistantError as exc:
         return JSONResponse(status_code=exc.status_code, content={"ok": False, "error": exc.message})
 

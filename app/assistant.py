@@ -43,6 +43,9 @@ VIEW_IDS = {v for v, _ in BUSINESS_VIEWS}
 SUPPORTED_DOC_EXTENSIONS = {".md", ".txt", ".json", ".py", ".csv", ".html", ".htm", ".yaml", ".yml", ".log"}
 MAX_DOC_BYTES = 1_000_000
 MAX_DOCS = 100
+LOCAL_MODEL_DISCOVERY_TIMEOUT_S = 5.0
+LOCAL_MODEL_DISCOVERY_MAX_BYTES = 1_000_000
+LOCAL_MODEL_DISCOVERY_MAX_MODELS = 200
 MAX_KB_BYTES = 20_000_000
 MAX_PROMPT_CHARS = 12_000
 MAX_HISTORY_MESSAGES = 20
@@ -209,6 +212,38 @@ def _validate_base_url(value: Any, model_type: str) -> str:
     return url
 
 
+def _extract_local_model_names(payload: Any) -> List[str]:
+    """Extract model identifiers from OpenAI ``data`` or Ollama ``models`` payloads."""
+    entries: Any = payload if isinstance(payload, list) else []
+    if isinstance(payload, dict):
+        for key in ("data", "models"):
+            candidate = payload.get(key)
+            if isinstance(candidate, list):
+                if candidate or not entries:
+                    entries = candidate
+                if candidate:
+                    break
+    names: List[str] = []
+    seen = set()
+    for entry in entries:
+        if isinstance(entry, str):
+            raw_name = entry
+        elif isinstance(entry, dict):
+            raw_name = next((entry.get(key) for key in ("id", "name", "model")
+                             if isinstance(entry.get(key), str) and entry.get(key).strip()), "")
+        else:
+            continue
+        name = str(raw_name or "").strip()
+        if (not name or len(name) > 160 or name in seen
+                or any(ord(char) < 32 or ord(char) == 127 for char in name)):
+            continue
+        seen.add(name)
+        names.append(name)
+        if len(names) >= LOCAL_MODEL_DISCOVERY_MAX_MODELS:
+            break
+    return names
+
+
 def _number(value: Any, name: str, low: float, high: float, integer: bool = False) -> Any:
     try:
         if isinstance(value, bool):
@@ -281,6 +316,12 @@ class AssistantService:
 
     def __init__(self, data_dir: Optional[str] = None):
         self._lock = threading.RLock()
+        self._local_models_lock = threading.RLock()
+        self._local_models_refreshing = False
+        self._local_models_startup_started = False
+        self._local_model_catalog: Dict[str, Any] = {
+            "base_url": "", "status": "idle", "models": [], "error": "", "updated_at": None,
+        }
         self._secrets: Dict[str, str] = {"local_api_key": "", "cloud_api_key": ""}
         self._requests: Dict[str, Deque[float]] = defaultdict(deque)
         self._tool_requests: Dict[str, Deque[float]] = defaultdict(deque)
@@ -515,6 +556,147 @@ class AssistantService:
             self._config = self._sanitize_config(cfg)
             self._save_config()
             return self.public_config()
+
+    def _local_model_settings(self) -> Tuple[str, str]:
+        with self._lock:
+            base_url = str(self._config["local_base_url"])
+            api_key = self._env_secret("ELEC_TOOL_ASSISTANT_LOCAL_API_KEY") or self._secrets.get("local_api_key", "")
+        return base_url, api_key
+
+    def _read_local_model_payload(self, url: str, api_key: str) -> Any:
+        headers = {"Accept": "application/json"}
+        if api_key:
+            headers["Authorization"] = "Bearer " + api_key
+        request = urllib.request.Request(url, headers=headers, method="GET")
+        # Keep local model discovery off HTTP_PROXY / HTTPS_PROXY, just like local chat requests.
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        try:
+            with opener.open(request, timeout=LOCAL_MODEL_DISCOVERY_TIMEOUT_S) as response:
+                raw = response.read(LOCAL_MODEL_DISCOVERY_MAX_BYTES + 1)
+        except urllib.error.HTTPError:
+            raise AssistantError(502, "本地模型列表端点请求失败") from None
+        except (TimeoutError, urllib.error.URLError, OSError):
+            raise AssistantError(503, "无法连接本地模型列表端点") from None
+        if len(raw) > LOCAL_MODEL_DISCOVERY_MAX_BYTES:
+            raise AssistantError(502, "本地模型列表响应超过 1 MB 限制")
+        try:
+            return json.loads(raw.decode("utf-8-sig"))
+        except (UnicodeDecodeError, ValueError, TypeError):
+            raise AssistantError(502, "本地模型列表不是有效的 JSON") from None
+
+    def _fetch_local_models(self, base_url: str) -> List[str]:
+        """Read OpenAI-compatible /models, falling back to Ollama's native /api/tags."""
+        base_url = _validate_base_url(base_url, "local")
+        _, api_key = self._local_model_settings()
+        parsed = urlsplit(base_url)
+        endpoints = [base_url.rstrip("/") + "/models", f"{parsed.scheme}://{parsed.netloc}/api/tags"]
+        had_valid_response = False
+        for endpoint in dict.fromkeys(endpoints):
+            try:
+                payload = self._read_local_model_payload(endpoint, api_key)
+            except AssistantError:
+                continue
+            had_valid_response = True
+            names = _extract_local_model_names(payload)
+            if names:
+                return names
+        if had_valid_response:
+            return []
+        raise AssistantError(502, "读取本地模型列表失败；请检查本地服务地址、服务状态和 API Key")
+
+    @staticmethod
+    def _local_model_catalog_payload(catalog: Dict[str, Any]) -> Dict[str, Any]:
+        return {"ok": True, "status": catalog["status"], "models": list(catalog["models"]),
+                "error": str(catalog["error"] or ""), "updated_at": catalog["updated_at"]}
+
+    def local_model_catalog(self) -> Dict[str, Any]:
+        """Return the cached local model names without making a network request."""
+        with self._lock:
+            configured_url = self._config["local_base_url"]
+        with self._local_models_lock:
+            catalog = dict(self._local_model_catalog)
+            if catalog["base_url"] != configured_url:
+                catalog = {"base_url": configured_url, "status": "idle", "models": [],
+                           "error": "", "updated_at": None}
+        return self._local_model_catalog_payload(catalog)
+
+    def _refresh_local_model_catalog(self, base_url: str, *, background: bool = False) -> Dict[str, Any]:
+        with self._local_models_lock:
+            if self._local_models_refreshing:
+                if background:
+                    return self._local_model_catalog_payload(self._local_model_catalog)
+                raise AssistantError(409, "本地模型列表正在刷新，请稍后重试")
+            previous = dict(self._local_model_catalog)
+            retained = list(previous["models"]) if previous["base_url"] == base_url else []
+            self._local_models_refreshing = True
+            self._local_model_catalog = {"base_url": base_url, "status": "loading", "models": retained,
+                                         "error": "", "updated_at": previous["updated_at"]}
+        try:
+            models = self._fetch_local_models(base_url)
+        except AssistantError as exc:
+            message = exc.message
+            with self._local_models_lock:
+                self._local_model_catalog = {"base_url": base_url, "status": "error", "models": retained,
+                                             "error": message, "updated_at": time.time()}
+            if background:
+                log.debug("Assistant local model discovery failed: %s", message)
+                return self.local_model_catalog()
+            raise
+        except Exception:
+            message = "读取本地模型列表失败；请检查本地服务地址、服务状态和 API Key"
+            with self._local_models_lock:
+                self._local_model_catalog = {"base_url": base_url, "status": "error", "models": retained,
+                                             "error": message, "updated_at": time.time()}
+            if background:
+                log.debug("Assistant local model discovery failed: %s", message)
+                return self.local_model_catalog()
+            raise AssistantError(502, message) from None
+        else:
+            status = "ready" if models else "empty"
+            with self._local_models_lock:
+                self._local_model_catalog = {"base_url": base_url, "status": status, "models": models,
+                                             "error": "", "updated_at": time.time()}
+        finally:
+            with self._local_models_lock:
+                self._local_models_refreshing = False
+        with self._local_models_lock:
+            return self._local_model_catalog_payload(self._local_model_catalog)
+
+    def start_local_model_discovery(self) -> None:
+        """Kick off one non-blocking discovery at service startup; never delay ASGI startup."""
+        with self._local_models_lock:
+            if self._local_models_startup_started:
+                return
+            self._local_models_startup_started = True
+        with self._lock:
+            base_url = str(self._config["local_base_url"])
+        with self._local_models_lock:
+            previous = dict(self._local_model_catalog)
+            retained = list(previous["models"]) if previous["base_url"] == base_url else []
+            self._local_model_catalog = {"base_url": base_url, "status": "loading", "models": retained,
+                                         "error": "", "updated_at": previous["updated_at"]}
+        thread = threading.Thread(target=self._refresh_local_model_catalog, args=(base_url,),
+                                  kwargs={"background": True}, daemon=True, name="assistant-model-discovery")
+        try:
+            thread.start()
+        except Exception:
+            with self._local_models_lock:
+                self._local_model_catalog = {"base_url": base_url, "status": "error", "models": retained,
+                                             "error": "后台模型列表读取未能启动", "updated_at": time.time()}
+            raise
+
+    def refresh_local_models(self, admin_token: str, base_url: Optional[str] = None) -> Dict[str, Any]:
+        """Refresh local model names after administrator authorization."""
+        self.authorize_admin(admin_token)
+        if base_url is None:
+            with self._lock:
+                base_url = str(self._config["local_base_url"])
+        elif not isinstance(base_url, str):
+            raise AssistantError(400, "本地模型服务地址必须是文本")
+        if len(base_url) > 2048:
+            raise AssistantError(400, "本地模型服务地址不能超过 2048 字符")
+        validated_url = _validate_base_url(base_url, "local")
+        return self._refresh_local_model_catalog(validated_url)
 
     def _operator_token_records(self) -> List[Dict[str, Any]]:
         """Load scoped operator credentials from a server-only JSON environment variable."""

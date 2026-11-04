@@ -886,3 +886,12 @@
 - 验证方式 / 覆盖范围 / 缺口：`.venv/bin/pytest tests/test_assistant.py -q` **18 passed**；生成器 `--check` 四份 `OK`；README 与助手说明中的 bash 块 `bash -n` 通过；shell 示例生成 JSON 的实测只验证 ID / 长度 / scopes（不输出秘密）；PowerShell 仅静态检查；Python 编译与 `git diff --check` 通过。未运行全量测试、Windows PowerShell、Windows 服务管理器、systemd / Docker 现场验收。
 - 未决问题：需部署方在其真实服务管理器设置环境变量、重启后验证操作员身份与最小 scope；不应分享真实 token。此后若现场反馈错误，先收集 `operator_tokens_configured`、ID、token 长度和 scope，不收集 token 本身。
 - 相关文件/分支：`README.md`、`app/assistant_docs.py`、`docs/智能问答助手说明.md`、`docs/软件使用文档.md`、`docs/软件部署说明文档.md`、`tests/test_assistant.py`、`STATUS.md`、`REPORT_TEST.md`；`arena/82e34fb8-nilm-calc-tool`。
+
+## [2026-11-04] 会话纪要
+- 目标：将智能问答管理员配置的本地模型名称改为可选候选且支持任意手动输入；从服务端本地读取模型信息，并提供配置加载 / 手动刷新入口。
+- 本会话角色：资深电力算法专家（`ROLE.md` 默认角色）＋工程实现工程师（第 195 轮任务级覆盖）；模式 A；活动分支 `arena/82e34fb8-nilm-calc-tool`。
+- 完成项：`app/assistant.py` 新增非阻塞启动预取、OpenAI `/models` / Ollama `/api/tags` 解析、缓存和管理员刷新；`app/server.py` 新增相对 API 对应的缓存读取 / 管理员刷新路由；`index.html` / `app.js` / `style.css` 将管理员本地模型字段改为 `input[list] + datalist`，页面配置加载后读候选，显式刷新时从输入的服务地址重新查询，失败 / 空列表不覆盖模型输入，配置保存 / 聊天字段不变。新增服务单测、API 测试、静态前端契约和 jsdom 行为回归；更新 STATUS 与专题报告。
+- 关键决策：不改聊天通道 `assistant-model-type` 或云端模型选择；浏览器只请求本应用相对路径，服务端只访问通过现有本地 URL 校验的地址并绕过代理；模型列表候选不是白名单，手填值仍走既有 `local_model` 校验 / 保存流程。服务启动预取不阻塞 lifespan，显式刷新需管理员口令；每端点 5 s 超时、1 MB 响应限制、候选最多 200 个。失败保留输入与旧候选，成功空列表只清 datalist。
+- 验证方式 / 覆盖范围 / 缺口：`.venv/bin/pytest tests/test_assistant.py tests/test_server.py tests/test_web_ui.py -q` **70 passed / 1 warning**（既有 Starlette/httpx `TestClient` 弃用）；`node tools/ui_assistant_check.cjs` **62 checks passed**；Python `py_compile`、两个 `node --check` 与指定文件 `git diff --check` 通过。测试覆盖 OpenAI / Ollama 模型列表结构、代理绕过、API Key header、端点回退、安全 URL、启动预取、管理鉴权、缓存与 UI 初始 / 刷新 / 空列表 / 失败 / 自定义值保存。真实模型服务、浏览器视觉、现场网络未验。
+- 未决问题：需用户在真实 Ollama / OpenAI-compatible 服务与浏览器中点检自动候选、管理员刷新、无模型 / 故障下手输值保留及保存聊天；未运行全量仓库 pytest。`tmp/` 中既有修改 / 删除 / 未跟踪运行产物未读取、未修改、未暂存或提交。
+- 相关文件/分支：`app/assistant.py`、`app/server.py`、`app/static/{index.html,app.js,style.css}`、`tests/test_assistant.py`、`tests/test_server.py`、`tests/test_web_ui.py`、`tools/ui_assistant_check.cjs`、`STATUS.md`、`REPORT_TEST.md`、`session/NILM_AC_session_complete.md`；分支 `arena/82e34fb8-nilm-calc-tool`。

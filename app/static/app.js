@@ -4945,7 +4945,7 @@ function normalizeConfigForms(root = document) {
 window.normalizeConfigForms = normalizeConfigForms;
 
 /* ------------------------------------------------------------------ 智能问答：同源 REST/SSE、无第三方渲染依赖 */
-const ASSISTANT_UI = { config: null, views: [], documents: [], activeDocumentId: null, mobilePane: 'chat', conversations: [], activeId: null, busy: false, controller: null, adminToken: '', operatorToken: '', operator: null, initialized: false };
+const ASSISTANT_UI = { config: null, views: [], documents: [], localModels: [], activeDocumentId: null, mobilePane: 'chat', conversations: [], activeId: null, busy: false, controller: null, adminToken: '', operatorToken: '', operator: null, initialized: false };
 const ASSISTANT_VIEW_LABELS = { overview: '总览面板', source: '数据源与控制', compare: '跨侧对比', voltage: '三相电压', current: '三相电流', power: '有功 / 无功 / 视在', power_factor: '功率因数', fundamental: '基波', harmonic: '谐波', interharmonic: '间谐波', dc: '直流偏置', spectrum: '频谱', events: '电能质量事件', nilm: '负荷辨识事件', windows: '窗口配置', export: '导出与日志', selftest: '算法自检', process: '数据处理' };
 const ASSISTANT_TOOL_LABELS = {
   set_profile_parameters: '修改设备画像匹配阈值', set_wiring_mode: '切换接线模式', load_latest_profile: '加载当前侧最新画像',
@@ -5379,6 +5379,45 @@ function assistantFillConfigForm(cfg) {
   const status = assistantEl('assistant-admin-status');
   if (status) status.textContent = cfg.admin_configurable ? '服务端管理员口令已启用。' : '尚未启用：请设置 ELEC_TOOL_ASSISTANT_ADMIN_TOKEN 并重启服务。';
 }
+function assistantRenderLocalModels(data) {
+  const list = assistantEl('assistant-local-model-options');
+  const models = Array.isArray(data && data.models)
+    ? Array.from(new Set(data.models.filter(name => typeof name === 'string' && name.trim()).map(name => name.trim())))
+    : [];
+  if (list) {
+    while (list.firstChild) list.removeChild(list.firstChild);
+    models.forEach(name => { const option = document.createElement('option'); option.value = name; list.appendChild(option); });
+  }
+  ASSISTANT_UI.localModels = models;
+  const state = data && data.status;
+  if (state === 'ready') assistantSetFeedback('assistant-local-models-status', `已读取 ${models.length} 个本地模型；也可手动输入其他名称。`);
+  else if (state === 'empty') assistantSetFeedback('assistant-local-models-status', '服务未返回模型列表；当前名称保留，仍可手动输入。');
+  else if (state === 'loading') assistantSetFeedback('assistant-local-models-status', '后台正在读取模型列表；也可直接手动输入。');
+  else if (state === 'error') assistantSetFeedback('assistant-local-models-status', (data.error || '读取模型列表失败') + '；当前名称保留，可重试或手动输入。', true);
+  else assistantSetFeedback('assistant-local-models-status', '模型候选列表尚未载入；可点击刷新，或手动输入名称。');
+}
+async function assistantLoadLocalModels(attempt = 0) {
+  try {
+    const data = await assistantApi('/api/assistant/local-models'); assistantRenderLocalModels(data);
+    if (data.status === 'loading' && attempt < 24) window.setTimeout(() => assistantLoadLocalModels(attempt + 1), 500);
+  } catch (e) { assistantSetFeedback('assistant-local-models-status', '读取模型列表失败：' + e.message + '；当前名称保留，可刷新或手动输入。', true); }
+}
+async function assistantRefreshLocalModels() {
+  const tokenInput = assistantEl('assistant-admin-token'), modelInput = assistantEl('assistant-local-model');
+  if (tokenInput && tokenInput.value) ASSISTANT_UI.adminToken = tokenInput.value;
+  const button = assistantEl('assistant-refresh-local-models');
+  if (button) button.disabled = true;
+  assistantSetFeedback('assistant-local-models-status', '正在从本地模型服务读取候选…');
+  try {
+    const data = await assistantApi('/api/assistant/local-models/refresh', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Assistant-Admin-Token': ASSISTANT_UI.adminToken },
+      body: JSON.stringify({ base_url: modelInput && assistantEl('assistant-local-url') ? assistantEl('assistant-local-url').value.trim() : undefined })
+    });
+    assistantRenderLocalModels(data);
+  } catch (e) {
+    assistantSetFeedback('assistant-local-models-status', '刷新失败：' + e.message + '；当前名称保留，请检查管理员口令 / 服务地址，或手动输入。', true);
+  } finally { if (button) button.disabled = false; }
+}
 async function assistantLoadKnowledge() {
   try {
     const data = await assistantApi('/api/assistant/knowledge'); const root = assistantEl('assistant-knowledge-list'); if (!root) return;
@@ -5400,6 +5439,7 @@ async function assistantLoadConfig() {
     if (conv && !conv.messages.length && ASSISTANT_UI.config.default_model_type) { conv.backend = ASSISTANT_UI.config.default_model_type; const model = assistantEl('assistant-model-type'); if (model) model.value = conv.backend; }
     assistantRenderConversationList(); assistantSetPrivacy(); assistantSyncLauncher();
     assistantSetFeedback('assistant-config-message', '配置已读取；API Key 不会回显。');
+    await assistantLoadLocalModels();
     await assistantLoadKnowledge();
   } catch (e) {
     assistantSetFeedback('assistant-admin-status', '无法读取智能问答配置：' + e.message, true);
@@ -5525,6 +5565,7 @@ function assistantChangeBackend() {
   if (ASSISTANT_UI.operatorToken) assistantVerifyOperator();
 }
 async function assistantSaveConfig() {
+  const previousLocalUrl = String(ASSISTANT_UI.config && ASSISTANT_UI.config.local_base_url || '').trim();
   const tokenInput = assistantEl('assistant-admin-token');
   if (tokenInput && tokenInput.value) ASSISTANT_UI.adminToken = tokenInput.value;
   const get = id => assistantEl(id), number = id => Number(get(id).value);
@@ -5553,6 +5594,7 @@ async function assistantSaveConfig() {
     assistantSetFeedback('assistant-config-message', '正在保存…');
     const data = await assistantApi('/api/assistant/config', { method: 'PUT', headers: { 'Content-Type': 'application/json', 'X-Assistant-Admin-Token': ASSISTANT_UI.adminToken }, body: JSON.stringify(payload) });
     ASSISTANT_UI.config = data.config || ASSISTANT_UI.config;
+    const localUrlChanged = previousLocalUrl !== String(ASSISTANT_UI.config && ASSISTANT_UI.config.local_base_url || '').trim();
     const active = assistantCurrentConversation();
     if (active && !active.messages.length && ASSISTANT_UI.config.default_model_type) {
       active.backend = ASSISTANT_UI.config.default_model_type;
@@ -5560,6 +5602,7 @@ async function assistantSaveConfig() {
     }
     assistantFillConfigForm(ASSISTANT_UI.config); assistantRenderConversationList(); assistantSetPrivacy(); assistantSyncLauncher();
     assistantSetFeedback('assistant-config-message', '设置已保存到服务端本地配置；API Key 不会回显，环境变量优先。');
+    if (localUrlChanged) await assistantRefreshLocalModels();
   } catch (e) { assistantSetFeedback('assistant-config-message', '保存失败：' + e.message, true); }
 }
 async function assistantLoadSensitiveTerms() {
@@ -5630,6 +5673,7 @@ function assistantInit() {
   const clearContext = assistantEl('assistant-clear-context'); if (clearContext) clearContext.addEventListener('click', assistantClearContext);
   const stop = assistantEl('assistant-stop'); if (stop) stop.addEventListener('click', () => { if (ASSISTANT_UI.controller) ASSISTANT_UI.controller.abort(); });
   const save = assistantEl('assistant-save-settings'); if (save) save.addEventListener('click', assistantSaveConfig);
+  const refreshLocalModels = assistantEl('assistant-refresh-local-models'); if (refreshLocalModels) refreshLocalModels.addEventListener('click', assistantRefreshLocalModels);
   const importButton = assistantEl('assistant-import-docs'); if (importButton) importButton.addEventListener('click', assistantImportKnowledge);
   const clearDocs = assistantEl('assistant-clear-docs'); if (clearDocs) clearDocs.addEventListener('click', assistantClearKnowledge);
   const token = assistantEl('assistant-admin-token'); if (token) token.addEventListener('input', () => { ASSISTANT_UI.adminToken = token.value; });

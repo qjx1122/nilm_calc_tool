@@ -416,6 +416,7 @@ def test_openapi_documents_all_endpoints(client):
     for p in ("/api/health", "/api/state", "/api/config", "/api/engine/start",
               "/api/engine/stop", "/api/result", "/api/export", "/api/selftest",
               "/api/probe", "/api/files", "/api/assistant/config", "/api/assistant/config/private",
+              "/api/assistant/local-models", "/api/assistant/local-models/refresh",
               "/api/assistant/chat", "/api/assistant/knowledge", "/api/assistant/knowledge/import"):
         assert p in paths, sorted(paths)
     assert any(p.startswith("/api/history") for p in paths)
@@ -494,6 +495,36 @@ def test_assistant_api_protects_configuration_secrets(client, tmp_path, monkeypa
     assert private.status_code == 200 and private.json()["config"]["sensitive_terms"] == ["INTERNAL-PROJECT-ALPHA"]
     assert secret not in private.text
     assert secret not in (tmp_path / "assistant" / "config.json").read_text(encoding="utf-8")
+
+
+def test_assistant_local_model_catalog_api_is_cached_and_refresh_is_admin_only(client, tmp_path, monkeypatch):
+    from app.assistant import AssistantService
+
+    admin = "local-model-api-admin"
+    monkeypatch.setenv("ELEC_TOOL_ASSISTANT_ADMIN_TOKEN", admin)
+    service = AssistantService(data_dir=str(tmp_path / "assistant-model-catalog"))
+    monkeypatch.setattr(client.srv, "assistant_service", service)
+    monkeypatch.setattr(service, "_fetch_local_models", lambda _url: ["qwen2.5:7b", "llama3.2:latest"])
+
+    initial = client.get("/api/assistant/local-models")
+    assert initial.status_code == 200
+    assert initial.json() == {"ok": True, "status": "idle", "models": [], "error": "", "updated_at": None}
+    denied = client.post("/api/assistant/local-models/refresh", json={"base_url": "http://127.0.0.1:11434/v1"})
+    assert denied.status_code == 403
+
+    refreshed = client.post("/api/assistant/local-models/refresh",
+                            headers={"X-Assistant-Admin-Token": admin},
+                            json={"base_url": "http://127.0.0.1:11434/v1"})
+    assert refreshed.status_code == 200, refreshed.text
+    assert refreshed.json()["status"] == "ready"
+    assert refreshed.json()["models"] == ["qwen2.5:7b", "llama3.2:latest"]
+    assert "base_url" not in refreshed.json() and "api_key" not in refreshed.json()
+
+    cached = client.get("/api/assistant/local-models")
+    assert cached.status_code == 200 and cached.json()["models"] == refreshed.json()["models"]
+    rejected = client.post("/api/assistant/local-models/refresh",
+                           headers={"X-Assistant-Admin-Token": admin}, json={"base_url": "http://8.8.8.8/v1"})
+    assert rejected.status_code == 400
 
 
 def test_assistant_chat_stream_and_nonstream_api(client, tmp_path, monkeypatch):

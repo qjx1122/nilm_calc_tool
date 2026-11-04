@@ -447,6 +447,11 @@ input.flash{animation:ntflash 1.5s ease-out}
 .assistant-admin-status{min-width:200px}
 .assistant-config-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin:8px 0 12px}
 .assistant-config-grid>label{display:flex;flex-direction:column;gap:4px;color:var(--mut);font-size:11px;min-width:0}
+.assistant-local-model-field{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:end;gap:5px;min-width:0;color:var(--mut);font-size:11px}
+.assistant-local-model-field label{display:flex;flex-direction:column;gap:4px;min-width:0}
+.assistant-local-model-field button{white-space:nowrap;align-self:end}
+.assistant-local-model-field small{grid-column:1/-1;color:var(--mut);font-size:10px;line-height:1.4}
+.assistant-local-model-field small.is-error{color:var(--bad)}
 .assistant-config-grid>label.check{flex-direction:row;align-items:center;color:var(--fg)}
 .assistant-settings h3{display:block;margin:12px 0 4px;padding-bottom:4px;border-bottom:1px solid var(--line)}
 .assistant-wide{display:flex;flex-direction:column;gap:4px;color:var(--mut);font-size:11px}

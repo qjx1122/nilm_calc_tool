@@ -285,6 +285,7 @@ def test_assistant_ui_contract_and_safe_markdown_renderer(page):
         "assistant-delete-conversation", "assistant-operator-token", "assistant-verify-operator", "assistant-operator-status",
         "assistant-messages", "assistant-form", "assistant-prompt", "assistant-stop", "assistant-settings",
         "assistant-admin-token", "assistant-save-settings", "assistant-load-sensitive-terms",
+        "assistant-local-model", "assistant-local-model-options", "assistant-refresh-local-models", "assistant-local-models-status",
         "assistant-tools-enabled", "assistant-cloud-tools-enabled", "assistant-tool-audit-enabled",
         "assistant-enabled-tool-checks", "assistant-audit-refresh", "assistant-audit-list",
         "assistant-clear-sensitive-terms", "assistant-doc-files", "assistant-import-docs", "assistant-knowledge-list",
@@ -312,6 +313,23 @@ def test_assistant_ui_contract_and_safe_markdown_renderer(page):
     assert "云端模式" in assistant_js and "文件路径 / 录波名会拦截" in assistant_js
     assert "X-Assistant-Admin-Token" in assistant_js
     assert "会话仅保存在当前页面内存" in HTML
+
+
+def test_assistant_local_model_picker_is_editable_and_uses_same_origin_discovery(page):
+    assert re.search(r'<input id="assistant-local-model"[^>]*type="text"[^>]*list="assistant-local-model-options"', HTML)
+    assert '<select id="assistant-local-model"' not in HTML, "本地模型名称必须保留任意手动输入"
+    assert "assistant-local-model-options" in HTML and "assistant-refresh-local-models" in HTML
+    start = APPJS.index("/* ------------------------------------------------------------------ 智能问答")
+    end = APPJS.index("async function init() {", start)
+    assistant_js = APPJS[start:end]
+    assert "await assistantLoadLocalModels();" in assistant_js, "配置加载后应读取服务端候选列表"
+    assert "assistantApi('/api/assistant/local-models')" in assistant_js
+    assert "assistantApi('/api/assistant/local-models/refresh'" in assistant_js
+    assert "X-Assistant-Admin-Token" in assistant_js
+    render_start = assistant_js.index("function assistantRenderLocalModels(data) {")
+    render_end = assistant_js.index("async function assistantLoadLocalModels(", render_start)
+    assert "assistant-local-model-options" in assistant_js[render_start:render_end]
+    assert "assistant-local-model').value" not in assistant_js[render_start:render_end], "刷新候选不得覆盖当前手填值"
 
 
 def test_assistant_is_a_fixed_composite_sidebar_with_zero_config_backend(page):

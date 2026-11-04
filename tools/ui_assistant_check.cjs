@@ -46,6 +46,8 @@ let lastConfirmPayload = null;
 let lastConfirmHeaders = null;
 let emitProposal = false;
 let lastImportedDocuments = null;
+let lastLocalModelRefresh = null;
+let nextLocalModelRefresh = { status: 'ready', models: ['refreshed-local-model'] };
 let knowledgeDocuments = [];
 const bundledDocuments = [
   { id: 'builtin-platform-parameters', name: '平台参数清单', title: '平台参数清单', category: '平台参数', summary: '代码默认与两侧模板值', content: '# 平台参数清单\n\n| 配置路径 | 代码默认值 | 总线模板值 | 分路模板值 |\n| --- | --- | --- | --- |\n| `sampling.fs` | `6400.0` | `6400.0` | `6400.0` |', characters: 100 },
@@ -55,6 +57,15 @@ window.fetch = async (url, options = {}) => {
   if (url === '/api/assistant/documents') return jsonResponse({ ok: true, count: bundledDocuments.length, characters: 130, documents: bundledDocuments });
   if (url === '/api/assistant/config' && (!options.method || options.method === 'GET')) {
     return jsonResponse({ ok: true, config, views });
+  }
+  if (url === '/api/assistant/local-models' && (!options.method || options.method === 'GET')) {
+    return jsonResponse({ ok: true, status: 'ready', models: ['qwen2.5:7b', 'llama3.2:latest'], error: '', updated_at: 1 });
+  }
+  if (url === '/api/assistant/local-models/refresh' && options.method === 'POST') {
+    if (options.headers['X-Assistant-Admin-Token'] !== 'admin') throw new Error('刷新本地模型列表时缺少管理员口令');
+    lastLocalModelRefresh = { body: JSON.parse(options.body), headers: options.headers };
+    if (nextLocalModelRefresh.fail) return jsonResponse({ ok: false, error: '本地服务暂不可用' }, 503);
+    return jsonResponse({ ok: true, ...nextLocalModelRefresh, error: '', updated_at: 2 });
   }
   if (url === '/api/assistant/config/private') {
     if (options.headers['X-Assistant-Admin-Token'] !== 'admin') throw new Error('管理员读取敏感词时缺少口令');
@@ -111,12 +122,15 @@ check($('assistant-launcher').hidden, '配置读取前问答入口应默认隐�
 
 (async () => {
   // 等待首次配置读取及启动时加载的完整内置文档库。
-  for (let i = 0; i < 100 && (!window.__assistantState.config || !window.__assistantState.documents.length); i++) await new Promise(resolve => setTimeout(resolve, 10));
+  for (let i = 0; i < 100 && (!window.__assistantState.config || !window.__assistantState.documents.length || !window.__assistantState.localModels.length); i++) await new Promise(resolve => setTimeout(resolve, 10));
   check(!!window.__assistantState.config, '配置未加载');
   check(!$('assistant-launcher').hidden, '总览页应显示入口');
   check($('assistant-model-type').value === 'builtin', '未配置模型时应默认选择内置文档通道');
   check($('assistant-privacy-note').textContent.includes('本地文档模式'), '内置通道隐私说明未显示本地文档语义');
   check(window.__assistantState.documents.length === 2, '启动时未加载文档目录');
+  check(window.__assistantState.localModels.length === 2, '配置加载后未读取本地模型候选');
+  check($('assistant-local-model').value === config.local_model, '初始模型列表加载覆盖了服务端保存的模型名');
+  check(Array.from($('assistant-local-model-options').querySelectorAll('option')).map(option => option.value).join(',') === 'qwen2.5:7b,llama3.2:latest', '本地模型候选没有填入 datalist');
   check($('assistant-doc-content').textContent.includes('sampling.fs'), '默认参数清单没有渲染为完整文档');
   $('assistant-doc-search').value = '设计'; $('assistant-doc-search').dispatchEvent(new window.Event('input'));
   check($('assistant-doc-list').querySelectorAll('button').length === 1, '文档搜索没有按标题和摘要过滤');
@@ -171,10 +185,30 @@ check($('assistant-launcher').hidden, '配置读取前问答入口应默认隐�
 
   // 配置保存必须带管理员口令，且密钥输入只作为 POST/PUT 参数，不回填页面。
   $('assistant-admin-token').value = 'admin'; $('assistant-admin-token').dispatchEvent(new window.Event('input'));
+  const localModelInput = $('assistant-local-model'), refreshModelsButton = $('assistant-refresh-local-models');
+  localModelInput.value = 'my-custom-local-model';
+  const waitForLocalRefresh = async () => {
+    for (let i = 0; i < 100 && refreshModelsButton.disabled; i++) await new Promise(resolve => setTimeout(resolve, 10));
+  };
+  refreshModelsButton.click(); await waitForLocalRefresh();
+  check(lastLocalModelRefresh && lastLocalModelRefresh.headers['X-Assistant-Admin-Token'] === 'admin', '刷新模型列表没有携带管理员口令');
+  check(lastLocalModelRefresh.body.base_url === config.local_base_url, '刷新列表没有使用本地服务地址输入值');
+  check(localModelInput.value === 'my-custom-local-model', '刷新候选覆盖了手动填写的模型名称');
+  check($('assistant-local-model-options').querySelector('option').value === 'refreshed-local-model', '刷新后的候选没有更新');
+  nextLocalModelRefresh = { status: 'empty', models: [] };
+  refreshModelsButton.click(); await waitForLocalRefresh();
+  check(localModelInput.value === 'my-custom-local-model', '空模型列表意外清除了手动填写值');
+  check(!$('assistant-local-model-options').querySelector('option'), '空响应后 datalist 仍显示过期候选');
+  nextLocalModelRefresh = { fail: true };
+  refreshModelsButton.click(); await waitForLocalRefresh();
+  check(localModelInput.value === 'my-custom-local-model', '刷新失败意外清除了手动填写值');
+  check($('assistant-local-models-status').textContent.includes('本地服务暂不可用'), '刷新失败状态未显示');
+  nextLocalModelRefresh = { status: 'ready', models: ['refreshed-local-model'] };
   $('assistant-enabled').checked = true;
   $('assistant-cloud-key').value = 'temporary-cloud-secret';
   await window.assistantSaveConfig();
   check(!!lastConfigPayload && lastConfigPayload.cloud_api_key === 'temporary-cloud-secret', '配置保存载荷缺密钥');
+  check(lastConfigPayload.local_model === 'my-custom-local-model', '手动模型名称未沿用既有配置保存流程');
   check(!Object.prototype.hasOwnProperty.call(lastConfigPayload, 'sensitive_terms'), '普通配置保存不应覆盖未读取的敏感词');
   check(!$('assistant-cloud-key').value, '保存后 API Key 输入框未清空');
   check(!$('assistant-config-message').classList.contains('is-error'), '配置保存失败：' + $('assistant-config-message').textContent);
@@ -218,7 +252,7 @@ check($('assistant-launcher').hidden, '配置读取前问答入口应默认隐�
   await window.assistantLoadConfig();
   check($('assistant-launcher').hidden, 'enabled=false 时问答入口仍然可见');
 
-  console.log(`PASS ${checkCount} checks — fixed document/chat sidebar, bundled docs, mobile tabs, builtin retrieval, safe Markdown/XSS, citations, model sessions, admin config, local import, operator-token proposal confirmation`);
+  console.log(`PASS ${checkCount} checks — fixed document/chat sidebar, bundled docs, mobile tabs, builtin retrieval, safe Markdown/XSS, citations, model sessions, editable local model discovery/refresh/manual entry, admin config, local import, operator-token proposal confirmation`);
   dom.window.close();
 })().catch(error => {
   console.error('FAIL:', error && error.stack || error);

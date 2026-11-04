@@ -3915,3 +3915,21 @@ delta_i_a  = d_i_obs
   - 仓库 `tmp/` 既有数据修改 / 删除 / 未跟踪文件未读取、未修改、未暂存或提交。
 - 是否进入 REPORT.md（稳定结论）：否（工程文档同步；未产生稳定算法结论或现场服务验证结果）。
 - 遗留问题：PowerShell 示例、Windows 服务管理器环境注入、真实 systemd / Docker secret 权限和现场模型工具调用都需部署方实测；`operator_tokens_configured=true` 不证明当前用户输入 token 匹配。遇后续环境反馈时只收集布尔值、ID、长度、scope 等不含秘密的诊断信息。
+
+## [2026-11-04] 专题：智能问答本地模型候选列表与手动输入
+- 类型：用户专题 / 验证专题
+- 目标与假设：管理员配置中的本地模型名称既可从已配置的本地模型服务选择，也可手动输入任意模型标识；页面初始化后填充候选并提供刷新按钮，不改问答通道或云端模型字段，也不改变既有保存 / 聊天字段。
+- 方法 / 数据 / 参数：
+  - `app/assistant.py` 启动发现采用 daemon 线程，不阻塞 ASGI lifespan；模型发现只从经 `_validate_base_url(..., "local")` 校验的本地 URL 读取，`urllib` 使用空 `ProxyHandler`、单端点 5 s 超时、1 MB 响应上限，响应最多列出 200 个、每名最多 160 字符的模型标识。先请求 OpenAI-compatible `GET {local_base_url}/models`，没有可用候选时回退 Ollama `GET /api/tags`；解析 `data[].id`、`models[].name/model` 等常见结构。
+  - `GET /api/assistant/local-models` 只返回内存缓存；`POST /api/assistant/local-models/refresh` 需 `X-Assistant-Admin-Token`，刷新 URL 仍受本地地址校验，可在保存前按当前输入地址试读。配置新 URL 后 UI 保存流程自动刷新。
+  - 管理员表单只将 `assistant-local-model` 改为 `input[list] + datalist`；所有模型请求均由浏览器调用本应用相对 API。前端加载候选只重建 datalist、不写输入框；空列表清空候选但不改当前值，请求失败时保留已有候选与手填值。模型仍通过既有 `local_model` 配置保存，聊天侧无需额外参数。
+  - 新增服务解析 / 无代理 / OpenAI 与 Ollama 回退 / 管理员鉴权 / 启动预取测试、API 缓存与刷新测试、HTML / JS 静态契约，以及 jsdom 对页面初始加载、手动刷新、空列表、失败和自定义模型保存的行为检查。
+- 用户执行命令（含实录路径；本节无用户命令则注明）：无用户侧命令或实录；全部验证由 Agent 在沙盒执行。未连接真实 Ollama、vLLM、LM Studio 或其他本地模型服务。
+- 结果 / 结论：
+  - `.venv/bin/pytest tests/test_assistant.py tests/test_server.py tests/test_web_ui.py -q`：**70 passed / 1 warning**（10.00 s）；唯一 warning 是既有 Starlette/httpx `TestClient` deprecation。
+  - `node tools/ui_assistant_check.cjs`：**PASS 62 checks**，包括新增本地模型候选、刷新、任意手填与错误 / 空列表保值检查。
+  - `node --check app/static/app.js`、`node --check tools/ui_assistant_check.cjs`、`.venv/bin/python -m py_compile app/assistant.py app/server.py tests/test_assistant.py tests/test_server.py tests/test_web_ui.py` 和本轮明确文件的 `git diff --check` 均通过。
+  - 真实模型服务上的返回字段差异、服务鉴权策略、用户浏览器 datalist 外观 / 操作及现场部署网络均未实测；本专题不将沙盒结果表述为现场验收。
+  - 仓库 `tmp/` 中既有运行数据修改 / 删除 / 未跟踪状态原样保留，不读取、不清理、不暂存、不提交。
+- 是否进入 REPORT.md（稳定结论）：否（配置界面与服务端模型发现功能，不涉及稳定 NILM 算法结论）。
+- 遗留问题：用户需在真实本地服务启动时验证自动候选加载、管理员刷新、空 / 错误响应后的手动填写与保存，并确认浏览器外观；若某个 OpenAI-compatible provider 使用不同模型目录路径或字段，再按其非敏感接口样例补适配。
