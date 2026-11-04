@@ -192,11 +192,12 @@ check($('assistant-launcher').hidden, '配置读取前问答入口应默认隐�
   const cssRule = selector => { const start = style.indexOf(selector + '{'); return start < 0 ? '' : style.slice(start, style.indexOf('}', start)); };
   const messageScrollCss = cssRule('.assistant-messages');
   check(messageScrollCss.includes('overflow-y:auto') && messageScrollCss.includes('scroll-behavior:auto') && !messageScrollCss.includes('scroll-behavior:smooth'), '消息区必须有独立纵向滚轮且不能以平滑自动滚动抢占操作');
-  check(cssRule('.assistant-conversation-list').includes('overflow-y:auto') && cssRule('.assistant-settings-body').includes('overflow-y:auto'), '会话栏与设置内容区必须可纵向滚动');
-  check(cssRule('.assistant-settings-body').includes('scrollbar-width:auto') && cssRule('.assistant-settings-body').includes('scrollbar-color:#7898c5 #172338'), '设置内容超出可视区域时没有高对比滚动条');
-  check(style.includes('.assistant-settings-body:focus-visible{outline:2px solid #4e8de8'), '键盘聚焦设置滚动区时没有焦点指示');
-  check(style.includes('.assistant-settings-body::-webkit-scrollbar{width:12px}') && style.includes('.assistant-settings-body::-webkit-scrollbar-track{background:#172338'), '设置滚动条的 WebKit 轨道 / 尺寸样式缺失');
-  check(html.includes('class="assistant-settings-body" role="region" aria-label="配置与附加知识库设置内容，可滚动浏览" tabindex="0"'), '设置滚动区域缺少键盘可达的无障碍标记');
+  check(cssRule('.assistant-conversation-list').includes('overflow-y:auto'), '会话列表必须可纵向滚动');
+  check(cssRule('.assistant-settings[open]').includes('overflow-y:scroll') && cssRule('.assistant-settings[open]').includes('scrollbar-width:auto') && cssRule('.assistant-settings[open]').includes('scrollbar-color:#7898c5 #172338'), '设置覆盖层本身没有强制显示高对比滚动条');
+  check(style.includes('.assistant-settings[open]:focus-visible{outline:2px solid #4e8de8'), '键盘聚焦设置滚动区时没有焦点指示');
+  check(style.includes('.assistant-settings[open]::-webkit-scrollbar{width:12px}') && style.includes('.assistant-settings[open]::-webkit-scrollbar-track{background:#172338'), '设置滚动条的 WebKit 轨道 / 尺寸样式缺失');
+  check(cssRule('.assistant-settings-header').includes('position:sticky') && cssRule('.assistant-settings-header').includes('top:0'), '设置滚动时标题 / 关闭按钮应保持可见');
+  check(html.includes('id="assistant-settings" class="assistant-settings" aria-label="配置与附加知识库" tabindex="0"'), '设置滚动区域缺少键盘可达标记');
   check(html.includes('<aside id="assistant-panel"') && !html.includes('<dialog id="assistant-dialog"'), '助手必须使用同页侧栏而不是旧 dialog');
 
   const panel = $('assistant-panel'); $('assistant-launcher').click();
@@ -284,7 +285,7 @@ check($('assistant-launcher').hidden, '配置读取前问答入口应默认隐�
 
   $('assistant-settings-open').click();
   check($('assistant-shell').classList.contains('settings-open'), '设置面板打开后没有锁定外层滚动位置');
-  const settingsScroll = mockScrollArea(window.document.querySelector('.assistant-settings-body'), 1000, 300, 100);
+  const settingsScroll = mockScrollArea($('assistant-settings'), 1000, 300, 100);
   mockScrollArea($('assistant-doc-content'), 600, 200, 400);
   const settingsWheel = new window.WheelEvent('wheel', { deltaY: 80, bubbles: true, cancelable: true });
   check(!$('assistant-doc-content').dispatchEvent(settingsWheel) && settingsScroll.top === 180, '嵌套文档滚动到底后，滚轮没有继续滚动设置面板');

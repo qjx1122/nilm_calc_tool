@@ -4024,7 +4024,24 @@ delta_i_a  = d_i_obs
   - 定向 `.venv/bin/pytest tests/test_assistant.py tests/test_server.py tests/test_web_ui.py -q`：**75 passed / 1 warning**（13.07 s）；既有 Starlette/httpx `TestClient` deprecation。
   - 全量 `.venv/bin/pytest -q`：**620 passed / 1 skipped / 1 warning**（151.46 s）；同一既有弃用 warning。
   - `node tools/ui_assistant_check.cjs`：**PASS 137 checks**；app.js / harness `node --check`、`tests/test_web_ui.py` `py_compile` 通过。
-  - 四份手册 `tools/generate_assistant_docs.py --check` 全 `OK`（设计 42,713、使用 224,949、部署 45,722、调参验证 142,220 字符）；排除 `tmp/` 的 `git diff --check` 通过。
+  - 四份手册 `tools/generate_assistant_docs.py --check` 全 `OK`（设计 42,713、使用 225,574、部署 45,735、调参验证 142,220 字符）；排除 `tmp/` 的 `git diff --check` 通过。
   - 当前 live preview 的 `/` 与 `/static/style.css` 均 HTTP 200，且包含设置区新标记；这是服务 / 资源 smoke check，不代表浏览器原生滚动条视觉或键盘验收。
 - 是否进入 REPORT.md（稳定结论）：否（界面可达性修复，不涉及稳定 NILM 算法结论）。
 - 遗留问题：需用户在目标浏览器缩小助手窗口高度、打开长设置页和文档列表，确认可见滚动条样式、滚轮及键盘访问；系统级 overlay scrollbar 策略可能影响常驻显示。`tmp/` 不读取、不修改、不暂存、不提交。
+
+## [2026-11-04] 专题：配置与附加知识库展开后的滚动条复修
+- 类型：用户复测反馈 / UI 根因复核与滚动回归
+- 目标与根因：用户反馈展开“浏览本地帮助文档与完整平台参数清单”后仍有内容被遮挡且不显示滚动条。代码检查发现 v0.99.42 的 scrollport / scrollbar 样式位于内层 `.assistant-settings-body`，固定定位的 `.assistant-settings[open]` 本身仍 `overflow:hidden`；滚动容器层级与完整设置覆盖层不一致。将滚动端点移至设置覆盖层本身，不改模型 / API 配置功能。
+- 方法 / 实现：
+  - `.assistant-settings[open]` 改为固定大小的 block scrollport，使用 `overflow-y:scroll` 强制显示滚动槽，设置 Firefox `scrollbar-width/color` 及 WebKit 12px thumb / track 样式；即使设置内容适配窗口，也保留可发现的滚动条。
+  - `.assistant-settings-body` 改回普通内容流，避免重复的双层设置滚动；设置标题仍用 sticky 定位于滚动覆盖层，关闭按钮保持可见。将 `tabindex="0"` 和清晰焦点指示移到真正滚动的 `<details id="assistant-settings">` 上。
+  - wheel 路由把打开的 `.assistant-settings[open]` 作为滚动节点；文档正文 / 目录先内部滚动，到边界后滚动完整设置层；设置层到边界仍阻止底层助手 shell 移动。
+  - 更新 Python 静态契约与 jsdom harness，验证滚动样式和键盘焦点，并把模拟滚动尺寸放到实际 settings overlay；README / 助手说明更新到 v0.99.43，重新生成软件使用 / 部署手册。
+- 用户执行命令：无；用户报告的是实际展开后的界面复测结果。本环境没有真实浏览器视觉自动化工具。
+- 结果 / 结论：
+  - 定向 `.venv/bin/pytest tests/test_assistant.py tests/test_server.py tests/test_web_ui.py -q`：**75 passed / 1 warning**（13.56 s）。
+  - 全量 `.venv/bin/pytest -q`：**620 passed / 1 skipped / 1 warning**（150.46 s）。两组唯一 warning 都是既有 Starlette/httpx `TestClient` deprecation。
+  - `node tools/ui_assistant_check.cjs`：**PASS 138 checks**；app.js / harness `node --check` 与测试文件 `py_compile` 通过。
+  - 四份生成手册 `--check`、`git diff --check` 通过；live preview `/`、`/static/style.css`、`/static/app.js` 均 HTTP 200 且含新的设置 overlay scrollbar 标记。HTTP/jsdom 不等于浏览器视觉验收。
+- 是否进入 REPORT.md（稳定结论）：否（UI 滚动行为修正，不涉及 NILM 算法结论）。
+- 遗留问题：请用户再次展开本地文档 / 完整参数详情，确认设置 overlay 滚动条可见、从文档内层滚动到整层、关闭按钮始终可达；目标浏览器 / OS 的 scrollbar 自隐藏行为尚未实测。`tmp/` 未读取、修改、暂存或提交。

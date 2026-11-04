@@ -941,3 +941,12 @@
 - 验证方式 / 覆盖范围 / 缺口：定向 pytest **75 passed / 1 warning**（13.07 s）；全量 pytest **620 passed / 1 skipped / 1 warning**（151.46 s）；jsdom **137 checks**；JS 语法、测试 Python 编译与四份生成手册 `--check` 通过；live preview 首页和 CSS HTTP 200。唯一 warning 为既有 Starlette/httpx TestClient deprecation。真实浏览器滚动条视觉、触控板 / 键盘现场验收未做，jsdom 不模拟原生 scrollbar。
 - 未决问题：请用户在目标浏览器窗口高度不足时打开设置页，确认滚动条可见、表单和附加知识各区完整可浏览、键盘聚焦可用；操作系统的自动隐藏 scrollbar 设置可能影响常驻显示。`tmp/` 未读取、修改、暂存或提交。
 - 相关文件/分支：`app/static/style.css`、`app/static/index.html`、`tests/test_web_ui.py`、`tools/ui_assistant_check.cjs`、`README.md`、`docs/智能问答助手说明.md`、生成的 `docs/软件使用文档.md` / `docs/软件部署说明文档.md`、`STATUS.md`、`REPORT_TEST.md`；分支 `arena/82e34fb8-nilm-calc-tool`。
+
+## [2026-11-04] 会话纪要
+- 目标：用户实际展开“浏览本地帮助文档与完整平台参数清单”后，仍有设置内容被遮挡且没有 scrollbar；检测代码并直接修复实际滚动层级。
+- 本会话角色：资深电力算法专家（默认）＋工程实现工程师（第 201 轮任务级覆盖）；模式 A；活动分支 `arena/82e34fb8-nilm-calc-tool`。
+- 完成项：确认第 200 轮的高对比滚动样式位于 `.assistant-settings-body`，而固定定位的 `.assistant-settings[open]` 外层仍为 `overflow:hidden`。复修将 `overflow-y:scroll` 和 Firefox / WebKit 滚动条样式设到完整设置 overlay 本身，不再让 body 单独滚动；设置层展开时强制显示 scrollbar。把键盘 `tabindex` / focus ring 放在真正滚动的 details 节点，保持 header sticky、关闭按钮可达；将 wheel 路由和 jsdom mock 更新为实际 settings overlay，长文档先内部滚动、到边界后传给设置层。更新 README v0.99.43、助手说明及生成手册。
+- 关键决策：设置滚动条强制显示于 overlay 本身（即使内容当前未溢出也显示轨道），而不是给 body 与 overlay 叠加两个滚动条。这样滚动 affordance 清晰；在设置边界阻止底层助手 shell 继续滚动。未改变模型 / API 档案逻辑；`tmp/` 未读取、修改、暂存或提交。
+- 验证方式 / 覆盖范围 / 缺口：定向 pytest **75 passed / 1 warning**（13.56 s）；全量 pytest **620 passed / 1 skipped / 1 warning**（150.46 s）；jsdom **138 checks**；JS 语法、测试文件编译、四份生成手册 `--check`、`git diff --check` 均通过；preview `/`、CSS、JS HTTP 200。真实浏览器渲染、OS 滚动条样式和键盘手动验收未做；warning 为 Starlette/httpx TestClient 既有 deprecation。
+- 未决问题：请用户在目标浏览器展开本地文档 / 完整平台参数，验证滚动条显示、内层滚动传递与焦点操作；部分系统级 overlay scrollbar 可能在非交互时淡出。`tmp/` 保持未读、未改、未提交。
+- 相关文件/分支：`app/static/style.css`、`app/static/index.html`、`app/static/app.js`、`tests/test_web_ui.py`、`tools/ui_assistant_check.cjs`、`README.md`、`docs/智能问答助手说明.md`、生成的 `docs/软件使用文档.md` / `docs/软件部署说明文档.md`、`STATUS.md`、`REPORT_TEST.md`；分支 `arena/82e34fb8-nilm-calc-tool`。
