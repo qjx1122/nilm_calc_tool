@@ -39,7 +39,8 @@ from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
-from app.assistant import BUSINESS_VIEWS, AssistantError, assistant_service, run_stream_to_queue, sse_event
+from app.assistant import (BUSINESS_VIEWS, MAX_ASSISTANT_CHAT_REQUEST_BYTES, AssistantError, assistant_service,
+                           run_stream_to_queue, sse_event)
 
 from elec_tool import __version__
 from elec_tool.config import (AppConfig, ConfigError, parse_time_text, CURVE_KEYS, QUANTITY_KEYS, SourceConfig, WindowSpec,
@@ -1754,9 +1755,27 @@ async def clear_assistant_knowledge(request: Request) -> Any:
 
 
 @app.post("/api/assistant/chat")
-async def assistant_chat(payload: Dict[str, Any], request: Request) -> Any:
-    """OpenAI-compatible local/cloud gateway; stream=true returns server-sent events."""
-    stream = payload.get("stream", True) if isinstance(payload, dict) else True
+async def assistant_chat(request: Request) -> Any:
+    """OpenAI-compatible local/cloud gateway; stream=true returns SSE; body size is bounded before JSON parsing."""
+    content_length = request.headers.get("content-length", "")
+    too_large_message = "问答请求体过大（上限 7 MiB）；请缩小截图或缩短对话内容（每轮截图总大小不超过 5 MiB）"
+    try:
+        if content_length and int(content_length) > MAX_ASSISTANT_CHAT_REQUEST_BYTES:
+            return JSONResponse(status_code=413, content={"ok": False, "error": too_large_message})
+    except ValueError:
+        return JSONResponse(status_code=400, content={"ok": False, "error": "Content-Length 请求头无效"})
+    raw_body = bytearray()
+    async for chunk in request.stream():
+        if len(raw_body) + len(chunk) > MAX_ASSISTANT_CHAT_REQUEST_BYTES:
+            return JSONResponse(status_code=413, content={"ok": False, "error": too_large_message})
+        raw_body.extend(chunk)
+    try:
+        payload = json.loads(bytes(raw_body))
+    except (json.JSONDecodeError, UnicodeDecodeError, TypeError):
+        return JSONResponse(status_code=400, content={"ok": False, "error": "问答请求必须是有效 JSON"})
+    if not isinstance(payload, dict):
+        return JSONResponse(status_code=400, content={"ok": False, "error": "请求内容必须是 JSON 对象"})
+    stream = payload.get("stream", True)
     if not isinstance(stream, bool):
         return JSONResponse(status_code=400, content={"ok": False, "error": "stream 必须是布尔值"})
     client_id = request.client.host if request.client else "unknown"

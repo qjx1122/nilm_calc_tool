@@ -4945,7 +4945,11 @@ function normalizeConfigForms(root = document) {
 window.normalizeConfigForms = normalizeConfigForms;
 
 /* ------------------------------------------------------------------ 智能问答：同源 REST/SSE、无第三方渲染依赖 */
-const ASSISTANT_UI = { config: null, views: [], documents: [], localModels: [], activeDocumentId: null, mobilePane: 'chat', conversations: [], activeId: null, busy: false, controller: null, adminToken: '', operatorToken: '', operator: null, initialized: false };
+const ASSISTANT_UI = { config: null, views: [], documents: [], localModels: [], activeDocumentId: null, conversations: [], activeId: null, busy: false, controller: null, adminToken: '', operatorToken: '', operator: null, contextConversationId: null, draggingConversationId: null, pendingImages: [], initialized: false };
+const ASSISTANT_IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp']);
+const ASSISTANT_IMAGE_MAX_BYTES = 3 * 1024 * 1024;
+const ASSISTANT_IMAGE_TOTAL_MAX_BYTES = 5 * 1024 * 1024;
+const ASSISTANT_IMAGE_MAX_COUNT = 3;
 const ASSISTANT_VIEW_LABELS = { overview: '总览面板', source: '数据源与控制', compare: '跨侧对比', voltage: '三相电压', current: '三相电流', power: '有功 / 无功 / 视在', power_factor: '功率因数', fundamental: '基波', harmonic: '谐波', interharmonic: '间谐波', dc: '直流偏置', spectrum: '频谱', events: '电能质量事件', nilm: '负荷辨识事件', windows: '窗口配置', export: '导出与日志', selftest: '算法自检', process: '数据处理' };
 const ASSISTANT_TOOL_LABELS = {
   set_profile_parameters: '修改设备画像匹配阈值', set_wiring_mode: '切换接线模式', load_latest_profile: '加载当前侧最新画像',
@@ -4971,9 +4975,9 @@ function assistantSetPrivacy() {
   if (backend === 'builtin') {
     el.textContent = '本地文档模式：不调用大模型，也不解析或执行操作指令。';
   } else if (cloud) {
-    el.textContent = `云端模式：问题与命中文档片段会发送到云端；文件路径 / 录波名会拦截。云端工具${cfg.cloud_tools_enabled ? '已配置独立开关' : '默认关闭'}。${toolNote}`;
+    el.textContent = `云端模式：问题、命中文档及主动附加的截图会发送到云端；截图不经过文本敏感词扫描，图片发送前会再次确认。文件路径 / 录波名会拦截。云端工具${cfg.cloud_tools_enabled ? '已配置独立开关' : '默认关闭'}。${toolNote}`;
   } else {
-    el.textContent = `本地模式：问答只发送到配置的本机 / 内网模型。${toolNote}`;
+    el.textContent = `本地模式：问答与主动附加的截图只发送到配置的本机 / 内网模型；模型须支持视觉输入。${toolNote}`;
   }
 }
 function assistantSyncLauncher() {
@@ -4985,10 +4989,12 @@ function assistantSyncLauncher() {
 }
 function assistantUpdateBusy() {
   const busy = ASSISTANT_UI.busy;
-  ['assistant-send', 'assistant-new', 'assistant-clear-context', 'assistant-delete-conversation', 'assistant-conversation-select', 'assistant-model-type'].forEach(id => { const el = assistantEl(id); if (el) el.disabled = busy; });
-  const send = assistantEl('assistant-send'), stop = assistantEl('assistant-stop');
+  ['assistant-send', 'assistant-new', 'assistant-clear-context', 'assistant-delete-conversation', 'assistant-clear-context-menu', 'assistant-rename-conversation', 'assistant-model-type', 'assistant-attach-image', 'assistant-image-input'].forEach(id => { const el = assistantEl(id); if (el) el.disabled = busy; });
+  const send = assistantEl('assistant-send'), stop = assistantEl('assistant-stop'), thinking = assistantEl('assistant-thinking');
   if (send) send.style.display = busy ? 'none' : '';
   if (stop) stop.style.display = busy ? '' : 'none';
+  if (thinking) thinking.hidden = !busy;
+  assistantRenderConversationList();
 }
 function assistantRenderSourceBadges(refs, sources) {
   while (refs.firstChild) refs.removeChild(refs.firstChild);
@@ -5047,11 +5053,24 @@ function assistantBuildMessage(msg) {
   if (msg.role === 'user') { body.className = 'assistant-user-content'; body.style.whiteSpace = 'pre-wrap'; body.textContent = msg.content || ''; }
   else { body.className = 'assistant-markdown'; assistantRenderMarkdown(body, msg.content || ''); }
   root.appendChild(body);
+  let images = null;
+  if (msg.role === 'user' && Array.isArray(msg.images) && msg.images.length) {
+    images = document.createElement('div'); images.className = 'assistant-message-images'; images.setAttribute('aria-label', '本轮附加截图');
+    msg.images.forEach((image, index) => {
+      if (!image || !ASSISTANT_IMAGE_TYPES.has(String(image.mime_type || '').toLowerCase()) || !String(image.dataUrl || '').startsWith('data:image/')) return;
+      const figure = document.createElement('figure');
+      const preview = document.createElement('img'); preview.src = image.dataUrl; preview.alt = '已发送的波形截图 ' + (index + 1); preview.loading = 'lazy';
+      figure.appendChild(preview);
+      const caption = document.createElement('figcaption'); caption.textContent = image.name || ('波形截图 ' + (index + 1)); figure.appendChild(caption);
+      images.appendChild(figure);
+    });
+    if (images.childNodes.length) root.appendChild(images); else images = null;
+  }
   const refs = document.createElement('div'); refs.className = 'assistant-sources'; refs.setAttribute('aria-label', '知识库引用');
   assistantRenderSourceBadges(refs, msg.sources);
   if (refs.childNodes.length) root.appendChild(refs);
   const proposal = assistantBuildProposal(msg); if (proposal) root.appendChild(proposal);
-  msg._dom = { root, body, refs, proposal };
+  msg._dom = { root, body, refs, proposal, images };
   return root;
 }
 function assistantRefreshMessage(msg) {
@@ -5069,16 +5088,95 @@ function assistantRefreshMessage(msg) {
     const list = assistantEl('assistant-messages'); if (list) list.scrollTop = list.scrollHeight;
   }
 }
+function assistantFormatConversationTime(value) {
+  const date = new Date(Number(value));
+  if (!Number.isFinite(date.getTime())) return '';
+  const now = new Date();
+  const hhmm = date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false });
+  if (date.getFullYear() === now.getFullYear() && date.getMonth() === now.getMonth() && date.getDate() === now.getDate()) return '今天 ' + hhmm;
+  const mmdd = String(date.getMonth() + 1).padStart(2, '0') + '-' + String(date.getDate()).padStart(2, '0');
+  return date.getFullYear() === now.getFullYear() ? mmdd : date.getFullYear() + '-' + mmdd;
+}
+function assistantConversationTimestamp(conv) { return Number(conv && (conv.updatedAt || conv.createdAt)) || Date.now(); }
+function assistantCloseSessionContextMenu() {
+  const menu = assistantEl('assistant-session-context-menu'); if (menu) menu.hidden = true;
+  ASSISTANT_UI.contextConversationId = null;
+}
+function assistantShowSessionContextMenu(id, x, y) {
+  if (ASSISTANT_UI.busy) return;
+  const menu = assistantEl('assistant-session-context-menu');
+  if (!menu || !ASSISTANT_UI.conversations.some(conv => conv.id === id)) return;
+  ASSISTANT_UI.contextConversationId = id;
+  menu.hidden = false;
+  const width = 176, height = 132, margin = 8;
+  const left = Math.max(margin, Math.min(Number(x) || margin, (window.innerWidth || 1024) - width - margin));
+  const top = Math.max(margin, Math.min(Number(y) || margin, (window.innerHeight || 768) - height - margin));
+  menu.style.left = left + 'px'; menu.style.top = top + 'px';
+}
+function assistantMoveConversation(draggedId, targetId) {
+  if (!draggedId || !targetId || draggedId === targetId || ASSISTANT_UI.busy) return;
+  const from = ASSISTANT_UI.conversations.findIndex(conv => conv.id === draggedId);
+  if (from < 0 || !ASSISTANT_UI.conversations.some(conv => conv.id === targetId)) return;
+  const [conv] = ASSISTANT_UI.conversations.splice(from, 1);
+  const targetIndex = ASSISTANT_UI.conversations.findIndex(item => item.id === targetId);
+  ASSISTANT_UI.conversations.splice(targetIndex, 0, conv);
+  ASSISTANT_UI.draggingConversationId = null;
+  assistantRenderConversationList();
+}
 function assistantRenderConversationList() {
-  const select = assistantEl('assistant-conversation-select'); if (!select) return;
-  while (select.firstChild) select.removeChild(select.firstChild);
-  ASSISTANT_UI.conversations.forEach((conv, index) => {
-    const option = document.createElement('option'); option.value = conv.id;
-    const title = conv.title || '新对话'; option.textContent = (index + 1) + '. ' + title;
-    select.appendChild(option);
+  const root = assistantEl('assistant-conversation-list'); if (!root) return;
+  while (root.firstChild) root.removeChild(root.firstChild);
+  const query = String((assistantEl('assistant-session-search') || {}).value || '').trim().toLocaleLowerCase();
+  const matches = conv => !query || String(conv.title || '新对话').toLocaleLowerCase().includes(query);
+  const groups = [
+    { title: '最近会话', conversations: ASSISTANT_UI.conversations.slice(0, 5).filter(matches) },
+    { title: '历史会话', conversations: ASSISTANT_UI.conversations.slice(5).filter(matches) },
+  ];
+  if (!groups.some(group => group.conversations.length)) {
+    const empty = document.createElement('p'); empty.className = 'assistant-session-empty'; empty.textContent = query ? '没有匹配的会话标题。' : '暂无会话。'; root.appendChild(empty);
+  }
+  groups.forEach(group => {
+    if (!group.conversations.length) return;
+    const section = document.createElement('section'); section.className = 'assistant-session-group';
+    const heading = document.createElement('h3'); heading.className = 'assistant-session-group-title'; heading.textContent = group.title + ' · ' + group.conversations.length; section.appendChild(heading);
+    const list = document.createElement('ul'); list.className = 'assistant-session-items';
+    group.conversations.forEach(conv => {
+      const item = document.createElement('li'); item.className = 'assistant-session-row'; item.draggable = !ASSISTANT_UI.busy;
+      item.dataset.conversationId = conv.id; item.classList.toggle('is-active', conv.id === ASSISTANT_UI.activeId);
+      item.addEventListener('contextmenu', event => { event.preventDefault(); assistantShowSessionContextMenu(conv.id, event.clientX, event.clientY); });
+      item.addEventListener('dragstart', event => {
+        if (ASSISTANT_UI.busy) { event.preventDefault(); return; }
+        ASSISTANT_UI.draggingConversationId = conv.id; item.classList.add('is-dragging');
+        if (event.dataTransfer) { event.dataTransfer.effectAllowed = 'move'; try { event.dataTransfer.setData('text/plain', conv.id); } catch (e) {} }
+      });
+      item.addEventListener('dragover', event => { if (!ASSISTANT_UI.draggingConversationId || ASSISTANT_UI.draggingConversationId === conv.id) return; event.preventDefault(); item.classList.add('is-drop-target'); });
+      item.addEventListener('dragleave', () => item.classList.remove('is-drop-target'));
+      item.addEventListener('drop', event => {
+        event.preventDefault(); item.classList.remove('is-drop-target');
+        const id = ASSISTANT_UI.draggingConversationId || (event.dataTransfer && event.dataTransfer.getData('text/plain'));
+        assistantMoveConversation(id, conv.id);
+      });
+      item.addEventListener('dragend', () => { ASSISTANT_UI.draggingConversationId = null; item.classList.remove('is-dragging'); root.querySelectorAll('.is-drop-target').forEach(node => node.classList.remove('is-drop-target')); });
+      const select = document.createElement('button'); select.type = 'button'; select.className = 'assistant-session-select';
+      select.disabled = ASSISTANT_UI.busy; select.setAttribute('aria-current', conv.id === ASSISTANT_UI.activeId ? 'true' : 'false');
+      select.title = conv.title || '新对话';
+      const title = document.createElement('span'); title.className = 'assistant-session-title'; title.textContent = conv.title || '新对话'; select.appendChild(title);
+      const time = document.createElement('time'); time.className = 'assistant-session-time';
+      const timestamp = assistantConversationTimestamp(conv); time.dateTime = new Date(timestamp).toISOString(); time.textContent = assistantFormatConversationTime(timestamp); select.appendChild(time);
+      select.addEventListener('click', () => assistantSelectConversation(conv.id));
+      item.appendChild(select);
+      const actions = document.createElement('button'); actions.type = 'button'; actions.className = 'assistant-session-actions'; actions.textContent = '⋯';
+      actions.disabled = ASSISTANT_UI.busy; actions.setAttribute('aria-label', '会话操作：' + (conv.title || '新对话')); actions.title = '重命名或删除';
+      actions.addEventListener('click', event => { event.stopPropagation(); const rect = actions.getBoundingClientRect(); assistantShowSessionContextMenu(conv.id, rect.left, rect.bottom); });
+      item.appendChild(actions); list.appendChild(item);
+    });
+    section.appendChild(list); root.appendChild(section);
   });
-  if (ASSISTANT_UI.activeId) select.value = ASSISTANT_UI.activeId;
+  const active = assistantCurrentConversation();
+  const clear = assistantEl('assistant-clear-context'); if (clear) clear.disabled = ASSISTANT_UI.busy || !active || !active.messages.length;
+  const clearMenu = assistantEl('assistant-clear-context-menu'); if (clearMenu) clearMenu.disabled = ASSISTANT_UI.busy || !(ASSISTANT_UI.conversations.find(conv => conv.id === ASSISTANT_UI.contextConversationId) || active || {}).messages?.length;
   const del = assistantEl('assistant-delete-conversation'); if (del) del.disabled = ASSISTANT_UI.busy || !ASSISTANT_UI.conversations.length;
+  const rename = assistantEl('assistant-rename-conversation'); if (rename) rename.disabled = ASSISTANT_UI.busy || !ASSISTANT_UI.conversations.length;
 }
 function assistantRenderConversation() {
   const list = assistantEl('assistant-messages'); if (!list) return;
@@ -5094,37 +5192,72 @@ function assistantRenderConversation() {
 function assistantNewConversation(backend) {
   if (ASSISTANT_UI.busy) return null;
   const model = backend || (assistantEl('assistant-model-type') && assistantEl('assistant-model-type').value) || 'builtin';
-  const conv = { id: assistantUid(), title: '新对话', backend: model, messages: [], createdAt: Date.now() };
+  const now = Date.now();
+  const conv = { id: assistantUid(), title: '新对话', backend: model, messages: [], createdAt: now, updatedAt: now, customTitle: false };
   ASSISTANT_UI.conversations.unshift(conv);
   if (ASSISTANT_UI.conversations.length > 30) ASSISTANT_UI.conversations.length = 30;
   ASSISTANT_UI.activeId = conv.id;
   const select = assistantEl('assistant-model-type'); if (select) select.value = model;
-  assistantClearError(); assistantRenderConversation();
+  assistantCloseSessionContextMenu(); assistantClearError(); assistantRenderConversation();
+  if (assistantIsCompactViewport()) assistantSetSessionsCollapsed(true);
   return conv;
 }
 function assistantSelectConversation(id) {
+  assistantCloseSessionContextMenu();
   if (ASSISTANT_UI.busy) { assistantSetFeedback('assistant-config-message', '请先停止当前生成，再切换会话。', true); assistantRenderConversationList(); return; }
   const conv = ASSISTANT_UI.conversations.find(c => c.id === id); if (!conv) return;
   ASSISTANT_UI.activeId = conv.id; assistantClearError(); assistantRenderConversation();
+  if (assistantIsCompactViewport()) assistantSetSessionsCollapsed(true);
   if (ASSISTANT_UI.operatorToken) assistantVerifyOperator();
 }
-function assistantRemoveConversation() {
+function assistantRemoveConversation(id) {
   if (ASSISTANT_UI.busy) return;
-  const conv = assistantCurrentConversation(); if (!conv) return;
-  if (!window.confirm('删除当前对话？此操作仅影响当前页面内存中的会话。')) return;
-  ASSISTANT_UI.conversations = ASSISTANT_UI.conversations.filter(c => c.id !== conv.id);
-  if (!ASSISTANT_UI.conversations.length) assistantNewConversation((assistantEl('assistant-model-type') || {}).value || 'builtin');
-  else { ASSISTANT_UI.activeId = ASSISTANT_UI.conversations[0].id; assistantRenderConversation(); }
+  const targetId = id || ASSISTANT_UI.contextConversationId || ASSISTANT_UI.activeId;
+  const conv = ASSISTANT_UI.conversations.find(item => item.id === targetId); if (!conv) return;
+  assistantCloseSessionContextMenu();
+  if (!window.confirm('删除“' + (conv.title || '新对话') + '”？此操作仅影响当前页面内存中的会话。')) return;
+  const wasActive = conv.id === ASSISTANT_UI.activeId, fallback = conv.backend || 'builtin';
+  ASSISTANT_UI.conversations = ASSISTANT_UI.conversations.filter(item => item.id !== conv.id);
+  if (!ASSISTANT_UI.conversations.length) assistantNewConversation(fallback);
+  else if (wasActive) { ASSISTANT_UI.activeId = ASSISTANT_UI.conversations[0].id; assistantRenderConversation(); }
+  else assistantRenderConversationList();
 }
-function assistantClearContext() {
+function assistantClearContext(id) {
   if (ASSISTANT_UI.busy) return;
-  const conv = assistantCurrentConversation(); if (!conv || !conv.messages.length) return;
-  if (!window.confirm('清空当前对话中的全部消息与模型上下文？当前会话条目将保留。')) return;
-  conv.messages = []; conv.title = '新对话'; assistantClearError(); assistantRenderConversationList(); assistantRenderConversation();
+  const targetId = id || ASSISTANT_UI.contextConversationId || ASSISTANT_UI.activeId;
+  const conv = ASSISTANT_UI.conversations.find(item => item.id === targetId);
+  assistantCloseSessionContextMenu();
+  if (!conv || !conv.messages.length) return;
+  if (!window.confirm('清空“' + (conv.title || '新对话') + '”中的全部消息与模型上下文？会话条目将保留。')) return;
+  conv.messages = []; conv.updatedAt = Date.now();
+  if (!conv.customTitle) conv.title = '新对话';
+  if (conv.id === ASSISTANT_UI.activeId) assistantClearError();
+  assistantRenderConversationList();
+  if (conv.id === ASSISTANT_UI.activeId) assistantRenderConversation();
+}
+function assistantRenameConversation(id) {
+  if (ASSISTANT_UI.busy) return;
+  const targetId = id || ASSISTANT_UI.contextConversationId || ASSISTANT_UI.activeId;
+  const conv = ASSISTANT_UI.conversations.find(item => item.id === targetId); if (!conv) return;
+  assistantCloseSessionContextMenu();
+  const result = window.prompt('请输入会话标题（最多 80 字）', conv.title || '新对话');
+  if (typeof result !== 'string') return;
+  const title = result.trim().slice(0, 80);
+  if (!title) { assistantShowError('会话标题不能为空。'); return; }
+  conv.title = title; conv.customTitle = true; conv.updatedAt = Date.now();
+  const from = ASSISTANT_UI.conversations.indexOf(conv);
+  if (from > 0) { ASSISTANT_UI.conversations.splice(from, 1); ASSISTANT_UI.conversations.unshift(conv); }
+  assistantRenderConversationList();
+}
+function assistantTouchConversation(conv) {
+  if (!conv) return;
+  conv.updatedAt = Date.now();
+  const index = ASSISTANT_UI.conversations.indexOf(conv);
+  if (index > 0) { ASSISTANT_UI.conversations.splice(index, 1); ASSISTANT_UI.conversations.unshift(conv); }
 }
 function assistantSetMessageTitle(conv) {
   const first = conv.messages.find(m => m.role === 'user' && m.content);
-  if (first) conv.title = first.content.replace(/\s+/g, ' ').slice(0, 32) || '新对话';
+  if (first && !conv.customTitle) conv.title = first.content.replace(/\s+/g, ' ').slice(0, 32) || '新对话';
   assistantRenderConversationList();
 }
 
@@ -5272,22 +5405,35 @@ async function assistantDownloadExport(result) {
     setTimeout(() => URL.revokeObjectURL(url), 30000);
   } catch (e) { assistantShowError(e && e.message ? e.message : '下载失败'); }
 }
+function assistantIsCompactViewport() {
+  return (window.matchMedia && window.matchMedia('(max-width: 680px)').matches) || (window.innerWidth || 0) <= 680;
+}
+function assistantSetSessionsCollapsed(collapsed) {
+  const panel = assistantEl('assistant-panel'), toggle = assistantEl('assistant-session-toggle');
+  if (panel) panel.classList.toggle('sessions-collapsed', !!collapsed);
+  if (toggle) toggle.setAttribute('aria-expanded', String(!collapsed));
+}
+function assistantToggleSettings(open) {
+  const settings = assistantEl('assistant-settings'), toggle = assistantEl('assistant-settings-open'); if (!settings) return;
+  const nextOpen = typeof open === 'boolean' ? open : !settings.open;
+  settings.open = nextOpen;
+  if (toggle) toggle.setAttribute('aria-expanded', String(nextOpen));
+  if (nextOpen) { const close = assistantEl('assistant-settings-close'); if (close) close.focus(); }
+  else if (toggle) toggle.focus();
+}
 function assistantTogglePanel(open) {
   const panel = assistantEl('assistant-panel'), launcher = assistantEl('assistant-launcher'); if (!panel) return;
   const nextOpen = typeof open === 'boolean' ? open : panel.hidden;
   panel.hidden = !nextOpen; panel.setAttribute('aria-hidden', String(!nextOpen));
   if (launcher) launcher.setAttribute('aria-expanded', String(nextOpen));
-  if (nextOpen) { assistantSetMobilePane('chat'); const prompt = assistantEl('assistant-prompt'); if (prompt) prompt.focus(); }
-  else if (launcher && !launcher.hidden) launcher.focus();
-}
-function assistantSetMobilePane(pane) {
-  const active = pane === 'docs' ? 'docs' : 'chat'; ASSISTANT_UI.mobilePane = active;
-  const docs = assistantEl('assistant-doc-pane'), chat = assistantEl('assistant-chat-pane');
-  const docsTab = assistantEl('assistant-tab-docs'), chatTab = assistantEl('assistant-tab-chat');
-  if (docs) docs.classList.toggle('is-active', active === 'docs');
-  if (chat) chat.classList.toggle('is-active', active === 'chat');
-  if (docsTab) docsTab.setAttribute('aria-selected', String(active === 'docs'));
-  if (chatTab) chatTab.setAttribute('aria-selected', String(active === 'chat'));
+  if (nextOpen) {
+    assistantToggleSettings(false); assistantCloseSessionContextMenu();
+    assistantSetSessionsCollapsed(assistantIsCompactViewport());
+    const prompt = assistantEl('assistant-prompt'); if (prompt) prompt.focus();
+  } else {
+    assistantToggleSettings(false); assistantCloseSessionContextMenu();
+    if (launcher && !launcher.hidden) launcher.focus();
+  }
 }
 function assistantRenderDocumentList() {
   const root = assistantEl('assistant-doc-list'); if (!root) return;
@@ -5500,25 +5646,84 @@ function assistantHandleStreamData(raw, msg) {
     else if (data.type === 'error') throw new Error(data.error || '模型生成失败');
   }
 }
+function assistantRenderPendingImages() {
+  const root = assistantEl('assistant-image-previews'); if (!root) return;
+  while (root.firstChild) root.removeChild(root.firstChild);
+  ASSISTANT_UI.pendingImages.forEach((image, index) => {
+    const card = document.createElement('figure'); card.className = 'assistant-image-preview';
+    const preview = document.createElement('img'); preview.src = image.dataUrl; preview.alt = image.name || ('波形截图 ' + (index + 1)); preview.loading = 'lazy'; card.appendChild(preview);
+    const caption = document.createElement('figcaption'); caption.textContent = image.name || '波形截图'; card.appendChild(caption);
+    const remove = document.createElement('button'); remove.type = 'button'; remove.textContent = '移除'; remove.setAttribute('aria-label', '移除截图 ' + (index + 1));
+    remove.addEventListener('click', () => { ASSISTANT_UI.pendingImages.splice(index, 1); assistantRenderPendingImages(); });
+    card.appendChild(remove); root.appendChild(card);
+  });
+}
+function assistantReadImageDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    if (typeof FileReader === 'undefined') { reject(new Error('当前浏览器不支持读取截图，请更新浏览器后重试。')); return; }
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('读取截图失败，请重新选择。'));
+    reader.onload = () => typeof reader.result === 'string' ? resolve(reader.result) : reject(new Error('截图数据格式异常。'));
+    reader.readAsDataURL(file);
+  });
+}
+async function assistantAddImageFiles(fileList) {
+  if (ASSISTANT_UI.busy) { assistantShowError('当前正在生成回答，请完成或停止后再添加截图。'); return; }
+  const files = Array.from(fileList || []).filter(Boolean);
+  if (!files.length) return;
+  try {
+    const next = ASSISTANT_UI.pendingImages.slice();
+    if (next.length + files.length > ASSISTANT_IMAGE_MAX_COUNT) throw new Error('每轮最多附加 ' + ASSISTANT_IMAGE_MAX_COUNT + ' 张截图。');
+    let totalBytes = next.reduce((sum, image) => sum + (Number(image.size) || 0), 0);
+    for (const file of files) {
+      const mimeType = String(file.type || '').toLowerCase();
+      if (!ASSISTANT_IMAGE_TYPES.has(mimeType)) throw new Error('只支持 PNG、JPEG 或 WebP 截图。');
+      if (!Number.isFinite(file.size) || file.size <= 0) throw new Error('空截图无法添加。');
+      if (file.size > ASSISTANT_IMAGE_MAX_BYTES) throw new Error((file.name || '截图') + ' 超过 3 MiB。');
+      totalBytes += file.size;
+      if (totalBytes > ASSISTANT_IMAGE_TOTAL_MAX_BYTES) throw new Error('待发送截图总大小不能超过 5 MiB。');
+      const dataUrl = await assistantReadImageDataUrl(file);
+      const match = dataUrl.match(/^data:(image\/(?:png|jpeg|webp));base64,([A-Za-z0-9+/=]+)$/i);
+      if (!match || match[1].toLowerCase() !== mimeType) throw new Error('截图读取结果与文件类型不一致。');
+      next.push({ name: String(file.name || '波形截图'), mime_type: mimeType, data: match[2], dataUrl, size: file.size });
+    }
+    ASSISTANT_UI.pendingImages = next; assistantRenderPendingImages(); assistantClearError();
+  } catch (e) { assistantShowError(e && e.message ? e.message : '添加截图失败'); }
+}
+function assistantReadableRequestError(error) {
+  const message = error && error.message ? error.message : '问答请求失败';
+  return /超时|timed?\s*out|timeout/i.test(message) && !/配置与附加知识库/.test(message)
+    ? message + ' 如持续出现，请检查模型服务状态、网络及「配置与附加知识库」中的超时设置。'
+    : message;
+}
 async function assistantSubmit() {
   if (ASSISTANT_UI.busy) return;
-  const input = assistantEl('assistant-prompt'), prompt = input ? input.value.trim() : '';
-  if (!prompt) { if (input) input.focus(); return; }
-  let conv = assistantCurrentConversation(); if (!conv) conv = assistantNewConversation('builtin');
+  const input = assistantEl('assistant-prompt'), typedPrompt = input ? input.value.trim() : '';
+  const selectedImages = ASSISTANT_UI.pendingImages.slice();
+  if (!typedPrompt && !selectedImages.length) { if (input) input.focus(); return; }
+  let conv = assistantCurrentConversation(); if (!conv) conv = assistantNewConversation((assistantEl('assistant-model-type') || {}).value || 'builtin');
   if (!conv) return;
+  if (selectedImages.length && conv.backend === 'builtin') {
+    assistantShowError('内置知识库只做本地文本检索，不具备图像理解。请先切换到支持视觉输入的本地或云端模型。'); return;
+  }
+  if (selectedImages.length && conv.backend === 'cloud' && !window.confirm('你附加的波形截图会发送给当前云端模型，且截图内容不经过文本敏感词扫描。请确认图片不含涉密 / 个人信息后继续。')) return;
+  const prompt = typedPrompt || '请分析这张波形截图，概述主要波形特征、可能的电气暂态及需要核对的参数。';
   assistantClearError(); assistantSetFeedback('assistant-config-message', '');
   const history = conv.messages.filter(m => (m.role === 'user' || m.role === 'assistant') && String(m.content || '').trim()).map(m => ({ role: m.role, content: m.content }));
-  const userMessage = { role: 'user', content: prompt, sources: [] };
+  const userMessage = { role: 'user', content: prompt, sources: [], images: selectedImages };
   const answerMessage = { role: 'assistant', content: '', sources: [] };
-  conv.messages.push(userMessage, answerMessage); assistantSetMessageTitle(conv);
+  assistantTouchConversation(conv); conv.messages.push(userMessage, answerMessage); assistantSetMessageTitle(conv);
   if (input) input.value = '';
+  ASSISTANT_UI.pendingImages = []; assistantRenderPendingImages();
   const count = assistantEl('assistant-count'); if (count) count.textContent = '0 / 12000';
   assistantRenderConversation(); assistantSetBusy(true);
   const controller = new AbortController(); ASSISTANT_UI.controller = controller;
   let reader = null;
   try {
+    const payload = { prompt, history, model_type: conv.backend || 'builtin', stream: true };
+    if (selectedImages.length) payload.images = selectedImages.map(image => ({ mime_type: image.mime_type, data: image.data }));
     const response = await fetch(assistantApiUrl('/api/assistant/chat'), { method: 'POST', headers: assistantOperatorHeaders({ 'Content-Type': 'application/json' }), signal: controller.signal,
-      body: JSON.stringify({ prompt, history, model_type: conv.backend || 'builtin', stream: true }) });
+      body: JSON.stringify(payload) });
     if (!response.ok) { let body = null; try { body = await response.json(); } catch (e) { /* response may not be JSON */ } throw new Error(body && body.error ? body.error : 'HTTP ' + response.status); }
     const contentType = response.headers.get('content-type') || '';
     if (!contentType.includes('text/event-stream')) {
@@ -5542,7 +5747,7 @@ async function assistantSubmit() {
       assistantShowError('已停止生成。');
     } else {
       if (!answerMessage.content) conv.messages = conv.messages.filter(m => m !== answerMessage);
-      assistantShowError(e && e.message ? e.message : '问答请求失败');
+      assistantShowError(assistantReadableRequestError(e));
     }
   } finally {
     if (reader) { try { await reader.cancel(); } catch (e) { /* stream already closed */ } }
@@ -5656,21 +5861,57 @@ function assistantInit() {
   const launcher = assistantEl('assistant-launcher'), panel = assistantEl('assistant-panel');
   if (launcher && panel) launcher.addEventListener('click', () => { assistantClearError(); assistantTogglePanel(true); });
   const close = assistantEl('assistant-close'); if (close && panel) close.addEventListener('click', () => assistantTogglePanel(false));
-  const docsTab = assistantEl('assistant-tab-docs'), chatTab = assistantEl('assistant-tab-chat');
-  if (docsTab) docsTab.addEventListener('click', () => assistantSetMobilePane('docs'));
-  if (chatTab) chatTab.addEventListener('click', () => assistantSetMobilePane('chat'));
+  const sessionToggle = assistantEl('assistant-session-toggle');
+  if (sessionToggle) sessionToggle.addEventListener('click', () => assistantSetSessionsCollapsed(!panel.classList.contains('sessions-collapsed')));
+  const settingsOpen = assistantEl('assistant-settings-open'), settingsClose = assistantEl('assistant-settings-close');
+  if (settingsOpen) settingsOpen.addEventListener('click', () => assistantToggleSettings(true));
+  if (settingsClose) settingsClose.addEventListener('click', () => assistantToggleSettings(false));
   const docSearch = assistantEl('assistant-doc-search'); if (docSearch) docSearch.addEventListener('input', assistantRenderDocumentList);
-  document.addEventListener('keydown', event => { if (event.key === 'Escape' && panel && !panel.hidden) assistantTogglePanel(false); });
+  const sessionSearch = assistantEl('assistant-session-search'); if (sessionSearch) sessionSearch.addEventListener('input', assistantRenderConversationList);
+  document.addEventListener('keydown', event => {
+    if (event.key !== 'Escape' || !panel || panel.hidden) return;
+    const settings = assistantEl('assistant-settings'), menu = assistantEl('assistant-session-context-menu');
+    if (menu && !menu.hidden) { assistantCloseSessionContextMenu(); return; }
+    if (settings && settings.open) { assistantToggleSettings(false); return; }
+    if (assistantIsCompactViewport() && !panel.classList.contains('sessions-collapsed')) { assistantSetSessionsCollapsed(true); return; }
+    assistantTogglePanel(false);
+  });
   const form = assistantEl('assistant-form'); if (form) form.addEventListener('submit', event => { event.preventDefault(); assistantSubmit(); });
   const prompt = assistantEl('assistant-prompt'); if (prompt) {
     prompt.addEventListener('input', () => { const count = assistantEl('assistant-count'); if (count) count.textContent = prompt.value.length + ' / 12000'; });
     prompt.addEventListener('keydown', event => { if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) { event.preventDefault(); if (form && form.requestSubmit) form.requestSubmit(); else assistantSubmit(); } });
+    prompt.addEventListener('paste', event => {
+      const items = Array.from(event.clipboardData && event.clipboardData.items || []);
+      const images = items.filter(item => item.kind === 'file' && /^image\//i.test(item.type)).map(item => item.getAsFile()).filter(Boolean);
+      if (images.length) { event.preventDefault(); assistantAddImageFiles(images); }
+    });
+  }
+  const chat = assistantEl('assistant-chat-pane');
+  if (chat) {
+    chat.addEventListener('dragover', event => {
+      const types = Array.from(event.dataTransfer && event.dataTransfer.types || []);
+      if (types.includes('Files')) { event.preventDefault(); chat.classList.add('is-dragging'); }
+    });
+    chat.addEventListener('dragleave', event => { if (!event.relatedTarget || !chat.contains(event.relatedTarget)) chat.classList.remove('is-dragging'); });
+    chat.addEventListener('drop', event => {
+      chat.classList.remove('is-dragging');
+      const files = Array.from(event.dataTransfer && event.dataTransfer.files || []);
+      if (files.length) { event.preventDefault(); assistantAddImageFiles(files); }
+    });
   }
   const model = assistantEl('assistant-model-type'); if (model) model.addEventListener('change', assistantChangeBackend);
-  const convSelect = assistantEl('assistant-conversation-select'); if (convSelect) convSelect.addEventListener('change', () => assistantSelectConversation(convSelect.value));
   const newButton = assistantEl('assistant-new'); if (newButton) newButton.addEventListener('click', () => { const current = assistantCurrentConversation(); assistantNewConversation(current ? current.backend : (model && model.value) || 'builtin'); });
-  const delButton = assistantEl('assistant-delete-conversation'); if (delButton) delButton.addEventListener('click', assistantRemoveConversation);
-  const clearContext = assistantEl('assistant-clear-context'); if (clearContext) clearContext.addEventListener('click', assistantClearContext);
+  const clearContext = assistantEl('assistant-clear-context'); if (clearContext) clearContext.addEventListener('click', () => assistantClearContext());
+  const rename = assistantEl('assistant-rename-conversation'); if (rename) rename.addEventListener('click', () => assistantRenameConversation());
+  const deleteConversation = assistantEl('assistant-delete-conversation'); if (deleteConversation) deleteConversation.addEventListener('click', () => assistantRemoveConversation());
+  const clearContextMenu = assistantEl('assistant-clear-context-menu'); if (clearContextMenu) clearContextMenu.addEventListener('click', () => assistantClearContext());
+  document.addEventListener('click', event => {
+    const menu = assistantEl('assistant-session-context-menu');
+    if (menu && !menu.hidden && !menu.contains(event.target) && !(event.target.closest && event.target.closest('.assistant-session-actions'))) assistantCloseSessionContextMenu();
+  });
+  const attach = assistantEl('assistant-attach-image'), imageInput = assistantEl('assistant-image-input');
+  if (attach && imageInput) attach.addEventListener('click', () => imageInput.click());
+  if (imageInput) imageInput.addEventListener('change', async () => { await assistantAddImageFiles(imageInput.files); imageInput.value = ''; });
   const stop = assistantEl('assistant-stop'); if (stop) stop.addEventListener('click', () => { if (ASSISTANT_UI.controller) ASSISTANT_UI.controller.abort(); });
   const save = assistantEl('assistant-save-settings'); if (save) save.addEventListener('click', assistantSaveConfig);
   const refreshLocalModels = assistantEl('assistant-refresh-local-models'); if (refreshLocalModels) refreshLocalModels.addEventListener('click', assistantRefreshLocalModels);
@@ -5690,7 +5931,8 @@ function assistantInit() {
     clearTerms.addEventListener('change', () => { if (clearTerms.checked) sensitiveField.value = ''; });
     sensitiveField.addEventListener('input', () => { if (sensitiveField.value) clearTerms.checked = false; });
   }
-  assistantUpdateBusy(); assistantSetPrivacy(); assistantRenderConversation(); assistantSetMobilePane('chat'); assistantSyncLauncher(); assistantLoadDocuments(); assistantLoadConfig();
+  assistantSetSessionsCollapsed(assistantIsCompactViewport());
+  assistantUpdateBusy(); assistantSetPrivacy(); assistantRenderConversation(); assistantSyncLauncher(); assistantLoadDocuments(); assistantLoadConfig();
 }
 
 async function init() {

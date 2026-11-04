@@ -279,16 +279,19 @@ def test_profile_phases_control_and_payload(page):
 
 def test_assistant_ui_contract_and_safe_markdown_renderer(page):
     required_ids = (
-        "assistant-launcher", "assistant-panel", "assistant-tab-docs", "assistant-tab-chat",
+        "assistant-launcher", "assistant-panel", "assistant-session-pane", "assistant-session-search",
+        "assistant-conversation-list", "assistant-session-context-menu", "assistant-rename-conversation",
+        "assistant-clear-context-menu", "assistant-delete-conversation", "assistant-new", "assistant-clear-context",
+        "assistant-model-type", "assistant-session-toggle", "assistant-close", "assistant-privacy-note",
         "assistant-doc-search", "assistant-doc-list", "assistant-doc-content", "assistant-doc-status",
-        "assistant-model-type", "assistant-conversation-select", "assistant-new", "assistant-clear-context",
-        "assistant-delete-conversation", "assistant-operator-token", "assistant-verify-operator", "assistant-operator-status",
-        "assistant-messages", "assistant-form", "assistant-prompt", "assistant-stop", "assistant-settings",
-        "assistant-admin-token", "assistant-save-settings", "assistant-load-sensitive-terms",
+        "assistant-messages", "assistant-thinking", "assistant-form", "assistant-prompt", "assistant-stop",
+        "assistant-image-input", "assistant-image-previews", "assistant-attach-image", "assistant-settings-open",
+        "assistant-settings-close", "assistant-settings", "assistant-operator-token", "assistant-verify-operator",
+        "assistant-operator-status", "assistant-admin-token", "assistant-save-settings", "assistant-load-sensitive-terms",
         "assistant-local-model", "assistant-local-model-options", "assistant-refresh-local-models", "assistant-local-models-status",
         "assistant-tools-enabled", "assistant-cloud-tools-enabled", "assistant-tool-audit-enabled",
         "assistant-enabled-tool-checks", "assistant-audit-refresh", "assistant-audit-list",
-        "assistant-clear-sensitive-terms", "assistant-doc-files", "assistant-import-docs", "assistant-knowledge-list",
+        "assistant-clear-sensitive-terms", "assistant-bundled-docs", "assistant-doc-files", "assistant-import-docs", "assistant-knowledge-list",
     )
     for element_id in required_ids:
         assert element_id in page.ids, f"缺少智能问答界面 #{element_id}"
@@ -301,17 +304,23 @@ def test_assistant_ui_contract_and_safe_markdown_renderer(page):
     assert "text/event-stream" in assistant_js and "response.body.getReader" in assistant_js
     assert "data.type === 'proposal'" in assistant_js and "assistantConfirmProposal" in assistant_js
     assert "assistantClearContext" in assistant_js and "assistantVerifyOperator" in assistant_js
-    assert "X-Assistant-Operator-Token" in assistant_js
+    assert "X-Assistant-Operator-Token" in assistant_js and "X-Assistant-Admin-Token" in assistant_js
     assert "localStorage" not in assistant_js and "sessionStorage" not in assistant_js
     assert "assistantNewConversation(next)" in assistant_js and "window.confirm(message)" in assistant_js
+    assert "assistantRenderConversationList" in assistant_js and "assistantMoveConversation" in assistant_js
+    assert "assistantSetSessionsCollapsed" in assistant_js and "assistantRenderDocumentList" in assistant_js
+    assert "assistantAddImageFiles" in assistant_js and "payload.images" in assistant_js
+    assert "assistantReadableRequestError" in assistant_js and "assistant-thinking" in assistant_js
     assert "visible_views" in assistant_js and "assistantSyncLauncher" in assistant_js
     assert "/api/assistant/documents" in assistant_js and "assistantLoadDocuments" in assistant_js
-    assert "assistantSetMobilePane" in assistant_js and "assistantRenderDocumentList" in assistant_js
     assert "noopener noreferrer" in assistant_js, "Markdown 外链必须禁止 opener"
     assert "assistantRenderMarkdown" in assistant_js and "element.innerHTML" not in assistant_js
-    assert "localStorage" not in assistant_js, "会话正文仅保存在页面内存，避免静默落浏览器持久存储"
-    assert "云端模式" in assistant_js and "文件路径 / 录波名会拦截" in assistant_js
-    assert "X-Assistant-Admin-Token" in assistant_js
+    assert "localStorage" not in assistant_js, "会话正文与截图只保存在页面内存，避免静默落浏览器持久存储"
+    assert "云端模式" in assistant_js and "截图内容不经过文本敏感词扫描" in assistant_js
+    settings_start = HTML.index('<details id="assistant-settings"')
+    settings_end = HTML.index('</aside>', settings_start)
+    for credential_id in ("assistant-operator-token", "assistant-admin-token", "assistant-verify-operator"):
+        assert settings_start < HTML.index(f'id="{credential_id}"') < settings_end, f"#{credential_id} 必须归入配置区域"
     assert "会话仅保存在当前页面内存" in HTML
 
 
@@ -332,19 +341,23 @@ def test_assistant_local_model_picker_is_editable_and_uses_same_origin_discovery
     assert "assistant-local-model').value" not in assistant_js[render_start:render_end], "刷新候选不得覆盖当前手填值"
 
 
-def test_assistant_is_a_fixed_composite_sidebar_with_zero_config_backend(page):
-    """同页固定侧栏融合文档与问答；窄屏提供文档 / 问答标签，内置通道免模型配置。"""
+def test_assistant_is_a_fixed_session_and_chat_sidebar_with_zero_config_backend(page):
+    """同页固定侧栏改为会话管理 + 问答双栏；内置知识库免模型配置，窄屏可收起会话栏。"""
     assert page.selects["assistant-model-type"] == ["builtin", "local", "cloud"]
     assert page.selects["assistant-default-backend"] == ["builtin", "local", "cloud"]
     assert '<aside id="assistant-panel"' in HTML and 'aria-controls="assistant-panel"' in HTML
     assert '<dialog id="assistant-dialog"' not in HTML and 'aria-modal="true"' not in HTML
     assert "assistant-launcher" in page.ids and "assistant-panel" in page.ids
-    assert "assistant-doc-pane" in HTML and "assistant-chat-pane" in HTML
+    assert "assistant-session-pane" in HTML and "assistant-chat-pane" in HTML
+    assert "assistant-bundled-docs" in HTML and "assistant-doc-pane" in HTML
+    assert HTML.index('<details id="assistant-settings"') < HTML.index('id="assistant-doc-pane"')
+    assert HTML.index('<aside id="assistant-session-pane"') < HTML.index('<main id="assistant-chat-pane"')
     style = (ROOT / "app/static/style.css").read_text(encoding="utf-8")
     sidebar = re.search(r"\.assistant-panel\s*\{([^}]*)\}", style)
     assert sidebar, "style.css 缺少固定侧栏样式"
     assert "position:fixed" in sidebar.group(1) and "inset:0 0 0 auto" in sidebar.group(1), sidebar.group(1)
-    assert "width:min(900px,100vw)" in sidebar.group(1) and "height:100dvh" in sidebar.group(1)
-    assert "@media(max-width:760px)" in style and ".assistant-mode-tabs{display:flex" in style
+    assert "width:min(1120px,100vw)" in sidebar.group(1) and "height:100dvh" in sidebar.group(1)
+    assert ".assistant-workspace{display:grid;grid-template-columns:260px minmax(0,1fr)" in style
+    assert "@media(max-width:680px)" in style and ".assistant-session-toggle{display:inline-flex" in style
     assert "assistantNewConversation('builtin')" in APPJS, "新对话未默认进入免模型通道"
     assert "model_type: conv.backend || 'builtin'" in APPJS, "聊天载荷仍回退到需要模型配置的后端"

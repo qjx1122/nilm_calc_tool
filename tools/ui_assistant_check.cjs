@@ -24,7 +24,14 @@ window.TextDecoder = TextDecoder;
 window.TextEncoder = TextEncoder;
 window.ReadableStream = ReadableStream;
 window.AbortController = AbortController;
-window.confirm = () => true;
+let confirmMessages = [];
+let nextPromptValue = null;
+window.confirm = message => { confirmMessages.push(String(message || '')); return true; };
+window.prompt = (_message, defaultValue) => {
+  const result = nextPromptValue === null ? defaultValue : nextPromptValue;
+  nextPromptValue = null;
+  return result;
+};
 
 let config = {
   enabled: true, default_model_type: 'builtin',
@@ -90,7 +97,7 @@ window.fetch = async (url, options = {}) => {
   }
   if (url === '/api/assistant/chat') {
     const payload = JSON.parse(options.body); lastChatPayload = payload;
-    if (!payload.stream || !['builtin', 'local'].includes(payload.model_type)) throw new Error('聊天请求参数不符合预期');
+    if (!payload.stream || !['builtin', 'local', 'cloud'].includes(payload.model_type)) throw new Error('聊天请求参数不符合预期');
     const frames = [
       { type: 'sources', sources: [{ name: payload.model_type === 'builtin' ? '平台参数清单' : 'guide.md', score: 0.91 }] },
       { type: 'delta', text: payload.model_type === 'builtin' ? '### 内置知识库｜本地文档检索\n\n平台参数清单摘录：`pre_cycles` 与 `window_cycles` 的代码默认值须与当前配置核对。' : '## 结论\n\n支持 **Markdown**、`代码`。\n\n```js\nalert(1)\n```\n\n<img src=x onerror=alert(1)>\n\n[坏链接](javascript:alert(1))' },
@@ -138,16 +145,31 @@ check($('assistant-launcher').hidden, '配置读取前问答入口应默认隐�
   check($('assistant-doc-content').textContent.includes('平台模块说明'), '选择本地文档后没有渲染完整正文');
   $('assistant-doc-search').value = ''; $('assistant-doc-search').dispatchEvent(new window.Event('input'));
   check($('assistant-doc-list').querySelectorAll('button').length === 2, '清除搜索后文档目录未恢复');
-  check(style.includes('.assistant-panel{box-sizing:border-box;position:fixed;inset:0 0 0 auto;'), '助手 CSS 未定位到当前页面固定侧栏');
-  check(style.includes('@media(max-width:760px)') && style.includes('.assistant-mode-tabs{display:flex'), '移动端文档 / 问答标签样式缺失');
+  check(style.includes('.assistant-panel{position:fixed;inset:0 0 0 auto;'), '助手 CSS 未定位到当前页面固定侧栏');
+  check(style.includes('.assistant-workspace{display:grid;grid-template-columns:260px minmax(0,1fr)'), '双栏会话 / 问答布局缺失');
+  check(style.includes('@media(max-width:680px)') && style.includes('.assistant-session-toggle{display:inline-flex'), '窄屏会话栏切换样式缺失');
+  check(style.includes('.assistant-session-title{display:block;width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap'), '长会话标题省略样式缺失');
   check(html.includes('<aside id="assistant-panel"') && !html.includes('<dialog id="assistant-dialog"'), '助手必须使用同页侧栏而不是旧 dialog');
 
   const panel = $('assistant-panel'); $('assistant-launcher').click();
   check(!panel.hidden && panel.getAttribute('aria-hidden') === 'false', '点击入口没有打开固定侧栏');
-  $('assistant-tab-docs').click();
-  check($('assistant-doc-pane').classList.contains('is-active') && $('assistant-tab-docs').getAttribute('aria-selected') === 'true', '窄屏文档标签未切换到文档栏');
-  $('assistant-tab-chat').click();
-  check($('assistant-chat-pane').classList.contains('is-active') && $('assistant-tab-chat').getAttribute('aria-selected') === 'true', '窄屏问答标签未切换到问答栏');
+  window.assistantSetBusy(true);
+  check(!$('assistant-thinking').hidden, '请求忙碌时没有显示思考状态');
+  window.assistantSetBusy(false);
+  check($('assistant-thinking').hidden, '请求结束后思考状态没有隐藏');
+  check(window.assistantReadableRequestError(new Error('模型请求超时')).includes('超时设置'), '超时错误没有提供模型 / 超时设置提示');
+  $('assistant-settings-open').click();
+  check($('assistant-settings').open && $('assistant-settings-open').getAttribute('aria-expanded') === 'true', '配置与附加知识库入口未打开设置区');
+  $('assistant-bundled-docs').open = true;
+  check($('assistant-doc-pane').textContent.includes('本地文档与参数'), '完整本地文档浏览区未整合进设置 / 知识库区域');
+  $('assistant-settings-close').click();
+  check(!$('assistant-settings').open, '设置区关闭按钮无效');
+  Object.defineProperty(window, 'innerWidth', { configurable: true, value: 390 });
+  $('assistant-session-toggle').click();
+  check(panel.classList.contains('sessions-collapsed'), '窄屏会话列表未折叠');
+  $('assistant-session-toggle').click();
+  check(!panel.classList.contains('sessions-collapsed'), '窄屏会话按钮无法重新展开');
+  Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1024 });
   $('assistant-close').click();
   check(panel.hidden && panel.getAttribute('aria-hidden') === 'true', '关闭按钮没有收起侧栏');
   window.S.view = 'nilm'; window.assistantSyncLauncher();
@@ -248,11 +270,65 @@ check($('assistant-launcher').hidden, '配置读取前问答入口应默认隐�
   check(lastConfirmHeaders['X-Assistant-Operator-Token'] === 'memory-only-operator-token', '确认接口没有带操作员令牌');
   check(!!proposalCard && proposalCard.textContent.includes('接线模式已切换为 3p4w'), '确认执行结果未更新到提案卡');
 
+  // 图片仅保存在页面内存；文件选择 / 粘贴 / 拖放共用同一条受限图片管线。
+  const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x01]);
+  const screenshot = new window.File([png], 'waveform.png', { type: 'image/png' });
+  const pasteEvent = new window.Event('paste', { bubbles: true, cancelable: true });
+  Object.defineProperty(pasteEvent, 'clipboardData', { value: { items: [{ kind: 'file', type: 'image/png', getAsFile: () => screenshot }] } });
+  $('assistant-prompt').dispatchEvent(pasteEvent);
+  for (let i = 0; i < 50 && window.__assistantState.pendingImages.length < 1; i++) await new Promise(resolve => setTimeout(resolve, 5));
+  check(window.__assistantState.pendingImages.length === 1 && $('assistant-image-previews').querySelector('img'), '粘贴截图后没有生成页面内存预览');
+  const jpeg = new window.File([new Uint8Array([0xff, 0xd8, 0xff, 0x00])], 'waveform-drop.jpg', { type: 'image/jpeg' });
+  const dropEvent = new window.Event('drop', { bubbles: true, cancelable: true });
+  Object.defineProperty(dropEvent, 'dataTransfer', { value: { types: ['Files'], files: [jpeg] } });
+  $('assistant-chat-pane').dispatchEvent(dropEvent);
+  for (let i = 0; i < 50 && window.__assistantState.pendingImages.length < 2; i++) await new Promise(resolve => setTimeout(resolve, 5));
+  check(window.__assistantState.pendingImages.length === 2, '拖放截图没有加入待发附件');
+  $('assistant-prompt').value = '请分析波形的启动暂态';
+  await window.assistantSubmit();
+  check(lastChatPayload.model_type === 'local' && lastChatPayload.images.length === 2 && lastChatPayload.images[0].mime_type === 'image/png' && lastChatPayload.images[1].mime_type === 'image/jpeg', '粘贴 / 拖放截图未随本地视觉模型请求发送');
+  check($('assistant-messages').querySelectorAll('.assistant-message-images img').length === 2, '已发送截图没有显示在用户消息中');
+  check(window.__assistantState.pendingImages.length === 0, '发送后待发截图没有从 composer 清除');
+
+  model.value = 'cloud'; model.dispatchEvent(new window.Event('change'));
+  const cloudJpeg = new window.File([new Uint8Array([0xff, 0xd8, 0xff, 0x00])], 'waveform.jpg', { type: 'image/jpeg' });
+  await window.assistantAddImageFiles([cloudJpeg]);
+  $('assistant-prompt').value = '请分析截图中的电流变化';
+  await window.assistantSubmit();
+  check(lastChatPayload.model_type === 'cloud' && lastChatPayload.images[0].mime_type === 'image/jpeg', '截图未随云端视觉模型请求发送');
+  check(confirmMessages.some(message => message.includes('截图内容不经过文本敏感词扫描')), '云端截图发送前没有二次确认 / 隐私提示');
+
+  // 会话列表按当前顺序分最近 / 历史，支持搜索、重命名、右键菜单、删除和拖拽排序。
+  for (let i = 0; i < 4; i++) window.assistantNewConversation('builtin');
+  const conversationList = $('assistant-conversation-list');
+  check(conversationList.querySelectorAll('.assistant-session-group-title').length === 2, '超过 5 条后未分为最近会话与历史会话');
+  check(Array.from(conversationList.querySelectorAll('time')).every(time => time.textContent), '会话列表未显示更新时间');
+  const renameTarget = conversationList.querySelector('.assistant-session-row');
+  const renameId = renameTarget.dataset.conversationId;
+  renameTarget.dispatchEvent(new window.MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 80, clientY: 90 }));
+  check(!$('assistant-session-context-menu').hidden, '会话右键菜单未打开');
+  nextPromptValue = '手动命名的会话标题'; $('assistant-rename-conversation').click();
+  check(window.__assistantState.conversations.find(conv => conv.id === renameId).title === '手动命名的会话标题', '会话重命名未生效');
+  $('assistant-session-search').value = '手动命名'; $('assistant-session-search').dispatchEvent(new window.Event('input'));
+  check(conversationList.querySelectorAll('.assistant-session-row').length === 1, '会话标题搜索未过滤列表');
+  $('assistant-session-search').value = ''; $('assistant-session-search').dispatchEvent(new window.Event('input'));
+  const beforeDrag = window.__assistantState.conversations.map(conv => conv.id);
+  const dragRows = conversationList.querySelectorAll('.assistant-session-row');
+  const transfer = { value: '', effectAllowed: '', setData(_type, value) { this.value = value; }, getData() { return this.value; } };
+  const dragStart = new window.Event('dragstart', { bubbles: true, cancelable: true }); Object.defineProperty(dragStart, 'dataTransfer', { value: transfer });
+  dragRows[0].dispatchEvent(dragStart);
+  const drop = new window.Event('drop', { bubbles: true, cancelable: true }); Object.defineProperty(drop, 'dataTransfer', { value: transfer });
+  dragRows[2].dispatchEvent(drop);
+  check(window.__assistantState.conversations[0].id !== beforeDrag[0], '拖拽排序未改变会话顺序');
+  const deleteId = window.__assistantState.conversations[window.__assistantState.conversations.length - 1].id;
+  window.assistantShowSessionContextMenu(deleteId, 20, 20); $('assistant-delete-conversation').click();
+  check(!window.__assistantState.conversations.some(conv => conv.id === deleteId), '上下文菜单删除没有移除目标会话');
+
   config = { ...config, enabled: false };
   await window.assistantLoadConfig();
   check($('assistant-launcher').hidden, 'enabled=false 时问答入口仍然可见');
 
-  console.log(`PASS ${checkCount} checks — fixed document/chat sidebar, bundled docs, mobile tabs, builtin retrieval, safe Markdown/XSS, citations, model sessions, editable local model discovery/refresh/manual entry, admin config, local import, operator-token proposal confirmation`);
+  console.log(`PASS ${checkCount} checks — two-column fixed assistant sidebar, session search/groups/time/rename/delete/drag, bundled docs in settings, responsive sessions, builtin retrieval, safe Markdown/XSS, citations, editable local-model discovery, admin config, image upload/preview/cloud confirmation, local import, operator-token proposal confirmation`);
   dom.window.close();
 })().catch(error => {
   console.error('FAIL:', error && error.stack || error);

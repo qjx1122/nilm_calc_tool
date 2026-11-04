@@ -1,6 +1,7 @@
 """智能问答服务单元测试：密钥边界、配置校验、RAG 与模型适配。"""
 from __future__ import annotations
 
+import base64
 import json
 
 import pytest
@@ -315,6 +316,43 @@ def test_local_and_cloud_rag_context_uses_bundled_platform_catalog(tmp_path, mon
         assert "sampling.fs" in plan["sources"][0]["snippet"]
         assert "sampling.fs" in plan["messages"][0]["content"]
         assert plan["messages"][-1] == {"role": "user", "content": "sampling.fs 参数默认值是多少？"}
+
+
+def test_assistant_waveform_images_are_bounded_and_sent_as_openai_vision_parts(tmp_path, monkeypatch):
+    from app import assistant as assistant_module
+
+    monkeypatch.setenv("ELEC_TOOL_ASSISTANT_CLOUD_API_KEY", "cloud-image-test-key")
+    service = AssistantService(data_dir=str(tmp_path))
+    png_bytes = bytes([0x89]) + b"PNG" + bytes([0x0d, 0x0a, 0x1a, 0x0a]) + b"small waveform image bytes"
+    png = {"mime_type": "image/png", "data": base64.b64encode(png_bytes).decode("ascii")}
+
+    for backend in ("local", "cloud"):
+        plan = service.prepare_chat({"prompt": "请分析波形截图", "model_type": backend, "images": [png]})
+        content = plan["messages"][-1]["content"]
+        assert content[0] == {"type": "text", "text": "请分析波形截图"}
+        assert content[1]["type"] == "image_url"
+        assert content[1]["image_url"]["url"] == "data:image/png;base64," + png["data"]
+
+    with pytest.raises(AssistantError, match="需选择支持视觉输入"):
+        service.prepare_chat({"prompt": "请分析波形截图", "model_type": "builtin", "images": [png]})
+    with pytest.raises(AssistantError, match="只支持 PNG"):
+        service.prepare_chat({"prompt": "说明", "model_type": "local", "images": [{"mime_type": "image/gif", "data": png["data"]}]})
+    with pytest.raises(AssistantError, match="Base64"):
+        service.prepare_chat({"prompt": "说明", "model_type": "local", "images": [{"mime_type": "image/png", "data": "%%%"}]})
+    with pytest.raises(AssistantError, match="内容与声明"):
+        service.prepare_chat({"prompt": "说明", "model_type": "local", "images": [{
+            "mime_type": "image/png", "data": base64.b64encode(b"not a png").decode("ascii")
+        }]})
+    with pytest.raises(AssistantError, match="最多附加 3 张"):
+        service.prepare_chat({"prompt": "说明", "model_type": "local", "images": [png] * 4})
+    with pytest.raises(AssistantError) as oversize:
+        service.prepare_chat({"prompt": "说明", "model_type": "local", "images": [{
+            "mime_type": "image/png", "data": "A" * (4 * ((assistant_module.MAX_ASSISTANT_IMAGE_BYTES + 2) // 3) + 4)
+        }]})
+    assert oversize.value.status_code == 413
+    monkeypatch.setattr(assistant_module, "MAX_ASSISTANT_IMAGE_TOTAL_BYTES", len(png_bytes))
+    with pytest.raises(AssistantError, match="总大小"):
+        service.prepare_chat({"prompt": "说明", "model_type": "local", "images": [png, png]})
 
 
 def test_local_knowledge_import_search_and_delete(tmp_path, monkeypatch):

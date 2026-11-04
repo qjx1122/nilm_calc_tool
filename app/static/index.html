@@ -1549,18 +1549,80 @@
 </div>
 
 <button id="assistant-launcher" class="assistant-launcher" type="button" hidden aria-expanded="false" aria-controls="assistant-panel" title="在当前业务页打开智能问答助手">🤖 智能问答助手</button>
-<aside id="assistant-panel" class="assistant-panel" aria-labelledby="assistant-title" aria-label="智能问答助手文档与问答侧栏" aria-hidden="true" hidden>
+<aside id="assistant-panel" class="assistant-panel" aria-label="智能问答助手会话与问答侧栏" aria-hidden="true" hidden>
   <div class="assistant-shell">
-    <header class="assistant-head">
-      <div><h2 id="assistant-title">智能问答助手</h2><div class="assistant-subtitle">平台参数优先 · RAG 问答 · 受控操作先预览、确认后调用业务 API · 会话仅保存在当前页面内存</div></div>
-      <button id="assistant-close" type="button" aria-label="关闭智能问答助手">关闭</button>
-    </header>
-    <div class="assistant-mode-tabs" role="tablist" aria-label="窄屏侧栏内容">
-      <button id="assistant-tab-docs" type="button" role="tab" aria-selected="false" aria-controls="assistant-doc-pane">文档</button>
-      <button id="assistant-tab-chat" type="button" role="tab" aria-selected="true" aria-controls="assistant-chat-pane">问答</button>
+    <div class="assistant-workspace">
+      <aside id="assistant-session-pane" class="assistant-session-pane" aria-label="会话管理">
+        <div class="assistant-session-heading"><div><h2>会话</h2><span>最近 5 条 · 会话仅保存在当前页面内存</span></div></div>
+        <button id="assistant-new" class="assistant-new-session primary" type="button">＋ 新建对话</button>
+        <label class="assistant-session-search-label" for="assistant-session-search">搜索历史会话
+          <input id="assistant-session-search" type="search" autocomplete="off" placeholder="搜索会话标题">
+        </label>
+        <button id="assistant-clear-context" class="assistant-clear-session" type="button" title="清除当前对话消息，不删除会话">清空当前上下文</button>
+        <nav id="assistant-conversation-list" class="assistant-conversation-list" aria-label="最近会话与历史会话"></nav>
+      </aside>
+      <main id="assistant-chat-pane" class="assistant-chat-pane" aria-label="智能问答">
+        <header class="assistant-chat-header">
+          <button id="assistant-session-toggle" class="assistant-session-toggle" type="button" aria-controls="assistant-session-pane" aria-expanded="true" aria-label="显示或隐藏会话列表">☰ 会话</button>
+          <div class="assistant-title-group"><h2 id="assistant-title">智能问答助手</h2><div class="assistant-subtitle">平台参数优先 · RAG 调参辅助 · 受控操作先预览、确认后执行</div></div>
+          <label class="assistant-model-choice">问答模型
+            <select id="assistant-model-type" aria-label="选择问答模型">
+              <option value="builtin">内置知识库</option>
+              <option value="local">本地大模型</option>
+              <option value="cloud">云端大模型</option>
+            </select>
+          </label>
+          <button id="assistant-close" class="assistant-close" type="button" aria-label="关闭智能问答助手">关闭</button>
+        </header>
+        <div id="assistant-privacy-note" class="assistant-privacy" role="status">本地文档模式：不调用大模型。</div>
+        <div id="assistant-error" class="assistant-error" role="alert" style="display:none"></div>
+        <div id="assistant-messages" class="assistant-messages" role="log" aria-live="polite" aria-relevant="additions text">
+          <div id="assistant-empty" class="assistant-empty">你好！我会优先检索平台参数与操作文档。你可粘贴或拖入波形截图；截图分析需选择支持视觉的本地或云端模型。受控操作只生成预览，未经授权和确认不会执行。<br>云端模式请勿发送涉密配置、个人信息或不应外传的录波截图。</div>
+        </div>
+        <div id="assistant-thinking" class="assistant-thinking" role="status" aria-live="polite" hidden><span class="assistant-thinking-dot" aria-hidden="true"></span>助手正在思考…</div>
+        <div id="assistant-sources" class="assistant-sources" aria-label="知识库引用"></div>
+        <div class="assistant-composer">
+          <form id="assistant-form" class="assistant-input-form">
+            <div id="assistant-image-previews" class="assistant-image-previews" aria-label="待发送的截图"></div>
+            <label class="assistant-input-label" for="assistant-prompt">输入问题（Enter 发送，Shift+Enter 换行）</label>
+            <textarea id="assistant-prompt" rows="3" maxlength="12000" placeholder="例如：nilm.profile 的默认参数是什么？请分析这段波形的启动暂态特征。"></textarea>
+          </form>
+          <div class="assistant-input-actions">
+            <div class="assistant-compose-meta"><span id="assistant-count" class="assistant-count">0 / 12000</span><span class="assistant-drop-hint">可粘贴或拖入 PNG / JPEG / WebP 波形截图（每张 ≤ 3 MiB）</span></div>
+            <input id="assistant-image-input" type="file" accept="image/png,image/jpeg,image/webp" multiple hidden>
+            <div class="assistant-compose-buttons">
+              <button id="assistant-attach-image" type="button" title="选择波形截图">添加截图</button>
+              <button id="assistant-stop" type="button" style="display:none">停止生成</button>
+              <button id="assistant-send" class="primary" type="submit" form="assistant-form">发送</button>
+              <button id="assistant-settings-open" type="button" aria-controls="assistant-settings" aria-expanded="false">⚙ 配置与附加知识库</button>
+            </div>
+          </div>
+        </div>
+      </main>
     </div>
-    <div class="assistant-composite">
-      <section id="assistant-doc-pane" class="assistant-doc-pane" role="tabpanel" aria-labelledby="assistant-tab-docs" aria-label="平台文档与参数清单" tabindex="0">
+    <div id="assistant-session-context-menu" class="assistant-session-context-menu" role="menu" aria-label="会话操作" hidden>
+      <button id="assistant-rename-conversation" type="button" role="menuitem">重命名</button>
+      <button id="assistant-clear-context-menu" type="button" role="menuitem">清空上下文</button>
+      <button id="assistant-delete-conversation" type="button" role="menuitem">删除会话</button>
+    </div>
+    <details id="assistant-settings" class="assistant-settings" aria-label="配置与附加知识库">
+          <summary>配置与附加知识库</summary>
+          <div class="assistant-settings-body">
+            <div class="assistant-settings-header"><div><h2>配置与附加知识库</h2><p>管理员配置、操作员授权、本地文档与附加知识均集中在这里。</p></div><button id="assistant-settings-close" type="button" aria-label="关闭配置与附加知识库">关闭</button></div>
+            <section class="assistant-credentials" aria-labelledby="assistant-credentials-title">
+              <h3 id="assistant-credentials-title">操作员工具权限</h3>
+              <div class="assistant-credential-row">
+                <label class="assistant-operator-label">操作员令牌（独立于管理员口令；仅当前页面内存）
+                  <input id="assistant-operator-token" type="password" autocomplete="off" placeholder="由管理员分配；不会保存到浏览器">
+                </label>
+                <button id="assistant-verify-operator" type="button">验证操作权限</button>
+                <span id="assistant-operator-status" class="assistant-operator-status" role="status">未验证；问答仍可使用，指令执行需授权。</span>
+              </div>
+              <p class="assistant-credential-help">验证仅确认服务端令牌身份与当前模型可用 scope；每项受控操作仍须服务端重新校验并由你确认。</p>
+            </section>
+            <details id="assistant-bundled-docs" class="assistant-bundled-docs">
+              <summary>浏览本地帮助文档与完整平台参数清单</summary>
+              <section id="assistant-doc-pane" class="assistant-doc-pane" aria-label="平台文档与参数清单">
         <div class="assistant-doc-heading"><div><h3>本地文档与参数</h3><div id="assistant-doc-status" class="assistant-doc-status" role="status">正在加载结构化文档…</div></div></div>
         <label class="assistant-doc-search-label" for="assistant-doc-search">查找文档<input id="assistant-doc-search" type="search" placeholder="搜索文档标题或摘要"></label>
         <nav id="assistant-doc-list" class="assistant-doc-list" aria-label="本地文档目录"></nav>
@@ -1568,44 +1630,8 @@
           <p class="assistant-doc-placeholder">文档初始化中…</p>
         </article>
       </section>
-      <section id="assistant-chat-pane" class="assistant-chat-pane" role="tabpanel" aria-labelledby="assistant-tab-chat" aria-label="智能问答" tabindex="0">
-        <div class="assistant-modelbar">
-          <label>问答通道
-            <select id="assistant-model-type" aria-label="选择问答通道">
-              <option value="builtin">内置知识库（本地文档）</option>
-              <option value="local">本地私有模型</option>
-              <option value="cloud">云端大模型</option>
-            </select>
-          </label>
-          <label class="assistant-operator-label">操作员令牌
-            <input id="assistant-operator-token" type="password" autocomplete="off" placeholder="仅本页内存；由管理员分配">
-          </label>
-          <button id="assistant-verify-operator" type="button">验证操作权限</button>
-          <span id="assistant-operator-status" class="assistant-operator-status" role="status">未验证；问答仍可使用，指令执行需授权。</span>
-          <div id="assistant-privacy-note" class="assistant-privacy" role="status">本地文档模式：只检索本地资料，不调用模型。</div>
-          <label>会话<select id="assistant-conversation-select" aria-label="切换对话"></select></label>
-          <button id="assistant-new" type="button">新建对话</button>
-          <button id="assistant-clear-context" type="button" title="清除当前对话消息，不删除会话">清空上下文</button>
-          <button id="assistant-delete-conversation" type="button" title="删除当前对话">删除</button>
-        </div>
-        <div id="assistant-error" class="assistant-error" role="alert" style="display:none"></div>
-        <div id="assistant-messages" class="assistant-messages" role="log" aria-live="polite" aria-relevant="additions text">
-          <div id="assistant-empty" class="assistant-empty">你好！我会优先检索平台参数与操作文档。需要执行受控操作时，我会先展示工具、参数和影响，再由你确认；未经确认不会执行。<br>本地模型数据留在内网；云端模型前请勿发送录波文件、文件路径或涉密配置。</div>
-        </div>
-        <div id="assistant-sources" class="assistant-sources" aria-label="知识库引用"></div>
-        <form id="assistant-form" class="assistant-input-form">
-          <label class="assistant-input-label" for="assistant-prompt">输入问题（Enter 发送，Shift+Enter 换行）</label>
-          <textarea id="assistant-prompt" rows="3" maxlength="12000" placeholder="例如：nilm.profile 的默认参数是什么？如何设计一次可回滚的参数验证？" required></textarea>
-          <div class="assistant-input-actions">
-            <span id="assistant-count" class="assistant-count">0 / 12000</span>
-            <div><button id="assistant-stop" type="button" style="display:none">停止生成</button> <button id="assistant-send" class="primary" type="submit">发送</button></div>
-          </div>
-        </form>
-
-        <details id="assistant-settings" class="assistant-settings">
-          <summary>模型配置与附加知识（管理员）</summary>
-          <div class="assistant-settings-body">
-            <p class="assistant-warning">内置文档在服务启动时从本地项目文件加载。云端模式会上传提问、对话历史及命中的知识片段；请勿发送敏感信息。API Key 只在服务端内存中保留，不会写入普通配置文件或返回给浏览器。</p>
+            </details>
+            <p class="assistant-warning">内置文档在服务启动时从本地项目文件加载。云端模式会上传提问、对话历史、命中的知识片段及你主动附加的截图；请勿上传涉密 / 个人信息。截图不经过文本敏感词扫描，发送到云端前会再次征求确认。API Key 只在服务端内存中保留，不会写入普通配置文件或返回给浏览器。</p>
             <div class="assistant-admin-row">
               <label>管理员口令（由服务端 <code>ELEC_TOOL_ASSISTANT_ADMIN_TOKEN</code> 配置）<input id="assistant-admin-token" type="password" autocomplete="off" placeholder="仅本次页面内存使用，不会保存到浏览器"></label>
               <span id="assistant-admin-status" class="assistant-admin-status">读取配置中…</span>
@@ -1646,7 +1672,7 @@
             <label class="assistant-wide">云端拦截词（每行一个；命中时阻止云端请求）<textarea id="assistant-sensitive-terms" rows="3" placeholder="已有词条不会公开回显；可输入新列表替换"></textarea></label>
             <div class="assistant-settings-actions"><button id="assistant-load-sensitive-terms" type="button">读取已保存拦截词（管理员）</button><label class="check"><input id="assistant-clear-sensitive-terms" type="checkbox"> 清空已保存拦截词</label></div>
             <h3>受控业务工具与审计</h3>
-            <p class="assistant-warning">工具仅由服务端预注册的业务 API 执行；大模型输出只生成待确认预览。操作员令牌通过服务端环境变量 <code>ELEC_TOOL_ASSISTANT_OPERATOR_TOKENS</code> 配置 scope，令牌不会写入普通配置或浏览器存储。云端工具执行默认关闭；本地文件内容不会上传给模型。</p>
+            <p class="assistant-warning">工具仅由服务端预注册的业务 API 执行；大模型输出只生成待确认预览。操作员令牌通过服务端环境变量 <code>ELEC_TOOL_ASSISTANT_OPERATOR_TOKENS</code> 配置 scope，令牌不会写入普通配置或浏览器存储。云端工具执行默认关闭；助手不会自动读取本地文件，只有你主动附加的截图才会按当前模型通道发送。</p>
             <div class="assistant-config-grid">
               <label class="check"><input id="assistant-tools-enabled" type="checkbox"> 启用受控工具（仍需操作员令牌及 scope）</label>
               <label class="check"><input id="assistant-cloud-tools-enabled" type="checkbox"> 允许云端模型提出工具操作（单独开关，默认关闭）</label>
@@ -1671,8 +1697,6 @@
             </div>
           </div>
         </details>
-      </section>
-    </div>
   </div>
 </aside>
 

@@ -553,6 +553,54 @@ def test_assistant_chat_stream_and_nonstream_api(client, tmp_path, monkeypatch):
     assert invalid.status_code == 400 and "布尔值" in invalid.json()["error"]
 
 
+def test_assistant_chat_image_payload_is_validated_and_passed_to_model_stream(client, tmp_path, monkeypatch):
+    import base64
+    from app.assistant import AssistantService
+
+    service = AssistantService(data_dir=str(tmp_path / "assistant-image"))
+    captured = []
+    monkeypatch.setattr(client.srv, "assistant_service", service)
+    monkeypatch.setattr(service, "stream", lambda plan, cancel: (captured.append(plan) or iter(["截图分析回答"])))
+    image_bytes = bytes([0x89]) + b"PNG" + bytes([0x0d, 0x0a, 0x1a, 0x0a]) + b"fake image"
+    image = {"mime_type": "image/png", "data": base64.b64encode(image_bytes).decode("ascii")}
+    response = client.post("/api/assistant/chat", json={
+        "prompt": "请分析波形截图", "model_type": "local", "images": [image], "stream": True,
+    })
+    assert response.status_code == 200, response.text
+    assert "截图分析回答" in response.text
+    content = captured[0]["messages"][-1]["content"]
+    assert content[0] == {"type": "text", "text": "请分析波形截图"}
+    assert content[1]["image_url"]["url"] == "data:image/png;base64," + image["data"]
+
+    builtin = client.post("/api/assistant/chat", json={
+        "prompt": "请分析波形截图", "model_type": "builtin", "images": [image], "stream": False,
+    })
+    assert builtin.status_code == 400 and "需选择支持视觉输入" in builtin.json()["error"]
+    malformed = client.post("/api/assistant/chat", json={
+        "prompt": "说明", "model_type": "local", "images": [{"mime_type": "image/png", "data": "%%%"}], "stream": False,
+    })
+    assert malformed.status_code == 400 and "Base64" in malformed.json()["error"]
+    monkeypatch.setattr(client.srv, "MAX_ASSISTANT_CHAT_REQUEST_BYTES", 128)
+    oversized = client.post("/api/assistant/chat", json={"prompt": "x" * 200, "model_type": "local", "stream": False})
+    assert oversized.status_code == 413 and "请求体过大" in oversized.json()["error"]
+
+    # Transfer-encoding / absent Content-Length must still be bounded while chunks are read.
+    import asyncio
+    from starlette.requests import Request
+    calls = 0
+    async def receive():
+        nonlocal calls
+        calls += 1
+        return {"type": "http.request", "body": b"x" * 129, "more_body": False}
+    scope = {
+        "type": "http", "asgi": {"version": "3.0", "spec_version": "2.3"}, "http_version": "1.1",
+        "method": "POST", "scheme": "http", "path": "/api/assistant/chat", "raw_path": b"/api/assistant/chat",
+        "query_string": b"", "headers": [], "client": ("testclient", 1234), "server": ("testserver", 80),
+    }
+    chunked_response = asyncio.run(client.srv.assistant_chat(Request(scope, receive)))
+    assert chunked_response.status_code == 413 and calls == 1
+
+
 def test_assistant_proposal_confirm_is_branch_scoped_and_reauthorized(client, tmp_path, monkeypatch):
     from app.assistant import AssistantService
 
