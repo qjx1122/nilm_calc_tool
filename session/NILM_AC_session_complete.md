@@ -895,3 +895,13 @@
 - 验证方式 / 覆盖范围 / 缺口：`.venv/bin/pytest tests/test_assistant.py tests/test_server.py tests/test_web_ui.py -q` **70 passed / 1 warning**（既有 Starlette/httpx `TestClient` 弃用）；`node tools/ui_assistant_check.cjs` **62 checks passed**；Python `py_compile`、两个 `node --check` 与指定文件 `git diff --check` 通过。测试覆盖 OpenAI / Ollama 模型列表结构、代理绕过、API Key header、端点回退、安全 URL、启动预取、管理鉴权、缓存与 UI 初始 / 刷新 / 空列表 / 失败 / 自定义值保存。真实模型服务、浏览器视觉、现场网络未验。
 - 未决问题：需用户在真实 Ollama / OpenAI-compatible 服务与浏览器中点检自动候选、管理员刷新、无模型 / 故障下手输值保留及保存聊天；未运行全量仓库 pytest。`tmp/` 中既有修改 / 删除 / 未跟踪运行产物未读取、未修改、未暂存或提交。
 - 相关文件/分支：`app/assistant.py`、`app/server.py`、`app/static/{index.html,app.js,style.css}`、`tests/test_assistant.py`、`tests/test_server.py`、`tests/test_web_ui.py`、`tools/ui_assistant_check.cjs`、`STATUS.md`、`REPORT_TEST.md`、`session/NILM_AC_session_complete.md`；分支 `arena/82e34fb8-nilm-calc-tool`。
+
+## [2026-11-04] 会话纪要
+- 目标：第 196 轮智能问答界面整体重构——左侧会话管理、右侧自适应问答区、凭据归位、保留完整文档 / 参数 / RAG / 模型 / 工具授权，并增加经格式与大小受限的波形截图分析。
+- 本会话角色：资深电力算法专家（默认角色）＋工程实现工程师（本任务级覆盖）；模式 A；活动分支 `arena/82e34fb8-nilm-calc-tool`。
+- 完成项：桌面固定宽度会话栏 + 聊天区，窄屏折叠会话栏；会话标题搜索、最近 / 历史分组、时间、切换、右键 / 菜单重命名 / 删除、上下文清空、拖拽排序与长标题省略。保留同页固定侧栏，完整文档和平台参数浏览移至“配置与附加知识库”，管理员口令与操作员令牌 / 验证统一放该处；不改账号缺失、两类凭据分离、token 仅页内存、逐工具 scope、服务端校验及用户确认等既有边界。聊天支持安全 Markdown、SSE、思考 / 停止、模型超时 / 连接提示、多行输入与截图选择 / 粘贴 / 拖放。
+- 截图边界 / 决策：仅 PNG / JPEG / WebP；≤3 MiB / 张、≤3 张 / 轮、≤5 MiB / 轮；后端校验 MIME、Base64、签名、大小及 7 MiB 流式请求体上限；图片以 `image_url` data URI 随本轮 local / cloud 请求发送，builtin 明确拒绝。云端发图前逐次确认并说明图片不经过文本敏感词扫描；不得称具备图像 DLP 或自动视觉模型兼容检测。文件不写助手持久目录，浏览器会话 / 截图仅页内存。默认兼容假设是 local / cloud 提供方实现 OpenAI-compatible vision input；实际 provider 能力仍待验证。
+- 文档：更新 README §3.6、架构验收对照、v0.99.39 变更及验证记录；更新 `docs/智能问答助手说明.md`；运行生成器同步软件使用 / 部署手册并通过 `--check`。专题报告追加至 `REPORT_TEST.md`；未创建同类新报告。
+- 验证方式 / 覆盖范围 / 缺口：定向 pytest **72 passed / 1 warning**；隔离源码副本全量 **617 passed / 1 skipped / 1 warning**（138.88 s）；`node tools/ui_assistant_check.cjs` **84 checks**；四份生成文档 `--check`、Python 编译、JS 语法、指定文件 `git diff --check` 通过。live preview `0.0.0.0:8001` 首页 / 静态文件 200，配置 API 显示 builtin 启用；该 smoke check 不是目标浏览器视觉验收。唯一 warning 为 Starlette/httpx `TestClient` 弃用提醒。
+- 未决 / 用户验收：真实 local vision 模型、云端 provider 是否接受 `image_url` data URI、视觉输出质量、目标浏览器 / 移动端、Windows 与现场网络 / HTTPS 尚未验；云端图片未过文本敏感词扫描，用户需只上传有权使用且可发送的数据。刷新会清除会话与截图；跟进旧截图的问题需重新附图。工作树 `tmp/` 用户数据不读取、不更改、不提交。
+- 相关文件 / 分支：`app/static/index.html`、`app/static/app.js`、`app/static/style.css`、`app/assistant.py`、`app/server.py`、`tests/test_web_ui.py`、`tests/test_assistant.py`、`tests/test_server.py`、`tools/ui_assistant_check.cjs`、`README.md`、`docs/智能问答助手说明.md`、生成手册、`STATUS.md`、`REPORT_TEST.md`；`arena/82e34fb8-nilm-calc-tool`。

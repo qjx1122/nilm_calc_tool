@@ -3933,3 +3933,23 @@ delta_i_a  = d_i_obs
   - 仓库 `tmp/` 中既有运行数据修改 / 删除 / 未跟踪状态原样保留，不读取、不清理、不暂存、不提交。
 - 是否进入 REPORT.md（稳定结论）：否（配置界面与服务端模型发现功能，不涉及稳定 NILM 算法结论）。
 - 遗留问题：用户需在真实本地服务启动时验证自动候选加载、管理员刷新、空 / 错误响应后的手动填写与保存，并确认浏览器外观；若某个 OpenAI-compatible provider 使用不同模型目录路径或字段，再按其非敏感接口样例补适配。
+
+## [2026-11-04] 专题：智能问答会话管理双栏重构与波形截图输入
+- 类型：用户专题 / UI、接口与安全验证专题
+- 目标与假设：按第 196 轮验收要求，将同页固定智能问答侧栏重排为左侧会话管理 + 右侧自适应聊天；把完整本地文档 / 参数目录、模型 / RAG 设置及管理员 / 操作员凭据收拢到“配置与附加知识库”；新增受限截图分析输入。会话继续仅保存在当前页面内存，不增加刷新后持久化。
+- 方法 / 数据 / 参数：
+  - 桌面左栏固定 260 px；按当前顺序将前 5 条显示为“最近会话”、其余为“历史会话”，标题搜索、时间、切换、拖动排序、右键 / 菜单重命名 / 清上下文 / 删除，标题单行省略。新建对话按钮在列表上方；窄屏可折叠会话栏。右栏含助手标题、builtin / local / cloud 选择、关闭按钮、用户 / AI 气泡、滚动消息、SSE Markdown、思考状态、停止生成、超时 / 连接错误提示；Enter 发送、Shift+Enter 换行。
+  - 完整本地文档与平台参数目录放入同页配置详情区，并保持 `/api/assistant/documents` 全文加载、平台参数优先检索、本地 / 云端 RAG、管理员附加文本知识、现有本地模型候选发现、受控工具 scope / 服务端复核 / 用户确认机制。管理员口令、操作员令牌及其验证 UI 均在配置区；两类凭据仍分离，浏览器令牌仅页面内存。
+  - 图片接受 PNG / JPEG / WebP；每张 ≤3 MiB、每轮最多 3 张、每轮合计 ≤5 MiB。前端支持文件选择、粘贴和拖放；服务端检查 MIME、Base64、文件签名、单图 / 合计上限，并在 JSON 解析前按 `Content-Length` 与实际流式读取字节数限制请求体 ≤7 MiB，超限返回 413。图片通过 OpenAI-compatible `image_url` data URI 仅随本轮 local / cloud 请求发送；builtin 不接受图片。后端仅验证传输格式 / 签名，不据此宣称完整图像解码或模型兼容。
+  - 云端每次附图发送前由浏览器再次确认；明确告知图像不经过既有文本敏感词扫描，不能当作图像 DLP，提醒勿上传个人 / 涉密内容。图像不写助手知识库或持久目录；浏览器消息与会话刷新后清除。
+  - README §3.6、变更记录及 `docs/智能问答助手说明.md` 同步更新；运行 `tools/generate_assistant_docs.py` 后更新软件使用 / 部署手册。
+- 用户执行命令（含实录路径；本节无用户命令则注明）：无用户侧执行命令；无真实截图 / 用户数据输入。
+- 结果 / 结论：
+  - `./.venv/bin/pytest tests/test_web_ui.py tests/test_assistant.py tests/test_server.py -q`：**72 passed / 1 warning**；唯一 warning 为现有 Starlette/httpx `TestClient` deprecation。
+  - 隔离源码副本（在 `/tmp` 由跟踪源码及显式本轮补丁构建，未复制工作树未跟踪数据）全量 `pytest -q`：**617 passed / 1 skipped / 1 warning**，138.88 s；warning 同为 Starlette/httpx deprecation。
+  - `node tools/ui_assistant_check.cjs`：**PASS 84 checks**，覆盖会话列表、菜单 / 拖拽、响应式折叠、配置区文档、SSE / 安全 Markdown、图像粘贴 / 拖放、本地图像请求、云端确认、受控操作提案确认。
+  - `python tools/generate_assistant_docs.py --check`：软件设计 **42,713** 字符、软件使用 **221,857**、软件部署 **44,975**、算法调参与验证 **142,220**，全部 `OK`；定向 Python `py_compile`、`node --check app/static/app.js` / harness、明确文件 `git diff --check` 均通过。
+  - 隔离 live preview `0.0.0.0:8001`：`/`、`/static/app.js`、`/static/style.css` 均 HTTP 200；配置 API 返回 assistant enabled / builtin。此为服务与静态资源 smoke check，不代表真实浏览器视觉验收。
+  - 仓库工作树 `tmp/` 的既有用户运行数据未读取、清理、修改、暂存或提交；测试副本与提交文件均按明确路径控制。
+- 是否进入 REPORT.md（稳定结论）：否（这是 UI / 传输接口实现专题，没有新的稳定电气算法结论）。
+- 遗留问题：没有连接真实本地视觉模型或云端 provider，未确认具体 OpenAI-compatible 实现是否接受图片 data URI / `image_url` 形态及图片效果；未做目标浏览器、Windows、现场网络 / HTTPS 实测。云端图片无图像敏感扫描，不得将文本拦截说成图像 DLP；截图后续追问需要重新附图，历史会话不持久化。
