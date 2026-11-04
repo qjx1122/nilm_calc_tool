@@ -3883,3 +3883,17 @@ delta_i_a  = d_i_obs
   - 内容口径保持来源边界：平台模板 / 代码默认不冒充用户当前运行值；部署手册保留原文中 Windows / 现场网络等待验证标记，不宣称用户环境验收完成。工作树原 `tmp/` 运行数据状态完整排除在测试和文件变更范围外。
 - 是否进入 REPORT.md（稳定结论）：否（本专题为正式文档整理与知识库加载，不产生新的稳定算法结论）。
 - 遗留问题：真实 Ollama / 云端模型、用户真实浏览器视觉、Windows / 现场网络与部署、真实现场数据均未在本专题验证；生成后的静态文档需在服务重启后由 AssistantService 读取。后续若上游 README / REPORT / 算法方案 / 调参手册更新，需运行 `python tools/generate_assistant_docs.py` 再提交生成文件。
+
+## [2026-11-04] 专题：管理员令牌与受控工具现场操作说明
+- 类型：用户专题 / 文档与验证专题
+- 目标与假设：按用户要求，从实施工程师、交付工程师和现场运维视角，详细说明 `ELEC_TOOL_ASSISTANT_ADMIN_TOKEN` 的设置与服务重启，以及如何配置操作员凭证、scope 并通过 UI 开启受控工具。只更新助手模块说明文档，不改变现有授权和执行逻辑。
+- 方法 / 数据 / 参数：核对 `app/assistant.py` 的管理员环境变量判定、操作员 token JSON 解析 / scope 校验 / 工具交集，`app/assistant_tools.py` 的闭集工具及 high-risk 标记，以及 `app/static/index.html` / `app/static/app.js` 的管理员与操作员 UI 字段。文档补充 Linux / macOS 当前终端、PowerShell、systemd `EnvironmentFile` 示例；以只读 `recordings.read` / `profiles.read` 为起步示例，并引用完整工具 / scope 表；说明 builtin、云端工具额外开关、提案预览 / 确认、过期和高风险二次确认。
+- 用户执行命令（含实录路径；本节无用户命令则注明）：无用户侧执行命令。本节命令为文档示例；Linux 片段在沙盒语法检查并执行环境 JSON 部分，没有启动服务。PowerShell / systemd 示例未在目标系统实跑。
+- 结果 / 结论：
+  - 更新 `docs/智能问答助手说明.md` §6.1–6.5：明确管理员口令与操作员令牌不同、环境变量必须进入实际服务进程并在修改后重启、管理 UI 全局开关 / allow-list / 云端独立开关、按角色分工的操作流程和故障排查。
+  - 更正高风险工具说明：`set_profile_parameters`、`set_wiring_mode`、`load_latest_profile`、`clear_nilm_events` 需要服务端提供的 6 位二次确认码。保留 `clear_nilm_events` 仅清当前侧内存事件、不删磁盘 CSV / 不清缓存的边界。
+  - `tests/test_assistant.py -q`：**18 passed**。文档 Linux 命令块 `bash -n` 通过；示例实际生成并解析了操作员 JSON，确认最小只读 scope；PowerShell 路径与环境变量名断言通过；四份生成文档 `--check` 全 `OK`；`git diff --check` 通过。
+  - 泛化查询“如何部署软件”现在也会命中新增的助手环境配置说明；为保持回归语义稳定，将原部署手册检索断言收紧为“Linux 离线部署 安装”的具体问题。
+  - 本轮没有修改 `app/` 执行代码；仓库 `tmp/` 状态未触碰、未暂存。
+- 是否进入 REPORT.md（稳定结论）：否（部署与权限说明专题，不产生稳定算法结论）。
+- 遗留问题：没有在用户的 Windows、systemd / Docker 或现场网络上实际设置变量和重启服务；需要部署方在目标系统按手册验证 secret 管理、网络访问控制、真实模型 tool/function calling 与审批流程。应用无账号 / SSO，操作员 ID 只是审计标签；不要向聊天、工单或 Git 提交真实令牌。

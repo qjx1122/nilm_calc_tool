@@ -868,3 +868,12 @@
 - 验证：生成器 `--check` 四份 `OK`；助手定向 **17 passed**；最终隔离副本 `/tmp/nilm-calc-tool-test-192-final` 全量 pytest **609 passed / 1 skipped / 1 warning**（131.13 s，既有 Starlette/httpx `TestClient` deprecation）；jsdom `ui_assistant_check.cjs` **50 checks passed**；Python 编译、两个 `node --check`、`git diff --check` 通过。全量 pytest 副本明确排除 `tmp/`。
 - 未决问题：真实本地 / 云端模型、用户真实浏览器视觉、Windows / 现场部署和现场数据未验证；文档服务端加载需重启后更新。用户若提出文案或内容修订，再按源文档更新并重新生成。
 - 相关文件/分支：四份 `docs/软件*.md`、`docs/智能问答助手说明.md`、`tools/generate_assistant_docs.py`、`app/assistant_docs.py`、`tests/test_assistant.py`、`README.md`、`STATUS.md`、`REPORT_TEST.md`；分支 `arena/82e34fb8-nilm-calc-tool`。
+
+## [2026-11-04] 会话纪要
+- 目标：根据用户要求，为现场运维、交付和实施工程师补充 `ELEC_TOOL_ASSISTANT_ADMIN_TOKEN` 配置与受控工具执行的操作说明。
+- 本会话角色：资深电力算法专家（`ROLE.md` 默认角色）；分支 `arena/82e34fb8-nilm-calc-tool`（active）。
+- 完成项：扩展 `docs/智能问答助手说明.md` §6.1–6.5，覆盖管理员口令和操作员令牌的区别、Linux / macOS / PowerShell / systemd 环境配置、UI 工具总开关与 allow-list、云端独立开关、scope、提案预览确认、高风险二次码、角色化交接与故障排查；更正四个高风险工具列表；新增助手文档回归。
+- 关键决策：管理员 token 只保护服务级设置 / 知识写操作，不自动授予工具权限；操作员令牌按人配置、仅授予最小 scope；现场先从只读列表工具开始；云端工具保持单独关闭，除非部署方明确批准；不要求用户把秘密发给 Agent。
+- 验证：`tests/test_assistant.py` **18 passed**；Linux/macOS 示例 `bash -n` 与操作员 JSON 结构检查通过；PowerShell 路径 / 环境变量名称断言通过；四份项目手册 `--check` 全 OK，`git diff --check` 通过。未启动真实服务；PowerShell / systemd 实例尚未在目标系统执行。
+- 未决问题：现场 Windows / systemd / Docker 环境变量注入、HTTPS / 网络访问控制、真实模型工具调用与运维审批流程需部署方实测；`tmp/` 原有用户运行产物状态保持不变。
+- 相关文件 / 分支：`docs/智能问答助手说明.md`、`tests/test_assistant.py`、`STATUS.md`、`REPORT_TEST.md`；分支 `arena/82e34fb8-nilm-calc-tool`。

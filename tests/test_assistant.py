@@ -134,7 +134,7 @@ def test_bundled_library_has_required_manuals_and_parameter_provenance(tmp_path)
 
     matches = service.search_knowledge("sampling.fs 参数默认值", 4, 0.08)
     assert matches and matches[0]["id"] == PLATFORM_PARAMETER_DOC_ID
-    assert any("软件部署说明文档" == hit["name"] for hit in service.search_knowledge("如何部署软件？", 4, 0.08))
+    assert any("软件部署说明文档" == hit["name"] for hit in service.search_knowledge("Linux 离线部署 安装", 10, 0.08))
 
 
 def test_bundled_assistant_loads_generated_markdown_files(monkeypatch):
@@ -152,6 +152,21 @@ def test_bundled_assistant_loads_generated_markdown_files(monkeypatch):
         assert docs[doc_id]["name"] == title
         assert docs[doc_id]["content"] == expected
         assert docs[doc_id]["characters"] == len(expected)
+
+
+def test_assistant_manual_explains_admin_and_controlled_tool_setup(tmp_path):
+    service = AssistantService(data_dir=str(tmp_path))
+    docs = {doc["id"]: doc for doc in service.document_library()["documents"]}
+    guide = docs["builtin-assistant-guide"]["content"]
+    assert "ELEC_TOOL_ASSISTANT_ADMIN_TOKEN" in guide
+    assert "ELEC_TOOL_ASSISTANT_OPERATOR_TOKENS" in guide
+    assert "管理员口令本身不授予工具执行权限" in guide
+    assert "### 6.1 实施工程师" in guide
+    assert "### 6.2 交付工程师" in guide
+    assert "### 6.4 现场运维" in guide
+    assert '"recordings.read","profiles.read"' in guide
+    assert r".\.venv\Scripts\python.exe" in guide
+    assert "cloud_tools_enabled=true" in guide
 
 
 def test_local_and_cloud_rag_context_uses_bundled_platform_catalog(tmp_path, monkeypatch):
