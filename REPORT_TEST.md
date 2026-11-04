@@ -3953,3 +3953,21 @@ delta_i_a  = d_i_obs
   - 仓库工作树 `tmp/` 的既有用户运行数据未读取、清理、修改、暂存或提交；测试副本与提交文件均按明确路径控制。
 - 是否进入 REPORT.md（稳定结论）：否（这是 UI / 传输接口实现专题，没有新的稳定电气算法结论）。
 - 遗留问题：没有连接真实本地视觉模型或云端 provider，未确认具体 OpenAI-compatible 实现是否接受图片 data URI / `image_url` 形态及图片效果；未做目标浏览器、Windows、现场网络 / HTTPS 实测。云端图片无图像敏感扫描，不得将文本拦截说成图像 DLP；截图后续追问需要重新附图，历史会话不持久化。
+
+## [2026-11-04] 专题：智能问答本地模型候选选择与鼠标滚轮修复
+- 类型：用户专题 / UI 交互与回归验证专题
+- 目标与决策：修复本地模型候选下拉操作异常及助手侧栏鼠标滚轮无法浏览的问题。候选列表改成明确可打开的原生 `<select>`，但保留独立可编辑模型名输入框；不改本地模型发现 API、管理员刷新授权、配置保存字段或 `tmp/`。
+- 方法 / 实现：
+  - `app/static/index.html` 增加 `#assistant-local-model-select`，候选选择后同步至 `#assistant-local-model`；手动输入列表外名称仍可保存。初始加载、手动刷新、空列表与失败路径都不覆盖输入值；既有 `GET /api/assistant/local-models` 与管理员鉴权 `POST /api/assistant/local-models/refresh` 保持不变。
+  - 消息滚动静态检查定位到两处强制回底：SSE 每次消息更新时 `assistantRefreshMessage()` 无条件滚至 `scrollHeight`，且请求结束重绘同样无条件回底；同时消息区用了 `scroll-behavior:smooth`。现仅在用户原本距底部 ≤72 px 时自动跟随；请求结束按原位置重绘；消息区改为即时滚动。
+  - 助手 fixed 面板新增受限 wheel 路由：消息 / 会话 / 设置 / 文档等已滚动区域优先原生滚动；嵌套内容到边界时继续滚动父级；标题或空白处将滚轮送至对应消息区 / 会话列表 / 设置主体。显式设置纵向 overflow、`min-height:0`、细滚动条与面板内 overscroll 行为。
+  - 扩展 `tests/test_web_ui.py` 与 `tools/ui_assistant_check.cjs`：覆盖候选选择与手填同步、刷新 / 空列表不丢输入、候选值走原配置保存字段、流式更新 / 完成重绘保持阅读位置、底部跟随、标题空白区和嵌套设置文档区滚轮传递。
+- 用户执行命令：无；未连接真实本地模型服务，未进行用户目标浏览器手动验收。
+- 结果 / 结论：
+  - 定向 `.venv/bin/pytest tests/test_assistant.py tests/test_server.py tests/test_web_ui.py -q`：**73 passed / 1 warning**（10.24 s）；唯一 warning 是既有 Starlette/httpx `TestClient` 弃用提示。
+  - 隔离源码副本全量 pytest（`/tmp/nilm-calc-tool-test-197-final-q53aFy`，由 `git archive HEAD` 加本轮明确文件构建，不复制仓库 `tmp/`）：**618 passed / 1 skipped / 1 warning**（137.50 s）；warning 同为既有弃用提示。
+  - `node tools/ui_assistant_check.cjs`：**PASS 99 checks**；`node --check app/static/app.js`、`node --check tools/ui_assistant_check.cjs`、`.venv/bin/python -m py_compile tests/test_web_ui.py` 与明确文件 `git diff --check` 通过。实现提交 `cb23f2d` 已创建。
+  - 现有 live preview `0.0.0.0:8001` 的首页、`/static/app.js`、`/static/style.css` 均 HTTP 200，且包含本轮 UI 标记。此项是服务 / 静态资源 smoke check，不等于浏览器交互验收。
+  - jsdom 覆盖事件同步与滚动路由，但不模拟浏览器原生 `<select>` 弹出层、真实鼠标滚轮惯性或目标浏览器布局；不得据此宣称用户浏览器已验收。仓库 `tmp/` 未读取、未修改、未暂存或提交。
+- 是否进入 REPORT.md（稳定结论）：否（纯 UI / 前端交互修复，不涉及稳定 NILM 算法结论）。
+- 遗留问题：请在目标浏览器确认候选可点击展开、选中后可保存、列表外模型名仍可手填；在生成中从底部滚到较早消息后确认不跳回，并在会话栏、配置 / 文档区及空白处验证滚轮。真实 Ollama / OpenAI-compatible 服务、浏览器外观与现场网络仍待用户环境实测。

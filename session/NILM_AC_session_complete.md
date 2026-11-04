@@ -905,3 +905,12 @@
 - 验证方式 / 覆盖范围 / 缺口：定向 pytest **72 passed / 1 warning**；隔离源码副本全量 **617 passed / 1 skipped / 1 warning**（138.88 s）；`node tools/ui_assistant_check.cjs` **84 checks**；四份生成文档 `--check`、Python 编译、JS 语法、指定文件 `git diff --check` 通过。live preview `0.0.0.0:8001` 首页 / 静态文件 200，配置 API 显示 builtin 启用；该 smoke check 不是目标浏览器视觉验收。唯一 warning 为 Starlette/httpx `TestClient` 弃用提醒。
 - 未决 / 用户验收：真实 local vision 模型、云端 provider 是否接受 `image_url` data URI、视觉输出质量、目标浏览器 / 移动端、Windows 与现场网络 / HTTPS 尚未验；云端图片未过文本敏感词扫描，用户需只上传有权使用且可发送的数据。刷新会清除会话与截图；跟进旧截图的问题需重新附图。工作树 `tmp/` 用户数据不读取、不更改、不提交。
 - 相关文件 / 分支：`app/static/index.html`、`app/static/app.js`、`app/static/style.css`、`app/assistant.py`、`app/server.py`、`tests/test_web_ui.py`、`tests/test_assistant.py`、`tests/test_server.py`、`tools/ui_assistant_check.cjs`、`README.md`、`docs/智能问答助手说明.md`、生成手册、`STATUS.md`、`REPORT_TEST.md`；`arena/82e34fb8-nilm-calc-tool`。
+
+## [2026-11-04] 会话纪要
+- 目标：修复助手配置本地模型名称候选下拉不正常，以及助手侧栏鼠标滚轮不能正常浏览的问题。
+- 本会话角色：资深电力算法专家（默认）＋工程实现工程师（第 197 轮任务级覆盖）；模式 A；活动分支 `arena/82e34fb8-nilm-calc-tool`。
+- 完成项：本地模型 UI 改为原生候选 `<select>` + 可编辑模型名称输入框；选中后同步、手填列表外名称仍可保存；加载 / 刷新 / 空列表 / 错误路径不覆盖手填输入，保留原服务端发现接口及管理员刷新验证。修复流式更新与请求完成后强制滚底；加入 near-bottom 跟随、原位置重绘、侧栏空白区 / nested overflow wheel 路由与独立滚动样式。更新 Python 静态契约及 jsdom 行为回归，专题报告追加至 `REPORT_TEST.md`；实现提交 `cb23f2d` 已创建。
+- 关键决策：用可直接打开的原生 select 取代原来只能按输入前缀触发的 datalist，但不把 select 当作唯一数据字段；保留原 `assistant-local-model` 输入字段以保证自定义模型兼容。流式期间仅在用户已接近底部时跟随；固定侧栏的 wheel handler 先让最近可滚动区处理，嵌套滚动到边界后才路由至父级；不改后端模型 discovery / 授权 API。JSDOM 不代表真实浏览器原生候选 UI / 滚轮惯性验收。
+- 验证方式 / 覆盖范围 / 缺口：定向 pytest **73 passed / 1 warning**（10.24 s）；隔离源码副本全量 **618 passed / 1 skipped / 1 warning**（137.50 s，`/tmp/nilm-calc-tool-test-197-final-q53aFy`，排除仓库 `tmp/`）；`node tools/ui_assistant_check.cjs` **99 checks**；app.js / harness `node --check`、`tests/test_web_ui.py` py_compile 通过；live preview `0.0.0.0:8001` 首页与 JS / CSS 均 HTTP 200。HTTP smoke check 不代表浏览器现场验收；唯一 pytest warning 是现有 Starlette/httpx TestClient deprecation。
+- 未决问题：真实 Ollama / OpenAI-compatible 模型服务未连；未在用户目标浏览器手动验收原生 select、滚轮、窄屏与面板布局，现场网络未验。仓库 `tmp/` 用户运行数据未读取、未改、未暂存或提交。请用户环境确认候选保存、列表外手输和流式中向上滚动保持。
+- 相关文件/分支：`app/static/index.html`、`app/static/app.js`、`app/static/style.css`、`tests/test_web_ui.py`、`tools/ui_assistant_check.cjs`、`STATUS.md`、`REPORT_TEST.md`、`session/NILM_AC_session_complete.md`；分支 `arena/82e34fb8-nilm-calc-tool`。
