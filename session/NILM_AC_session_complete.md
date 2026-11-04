@@ -850,3 +850,12 @@
 - 取证限制：原始 Windows 波形不在沙盒；`run_info` 两侧路径相同且 trend points 完全一致，但 `config_branch.json` 路径写 bus-start，且分路挂载的画像 JSON `side=bus`，需用户确认配置快照与画像来源。画像启动 / 停机各只有 1 个自动样本。
 - 验证方式 / 覆盖范围 / 缺口：使用 `.venv` 运行公式复算；直接读取 2026-11-04 事件 / 候选 / 趋势输出；核对候选数量、conf、D²/维、画像 μ/σ、输入同一性及 `_profile_need_one`。覆盖已落盘画像匹配判定，不覆盖原始周波 CSV 重放或独立人工真值确认。建议本波形先验证 `pre=200/400/600`、保持 post=3000 和其他参数固定，并补每方向 ≥3 个标签样本；50 Hz 下 pre600=12 s、post3000=60 s。`window_cycles=3000` 小于需求，但当前代码自动扩窗到约 7,898 cycles（600/3000）或 7,498 cycles（200/3000）。
 - 相关文件 / 分支：`tmp/run_info.json`、`tmp/config_bus.json`、`tmp/config_branch.json`、`tmp/nilm/profile_*_20261104*.json`、`tmp/nilm/nilm_events_20261104.csv`、`tmp/nilm/nilm_profile_candidates_20261104.csv`、`tmp/realtime/*_20261104.csv`、`elec_tool/nilm_profile.py`、`elec_tool/nilm.py`、`tools/nilm_profile.py`、`app/static/index.html`、`app/static/app.js`；分支 `arena/82e34fb8-nilm-calc-tool`。
+
+## [2026-11-04] 会话纪要
+- 目标：完成第 191 轮智能问答受控业务工具闭环：自然语言操作提案、影响预览、用户确认、服务端二次授权与固定业务 API 执行，并完善管理员权限 / 审计配置。
+- 本会话角色：资深电力算法专家（默认）＋工程实现工程师（第 191 轮任务级覆盖）。
+- 完成项：建立 8 项闭集工具 schema、operator token + 每工具 scope、proposal 5 分钟 TTL / 侧别绑定 / 单次消费 / 高风险二次码 / 审计 / 临时 CSV；实现身份 / 确认 / 取消 / 下载 / 管理员审计路由和总线 / 分路 handler 映射；前端令牌验证、提案影响与有效期状态、确认 / 取消 UI；README、助手说明、STATUS 与专题报告同步。
+- 关键决策：无账号体系时采用独立操作员令牌和 scope；云端工具默认关闭；无效 / 已撤销可选令牌不阻断只读问答，但 identity 端点仍拒绝；坏类型 `enabled_tools` allow-list fail-closed 为空名单；不实现任意命令 / SQL / 路径工具。保留 `/api/assistant/chat`，`/api/chat` alias 未实现 / 未评估。全量 pytest 在 `/tmp/nilm-calc-tool-test-191` 隔离副本运行，避开仓库 `tmp/`；工作区当前 `tmp/` 的用户运行数据状态不加入本任务变更或提交。
+- 验证方式 / 覆盖范围 / 缺口：全量 pytest **608 passed / 1 skipped / 1 warning**（134.16 s，Starlette/httpx TestClient deprecation）；`tests/test_assistant.py` **16 passed**，`tests/test_server.py` **27 passed**；`node tools/ui_assistant_check.cjs` **50 checks**；Python 编译、app.js 与 jsdom 工具 `node --check`、`git diff --check` 通过。覆盖畸形 allow-list fail-closed、只读 token 行为、身份拒绝、scope / TTL / 侧别 / 二次码复验、SSE proposal 与前端确认头。真实 local/cloud function calling、Windows、生产部署及用户浏览器视觉尚未验证。
+- 未决问题：需用户环境配置管理员工具开关及 `ELEC_TOOL_ASSISTANT_OPERATOR_TOKENS` 后验收总线 / 分路工具与错误 / 撤销 / 过期 / 重放场景；真实模型 / 云端服务与浏览器、Windows / HTTPS 部署仍待实录；无账号 / SSO 时 audit operator ID 不能证明自然人身份；`/api/chat` alias 仍未实现 / 评估。
+- 相关文件/分支：`app/assistant_tools.py`、`app/assistant.py`、`app/server.py`、`app/static/{index.html,app.js,style.css}`、`tests/test_assistant.py`、`tests/test_server.py`、`tests/test_web_ui.py`、`tools/ui_assistant_check.cjs`、`README.md`、`docs/智能问答助手说明.md`、`STATUS.md`、`REPORT_TEST.md`；分支 `arena/82e34fb8-nilm-calc-tool`。

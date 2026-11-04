@@ -1,9 +1,9 @@
 # README.md — nilm_calc_tool（电力系统各类电气量计算工具）
 
 > 台账文件（BOOTSTRAP.md v2.2）：安装与环境 / 运行命令 / 数据目录 / 配置结构 / 输出产物 / 生产推荐流程。
-> **当前状态：v0.99.37（2026-11-04）**——助手改为同页固定复合侧栏（文档 + 问答）；服务启动时加载设计、使用、部署、算法调参与验证、参数、数据字典及助手说明资料，builtin/local/cloud 共用本地语料；参数清单分列代码默认值与两侧模板值，参数问题提高清单检索优先级。全量 pytest **603 passed / 1 skipped**，助手 jsdom **42 checks**。真实模型与用户浏览器视觉验收仍待完成。
+> **当前状态：v0.99.38（2026-11-04）**——在 v0.99.37 固定复合侧栏与本地文档库上增加受控工具提议 / 用户确认 / 服务端二次授权执行、操作员令牌 scope、云端工具关闭默认值、审计与临时 CSV 下载。验证结果以本轮 `REPORT_TEST.md` 记录为准；真实模型与用户浏览器视觉验收仍待完成。
 > 状态标注：✅已确认（有代码 / 实录 / 官方来源佐证）｜🔶待确认（占位或推断，需用户回填）｜❌已废弃（不删行，只翻状态）
-> **历史验收条目的 ✅ 实录以各条目所列日期 / 环境为准；README 早期基线环境为 Linux 6.1.158+ / CPython 3.11.2 / numpy 2.4.6（2026-10-10）。第 189 轮（2026-11-04）最新验证结果见 §11。**
+> **历史验收条目的 ✅ 实录以各条目所列日期 / 环境为准；README 早期基线环境为 Linux 6.1.158+ / CPython 3.11.2 / numpy 2.4.6（2026-10-10）。第 191 轮（2026-11-04）最新验证结果见 §11。**
 > **Windows 命令、真实现场数据、生产部署三项尚未在用户环境验证，一律标 🔶，请按 `REPORT_TEST.md`「T-002 本地部署与验收执行包」逐条回填。**
 
 ---
@@ -45,7 +45,7 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt          # Li
 | ④ | 输入支持实时采集数据与离线文件数据 | `elec_tool/sources/`：`csv_file`(离线)、`csv_tail`(实时追加)、`tcp`(实时流)、`simulator`(实时联调) | 实时链路 `test_realtime_simulator_streams_*`；离线链路 `test_offline_csv_end_to_end_values` | ✅沙盒（真实采集设备 🔶） |
 | ⑤ | 三相电压/电流、功率因数、有功、无功、基波、谐波(2–50)、频谱；**v0.8 增：间谐波、直流偏置、事件** | `elec_tool/analysis/{rms,harmonic,power,window}.py` + `metrics.py` + `events.py` | 数值对齐解析解（`expected_values()`），见 §8；间谐波/直流/事件见 `tests/test_r9_events.py` | ✅沙盒 |
 | ⑥ | 各电气量分别配置指定时间段计算 | `configs/*.json` 的 `windows.<量>.length_s/step_s`；引擎按量独立调度 | 实测：电压窗 1s→输出 6 次、谐波窗 0.2s→输出 26 次（同一份 5s 数据）；改 5s→输出 2 次、缓冲自动扩到 49280 点 | ✅沙盒 |
-| ⑦ | 网页智能问答：同页固定文档 + 问答侧栏；默认本地文档检索（不调用模型）；设计、使用、部署、调参验证、参数与数据字典等完整知识库；可选本地 / 云端模型、SSE + Markdown、参数优先检索与来源名脱敏 | `app/assistant_docs.py`、`app/assistant.py`、`app/server.py`、`app/static/` | `GET /api/assistant/documents`；助手单测、服务端接口、UI 契约与 jsdom 行为检查 | ✅沙盒实现；真实模型与用户浏览器视觉验收 🔶
+| ⑦ | 网页智能问答：同页固定文档 + 问答侧栏；默认本地文档检索；本地 / 云端模型、RAG、SSE + Markdown；受控工具先提案后确认、操作员 scope、云端工具默认关闭、审计 | `app/assistant_docs.py`、`app/assistant_tools.py`、`app/assistant.py`、`app/server.py`、`app/static/` | `/api/assistant/chat`、`/api/assistant/tools/*`；助手单测、服务端接口、UI 契约 | ✅沙盒实现；真实模型与用户浏览器视觉验收 🔶
 
 **代码规模**（2026-11-04 沙盒快照，`wc -l`）：`elec_tool/` + `app/server.py` + `app/assistant.py` + `cli.py` = 17333 行；`app/static/`（HTML/CSS/JS）= 7543 行；`tests/*.py` = 12771 行。
 
@@ -740,9 +740,9 @@ curl -s "http://127.0.0.1:8000/api/export?fmt=csv" -o output/result.csv
 | 长时间运行内存上涨 | 历史与结果缓存 | 环形缓冲上限 = 最长窗 × fs × 1.6（自动扩容，有上限）；`output.history_len`(默认 900) 与服务端结果缓存 `maxlen=2000` 都是定长队列 | ✅（架构实录） |
 | 改了界面配置，重启后没了 / 或出厂模板被改 | 配置持久化机制 | 界面保存写入 `configs/runtime.json`（gitignore），下次启动优先加载；`configs/default.json` 是出厂模板不会被界面污染。要恢复出厂：删掉 `runtime.json` | ✅沙盒实录 |
 
-### 3.6 智能问答模块（v0.99.37）
+### 3.6 智能问答模块（v0.99.38）
 
-业务页面右下角的「🤖 智能问答助手」入口在**当前业务页内打开固定复合侧栏**，不跳转独立页面；宽屏同时显示本地文档栏与问答栏，窄屏可切换“文档 / 问答”标签。标题固定为“智能问答助手”，定位为**调参辅助文档助手**；服务端 `visible_views` 配置控制入口显示在哪些页面。它不是账户权限：本应用当前没有登录 / 角色系统，知道 REST 地址的客户端仍可直接访问问答接口。未配置本地或云端模型时，默认走本地文档检索通道，读取随程序内置加载的文档和管理员附加资料，不连接任何模型服务。
+业务页面右下角的「🤖 智能问答助手」入口在**当前业务页内打开固定复合侧栏**，不跳转独立页面；宽屏同时显示本地文档栏与问答栏，窄屏可切换“文档 / 问答”标签。标题固定为“智能问答助手”，定位为**调参辅助文档助手**；服务端 `visible_views` 配置控制入口显示在哪些页面。问答接口当前仍无账号登录；工具执行另需服务端配置的操作员令牌与每工具 scope，且必须先由用户确认。未提供、无效或已撤销的可选操作员令牌不会阻断只读问答，但该请求不提供工具 schema；身份校验端点仍返回认证错误。未配置本地或云端模型时，默认走本地文档检索通道，读取随程序内置加载的文档和管理员附加资料，不连接任何模型服务。
 
 **功能与数据边界**
 
@@ -752,8 +752,14 @@ curl -s "http://127.0.0.1:8000/api/export?fmt=csv" -o output/result.csv
 - 管理员附加知识库仅接受文本：md/txt/json/py/csv/html/yaml/log；单文件 ≤1 MB、一次 ≤10 个 / 5 MB、总量最多 100 个 / 20 MB。它与只读内置文档分开管理；清空操作不删除内置资料。依赖无外部向量服务：按文本分块与词项 TF-IDF 相似度检索，回答附来源名 / 相似度；这是词项检索，不是语义向量检索。
 - 来源文件名的服务端脱敏当前跟随总线侧 `branch.hide_ui`；该字段原语义是「隐藏分路侧界面」，不是独立的助手来源显示开关。按本轮暂定规则，字段为真时会对检索上下文、回答、引用和流式分片中的知识库文件名脱敏；如果产品需要独立开关，应另行明确规则。
 - 知识库 / 普通配置默认写到 gitignore 覆盖的 `output/assistant/`（可用 `ELEC_TOOL_ASSISTANT_DATA_DIR` 改位置）；Linux 权限尽力收紧为目录 `0700`、JSON `0600`。普通配置会落盘；UI 输入的 API Key **只保存在服务进程内存**，进程重启后消失；部署持久密钥应使用环境变量。`*_API_KEY` 环境变量始终优先，密钥值不会经 GET 回传，也不会写进 `config.json`。
-- 云端模式会把本轮问题、最多 20 条对话历史及命中的知识片段发送给配置的云端服务；服务端会拦截明显的 API Key / 私钥特征及管理员配置的敏感词，但这不是 DLP，也不能保证识别所有个人信息 / 业务秘密。配置页会持续显示该提示。私有知识库应只用于本地模型，或经过人工脱敏后再使用云端。
+- 云端模式会把本轮问题、最多 20 条对话历史及命中的知识片段发送给配置的云端服务；服务端会拦截明显的 API Key / 私钥特征、管理员配置的敏感词及常见本地路径 / 数据文件名，但这不是 DLP，也不能保证识别所有个人信息 / 业务秘密。云端工具提议另有 `cloud_tools_enabled` 独立开关，新安装默认关闭；即使打开，仍须操作员 scope 与确认 API 复验。
 - 配置与知识库写操作使用 `ELEC_TOOL_ASSISTANT_ADMIN_TOKEN`；未配置时这些写操作返回 403。敏感词正文由独立的管理员接口读取；API Key 无论是否管理员都不回传。对外提供服务时必须使用 HTTPS / 受信任内网并保护管理员口令；聊天接口本身没有账户登录，限流（每客户端 60 秒 12 次、全局最多 3 个活跃模型请求）只能降低滥用，不能替代网络访问控制。
+
+**受控工具执行（可选，默认关闭）**
+
+操作员令牌由服务端环境变量 `ELEC_TOOL_ASSISTANT_OPERATOR_TOKENS` 配置为 JSON 数组，每项为 `{"id":"...","token":"至少 16 字符随机令牌","scopes":["精确 scope"]}`。令牌只在页面内存、不会写入 `localStorage` / `sessionStorage`。管理员可在“受控业务工具与审计”中设置全局开关、单工具 allow-list、云端独立开关与审计开关；若持久配置中的 `enabled_tools` 不是列表，服务会回退为空 allow-list（fail-closed），不会放大成全部工具。模型工具调用只返回待确认预览；预览卡显示有效期及待确认 / 过期 / 已处理状态。确认时服务端重新验证令牌、actor、scope、proposal TTL、侧别和高风险二次确认码，然后走现有业务 API。待确认操作进程内保存、5 分钟到期、单次执行。
+
+可用工具与 scope：`set_profile_parameters`→`profile.thresholds.write`；`set_wiring_mode`→`config.wiring.write`；`load_latest_profile`→`profile.load`；`start_current_source`→`engine.start`；`export_csv`→`data.export`；`list_recordings`→`recordings.read`；`list_profiles`→`profiles.read`；`clear_nilm_events`→`nilm.events.clear`。工具只接受封闭参数 schema；不允许任意 shell、SQL 或路径。`clear_nilm_events` 仅清当前侧内存事件，不删除磁盘 CSV、也不等同清缓存。工具审计默认追加至助手数据目录 `tool_audit.jsonl`。CSV 临时下载在内存保存 10 分钟；下载时再校验操作员 / scope / 侧别。总线侧确认用 `/api/assistant/tools/...`，分路侧必须使用 `/api/branch/assistant/tools/...`。
 
 **最小配置示例**（Linux shell；PowerShell 请使用 `$env:NAME="value"`）：
 
@@ -762,6 +768,9 @@ export ELEC_TOOL_ASSISTANT_ADMIN_TOKEN='替换为足够长的随机口令'
 export ELEC_TOOL_ASSISTANT_LOCAL_URL='http://127.0.0.1:11434/v1'
 export ELEC_TOOL_ASSISTANT_LOCAL_MODEL='qwen2.5:7b'
 export ELEC_TOOL_ASSISTANT_BACKEND='local'
+# （可选）为确需执行受控操作的人员配置各自的随机令牌与精确 scope；默认不开启工具。
+# 不要把真实令牌写入仓库。云端工具仍由管理员 UI 中 cloud_tools_enabled 单独控制且默认关闭。
+export ELEC_TOOL_ASSISTANT_OPERATOR_TOKENS='[{"id":"field-operator-1","token":"换成至少 16 字符高熵随机值","scopes":["engine.start","data.export"]}]'
 # 启动本地模型服务后再启动本工具
 .venv/bin/python cli.py serve --host 0.0.0.0 --port 8000
 ```
@@ -1229,7 +1238,7 @@ python cli.py selftest                            # 实测：44/44，worst_rel_e
 
 ## 11. 验证状态（工程实现工程师交付说明）
 
-- **第 189 轮最新验证（2026-11-04，v0.99.37）**：全量 pytest **603 passed / 1 skipped**；定向助手 / API / UI **58 passed**；`node tools/ui_assistant_check.cjs` **42 checks**；`node --check` 与 `git diff --check` 通过。隔离 live preview 的首页、文档目录 API（7 份完整资料）、助手配置与 builtin 参数问答均 HTTP 200。未连接真实 Ollama/vLLM 或云端供应商；Windows / 现场浏览器视觉 / HTTPS 反代待用户实录。
+- **第 191 轮当前验证（2026-11-04，v0.99.38）**：隔离源码副本全量 pytest **608 passed / 1 skipped / 1 warning**（134.16 s；既有 Starlette/httpx TestClient deprecation）；定向 `tests/test_assistant.py` **16 passed**、`tests/test_server.py` **27 passed**；`node tools/ui_assistant_check.cjs` **50 checks**；Python 编译、`node --check app/static/app.js` 与 `git diff --check` 通过。覆盖 malformed `enabled_tools` fail-closed、无效可选令牌只读问答 / 身份端点拒绝、提案过期与侧别复验、operator token + 二次确认码的 UI 确认流程及 `/api/branch/...` 执行路由。全量测试在 `/tmp` 隔离副本运行，未用测试覆盖原仓库 `tmp/`。真实模型 / 云端、浏览器视觉与 Windows / 现场部署仍待实测。
 - **第 188 轮（2026-11-04，v0.99.36）**：`./.venv/bin/python -m pytest -q` **600 passed / 1 skipped**；`node tools/ui_assistant_check.cjs` **33 checks**；`node --check app/static/app.js`、`node --check tools/ui_assistant_check.cjs`、`py_compile`、`git diff --check` 通过。新增路由覆盖内置 SSE 摘录与来源名脱敏。真实模型和现场验收仍待用户实录。
 - **沙盒已验证（Linux / CPython 3.11.2，2026-10-10 实录）**
   - 安装：venv + `pip install -r requirements.txt`；离线安装（Linux 29 包 / Windows 目标 24 包下载）；最小安装报错提示
@@ -1263,6 +1272,7 @@ python cli.py selftest                            # 实测：44/44，worst_rel_e
 ---
 
 ## 🗒 变更记录
+- **v0.99.38（2026-11-04，智能问答受控确认式工具执行）**：新增 8 项闭集工具 schema 与严格参数校验；模型 function call 仅形成待确认 proposal，SSE / 非流式均返回预览，用户确认时服务端重验操作员 token、scope、工具开关、云端开关、有效期、侧别与二次确认码，再调用当前侧受控业务 API。新增操作员身份验证、取消、临时 CSV 导出 / 下载、默认开启的 JSONL 审计与管理员配置 UI；云端工具执行默认关闭；前端令牌只存页面内存，分路请求固定走 `/api/branch/...`。无效可选令牌仅禁用工具、不阻断只读问答，身份端点仍拒绝；损坏的非列表 `enabled_tools` fail-closed 为空名单；提案卡显示有效期及过期 / 已处理状态。未新增 shell / SQL / 任意路径工具；`clear_nilm_events` 明确只清内存事件，不删磁盘 CSV、不代表清缓存。全量 pytest **608 passed / 1 skipped**，jsdom **50 checks**；未连接真实模型 / 云端，浏览器视觉与 Windows 现场验收待实测。
 - **v0.99.37（2026-11-04，智能问答固定复合侧栏与完整本地文档库）**：将助手由旧 dialog 改为同页固定侧栏，宽屏并列文档 / 问答、窄屏提供对应标签，标题为“智能问答助手”；新增白名单文档加载器与 `GET /api/assistant/documents`，服务启动读取设计、使用、部署、调参验证、助手说明、NILM 数据字典及平台参数资料，前端初始化获取并支持搜索 / 浏览安全 Markdown。参数清单从 `AppConfig` 代码默认、`configs/default.json`、`configs/branch.json` 生成三列，明确不等于当前运行值；参数问题对相关清单结果及命中字段优先排序，本地、云端 RAG 与 builtin 共用本地语料；管理员导入内容保持分离，既有 SSE / 会话 / 配置 / 脱敏能力保留。新增参数来源、RAG、API 与 UI 行为测试；全量 **603 passed / 1 skipped**，`node tools/ui_assistant_check.cjs` **42 checks**，`git diff --check` 通过。缺口：未连真实模型 / 云端、未做用户真实浏览器视觉验收；助手仍只提供有依据的实验步骤，不执行命令或改配置。
 - **v0.99.36（2026-11-04，智能问答零配置演示与嵌入抽屉）**：在 v0.99.35 问答上补齐用户验收要求。① 助手面板改为当前业务页内的**右侧全屏抽屉**（不跳独立页面，移动端铺满）；② 增加内置演示资料摘录集并设为新增安装默认：无模型 / API Key 也可零配置检索并返回本地摘录与引用，builtin 通道不建立任何模型请求；用户仍可显式切换 local/cloud。③ 来源名隐藏时，服务端把所有知识库文件名（不限于本轮命中）从 RAG 片段、模型提示、历史、答案、引用及 SSE 分片中脱敏。**暂定映射假设**：目前沿用总线配置 `branch.hide_ui` 作为服务端脱敏判据；它原义是隐藏分路侧界面，不是助手专用开关，若要独立控制需产品另行确认。验证：全量 **600 passed / 1 skipped**，`node tools/ui_assistant_check.cjs` **33 checks**，语法与 diff 检查通过。缺口：未接真实模型 / 云服务、未做用户浏览器视觉与现场网络验收；来源显隐仍依上述暂定映射。
 - **v0.99.35（2026-11-04，网页智能问答）**：新增本地 / 云端 OpenAI-compatible 模型适配器（本地走内网且绕开代理、云端 HTTPS）、SSE 流式回答、受限 Markdown、内存会话管理、切换模型确认新会话、本地 TF-IDF 文本知识库与来源引用、模型/RAG/页面范围配置。安全边界：服务端管理员口令保护配置与知识写操作；API Key 不回传且仅 UI 设置值留进程内存、环境变量优先；敏感词正文仅管理员接口可读；云端请求检查用户提问/历史/检索片段并明确提示上传风险；页面显隐不冒称账户授权。配置 / 知识库存于 gitignore 的 `output/assistant/`。验证：pytest **596 passed / 1 skipped**；`node tools/ui_assistant_check.cjs` **21 checks**。真实模型与 Windows / 内网现场部署未验证。

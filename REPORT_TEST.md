@@ -3849,3 +3849,20 @@ delta_i_a  = d_i_obs
 
 - **是否进入 REPORT.md（稳定结论）**：否（单份用户波形、自动定位且每方向仅 1 样本；属于个案取证，尚不足以形成通用最优前窗结论）。
 - **遗留问题**：①确认 14:48:10.465 是否确为他负荷而非目标设备；②核对 `config_branch.json` 中 `bus-启动.csv` 是否为过期快照，并确认分路画像为何 `side=bus`；③提供原始 `bus-停止.csv` 或现场复跑记录后，才能固定其他参数做周期级 A/B；④每方向补足 ≥3 个已知动作，避免 σ 全靠经验下限。
+
+## [2026-11-04] 专题：智能问答确认式受控工具执行与授权边界
+- 类型：用户专题 / 验证专题
+- 目标与假设：在既有固定文档 + 问答侧栏、本地 / 云端模型、RAG、SSE 与会话管理基础上，提供“自然语言操作意图 → 影响预览 → 用户确认 → 服务端重新授权 → 固定业务 API”闭环，并提供管理员工具开关、逐工具 allow-list 和审计。既有系统没有登录账号 / 角色体系；按用户授权决策，采用服务端独立操作员令牌和每工具 scope，不把页面入口显隐当授权。云端工具默认关闭，不实现任意命令、路径或 SQL 执行器。
+- 方法 / 数据 / 参数：
+  - `app/assistant_tools.py` 定义 8 项闭集工具及严格参数 schema；模型输出不可信，只能创建进程内 proposal。`app/assistant.py` 实现 operator token / scope、5 分钟 proposal TTL、侧别绑定、单次消费、高风险二次码、限流、JSONL 审计与 10 分钟临时 CSV 导出。`app/server.py` 在确认时重新检查操作员、scope、工具及云端开关、proposal TTL、侧别和二次码，再复用现有总线 / 分路业务 handler；聊天保留 `/api/assistant/chat`，分路走 `/api/branch/assistant/...`。
+  - 前端新增令牌验证、proposal 影响 / 有效期 / 过期或已处理状态、取消和二次确认；新增 UI mock 行为验证确认请求携带操作员令牌与二次码。管理员界面支持全局 `tools_enabled`、逐工具 `enabled_tools`、`cloud_tools_enabled`、`tool_audit_enabled` 和审计查看。
+  - 安全修正：无效 / 已撤销的可选令牌只让本轮没有工具 schema，仍允许只读问答；identity 端点照样拒绝该令牌。持久配置的 `enabled_tools` 若类型异常，改为空 allow-list（fail-closed），不再回退到所有注册工具；并保留工具总开关默认关闭。
+  - 配套修正：画像目录仅在调用可用画像工具时扫描；按 `profile_branch1_...` / `profile_bus1_...` 文件名识别侧别；扩展云端对常见本地资料扩展名的引用拦截（不把该规则套用到完整内置 RAG 语料）。
+- 用户执行命令（含实录路径；本节无用户命令则注明）：无用户侧命令或真实数据实录；本节记录均为沙盒自动化验证。
+- 结果 / 结论：
+  - 隔离源码副本 `/tmp/nilm-calc-tool-test-191` 全量 `pytest -q`：**608 passed / 1 skipped / 1 warning**（134.16 s）；warning 是既有 Starlette/httpx `TestClient` deprecation。隔离副本排除了仓库 `tmp/` 和 `output/`，避免全量测试改写用户运行数据。
+  - 原工作树定向 `.venv/bin/pytest tests/test_assistant.py -q`：**16 passed**；`tests/test_server.py -q`：**27 passed**（同类 deprecation warning）。`node tools/ui_assistant_check.cjs`：**PASS 50 checks**，覆盖 fixed sidebar / 文档 / SSE / 安全 Markdown / 会话 / 管理配置 / 导入与操作 proposal 确认。Python `py_compile`、`node --check app/static/app.js`、`node --check tools/ui_assistant_check.cjs`、`git diff --check` 均通过。
+  - 回归覆盖：无效可选令牌只读问答及 identity 403；畸形 allow-list 不扩权；工具 scope 与管理员开关撤销、proposal 过期 / 侧别冲突 / 单次消费 / 二次确认；JSON 和 SSE proposal；画像 output 目录与侧别筛选；浏览器确认调用携带 operator token 和二次码。没有连接真实 Ollama/vLLM、云服务或用户浏览器，也没有声称现场验证通过。
+  - 当前工作区的 `tmp/` 存在运行数据的修改 / 新增 / 删除状态；按用户约束保留原状并排除在本专题文件变更之外，不纳入本任务提交。
+- 是否进入 REPORT.md（稳定结论）：否（本专题为工程实现与安全回归，没有形成 NILM 算法稳定结论）。
+- 遗留问题：真实模型 function calling、云端 provider / Key、真实浏览器视觉 / 移动端、Windows / 生产网络与真实业务 API 操作仍需用户环境验收；无账号 / SSO 时审计只能关联 operator ID，不能证明自然人身份；`/api/chat` 别名未实现 / 未评估，现有兼容路径为 `/api/assistant/chat`；Starlette/httpx 弃用警告仍待依赖升级时处理。云端工具继续默认关闭。
