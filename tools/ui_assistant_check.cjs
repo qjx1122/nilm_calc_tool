@@ -49,6 +49,8 @@ const jsonResponse = (data, status = 200) => new Response(JSON.stringify(data), 
   status, headers: { 'content-type': 'application/json' },
 });
 let lastConfigPayload = null;
+let lastIdentityModel = null;
+let lastIdentityToken = null;
 let lastChatPayload = null;
 let lastConfirmPayload = null;
 let lastConfirmHeaders = null;
@@ -106,6 +108,11 @@ window.fetch = async (url, options = {}) => {
       admin_configurable: true };
     return jsonResponse({ ok: true, config });
   }
+  if (url.startsWith('/api/assistant/tools/identity?model_type=')) {
+    lastIdentityModel = decodeURIComponent(url.split('model_type=')[1] || '');
+    lastIdentityToken = options.headers['X-Assistant-Operator-Token'] || '';
+    return jsonResponse({ ok: true, operator_id: 'jsdom-operator', scopes: ['assistant.read'], available_tools: [] });
+  }
   if (url === '/api/assistant/tools/confirm' && options.method === 'POST') {
     lastConfirmPayload = JSON.parse(options.body); lastConfirmHeaders = options.headers;
     return jsonResponse({ ok: true, result: { message: '接线模式已切换为 3p4w', side: 'bus' } });
@@ -136,6 +143,7 @@ window.fetch = async (url, options = {}) => {
 };
 
 Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1024 });
+Object.defineProperty(window, 'innerHeight', { configurable: true, value: 768 });
 window.eval(source.slice(start, end) + '\nwindow.__assistantState = ASSISTANT_UI;');
 window.assistantInit();
 const $ = id => window.document.getElementById(id);
@@ -163,12 +171,16 @@ check($('assistant-launcher').hidden, '配置读取前问答入口应默认隐�
   check($('assistant-title').hidden && !$('assistant-title').textContent, '新会话尚无正式问答时，右侧标题应为空');
   const modelControls = window.document.querySelector('.assistant-model-controls');
   const chatHeader = window.document.querySelector('.assistant-chat-header');
-  check(modelControls && modelControls.contains($('assistant-model-type')) && modelControls.contains($('assistant-model-name'))
-    && modelControls.contains($('assistant-send')) && !chatHeader.contains($('assistant-model-type')) && !chatHeader.contains($('assistant-model-name')),
-  '后端 / 模型下拉应移至底部发送区而非标题栏');
-  check(modelControls.children[0].contains($('assistant-model-type')) && modelControls.children[1].contains($('assistant-model-name'))
-    && modelControls.children[2] === $('assistant-send'), '问答后端与具体模型下拉未紧邻发送按钮左侧');
-  check($('assistant-model-type').value === 'builtin', '未配置模型时应默认选择内置文档通道');
+  const modelNameControl = $('assistant-model-name'), attachButton = $('assistant-attach-image');
+  check(!$('assistant-model-type') && !html.includes('id="assistant-model-type"'), '右侧输入区不应显示问答后端下拉列表');
+  check(modelControls && modelControls.contains(modelNameControl) && modelControls.contains($('assistant-send'))
+    && !chatHeader.contains(modelNameControl), '具体模型与发送按钮应归入底部控制组，而不在标题栏');
+  check(modelControls.children[0] === modelNameControl && modelControls.children[1] === $('assistant-send'), '底部模型选择器应紧邻发送按钮左侧');
+  check(modelNameControl.hidden && modelNameControl.getAttribute('aria-label') === '选择具体模型'
+    && !window.document.querySelector('.assistant-model-controls label'), '内置模式应隐藏模型选择器且去掉可见标题、保留无障碍名称');
+  check($('assistant-default-backend').value === 'builtin', '未配置模型时应从设置默认使用内置文档通道');
+  check(attachButton.textContent.trim() === '附件' && attachButton.title === '附件'
+    && attachButton.getAttribute('aria-label') === '添加附件', '附件按钮的可见文案或无障碍名称不正确');
   check($('assistant-privacy-note').textContent.includes('本地文档模式'), '内置通道隐私说明未显示本地文档语义');
   check(window.__assistantState.documents.length === 2, '启动时未加载文档目录');
   check(window.__assistantState.localModels.length === 2, '配置加载后未读取本地模型候选');
@@ -203,9 +215,14 @@ check($('assistant-launcher').hidden, '配置读取前问答入口应默认隐�
   check(style.includes('@media(max-width:680px)') && style.includes('.assistant-session-pane{position:absolute;inset:0 auto 0 0;'), '窄屏会话栏必须保留覆盖式抽屉布局');
   check(style.includes('.assistant-session-title{display:block;width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap'), '长会话标题省略样式缺失');
   const cssRule = selector => { const start = style.indexOf(selector + '{'); return start < 0 ? '' : style.slice(start, style.indexOf('}', start)); };
-  check(cssRule('.assistant-model-controls').includes('display:flex') && cssRule('.assistant-model-controls').includes('align-items:flex-end'), '底部模型 / 发送控制组布局缺失');
+  check(cssRule('.assistant-launcher').includes('cursor:grab') && cssRule('.assistant-launcher').includes('touch-action:none')
+    && cssRule('.assistant-launcher').includes('user-select:none'), '悬浮球拖动的鼠标 / 触屏样式缺失');
+  check(style.includes('.assistant-launcher.is-dragging{cursor:grabbing}')
+    && html.includes('title="拖动可移动位置，点击打开智能问答助手"'), '悬浮球拖动状态或提示缺失');
+  check(cssRule('.assistant-model-controls').includes('display:flex') && cssRule('.assistant-model-controls').includes('align-items:center')
+    && cssRule('.assistant-model-controls').includes('flex-wrap:nowrap'), '底部模型 / 发送控制组未对齐');
   check(style.includes('@media(max-width:420px){\n  .assistant-workspace{flex-basis:540px;min-height:540px}')
-    && style.includes('.assistant-model-controls{flex:1 1 100%;justify-content:flex-end;gap:4px}'), '极窄屏模型选择 / 发送区没有自适应布局');
+    && style.includes('.assistant-model-controls{flex:0 1 auto;justify-content:flex-end;gap:4px}'), '极窄屏附件 / 模型 / 发送区没有自适应布局');
   const messageScrollCss = cssRule('.assistant-messages');
   check(messageScrollCss.includes('overflow-y:auto') && messageScrollCss.includes('scroll-behavior:auto') && !messageScrollCss.includes('scroll-behavior:smooth'), '消息区必须有独立纵向滚轮且不能以平滑自动滚动抢占操作');
   check(cssRule('.assistant-conversation-list').includes('overflow-y:auto'), '会话列表必须可纵向滚动');
@@ -219,7 +236,34 @@ check($('assistant-launcher').hidden, '配置读取前问答入口应默认隐�
   check($('assistant-settings-scroll').contains(window.document.querySelector('.assistant-settings-body')) && $('assistant-settings-scroll').contains($('assistant-doc-pane')) && $('assistant-settings-scroll').contains($('assistant-admin-token')) && $('assistant-settings-scroll').contains($('assistant-knowledge-list')), 'HTML 解析后的真实 DOM 中，配置 / 文档 / 附加知识没有统一位于独立滚动区内');
   check(html.includes('<aside id="assistant-panel"') && !html.includes('<dialog id="assistant-dialog"'), '助手必须使用同页侧栏而不是旧 dialog');
 
-  const panel = $('assistant-panel'), launcher = $('assistant-launcher'); launcher.click();
+  const panel = $('assistant-panel'), launcher = $('assistant-launcher');
+  Object.defineProperty(launcher, 'offsetWidth', { configurable: true, value: 120 });
+  Object.defineProperty(launcher, 'offsetHeight', { configurable: true, value: 40 });
+  launcher.getBoundingClientRect = () => {
+    const left = Number.parseFloat(launcher.style.left), top = Number.parseFloat(launcher.style.top);
+    const x = Number.isFinite(left) ? left : window.innerWidth - 22 - 120;
+    const y = Number.isFinite(top) ? top : window.innerHeight - 82 - 40;
+    return { x, y, left: x, top: y, right: x + 120, bottom: y + 40, width: 120, height: 40 };
+  };
+  const pointer = (type, x, y) => {
+    const event = new window.MouseEvent(type, { bubbles: true, cancelable: true, button: 0, clientX: x, clientY: y });
+    Object.defineProperty(event, 'pointerId', { configurable: true, value: 7 });
+    return event;
+  };
+  launcher.dispatchEvent(pointer('pointerdown', 900, 666));
+  window.document.dispatchEvent(pointer('pointermove', 450, 366));
+  window.document.dispatchEvent(pointer('pointerup', 450, 366));
+  check(launcher.style.left === '432px' && launcher.style.top === '346px'
+    && launcher.style.right === 'auto' && launcher.style.bottom === 'auto', '悬浮球拖动后未跟随指针定位');
+  launcher.click();
+  check(panel.hidden, '拖动悬浮球时误触打开了助手');
+  await new Promise(resolve => window.setTimeout(resolve, 1));
+  launcher.dispatchEvent(pointer('pointerdown', 452, 366));
+  window.document.dispatchEvent(pointer('pointermove', 2000, 2000));
+  window.document.dispatchEvent(pointer('pointerup', 2000, 2000));
+  check(launcher.style.left === '904px' && launcher.style.top === '728px', '悬浮球拖动超出当前视口边界');
+  await new Promise(resolve => window.setTimeout(resolve, 1));
+  launcher.click();
   check(!panel.hidden && panel.getAttribute('aria-hidden') === 'false', '点击入口没有打开固定侧栏');
   check(launcher.hidden && launcher.getAttribute('aria-expanded') === 'true', '助手窗口打开时悬浮球应隐藏且展开状态同步');
   const sessionToggle = $('assistant-session-toggle');
@@ -241,7 +285,11 @@ check($('assistant-launcher').hidden, '配置读取前问答入口应默认隐�
   $('assistant-settings-close').click();
   check(!$('assistant-settings').open, '设置区关闭按钮无效');
   Object.defineProperty(window, 'innerWidth', { configurable: true, value: 390 });
-  window.assistantTogglePanel(false); window.assistantTogglePanel(true);
+  window.dispatchEvent(new window.Event('resize'));
+  check(launcher.style.left === '904px', '助手打开时不应读取隐藏悬浮球的零尺寸');
+  window.assistantTogglePanel(false);
+  check(launcher.style.left === '270px', '关闭助手后应按新视口尺寸将悬浮球夹回可见范围');
+  window.assistantTogglePanel(true);
   check(panel.classList.contains('sessions-collapsed') && sessionToggle.getAttribute('aria-expanded') === 'false', '窄屏打开助手时会话管理栏应默认折叠');
   check(sessionToggle.getAttribute('aria-label') === '展开会话管理面板' && sessionToggle.title === '展开会话管理面板' && sessionToggle.textContent.includes('显示会话'), '窄屏初始折叠状态的按钮提示不正确');
   sessionToggle.click();
@@ -270,13 +318,16 @@ check($('assistant-launcher').hidden, '配置读取前问答入口应默认隐�
   check(messages.textContent.includes('内置知识库｜本地文档检索') && messages.textContent.includes('pre_cycles'), '内置本地文档摘录未渲染');
   check(messages.textContent.includes('引用：平台参数清单'), '平台参数清单引用未显示');
 
-  // 切换到本地模型后验证 SSE 分片解析与安全 Markdown/XSS。
-  const model = $('assistant-model-type'); model.value = 'local'; model.dispatchEvent(new window.Event('change'));
-  check(window.__assistantState.conversations.length === 2, '切换模型未新建会话');
+  // 在设置中把默认后端改为 local，再新建会话；原内置会话不应被改写。
+  config = { ...config, default_model_type: 'local' }; await window.assistantLoadConfig();
+  check(window.__assistantState.conversations[0].backend === 'builtin', '保存默认后端不应更改已有会话的模型通道');
+  $('assistant-new').click();
+  check(window.__assistantState.conversations.length === 2, '按设置默认后端新建会话失败');
   check($('assistant-title').hidden && !$('assistant-title').textContent, '切换后新建的空会话不应显示右侧标题');
   check(window.__assistantState.conversations[0].backend === 'local', '新会话未采用所选模型');
   check(window.__assistantState.conversations[1].messages.length === 2, '内置文档会话没有保留');
   const modelName = $('assistant-model-name');
+  check(!modelName.hidden && modelName.getAttribute('aria-label') === '选择具体模型', 'local 后端应显示无可见标题且可访问的具体模型下拉');
   check(Array.from(modelName.options).some(option => option.value === 'qwen-local'), '具体模型下拉没有包含管理员配置的本地模型');
   check(Array.from(modelName.options).some(option => option.value === 'llama3.2:latest'), '具体模型下拉没有包含本地发现模型');
   modelName.value = 'llama3.2:latest'; modelName.dispatchEvent(new window.Event('change'));
@@ -351,9 +402,11 @@ check($('assistant-launcher').hidden, '配置读取前问答入口应默认隐�
   $('assistant-settings-close').click();
   check(!$('assistant-settings').open && !$('assistant-shell').classList.contains('settings-open'), '设置区关闭按钮无效或外层滚动锁未解除');
 
-  // 切换云端后端会创建独立会话；右侧具体模型列表包含默认模型和命名云端档案。
-  model.value = 'cloud'; model.dispatchEvent(new window.Event('change'));
-  check(window.__assistantState.conversations.length === 4, '切换后端未新建独立会话');
+  // 在设置中更改默认后端并新建会话；具体模型列表包含默认云端模型和命名档案。
+  config = { ...config, default_model_type: 'cloud' }; await window.assistantLoadConfig();
+  check(window.__assistantState.conversations[0].backend === 'local', '更改默认后端不应改写已有本地会话');
+  $('assistant-new').click();
+  check(window.__assistantState.conversations.length === 4, '按新设置默认后端创建会话失败');
   check(window.__assistantState.conversations[0].backend === 'cloud', '新会话未采用所选后端');
   check(window.__assistantState.conversations[1].backend === 'local' && window.__assistantState.conversations[1].modelName === 'qwen-local' && window.__assistantState.conversations[1].messages.length === 2, '本地模型会话没有保留');
   check(window.__assistantState.conversations[2].backend === 'local' && window.__assistantState.conversations[2].modelName === 'llama3.2:latest' && window.__assistantState.conversations[2].messages.length === 2, '旧本地模型会话没有保留');
@@ -432,10 +485,13 @@ check($('assistant-launcher').hidden, '配置读取前问答入口应默认隐�
   check(lastImportedDocuments && lastImportedDocuments[0].content === '画像参数与窗口配置说明', '本地知识库文件没有读取并提交 UTF-8 文本');
   check($('assistant-knowledge-list').textContent.includes('assistant-guide.md'), '导入后的知识库列表没有更新');
 
-  // 受控操作只显示预览；确认必须携带页面内存中的操作员令牌和二次确认码。
-  model.value = 'local'; model.dispatchEvent(new window.Event('change'));
+  // 将设置中的默认后端改为 local 并新建会话；受控操作只显示预览，确认仍需令牌与二次码。
   $('assistant-operator-token').value = 'memory-only-operator-token';
   $('assistant-operator-token').dispatchEvent(new window.Event('input'));
+  config = { ...config, default_model_type: 'local' }; await window.assistantLoadConfig();
+  check(lastIdentityModel === 'local' && lastIdentityToken === 'memory-only-operator-token', '默认后端变化后没有用新路由重新验证操作员令牌');
+  $('assistant-new').click();
+  check(window.__assistantState.conversations[0].backend === 'local', '设置默认本地后端后新会话没有切换到 local');
   emitProposal = true;
   $('assistant-prompt').value = '把当前侧接线模式切换到 3p4w';
   await window.assistantSubmit();
@@ -474,7 +530,9 @@ check($('assistant-launcher').hidden, '配置读取前问答入口应默认隐�
   check($('assistant-messages').querySelectorAll('.assistant-message-images img').length === 2, '已发送截图没有显示在用户消息中');
   check(window.__assistantState.pendingImages.length === 0, '发送后待发截图没有从 composer 清除');
 
-  model.value = 'cloud'; model.dispatchEvent(new window.Event('change'));
+  config = { ...config, default_model_type: 'cloud' }; await window.assistantLoadConfig();
+  $('assistant-new').click();
+  check(window.__assistantState.conversations[0].backend === 'cloud' && !modelName.hidden, '默认云端后端的新会话没有显示云端模型选择器');
   check(Array.from(modelName.options).some(option => option.textContent.includes('Test provider') && option.textContent.includes('test-model-v2')), '保存后的动态云端档案没有进入问答模型选择器');
   modelName.value = addedProfile.id; modelName.dispatchEvent(new window.Event('change'));
   check(window.__assistantState.conversations[0].cloudProfileId === addedProfile.id, '动态云端档案切换没有生效');
@@ -533,7 +591,7 @@ check($('assistant-launcher').hidden, '配置读取前问答入口应默认隐�
   check($('assistant-panel').hidden && $('assistant-panel').getAttribute('aria-hidden') === 'true'
     && $('assistant-launcher').getAttribute('aria-expanded') === 'false', '助手被禁用后仍保持打开或展开状态');
 
-  console.log(`PASS ${checkCount} checks — assistant launcher visibility, current-session titles, bottom backend/model controls, two-column sidebar, desktop/mobile collapsible sessions, session search/groups/time/rename/delete/drag, bundled docs, builtin retrieval, safe Markdown/XSS, citations, editable local-model discovery, admin config, image upload/preview/cloud confirmation, local import, operator-token proposal confirmation`);
+  console.log(`PASS ${checkCount} checks — draggable assistant launcher, launcher visibility, current-session titles, simplified bottom controls and attachment label, two-column sidebar, desktop/mobile collapsible sessions, session search/groups/time/rename/delete/drag, bundled docs, builtin retrieval, safe Markdown/XSS, citations, editable local-model discovery, admin config, image upload/preview/cloud confirmation, local import, operator-token proposal confirmation`);
   dom.window.close();
 })().catch(error => {
   console.error('FAIL:', error && error.stack || error);

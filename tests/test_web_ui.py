@@ -282,7 +282,7 @@ def test_assistant_ui_contract_and_safe_markdown_renderer(page):
         "assistant-launcher", "assistant-panel", "assistant-session-pane", "assistant-session-search",
         "assistant-conversation-list", "assistant-session-context-menu", "assistant-rename-conversation",
         "assistant-clear-context-menu", "assistant-delete-conversation", "assistant-new", "assistant-clear-context",
-        "assistant-model-type", "assistant-model-name", "assistant-title", "assistant-session-toggle", "assistant-close", "assistant-privacy-note",
+        "assistant-model-name", "assistant-title", "assistant-session-toggle", "assistant-close", "assistant-privacy-note",
         "assistant-doc-search", "assistant-doc-list", "assistant-doc-content", "assistant-doc-status",
         "assistant-messages", "assistant-thinking", "assistant-form", "assistant-prompt", "assistant-stop",
         "assistant-image-input", "assistant-image-previews", "assistant-attach-image", "assistant-settings-open",
@@ -301,14 +301,18 @@ def test_assistant_ui_contract_and_safe_markdown_renderer(page):
     header_start = HTML.index('<header class="assistant-chat-header">')
     header_end = HTML.index('</header>', header_start)
     chat_header = HTML[header_start:header_end]
-    assert 'id="assistant-model-type"' not in chat_header and 'id="assistant-model-name"' not in chat_header, "后端 / 模型下拉不应留在问答标题栏"
+    assert 'id="assistant-model-type"' not in HTML, "右侧输入区不应再显示问答后端下拉列表"
+    assert 'id="assistant-model-name"' not in chat_header, "具体模型选择器不应留在问答标题栏"
+    assert not re.search(r'<label[^>]*>\s*具体模型', HTML), "具体模型可见标题应去掉"
+    assert 'id="assistant-default-backend"' in HTML, "管理员设置中的默认后端配置应保留"
     buttons_start = HTML.index('<div class="assistant-compose-buttons">')
     model_controls = HTML.index('<div class="assistant-model-controls"', buttons_start)
-    backend_select = HTML.index('id="assistant-model-type"', model_controls)
-    model_select = HTML.index('id="assistant-model-name"', backend_select)
+    model_select = HTML.index('id="assistant-model-name"', model_controls)
     send_button = HTML.index('id="assistant-send"', model_select)
     settings_button = HTML.index('id="assistant-settings-open"', send_button)
-    assert buttons_start < model_controls < backend_select < model_select < send_button < settings_button, "模型选择器必须位于底部发送按钮左侧"
+    attach_button = HTML.index('id="assistant-attach-image"', buttons_start)
+    assert buttons_start < attach_button < model_controls < model_select < send_button < settings_button, "附件、模型、发送、配置控件应按底部布局顺序排列"
+    assert re.search(r'<button id="assistant-attach-image"[^>]*>附件</button>', HTML), "添加截图按钮文案应改为“附件”"
 
     start = APPJS.index("/* ------------------------------------------------------------------ 智能问答")
     end = APPJS.index("async function init() {", start)
@@ -320,7 +324,15 @@ def test_assistant_ui_contract_and_safe_markdown_renderer(page):
     assert "assistantClearContext" in assistant_js and "assistantVerifyOperator" in assistant_js
     assert "X-Assistant-Operator-Token" in assistant_js and "X-Assistant-Admin-Token" in assistant_js
     assert "localStorage" not in assistant_js and "sessionStorage" not in assistant_js
-    assert "assistantNewConversation(next)" in assistant_js and "window.confirm(message)" in assistant_js
+    assert "function assistantInitLauncherDrag(launcher)" in assistant_js
+    assert "document.addEventListener('pointermove'" in assistant_js and "document.addEventListener('pointerup'" in assistant_js
+    assert "assistantSetLauncherPosition(launcher" in assistant_js and "suppressClick" in assistant_js
+    assert "window.addEventListener('resize', () => { if (!launcher.hidden) assistantClampLauncherPosition(launcher); })" in assistant_js
+    launcher_css = re.search(r"\.assistant-launcher\{([^}]*)\}", (ROOT / "app/static/style.css").read_text(encoding="utf-8"))
+    assert launcher_css and all(token in launcher_css.group(1) for token in ("cursor:grab", "touch-action:none", "user-select:none"))
+    assert 'title="拖动可移动位置，点击打开智能问答助手"' in HTML
+    assert "function assistantDefaultBackend()" in assistant_js and "assistantNewConversation(backend, selection)" in assistant_js
+    assert "window.confirm(message)" not in assistant_js, "后端已由设置默认值控制，不应保留底部后端切换确认逻辑"
     assert "assistantRenderConversationList" in assistant_js and "assistantMoveConversation" in assistant_js
     assert "assistantSetSessionsCollapsed" in assistant_js and "assistantRenderDocumentList" in assistant_js
     assert "assistantAddImageFiles" in assistant_js and "payload.images" in assistant_js
@@ -362,7 +374,8 @@ def test_assistant_local_model_picker_is_editable_and_uses_same_origin_discovery
 def test_assistant_model_name_picker_and_dynamic_cloud_profile_editor(page):
     for element_id in ("assistant-model-name", "assistant-cloud-profiles", "assistant-cloud-profile-add", "assistant-cloud-profile-status"):
         assert element_id in page.ids, f"缺少模型选择 / 云端档案管理元素 #{element_id}"
-    assert "具体模型" in HTML and 'id="assistant-model-name"' in HTML
+    assert 'id="assistant-model-name"' in HTML and 'aria-label="选择具体模型"' in HTML
+    assert not re.search(r'<label[^>]*>\s*具体模型', HTML), "具体模型应仅保留无障碍名称，不显示可见标题"
     assert "额外云端 API 配置档案" in HTML and "API Key 仅存服务进程内存" in HTML
     start = APPJS.index("/* ------------------------------------------------------------------ 智能问答")
     end = APPJS.index("async function init() {", start)
@@ -430,7 +443,7 @@ def test_assistant_scroll_containers_preserve_reader_position_during_streaming()
 
 def test_assistant_is_a_fixed_session_and_chat_sidebar_with_zero_config_backend(page):
     """同页固定侧栏支持会话管理栏收起 / 恢复；内置知识库免模型配置，窄屏保留抽屉行为。"""
-    assert page.selects["assistant-model-type"] == ["builtin", "local", "cloud"]
+    assert "assistant-model-type" not in page.selects, "问答区不应再提供后端下拉列表"
     assert page.selects["assistant-default-backend"] == ["builtin", "local", "cloud"]
     assert '<aside id="assistant-panel"' in HTML and 'aria-controls="assistant-panel"' in HTML
     assert '<dialog id="assistant-dialog"' not in HTML and 'aria-modal="true"' not in HTML

@@ -4116,3 +4116,22 @@ delta_i_a  = d_i_obs
   - 未运行全量 pytest；本环境未做目标浏览器视觉、键盘或屏幕阅读器验收。jsdom 与静态契约不能替代真实浏览器验证。
 - 是否进入 REPORT.md（稳定结论）：否（助手 UI 交互改动，不涉及 NILM 算法稳定结论）。
 - 遗留问题：请用户在目标浏览器验证助手开 / 关时悬浮球显隐、完成 / 未完成会话标题、桌面 / 窄屏底部模型选择器及发送按钮的实际视觉 / 键盘操作。`tmp/` 用户运行数据未读取、修改、暂存或提交。
+
+## [2026-11-05] 专题：智能问答助手悬浮球拖动与底部控制区精简
+- 类型：用户专题 / 前端交互功能实现与回归验证
+- 目标与假设：按用户四项要求实现：悬浮球能在助手允许显示的页面上拖动；右侧 composer 移除“问答后端”单轮下拉与“具体模型”可见标题；“添加截图”按钮改名为“附件”；整理底部控件。模型路由与安全授权仍由配置、当前会话和服务端负责。
+- 方法 / 实现：
+  - 为悬浮按钮加入 Pointer Events 拖动；鼠标 / 触屏均可操作，5px 移动阈值区分点击与拖动，坐标夹在当前视口内，`resize` 时在按钮可见后重夹限；拖动后抑制合成 click，避免误打开助手。继续使用原生 `<button>`，轻点 / 键盘激活逻辑不变。位置只在当前页面运行期间保留，不写入 localStorage。
+  - 删除 composer 内 `assistant-model-type` 下拉及其逐会话切换处理。默认后端继续由“配置与附加知识库”设置的 `assistant-default-backend` 管理；保存后新会话用配置默认值，已有会话仍保留 `conv.backend` / 具体模型。`assistantVerifyOperator`、隐私提示、聊天 payload 改从当前会话 / 设置默认后端取值；设置变更导致空会话后端变化时，使用新路由重新验证现有操作员令牌；API 与服务端权限校验不变。
+  - 具体模型 `<select>` 保留，移除可见 `<label>具体模型</label>`；保留 aria-label。在 builtin 会话隐藏该选择器，在 local / cloud 会话显示。重新整理 select + 发送按钮 flex 组和窄屏规则。
+  - 将“添加截图”可见文案与 title 改为“附件”，增加清晰 aria-label“添加附件”；更新 README、助手说明与由 README 生成的手册。
+  - 扩展 `tests/test_web_ui.py` 与 `tools/ui_assistant_check.cjs`，覆盖无后端下拉 / 无可见标题、附件标签、默认后端对新旧会话的影响、模型选择器显隐 / 无障碍名称、浮球拖动坐标、边界夹限、拖动不误开及视口缩小后的恢复夹限。
+- 用户执行命令（含实录路径；本节无用户命令则注明）：无用户侧命令；验证由 Agent 在沙盒执行，目标浏览器操作尚待用户实测。本节无用户环境实录路径。
+- 结果 / 结论：
+  - `.venv/bin/python -m pytest -o addopts='' tests/test_assistant.py tests/test_web_ui.py -q`：**46 passed**（6.14 s）。
+  - `node tools/ui_assistant_check.cjs`：**PASS 188 checks**；覆盖悬浮球拖动 / 夹限 / click 抑制、控件移除 / 标签与附件文案、默认后端及旧会话隔离、默认后端变更后重新验证操作员令牌和既有助手交互。
+  - `node --check app/static/app.js`、`node --check tools/ui_assistant_check.cjs` 与 `.venv/bin/python -m py_compile tests/test_web_ui.py` 均通过。
+  - `.venv/bin/python tools/generate_assistant_docs.py --check`：四份均 `OK`（设计 42,721、使用 229,549、部署 46,426、算法调参与验证 142,220 字符）。明确文件范围 `git diff --check` 通过。
+  - 未运行全量 pytest；未在真实浏览器验收浮球拖动手感、触屏手势、底部桌面 / 窄屏视觉或原生键盘操作；jsdom 不能代替现场浏览器验收。
+- 是否进入 REPORT.md（稳定结论）：否（纯助手 UI 交互，不涉及 NILM 算法稳定结论）。
+- 遗留问题：请用户验证浮球可移至期望位置、窗口缩放后仍完全可见，轻点仍可开窗；确认后续新会话按设置默认后端启动、旧会话不被改路由；确认 local / cloud 具体模型选择器与“附件”按钮在目标桌面 / 窄屏的视觉排列。`tmp/` 用户运行数据未读取、修改、暂存或提交。

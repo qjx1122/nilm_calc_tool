@@ -379,8 +379,9 @@ input.flash{animation:ntflash 1.5s ease-out}
 .np-evsrc{margin-top:4px;font-size:11.5px}
 .np-tbl tr.np-stat td.np-stat:first-child{background:#17251f}
 
-/* 智能问答助手 v0.99.46：悬浮入口按窗口状态显隐、会话标题跟随问答、模型选择移至底部 */
-.assistant-launcher{position:fixed;right:22px;bottom:82px;z-index:30;border:1px solid #4485e8;background:linear-gradient(135deg,#1d4ed8,#2563eb);box-shadow:0 6px 22px #0008;border-radius:24px;padding:10px 16px;font-weight:700}
+/* 智能问答助手 v0.99.47：悬浮入口可拖动，底部模型 / 附件控件精简对齐 */
+.assistant-launcher{position:fixed;right:22px;bottom:82px;z-index:30;border:1px solid #4485e8;background:linear-gradient(135deg,#1d4ed8,#2563eb);box-shadow:0 6px 22px #0008;border-radius:24px;padding:10px 16px;font-weight:700;cursor:grab;touch-action:none;user-select:none}
+.assistant-launcher.is-dragging{cursor:grabbing}
 .assistant-launcher[hidden]{display:none}
 .assistant-panel,.assistant-panel *{box-sizing:border-box}
 .assistant-panel{position:fixed;inset:0 0 0 auto;z-index:29;width:min(1120px,100vw);height:100vh;height:100dvh;max-height:100vh;max-height:100dvh;padding:0;border-left:1px solid #3a4a6d;border-radius:14px 0 0 14px;background:#0f1420;color:var(--fg);box-shadow:-18px 0 60px #0008;overflow:hidden}
@@ -427,9 +428,9 @@ input.flash{animation:ntflash 1.5s ease-out}
 .assistant-title-group h2{margin:0;color:#f2f5fc;font-size:19px;line-height:1.3;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .assistant-title-group h2[hidden]{display:none}
 .assistant-subtitle{margin-top:4px;color:var(--mut);font-size:10px;line-height:1.35}
-.assistant-model-controls{display:flex;flex:0 1 auto;align-items:flex-end;gap:6px;min-width:0;flex-wrap:wrap}
-.assistant-model-choice{display:flex;flex:0 1 auto;flex-direction:column;gap:4px;min-width:0;color:var(--mut);font-size:10px}
-.assistant-model-choice select{width:190px;max-width:25vw;min-width:0}
+.assistant-model-controls{display:flex;flex:0 1 auto;align-items:center;gap:6px;min-width:0;flex-wrap:nowrap}
+.assistant-model-controls select{flex:0 1 190px;width:190px;max-width:25vw;min-width:0;text-overflow:ellipsis}
+.assistant-model-controls select[hidden]{display:none}
 .assistant-session-toggle{display:inline-flex;flex:0 0 auto;align-items:center;justify-content:center;gap:4px;padding:6px 8px;font-size:11px;white-space:nowrap}
 .assistant-close{flex:0 0 auto}
 .assistant-privacy{flex:0 0 auto;color:var(--ok);font-size:10px;line-height:1.45;overflow-wrap:anywhere}
@@ -593,8 +594,7 @@ input.flash{animation:ntflash 1.5s ease-out}
   .assistant-chat-header{gap:8px;flex-wrap:wrap}
   .assistant-title-group{flex:1 1 220px;min-width:130px}
   .assistant-model-controls{gap:5px}
-  .assistant-model-choice{flex:0 1 160px}
-  .assistant-model-choice select{width:168px;max-width:100%}
+  .assistant-model-controls select{width:168px;max-width:100%}
   .assistant-privacy{font-size:9px}
 }
 @media(max-width:680px){
@@ -609,8 +609,7 @@ input.flash{animation:ntflash 1.5s ease-out}
   .assistant-title-group h2{font-size:16px}
   .assistant-subtitle{display:none}
   .assistant-model-controls{gap:4px}
-  .assistant-model-choice{flex:0 1 132px;font-size:9px}
-  .assistant-model-choice select{width:132px;max-width:36vw;min-width:0;padding:6px 5px;font-size:11px}
+  .assistant-model-controls select{width:132px;max-width:36vw;min-width:0;padding:6px 5px;font-size:11px}
   .assistant-close{padding:6px 8px}
   .assistant-privacy{font-size:9px}
   .assistant-messages{padding:9px;gap:9px}
@@ -637,9 +636,7 @@ input.flash{animation:ntflash 1.5s ease-out}
   .assistant-title-group{order:1;flex:1 1 calc(100% - 100px)}
   .assistant-session-toggle{order:0}
   .assistant-close{order:2}
-  .assistant-model-controls{flex:1 1 100%;justify-content:flex-end;gap:4px}
-  .assistant-model-choice{flex:0 1 40%;min-width:0}
-  .assistant-model-choice select{width:100%;max-width:none}
+  .assistant-model-controls{flex:0 1 auto;justify-content:flex-end;gap:4px}
   .assistant-compose-buttons button{font-size:10px;padding:6px}
   .assistant-operator-label{min-width:0;flex-basis:100%}
   .assistant-operator-status{min-width:0;flex-basis:100%}

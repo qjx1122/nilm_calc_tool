@@ -1548,7 +1548,7 @@
   </main>
 </div>
 
-<button id="assistant-launcher" class="assistant-launcher" type="button" hidden aria-expanded="false" aria-controls="assistant-panel" title="在当前业务页打开智能问答助手">🤖 智能问答助手</button>
+<button id="assistant-launcher" class="assistant-launcher" type="button" hidden aria-expanded="false" aria-controls="assistant-panel" title="拖动可移动位置，点击打开智能问答助手">🤖 智能问答助手</button>
 <aside id="assistant-panel" class="assistant-panel" aria-label="智能问答助手会话与问答侧栏" aria-hidden="true" hidden>
   <div id="assistant-shell" class="assistant-shell" role="region" aria-label="智能问答助手内容，可滚动浏览全部界面" tabindex="0">
     <div class="assistant-workspace">
@@ -1570,7 +1570,7 @@
         <div id="assistant-privacy-note" class="assistant-privacy" role="status">本地文档模式：不调用大模型。</div>
         <div id="assistant-error" class="assistant-error" role="alert" style="display:none"></div>
         <div id="assistant-messages" class="assistant-messages" role="log" aria-live="polite" aria-relevant="additions text">
-          <div id="assistant-empty" class="assistant-empty">你好！我会优先检索平台参数与操作文档。你可粘贴或拖入波形截图；截图分析需选择支持视觉的本地或云端模型。受控操作只生成预览，未经授权和确认不会执行。<br>云端模式请勿发送涉密配置、个人信息或不应外传的录波截图。</div>
+          <div id="assistant-empty" class="assistant-empty">你好！我会优先检索平台参数与操作文档。你可粘贴或拖入波形截图；截图分析需在设置中配置支持视觉的本地或云端模型。受控操作只生成预览，未经授权和确认不会执行。<br>云端模式请勿发送涉密配置、个人信息或不应外传的录波截图。</div>
         </div>
         <div id="assistant-thinking" class="assistant-thinking" role="status" aria-live="polite" hidden><span class="assistant-thinking-dot" aria-hidden="true"></span>助手正在思考…</div>
         <div id="assistant-sources" class="assistant-sources" aria-label="知识库引用"></div>
@@ -1584,21 +1584,12 @@
             <div class="assistant-compose-meta"><span id="assistant-count" class="assistant-count">0 / 12000</span><span class="assistant-drop-hint">可粘贴或拖入 PNG / JPEG / WebP 波形截图（每张 ≤ 3 MiB）</span></div>
             <input id="assistant-image-input" type="file" accept="image/png,image/jpeg,image/webp" multiple hidden>
             <div class="assistant-compose-buttons">
-              <button id="assistant-attach-image" type="button" title="选择波形截图">添加截图</button>
+              <button id="assistant-attach-image" type="button" aria-label="添加附件" title="附件">附件</button>
               <button id="assistant-stop" type="button" style="display:none">停止生成</button>
-              <div class="assistant-model-controls" role="group" aria-label="问答后端与具体模型">
-                <label class="assistant-model-choice">问答后端
-                  <select id="assistant-model-type" aria-label="选择问答后端">
-                    <option value="builtin">内置知识库</option>
-                    <option value="local">本地大模型</option>
-                    <option value="cloud">云端大模型</option>
-                  </select>
-                </label>
-                <label class="assistant-model-choice">具体模型
-                  <select id="assistant-model-name" aria-label="选择具体模型" disabled>
-                    <option value="">由后端配置决定</option>
-                  </select>
-                </label>
+              <div class="assistant-model-controls" role="group" aria-label="模型选择与发送">
+                <select id="assistant-model-name" aria-label="选择具体模型" hidden disabled>
+                  <option value="">请先在设置中配置模型</option>
+                </select>
                 <button id="assistant-send" class="primary" type="submit" form="assistant-form">发送</button>
               </div>
               <button id="assistant-settings-open" type="button" aria-controls="assistant-settings" aria-expanded="false">⚙ 配置与附加知识库</button>

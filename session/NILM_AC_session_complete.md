@@ -986,3 +986,12 @@
 - 验证方式 / 覆盖范围 / 缺口：定向 `tests/test_assistant.py tests/test_web_ui.py` **46 passed**；`node tools/ui_assistant_check.cjs` **172 checks**，覆盖开关状态、会话名生命周期、模型下拉 DOM 排列及既有交互；app.js / harness `node --check`、测试文件 `py_compile`、四份生成手册 `--check` 与明确文件范围 `git diff --check` 通过。未运行全量 pytest；未做真实浏览器视觉、实际键盘 / 屏幕阅读器验收。
 - 未决问题：待用户在目标浏览器确认悬浮球开 / 关显隐，空会话与完成问答的右侧标题，以及桌面 / 窄屏下模型下拉和发送按钮位置。`tmp/` 未读取、修改、暂存或提交。
 - 相关文件/分支：`app/static/app.js`、`app/static/index.html`、`app/static/style.css`、`tests/test_web_ui.py`、`tools/ui_assistant_check.cjs`、`README.md`、`docs/智能问答助手说明.md`、生成的四份 `docs/软件*.md`、`REPORT_TEST.md`、`STATUS.md`、本文件；活动分支 `arena/82e34fb8-nilm-calc-tool`。
+
+## [2026-11-05] 会话纪要
+- 目标：实现用户提出的智能问答助手悬浮球可拖动、底部删除“问答后端”下拉和“具体模型”可见标题、截图按钮改名“附件”、底部布局整齐。
+- 本会话角色：资深电力算法专家（`ROLE.md` 默认）＋工程实现工程师（第 206 轮任务级覆盖）；模式 A；固定活动分支 `arena/82e34fb8-nilm-calc-tool`。
+- 完成项：悬浮球通过 Pointer Events 支持鼠标 / 触屏拖动，位置夹限于视口、缩放后可见时重新夹限，拖动不触发开窗，位置不跨页面刷新持久化；composer 移除单轮问答后端选择器，管理员默认后端配置仍在设置中，新会话使用最新默认值、旧会话保留原后端和模型；设置变更导致空会话路由变化时，使用新后端重新验证现有操作员令牌；具体模型 select 仅在 local / cloud 会话显示且不显示可见标签，保留 aria-label，builtin 隐藏；按钮显示 / title 改为“附件”。完成底部 flex / 窄屏规则、README / 助手说明与生成手册同步，以及静态契约 / jsdom 回归。
+- 关键决策：无 composer 后端下拉时，默认后端以已有管理员 `assistant-default-backend` 设置为准；对已存在的会话保留各自 backend、modelName / cloudProfileId，点“新建对话”使用设置默认后端，避免更改历史会话路由。具体模型的可见 label 删除但以 `aria-label` 保持屏幕阅读器可辨识。悬浮球位置作为当前页面运行态，不新增浏览器持久化。
+- 验证方式 / 覆盖范围 / 缺口：定向助手 pytest **46 passed**；`node tools/ui_assistant_check.cjs` **188 checks**（含拖动定位、视口边界、拖动 click 抑制、缩放后夹限、后端默认及旧会话、默认后端变化后重验操作员令牌、模型选择器显隐与附件标签）；JS 语法、测试 Python 编译、四份生成手册 `--check` 和显式文件范围 `git diff --check` 通过。未运行全量 pytest；真实浏览器拖动 / 触屏与底部视觉、原生键盘验收未做。
+- 未决问题：待用户在目标浏览器验证拖动手感、视口缩放后的定位、点击 / 键盘打开行为和桌面 / 窄屏 composer 布局；如有问题按浏览器、OS、视口和复现步骤继续修正。`tmp/` 未读取、修改、暂存或提交。
+- 相关文件/分支：`app/static/app.js`、`app/static/index.html`、`app/static/style.css`、`tests/test_web_ui.py`、`tools/ui_assistant_check.cjs`、`README.md`、`docs/智能问答助手说明.md`、生成的 `docs/软件使用文档.md` / `docs/软件部署说明文档.md`、`STATUS.md`、`REPORT_TEST.md`、本文件；固定活动分支 `arena/82e34fb8-nilm-calc-tool`。

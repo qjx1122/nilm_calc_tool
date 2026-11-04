@@ -4959,6 +4959,14 @@ const ASSISTANT_TOOL_LABELS = {
 function assistantEl(id) { return document.getElementById(id); }
 function assistantUid() { return window.crypto && crypto.randomUUID ? crypto.randomUUID() : 'chat-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 9); }
 function assistantCurrentConversation() { return ASSISTANT_UI.conversations.find(c => c.id === ASSISTANT_UI.activeId) || null; }
+function assistantDefaultBackend() {
+  const value = ASSISTANT_UI.config && ASSISTANT_UI.config.default_model_type;
+  return ['builtin', 'local', 'cloud'].includes(value) ? value : 'builtin';
+}
+function assistantCurrentBackend(conv = assistantCurrentConversation()) {
+  const value = conv && conv.backend;
+  return ['builtin', 'local', 'cloud'].includes(value) ? value : assistantDefaultBackend();
+}
 function assistantConversationHasFormalExchange(conv) {
   if (!conv || !Array.isArray(conv.messages)) return false;
   const hasQuestion = conv.messages.some(msg => msg && msg.role === 'user' && String(msg.content || '').trim());
@@ -4982,7 +4990,7 @@ function assistantClearError() { const el = assistantEl('assistant-error'); if (
 function assistantShowError(message) { const el = assistantEl('assistant-error'); if (el) { el.textContent = message || '请求失败'; el.style.display = ''; } }
 function assistantSetPrivacy() {
   const el = assistantEl('assistant-privacy-note'); if (!el) return;
-  const backend = assistantEl('assistant-model-type') ? assistantEl('assistant-model-type').value : 'builtin';
+  const backend = assistantCurrentBackend();
   const cfg = ASSISTANT_UI.config || {}, cloud = backend === 'cloud'; el.classList.toggle('cloud', cloud);
   const operator = ASSISTANT_UI.operator;
   const hasTools = !!(operator && Array.isArray(operator.available_tools) && operator.available_tools.length);
@@ -5004,10 +5012,70 @@ function assistantSyncLauncher() {
   const panel = assistantEl('assistant-panel'), enabled = assistantLauncherEnabledForView();
   if (!enabled && panel && !panel.hidden) assistantTogglePanel(false);
   launcher.hidden = !enabled || !!(panel && !panel.hidden);
+  if (!launcher.hidden) assistantClampLauncherPosition(launcher);
+}
+function assistantSetLauncherPosition(launcher, left, top) {
+  if (!launcher) return;
+  const rect = launcher.getBoundingClientRect();
+  const width = rect.width || launcher.offsetWidth || 0, height = rect.height || launcher.offsetHeight || 0;
+  const viewportWidth = window.innerWidth || document.documentElement.clientWidth || width;
+  const viewportHeight = window.innerHeight || document.documentElement.clientHeight || height;
+  const maxLeft = Math.max(0, viewportWidth - width), maxTop = Math.max(0, viewportHeight - height);
+  const x = Math.max(0, Math.min(maxLeft, Number(left) || 0));
+  const y = Math.max(0, Math.min(maxTop, Number(top) || 0));
+  launcher.style.left = `${x}px`; launcher.style.top = `${y}px`;
+  launcher.style.right = 'auto'; launcher.style.bottom = 'auto';
+}
+function assistantClampLauncherPosition(launcher) {
+  if (!launcher || !launcher.style.left || !launcher.style.top) return;
+  assistantSetLauncherPosition(launcher, parseFloat(launcher.style.left), parseFloat(launcher.style.top));
+}
+function assistantInitLauncherDrag(launcher) {
+  if (!launcher) return;
+  let drag = null, suppressClick = false;
+  launcher.addEventListener('pointerdown', event => {
+    if ((event.button !== undefined && event.button !== 0) || launcher.hidden) return;
+    const rect = launcher.getBoundingClientRect();
+    drag = {
+      pointerId: event.pointerId == null ? 1 : event.pointerId,
+      startX: event.clientX, startY: event.clientY,
+      startLeft: rect.left, startTop: rect.top, moved: false,
+    };
+    if (typeof launcher.setPointerCapture === 'function' && event.pointerId != null) {
+      try { launcher.setPointerCapture(event.pointerId); } catch (e) { /* document listeners still track the drag */ }
+    }
+  });
+  document.addEventListener('pointermove', event => {
+    if (!drag || (event.pointerId != null && event.pointerId !== drag.pointerId)) return;
+    const dx = event.clientX - drag.startX, dy = event.clientY - drag.startY;
+    if (!drag.moved && Math.hypot(dx, dy) < 5) return;
+    drag.moved = true; launcher.classList.add('is-dragging');
+    assistantSetLauncherPosition(launcher, drag.startLeft + dx, drag.startTop + dy);
+    if (event.cancelable) event.preventDefault();
+  }, { passive: false });
+  const finishDrag = event => {
+    if (!drag || (event.pointerId != null && event.pointerId !== drag.pointerId)) return;
+    const wasDragged = drag.moved, pointerId = drag.pointerId; drag = null;
+    launcher.classList.remove('is-dragging');
+    if (typeof launcher.releasePointerCapture === 'function') {
+      try { if (launcher.hasPointerCapture && launcher.hasPointerCapture(pointerId)) launcher.releasePointerCapture(pointerId); } catch (e) { /* capture may already be released */ }
+    }
+    if (wasDragged) {
+      suppressClick = true;
+      window.setTimeout(() => { suppressClick = false; }, 0);
+    }
+  };
+  document.addEventListener('pointerup', finishDrag);
+  document.addEventListener('pointercancel', finishDrag);
+  launcher.addEventListener('click', event => {
+    if (!suppressClick) return;
+    event.preventDefault(); event.stopImmediatePropagation(); suppressClick = false;
+  }, true);
+  window.addEventListener('resize', () => { if (!launcher.hidden) assistantClampLauncherPosition(launcher); });
 }
 function assistantUpdateBusy() {
   const busy = ASSISTANT_UI.busy;
-  ['assistant-send', 'assistant-new', 'assistant-clear-context', 'assistant-delete-conversation', 'assistant-clear-context-menu', 'assistant-rename-conversation', 'assistant-model-type', 'assistant-model-name', 'assistant-attach-image', 'assistant-image-input'].forEach(id => { const el = assistantEl(id); if (el) el.disabled = busy; });
+  ['assistant-send', 'assistant-new', 'assistant-clear-context', 'assistant-delete-conversation', 'assistant-clear-context-menu', 'assistant-rename-conversation', 'assistant-model-name', 'assistant-attach-image', 'assistant-image-input'].forEach(id => { const el = assistantEl(id); if (el) el.disabled = busy; });
   const send = assistantEl('assistant-send'), stop = assistantEl('assistant-stop'), thinking = assistantEl('assistant-thinking');
   if (send) send.style.display = busy ? 'none' : '';
   if (stop) stop.style.display = busy ? '' : 'none';
@@ -5205,16 +5273,14 @@ function assistantNearMessagesBottom(list, threshold = 72) {
 }
 function assistantRenderModelNameSelector(conv = assistantCurrentConversation()) {
   const select = assistantEl('assistant-model-name'); if (!select) return;
-  while (select.firstChild) select.removeChild(select.firstChild);
   const cfg = ASSISTANT_UI.config || {};
-  const backend = conv && conv.backend || (assistantEl('assistant-model-type') || {}).value || 'builtin';
+  const backend = assistantCurrentBackend(conv);
+  select.hidden = backend === 'builtin';
+  while (select.firstChild) select.removeChild(select.firstChild);
   const addOption = (value, label, disabled = false) => {
     const option = document.createElement('option'); option.value = value; option.textContent = label; option.disabled = disabled; select.appendChild(option);
   };
-  if (backend === 'builtin') {
-    addOption('builtin', '内置知识库（本地文档）');
-    select.value = 'builtin'; select.disabled = true; return;
-  }
+  if (backend === 'builtin') { select.value = ''; select.disabled = true; return; }
   if (backend === 'local') {
     const discovered = Array.isArray(ASSISTANT_UI.localModels) ? ASSISTANT_UI.localModels : [];
     const configured = typeof cfg.local_model === 'string' ? cfg.local_model.trim() : '';
@@ -5254,21 +5320,27 @@ function assistantRenderConversation(options = {}) {
   messages.forEach(msg => { msg._dom = null; list.appendChild(assistantBuildMessage(msg)); });
   if (followBottom) list.scrollTop = list.scrollHeight;
   else list.scrollTop = previousScrollTop;
-  const model = assistantEl('assistant-model-type'); if (model && conv) model.value = conv.backend || 'builtin';
   assistantRenderModelNameSelector(conv);
   assistantRenderConversationList(); assistantSetPrivacy();
 }
 function assistantSetConversationBackend(conv, backend) {
   const cfg = ASSISTANT_UI.config || {};
-  conv.backend = backend;
-  if (backend === 'local') conv.modelName = String(cfg.local_model || ASSISTANT_UI.localModels[0] || '');
+  const next = ['builtin', 'local', 'cloud'].includes(backend) ? backend : assistantDefaultBackend();
+  conv.backend = next;
+  if (next === 'local') conv.modelName = String(cfg.local_model || ASSISTANT_UI.localModels[0] || '');
   else delete conv.modelName;
-  if (backend === 'cloud') conv.cloudProfileId = '__default__';
+  if (next === 'cloud') conv.cloudProfileId = '__default__';
   else delete conv.cloudProfileId;
+}
+function assistantApplyDefaultBackendToEmptyConversation(conv) {
+  if (!conv || conv.messages.length) return false;
+  const previous = conv.backend;
+  assistantSetConversationBackend(conv, assistantDefaultBackend());
+  return previous !== conv.backend;
 }
 function assistantNewConversation(backend, selection = null) {
   if (ASSISTANT_UI.busy) return null;
-  const model = backend || (assistantEl('assistant-model-type') && assistantEl('assistant-model-type').value) || 'builtin';
+  const model = ['builtin', 'local', 'cloud'].includes(backend) ? backend : assistantDefaultBackend();
   const cfg = ASSISTANT_UI.config || {};
   const now = Date.now();
   const conv = { id: assistantUid(), title: '新对话', backend: model, messages: [], createdAt: now, updatedAt: now, customTitle: false };
@@ -5279,7 +5351,6 @@ function assistantNewConversation(backend, selection = null) {
   ASSISTANT_UI.conversations.unshift(conv);
   if (ASSISTANT_UI.conversations.length > 30) ASSISTANT_UI.conversations.length = 30;
   ASSISTANT_UI.activeId = conv.id;
-  const select = assistantEl('assistant-model-type'); if (select) select.value = model;
   assistantCloseSessionContextMenu(); assistantClearError(); assistantRenderConversation();
   if (assistantIsCompactViewport()) assistantSetSessionsCollapsed(true);
   return conv;
@@ -5522,6 +5593,7 @@ function assistantTogglePanel(open) {
   if (launcher) {
     launcher.setAttribute('aria-expanded', String(nextOpen));
     launcher.hidden = nextOpen || !assistantLauncherEnabledForView();
+    if (!launcher.hidden) assistantClampLauncherPosition(launcher);
   }
   if (nextOpen) {
     const shell = assistantEl('assistant-shell'); if (shell) shell.scrollTop = 0;
@@ -5785,15 +5857,13 @@ async function assistantLoadConfig() {
     ASSISTANT_UI.views = Array.isArray(data.views) ? data.views : [];
     assistantFillConfigForm(ASSISTANT_UI.config);
     const conv = assistantCurrentConversation();
-    if (conv && !conv.messages.length && ASSISTANT_UI.config.default_model_type) {
-      assistantSetConversationBackend(conv, ASSISTANT_UI.config.default_model_type);
-      const model = assistantEl('assistant-model-type'); if (model) model.value = conv.backend;
-    }
+    const backendChanged = assistantApplyDefaultBackendToEmptyConversation(conv);
     assistantRenderModelNameSelector(conv);
     assistantRenderConversationList(); assistantSetPrivacy(); assistantSyncLauncher();
     assistantSetFeedback('assistant-config-message', '配置已读取；API Key 不会回显。');
     await assistantLoadLocalModels();
     await assistantLoadKnowledge();
+    if (backendChanged && ASSISTANT_UI.operatorToken) assistantVerifyOperator();
   } catch (e) {
     assistantSetFeedback('assistant-admin-status', '无法读取智能问答配置：' + e.message, true);
     assistantSetFeedback('assistant-config-message', '配置读取失败：' + e.message, true);
@@ -5804,7 +5874,7 @@ async function assistantVerifyOperator() {
   const token = input ? input.value.trim() : '';
   ASSISTANT_UI.operatorToken = token; ASSISTANT_UI.operator = null;
   if (!token) { if (status) status.textContent = '请输入管理员分配的操作员令牌。'; assistantSetPrivacy(); return; }
-  const backend = assistantEl('assistant-model-type') ? assistantEl('assistant-model-type').value : 'builtin';
+  const backend = assistantCurrentBackend();
   if (status) status.textContent = '正在验证权限…';
   try {
     const data = await assistantApi('/api/assistant/tools/identity?model_type=' + encodeURIComponent(backend), { headers: assistantOperatorHeaders() });
@@ -5908,10 +5978,10 @@ async function assistantSubmit() {
   const input = assistantEl('assistant-prompt'), typedPrompt = input ? input.value.trim() : '';
   const selectedImages = ASSISTANT_UI.pendingImages.slice();
   if (!typedPrompt && !selectedImages.length) { if (input) input.focus(); return; }
-  let conv = assistantCurrentConversation(); if (!conv) conv = assistantNewConversation((assistantEl('assistant-model-type') || {}).value || 'builtin');
+  let conv = assistantCurrentConversation(); if (!conv) conv = assistantNewConversation(assistantDefaultBackend());
   if (!conv) return;
   if (selectedImages.length && conv.backend === 'builtin') {
-    assistantShowError('内置知识库只做本地文本检索，不具备图像理解。请先切换到支持视觉输入的本地或云端模型。'); return;
+    assistantShowError('内置知识库只做本地文本检索，不具备图像理解。请在“配置与附加知识库”中将默认后端设为支持视觉输入的本地或云端模型，保存后在新会话中附图。'); return;
   }
   if (selectedImages.length && conv.backend === 'cloud' && !window.confirm('你附加的波形截图会发送给当前云端模型，且截图内容不经过文本敏感词扫描。请确认图片不含涉密 / 个人信息后继续。')) return;
   const prompt = typedPrompt || '请分析这张波形截图，概述主要波形特征、可能的电气暂态及需要核对的参数。';
@@ -5962,23 +6032,6 @@ async function assistantSubmit() {
     if (reader) { try { await reader.cancel(); } catch (e) { /* stream already closed */ } }
     ASSISTANT_UI.controller = null; assistantSetBusy(false); assistantRenderConversation({ preserveScroll: true });
   }
-}
-function assistantChangeBackend() {
-  const select = assistantEl('assistant-model-type'), conv = assistantCurrentConversation(); if (!select) return;
-  const next = ['builtin', 'local', 'cloud'].includes(select.value) ? select.value : 'builtin';
-  if (conv && conv.backend === next) { assistantRenderModelNameSelector(conv); assistantSetPrivacy(); return; }
-  if (conv && conv.messages.length) {
-    const message = '切换后端会新建一个独立会话，当前对话将保留并仍使用原模型。继续切换？';
-    if (!window.confirm(message)) {
-      select.value = conv.backend || 'builtin'; assistantRenderModelNameSelector(conv); assistantSetPrivacy(); return;
-    }
-    assistantNewConversation(next);
-  } else {
-    if (conv) assistantSetConversationBackend(conv, next); else assistantNewConversation(next);
-    assistantRenderConversation();
-  }
-  assistantSetPrivacy();
-  if (ASSISTANT_UI.operatorToken) assistantVerifyOperator();
 }
 function assistantChangeModelName() {
   const select = assistantEl('assistant-model-name'), conv = assistantCurrentConversation();
@@ -6052,13 +6105,11 @@ async function assistantSaveConfig() {
     ASSISTANT_UI.config = data.config || ASSISTANT_UI.config;
     const localUrlChanged = previousLocalUrl !== String(ASSISTANT_UI.config && ASSISTANT_UI.config.local_base_url || '').trim();
     const active = assistantCurrentConversation();
-    if (active && !active.messages.length && ASSISTANT_UI.config.default_model_type) {
-      assistantSetConversationBackend(active, ASSISTANT_UI.config.default_model_type);
-      const modelSelect = assistantEl('assistant-model-type'); if (modelSelect) modelSelect.value = active.backend;
-    }
+    const backendChanged = assistantApplyDefaultBackendToEmptyConversation(active);
     assistantFillConfigForm(ASSISTANT_UI.config); assistantRenderModelNameSelector(active);
     assistantRenderConversationList(); assistantSetPrivacy(); assistantSyncLauncher();
     assistantSetFeedback('assistant-config-message', '设置已保存到服务端本地配置；API Key 不会回显，环境变量优先。');
+    if (backendChanged && ASSISTANT_UI.operatorToken) assistantVerifyOperator();
     if (localUrlChanged) await assistantRefreshLocalModels();
   } catch (e) { assistantSetFeedback('assistant-config-message', '保存失败：' + e.message, true); }
 }
@@ -6111,7 +6162,10 @@ function assistantInit() {
   if (ASSISTANT_UI.initialized) return; ASSISTANT_UI.initialized = true;
   assistantNewConversation('builtin');
   const launcher = assistantEl('assistant-launcher'), panel = assistantEl('assistant-panel');
-  if (launcher && panel) launcher.addEventListener('click', () => { assistantClearError(); assistantTogglePanel(true); });
+  if (launcher && panel) {
+    assistantInitLauncherDrag(launcher);
+    launcher.addEventListener('click', () => { assistantClearError(); assistantTogglePanel(true); });
+  }
   if (panel) panel.addEventListener('wheel', assistantHandlePanelWheel, { passive: false });
   const close = assistantEl('assistant-close'); if (close && panel) close.addEventListener('click', () => assistantTogglePanel(false));
   const sessionToggle = assistantEl('assistant-session-toggle');
@@ -6152,7 +6206,6 @@ function assistantInit() {
       if (files.length) { event.preventDefault(); assistantAddImageFiles(files); }
     });
   }
-  const model = assistantEl('assistant-model-type'); if (model) model.addEventListener('change', assistantChangeBackend);
   const modelName = assistantEl('assistant-model-name'); if (modelName) modelName.addEventListener('change', assistantChangeModelName);
   const addCloudProfile = assistantEl('assistant-cloud-profile-add'); if (addCloudProfile) addCloudProfile.addEventListener('click', () => {
     if (ASSISTANT_UI.cloudProfilesDraft.length >= 10) {
@@ -6164,14 +6217,16 @@ function assistantInit() {
     if (firstInput) firstInput.focus();
   });
   const newButton = assistantEl('assistant-new'); if (newButton) newButton.addEventListener('click', () => {
-    const current = assistantCurrentConversation();
+    const current = assistantCurrentConversation(), backend = assistantDefaultBackend();
     const currentProfile = current && current.cloudProfileId;
     const profileStillExists = !currentProfile || currentProfile === '__default__'
       || (Array.isArray(ASSISTANT_UI.config && ASSISTANT_UI.config.cloud_api_profiles)
         && ASSISTANT_UI.config.cloud_api_profiles.some(profile => profile && profile.id === currentProfile));
-    const selection = current && current.backend === 'local' ? { modelName: current.modelName }
-      : current && current.backend === 'cloud' ? { cloudProfileId: profileStillExists ? (currentProfile || '__default__') : '__default__' } : null;
-    assistantNewConversation(current ? current.backend : (model && model.value) || 'builtin', selection);
+    const sameBackend = current && assistantCurrentBackend(current) === backend;
+    const selection = sameBackend && backend === 'local' ? { modelName: current.modelName }
+      : sameBackend && backend === 'cloud' ? { cloudProfileId: profileStillExists ? (currentProfile || '__default__') : '__default__' } : null;
+    assistantNewConversation(backend, selection);
+    if (current && !sameBackend && ASSISTANT_UI.operatorToken) assistantVerifyOperator();
   });
   const clearContext = assistantEl('assistant-clear-context'); if (clearContext) clearContext.addEventListener('click', () => assistantClearContext());
   const rename = assistantEl('assistant-rename-conversation'); if (rename) rename.addEventListener('click', () => assistantRenameConversation());
