@@ -4945,7 +4945,7 @@ function normalizeConfigForms(root = document) {
 window.normalizeConfigForms = normalizeConfigForms;
 
 /* ------------------------------------------------------------------ 智能问答：同源 REST/SSE、无第三方渲染依赖 */
-const ASSISTANT_UI = { config: null, views: [], conversations: [], activeId: null, busy: false, controller: null, adminToken: '', initialized: false };
+const ASSISTANT_UI = { config: null, views: [], documents: [], activeDocumentId: null, mobilePane: 'chat', conversations: [], activeId: null, busy: false, controller: null, adminToken: '', initialized: false };
 const ASSISTANT_VIEW_LABELS = { overview: '总览面板', source: '数据源与控制', compare: '跨侧对比', voltage: '三相电压', current: '三相电流', power: '有功 / 无功 / 视在', power_factor: '功率因数', fundamental: '基波', harmonic: '谐波', interharmonic: '间谐波', dc: '直流偏置', spectrum: '频谱', events: '电能质量事件', nilm: '负荷辨识事件', windows: '窗口配置', export: '导出与日志', selftest: '算法自检', process: '数据处理' };
 function assistantEl(id) { return document.getElementById(id); }
 function assistantUid() { return window.crypto && crypto.randomUUID ? crypto.randomUUID() : 'chat-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 9); }
@@ -4961,7 +4961,7 @@ function assistantSetPrivacy() {
   const backend = assistantEl('assistant-model-type') ? assistantEl('assistant-model-type').value : 'builtin';
   const cloud = backend === 'cloud'; el.classList.toggle('cloud', cloud);
   if (backend === 'builtin') {
-    el.textContent = '演示摘录通道：无需配置模型或 API Key；只在本机检索内置资料，不调用任何大模型。';
+    el.textContent = '本地文档模式：无需配置模型或 API Key；检索内置与管理员导入资料，不调用大模型。';
   } else if (cloud) {
     el.textContent = '云端模式：提问、对话历史及命中的知识片段会发送给云端服务；敏感词拦截不能替代人工审查。';
   } else {
@@ -4971,8 +4971,9 @@ function assistantSetPrivacy() {
 function assistantSyncLauncher() {
   const launcher = assistantEl('assistant-launcher'); if (!launcher) return;
   const cfg = ASSISTANT_UI.config;
-  if (!cfg || !Array.isArray(cfg.visible_views)) { launcher.hidden = true; return; }
-  launcher.hidden = !cfg.enabled || !cfg.visible_views.includes(S.view || 'overview');
+  const visible = !!(cfg && cfg.enabled && Array.isArray(cfg.visible_views) && cfg.visible_views.includes(S.view || 'overview'));
+  launcher.hidden = !visible;
+  if (!visible) assistantTogglePanel(false);
 }
 function assistantUpdateBusy() {
   const busy = ASSISTANT_UI.busy;
@@ -5163,6 +5164,67 @@ async function assistantApi(path, options = {}) {
   if (!response.ok) throw new Error(data && data.error ? data.error : 'HTTP ' + response.status);
   return data || {};
 }
+function assistantTogglePanel(open) {
+  const panel = assistantEl('assistant-panel'), launcher = assistantEl('assistant-launcher'); if (!panel) return;
+  const nextOpen = typeof open === 'boolean' ? open : panel.hidden;
+  panel.hidden = !nextOpen; panel.setAttribute('aria-hidden', String(!nextOpen));
+  if (launcher) launcher.setAttribute('aria-expanded', String(nextOpen));
+  if (nextOpen) { assistantSetMobilePane('chat'); const prompt = assistantEl('assistant-prompt'); if (prompt) prompt.focus(); }
+  else if (launcher && !launcher.hidden) launcher.focus();
+}
+function assistantSetMobilePane(pane) {
+  const active = pane === 'docs' ? 'docs' : 'chat'; ASSISTANT_UI.mobilePane = active;
+  const docs = assistantEl('assistant-doc-pane'), chat = assistantEl('assistant-chat-pane');
+  const docsTab = assistantEl('assistant-tab-docs'), chatTab = assistantEl('assistant-tab-chat');
+  if (docs) docs.classList.toggle('is-active', active === 'docs');
+  if (chat) chat.classList.toggle('is-active', active === 'chat');
+  if (docsTab) docsTab.setAttribute('aria-selected', String(active === 'docs'));
+  if (chatTab) chatTab.setAttribute('aria-selected', String(active === 'chat'));
+}
+function assistantRenderDocumentList() {
+  const root = assistantEl('assistant-doc-list'); if (!root) return;
+  while (root.firstChild) root.removeChild(root.firstChild);
+  const query = (assistantEl('assistant-doc-search') || {}).value || '';
+  const needle = query.trim().toLocaleLowerCase();
+  const docs = ASSISTANT_UI.documents.filter(doc => !needle ||
+    [doc.title, doc.category, doc.summary].some(value => String(value || '').toLocaleLowerCase().includes(needle)));
+  if (!docs.length) { root.textContent = '没有匹配的本地文档。'; return; }
+  docs.forEach(doc => {
+    const button = document.createElement('button'); button.type = 'button'; button.className = 'assistant-doc-item';
+    button.classList.toggle('is-active', doc.id === ASSISTANT_UI.activeDocumentId);
+    button.setAttribute('aria-current', doc.id === ASSISTANT_UI.activeDocumentId ? 'page' : 'false');
+    const title = document.createElement('span'); title.textContent = doc.title || doc.name || '本地文档'; button.appendChild(title);
+    const summary = document.createElement('small'); summary.textContent = (doc.category ? doc.category + ' · ' : '') + (doc.summary || ''); button.appendChild(summary);
+    button.addEventListener('click', () => assistantSelectDocument(doc.id)); root.appendChild(button);
+  });
+}
+function assistantSelectDocument(id) {
+  const doc = ASSISTANT_UI.documents.find(item => item.id === id); if (!doc) return;
+  ASSISTANT_UI.activeDocumentId = doc.id;
+  const content = assistantEl('assistant-doc-content');
+  if (content) { assistantRenderMarkdown(content, doc.content || ''); content.scrollTop = 0; }
+  assistantSetFeedback('assistant-doc-status', doc.title + ' · ' + (doc.characters || String(doc.content || '').length) + ' 字 · 初始化已载入完整正文');
+  assistantRenderDocumentList();
+}
+async function assistantLoadDocuments() {
+  try {
+    const data = await assistantApi('/api/assistant/documents');
+    ASSISTANT_UI.documents = Array.isArray(data.documents) ? data.documents : [];
+    const total = Number(data.characters) || ASSISTANT_UI.documents.reduce((sum, doc) => sum + (Number(doc.characters) || 0), 0);
+    assistantSetFeedback('assistant-doc-status', '已加载 ' + ASSISTANT_UI.documents.length + ' 份本地文档 · ' + total.toLocaleString() + ' 字');
+    assistantRenderDocumentList();
+    const first = ASSISTANT_UI.documents.find(doc => doc.id === 'builtin-platform-parameters') || ASSISTANT_UI.documents[0];
+    if (first) assistantSelectDocument(first.id);
+    else {
+      const content = assistantEl('assistant-doc-content');
+      if (content) content.textContent = '本地文档目录为空，请检查服务端内置文档是否打包。';
+    }
+  } catch (e) {
+    assistantSetFeedback('assistant-doc-status', '加载本地文档失败：' + e.message, true);
+    const content = assistantEl('assistant-doc-content');
+    if (content) content.textContent = '文档初始化失败。可检查 /api/assistant/documents 接口与服务端日志；问答通道仍可使用。';
+  }
+}
 function assistantRenderViewChecks(selected) {
   const root = assistantEl('assistant-visible-views'); if (!root) return;
   while (root.firstChild) root.removeChild(root.firstChild);
@@ -5200,7 +5262,7 @@ async function assistantLoadKnowledge() {
   try {
     const data = await assistantApi('/api/assistant/knowledge'); const root = assistantEl('assistant-knowledge-list'); if (!root) return;
     while (root.firstChild) root.removeChild(root.firstChild);
-    if (!data.documents || !data.documents.length) { root.textContent = '知识库为空。导入后以词项相似度检索；云端模式会发送命中的片段。'; return; }
+    if (!data.documents || !data.documents.length) { root.textContent = '暂无管理员附加文档。程序内置文档已在服务启动时加载，仍会参与本地检索；清空操作不会删除内置文档。'; return; }
     data.documents.forEach(doc => {
       const row = document.createElement('div'); row.className = 'assistant-knowledge-item';
       const label = document.createElement('span'); label.textContent = doc.name + ' · ' + doc.characters + ' 字 / ' + doc.chunks + ' 段'; row.appendChild(label);
@@ -5374,16 +5436,20 @@ async function assistantClearKnowledge() {
   if (assistantEl('assistant-admin-token') && assistantEl('assistant-admin-token').value) ASSISTANT_UI.adminToken = assistantEl('assistant-admin-token').value;
   try {
     await assistantApi('/api/assistant/knowledge', { method: 'DELETE', headers: { 'X-Assistant-Admin-Token': ASSISTANT_UI.adminToken } });
-    assistantSetFeedback('assistant-knowledge-message', '本地知识库已清空。'); await assistantLoadKnowledge();
+    assistantSetFeedback('assistant-knowledge-message', '管理员附加知识已清空；内置文档仍可用。'); await assistantLoadKnowledge();
   } catch (e) { assistantSetFeedback('assistant-knowledge-message', '清空失败：' + e.message, true); }
 }
 function assistantInit() {
   if (ASSISTANT_UI.initialized) return; ASSISTANT_UI.initialized = true;
   assistantNewConversation('builtin');
-  const launcher = assistantEl('assistant-launcher'), dialog = assistantEl('assistant-dialog');
-  if (launcher && dialog) launcher.addEventListener('click', () => { assistantClearError(); if (dialog.showModal) dialog.showModal(); else dialog.setAttribute('open', ''); assistantEl('assistant-prompt').focus(); });
-  if (dialog) dialog.addEventListener('click', event => { if (event.target === dialog) { if (dialog.close) dialog.close(); else dialog.removeAttribute('open'); } });
-  const close = assistantEl('assistant-close'); if (close && dialog) close.addEventListener('click', () => { if (dialog.close) dialog.close(); else dialog.removeAttribute('open'); });
+  const launcher = assistantEl('assistant-launcher'), panel = assistantEl('assistant-panel');
+  if (launcher && panel) launcher.addEventListener('click', () => { assistantClearError(); assistantTogglePanel(true); });
+  const close = assistantEl('assistant-close'); if (close && panel) close.addEventListener('click', () => assistantTogglePanel(false));
+  const docsTab = assistantEl('assistant-tab-docs'), chatTab = assistantEl('assistant-tab-chat');
+  if (docsTab) docsTab.addEventListener('click', () => assistantSetMobilePane('docs'));
+  if (chatTab) chatTab.addEventListener('click', () => assistantSetMobilePane('chat'));
+  const docSearch = assistantEl('assistant-doc-search'); if (docSearch) docSearch.addEventListener('input', assistantRenderDocumentList);
+  document.addEventListener('keydown', event => { if (event.key === 'Escape' && panel && !panel.hidden) assistantTogglePanel(false); });
   const form = assistantEl('assistant-form'); if (form) form.addEventListener('submit', event => { event.preventDefault(); assistantSubmit(); });
   const prompt = assistantEl('assistant-prompt'); if (prompt) {
     prompt.addEventListener('input', () => { const count = assistantEl('assistant-count'); if (count) count.textContent = prompt.value.length + ' / 12000'; });
@@ -5404,7 +5470,7 @@ function assistantInit() {
     clearTerms.addEventListener('change', () => { if (clearTerms.checked) sensitiveField.value = ''; });
     sensitiveField.addEventListener('input', () => { if (sensitiveField.value) clearTerms.checked = false; });
   }
-  assistantUpdateBusy(); assistantSetPrivacy(); assistantRenderConversation(); assistantSyncLauncher(); assistantLoadConfig();
+  assistantUpdateBusy(); assistantSetPrivacy(); assistantRenderConversation(); assistantSetMobilePane('chat'); assistantSyncLauncher(); assistantLoadDocuments(); assistantLoadConfig();
 }
 
 async function init() {

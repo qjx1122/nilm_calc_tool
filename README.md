@@ -1,9 +1,9 @@
 # README.md — nilm_calc_tool（电力系统各类电气量计算工具）
 
 > 台账文件（BOOTSTRAP.md v2.2）：安装与环境 / 运行命令 / 数据目录 / 配置结构 / 输出产物 / 生产推荐流程。
-> **当前状态：v0.99.36（2026-11-04）**——在 v0.99.35 本地/云端问答基础上，补入**右侧嵌入抽屉、零配置内置演示知识摘录通道、来源文件名脱敏**；全量 pytest **600 passed / 1 skipped**，智能问答 jsdom **33 checks**。真实模型 / 浏览器与现场网络仍待用户验收。
+> **当前状态：v0.99.37（2026-11-04）**——助手改为同页固定复合侧栏（文档 + 问答）；服务启动时加载设计、使用、部署、算法调参与验证、参数、数据字典及助手说明资料，builtin/local/cloud 共用本地语料；参数清单分列代码默认值与两侧模板值，参数问题提高清单检索优先级。全量 pytest **603 passed / 1 skipped**，助手 jsdom **42 checks**。真实模型与用户浏览器视觉验收仍待完成。
 > 状态标注：✅已确认（有代码 / 实录 / 官方来源佐证）｜🔶待确认（占位或推断，需用户回填）｜❌已废弃（不删行，只翻状态）
-> **历史验收条目的 ✅ 实录以各条目所列日期 / 环境为准；README 早期基线环境为 Linux 6.1.158+ / CPython 3.11.2 / numpy 2.4.6（2026-10-10）。第 188 轮（2026-11-04）最新验证结果见 §11。**
+> **历史验收条目的 ✅ 实录以各条目所列日期 / 环境为准；README 早期基线环境为 Linux 6.1.158+ / CPython 3.11.2 / numpy 2.4.6（2026-10-10）。第 189 轮（2026-11-04）最新验证结果见 §11。**
 > **Windows 命令、真实现场数据、生产部署三项尚未在用户环境验证，一律标 🔶，请按 `REPORT_TEST.md`「T-002 本地部署与验收执行包」逐条回填。**
 
 ---
@@ -45,7 +45,7 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt          # Li
 | ④ | 输入支持实时采集数据与离线文件数据 | `elec_tool/sources/`：`csv_file`(离线)、`csv_tail`(实时追加)、`tcp`(实时流)、`simulator`(实时联调) | 实时链路 `test_realtime_simulator_streams_*`；离线链路 `test_offline_csv_end_to_end_values` | ✅沙盒（真实采集设备 🔶） |
 | ⑤ | 三相电压/电流、功率因数、有功、无功、基波、谐波(2–50)、频谱；**v0.8 增：间谐波、直流偏置、事件** | `elec_tool/analysis/{rms,harmonic,power,window}.py` + `metrics.py` + `events.py` | 数值对齐解析解（`expected_values()`），见 §8；间谐波/直流/事件见 `tests/test_r9_events.py` | ✅沙盒 |
 | ⑥ | 各电气量分别配置指定时间段计算 | `configs/*.json` 的 `windows.<量>.length_s/step_s`；引擎按量独立调度 | 实测：电压窗 1s→输出 6 次、谐波窗 0.2s→输出 26 次（同一份 5s 数据）；改 5s→输出 2 次、缓冲自动扩到 49280 点 | ✅沙盒 |
-| ⑦ | 网页智能问答：右侧嵌入抽屉；默认零配置内置知识摘录（不调用模型）；可选本地 / 云端 OpenAI-compatible 模型、SSE + Markdown、本地检索与引用及来源名脱敏 | `app/assistant.py`、`app/server.py`、`app/static/` | `tests/test_assistant.py`、`tests/test_server.py`、`tests/test_web_ui.py`、`node tools/ui_assistant_check.cjs` | ✅沙盒实现；真实模型与现场界面 🔶
+| ⑦ | 网页智能问答：同页固定文档 + 问答侧栏；默认本地文档检索（不调用模型）；设计、使用、部署、调参验证、参数与数据字典等完整知识库；可选本地 / 云端模型、SSE + Markdown、参数优先检索与来源名脱敏 | `app/assistant_docs.py`、`app/assistant.py`、`app/server.py`、`app/static/` | `GET /api/assistant/documents`；助手单测、服务端接口、UI 契约与 jsdom 行为检查 | ✅沙盒实现；真实模型与用户浏览器视觉验收 🔶
 
 **代码规模**（2026-11-04 沙盒快照，`wc -l`）：`elec_tool/` + `app/server.py` + `app/assistant.py` + `cli.py` = 17333 行；`app/static/`（HTML/CSS/JS）= 7543 行；`tests/*.py` = 12771 行。
 
@@ -64,7 +64,7 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt          # Li
 | CPU/内存 | 单核即可跑实时（实测 6400 点/s 实时摄入，速率 6398–6400 点/s）。内存主要是环形缓冲：`容量 = ceil(最长窗长 × fs × 1.5) + max(每块点数, 64)`（且不小于 fs），按 7 通道 float64 计——实测 1s 窗 + 块 640 → 容量 10240 点 ≈ 0.55 MB；1s 窗 + 块 1280 → 10880 点；5s 窗 + 块 1280 → 49280 点 ≈ 2.7 MB。窗长变化时缓冲自动扩容并保留已有数据尾部 | ✅沙盒实录（2 核 / 3 GB 环境；公式见 `elec_tool/engine.py:LiveEngine.__init__`） |
 | 浏览器 | 任一现代浏览器（Chrome/Edge/Firefox），需支持 WebSocket；不支持时前端自动降级为 1.5 s 轮询 | ✅（降级逻辑见 `app.js:startPolling`） |
 | 磁盘 | 代码 + 依赖 ≈ 200 MB；结果 CSV 视时长而定（实测 5 s 数据导出 26 次结果 = 1.4 MB） | ✅沙盒实录 |
-| 网络 | 默认内置演示通道可离线运行且不连接模型；选择本地模型时仍需本机 / 内网模型服务，选择云端时需访问配置的 HTTPS 服务（问题 / 历史 / 命中的片段会发给该服务）；界面本身无 CDN / 遥测 | 内置通道 ✅沙盒；本地/云端现场网络 🔶 |
+| 网络 | 默认本地文档通道可离线检索随程序加载的内置资料且不连接模型；选择本地模型时仍需本机 / 内网模型服务，选择云端时需访问配置的 HTTPS 服务（问题 / 历史 / 命中的片段会发给该服务）；界面本身无 CDN / 遥测 | 本地文档通道 ✅沙盒；本地/云端现场网络 🔶 |
 
 ### 2.2 获取代码
 
@@ -740,15 +740,16 @@ curl -s "http://127.0.0.1:8000/api/export?fmt=csv" -o output/result.csv
 | 长时间运行内存上涨 | 历史与结果缓存 | 环形缓冲上限 = 最长窗 × fs × 1.6（自动扩容，有上限）；`output.history_len`(默认 900) 与服务端结果缓存 `maxlen=2000` 都是定长队列 | ✅（架构实录） |
 | 改了界面配置，重启后没了 / 或出厂模板被改 | 配置持久化机制 | 界面保存写入 `configs/runtime.json`（gitignore），下次启动优先加载；`configs/default.json` 是出厂模板不会被界面污染。要恢复出厂：删掉 `runtime.json` | ✅沙盒实录 |
 
-### 3.6 智能问答模块（v0.99.36）
+### 3.6 智能问答模块（v0.99.37）
 
-业务页面右下角的「🤖 智能问答」入口在**当前业务页内打开右侧抽屉**，不跳转到独立页面；服务端 `visible_views` 配置控制入口显示在哪些页面。它不是账户权限：本应用当前没有登录 / 角色系统，知道 REST 地址的客户端仍可直接访问问答接口。未配置本地或云端模型时，默认使用“内置知识库（演示）”通道：只检索并返回应用内置的本地演示摘录和引用，不连接任何模型服务。
+业务页面右下角的「🤖 智能问答助手」入口在**当前业务页内打开固定复合侧栏**，不跳转独立页面；宽屏同时显示本地文档栏与问答栏，窄屏可切换“文档 / 问答”标签。标题固定为“智能问答助手”，定位为**调参辅助文档助手**；服务端 `visible_views` 配置控制入口显示在哪些页面。它不是账户权限：本应用当前没有登录 / 角色系统，知道 REST 地址的客户端仍可直接访问问答接口。未配置本地或云端模型时，默认走本地文档检索通道，读取随程序内置加载的文档和管理员附加资料，不连接任何模型服务。
 
 **功能与数据边界**
 
-- “内置知识库（演示）”是 retrieval-only 摘录通道，不走 OpenAI-compatible 接口，也不发起外部模型请求；新增安装默认选择该通道。切到本地或云端模型后，统一走 OpenAI-compatible `/chat/completions`：本地接口示例 `http://127.0.0.1:11434/v1`（Ollama）+ `qwen2.5:7b`；云端默认 DeepSeek-compatible URL，调用云端需要 API Key。新安装可在首次创建助手配置前设置 `ELEC_TOOL_ASSISTANT_BACKEND=local|cloud` 指定默认通道；已保存配置时以管理员保存的默认后端为准。
+- 内置文档在 AssistantService 启动时从固定白名单读取：软件设计 / 使用 / 部署文档、`NILM_TUNING_GUIDE.md`、由代码默认 + `configs/default.json` + `configs/branch.json` 生成的平台参数清单、`NILM_DATA_DICT.md` 和智能问答模块说明。`GET /api/assistant/documents` 向当前页面一次提供目录与完整正文；服务启动后改文档需重启才会重载。该语料参与 builtin、本地模型与云端 RAG；参数问题提高平台参数清单优先级。参数清单三种来源分列，不代表当前运行值，“未显式配置”也不等于已知继承值。
+- builtin 是本机检索式摘录，不走 OpenAI-compatible 接口，也不发起模型请求；新安装默认选择该通道。切到本地或云端模型后，统一走 OpenAI-compatible `/chat/completions`：本地接口示例 `http://127.0.0.1:11434/v1`（Ollama）+ `qwen2.5:7b`；云端默认 DeepSeek-compatible URL，调用云端需要 API Key。新安装可在首次创建助手配置前设置 `ELEC_TOOL_ASSISTANT_BACKEND=local|cloud` 指定默认通道；已保存配置时以管理员保存的默认后端为准。
 - 对话通过 SSE 增量显示；支持标题、列表、引用、代码块、表格和简单数学行内 / 块展示。原始 HTML 不执行，链接只允许 `http(s)`。会话可新建、切换、删除，并且**只在当前页面内存中**，刷新后清空；切换模型会先确认并新建独立会话。
-- 知识库仅接受文本：md/txt/json/py/csv/html/yaml/log；单文件 ≤1 MB、一次 ≤10 个 / 5 MB、总量最多 100 个 / 20 MB。依赖无外部向量服务：按文本分块与词项 TF-IDF 相似度检索，回答附来源文件名 / 相似度；这是词项检索，不是语义向量检索。默认不预载项目内部资料，管理员只导入允许用于问答的资料。
+- 管理员附加知识库仅接受文本：md/txt/json/py/csv/html/yaml/log；单文件 ≤1 MB、一次 ≤10 个 / 5 MB、总量最多 100 个 / 20 MB。它与只读内置文档分开管理；清空操作不删除内置资料。依赖无外部向量服务：按文本分块与词项 TF-IDF 相似度检索，回答附来源名 / 相似度；这是词项检索，不是语义向量检索。
 - 来源文件名的服务端脱敏当前跟随总线侧 `branch.hide_ui`；该字段原语义是「隐藏分路侧界面」，不是独立的助手来源显示开关。按本轮暂定规则，字段为真时会对检索上下文、回答、引用和流式分片中的知识库文件名脱敏；如果产品需要独立开关，应另行明确规则。
 - 知识库 / 普通配置默认写到 gitignore 覆盖的 `output/assistant/`（可用 `ELEC_TOOL_ASSISTANT_DATA_DIR` 改位置）；Linux 权限尽力收紧为目录 `0700`、JSON `0600`。普通配置会落盘；UI 输入的 API Key **只保存在服务进程内存**，进程重启后消失；部署持久密钥应使用环境变量。`*_API_KEY` 环境变量始终优先，密钥值不会经 GET 回传，也不会写进 `config.json`。
 - 云端模式会把本轮问题、最多 20 条对话历史及命中的知识片段发送给配置的云端服务；服务端会拦截明显的 API Key / 私钥特征及管理员配置的敏感词，但这不是 DLP，也不能保证识别所有个人信息 / 业务秘密。配置页会持续显示该提示。私有知识库应只用于本地模型，或经过人工脱敏后再使用云端。
@@ -765,9 +766,9 @@ export ELEC_TOOL_ASSISTANT_BACKEND='local'
 .venv/bin/python cli.py serve --host 0.0.0.0 --port 8000
 ```
 
-如使用云端，另行设置 `ELEC_TOOL_ASSISTANT_CLOUD_URL`、`ELEC_TOOL_ASSISTANT_CLOUD_MODEL` 与 `ELEC_TOOL_ASSISTANT_CLOUD_API_KEY`；云端地址须 HTTPS（localhost 测试例外）。本地模型地址只接受 loopback / 私有 IP 或显式内网域名，且本地模型请求不走系统 HTTP 代理。也可在问答弹窗「模型配置与本地知识库（管理员）」内调整地址、模型、超时、Temperature、token 数、RAG、敏感词和入口页面；UI 输入口令 / API Key 都不会写入浏览器存储。
+如使用云端，另行设置 `ELEC_TOOL_ASSISTANT_CLOUD_URL`、`ELEC_TOOL_ASSISTANT_CLOUD_MODEL` 与 `ELEC_TOOL_ASSISTANT_CLOUD_API_KEY`；云端地址须 HTTPS（localhost 测试例外）。本地模型地址只接受 loopback / 私有 IP 或显式内网域名，且本地模型请求不走系统 HTTP 代理。也可在侧栏“模型配置与附加知识（管理员）”面板调整地址、模型、超时、Temperature、token 数、RAG、敏感词和入口页面；UI 输入口令 / API Key 都不会写入浏览器存储。
 
-**验收 / 故障定位**：`node tools/ui_assistant_check.cjs`（jsdom，无网络模型，验证入口范围、分片 SSE、安全 Markdown、引用、模型切换新会话、管理员设置与本地文件导入）；`pytest tests/test_assistant.py tests/test_server.py tests/test_web_ui.py -q`。模型不可用时先确认本地 Ollama / vLLM 已启动、模型名和 `/v1` 基址正确；云端鉴权失败看模型服务的 Key / 权限；本地连接失败看服务端与模型同机/内网可达性。真实本地模型及云端供应商请求仍需现场验收。
+**验收 / 故障定位**：`GET /api/assistant/documents` 可确认服务启动加载的本地资料目录与全文；`node tools/ui_assistant_check.cjs`（jsdom，无网络模型，验证固定复合侧栏、文档初始化 / 搜索 / 浏览、窄屏标签、SSE、安全 Markdown、引用、模型切换、管理员设置与本地文件导入）；`pytest tests/test_assistant.py tests/test_server.py tests/test_web_ui.py -q`。模型不可用时先确认本地 Ollama / vLLM 已启动、模型名和 `/v1` 基址正确；云端鉴权失败看模型服务的 Key / 权限；本地连接失败看服务端与模型同机/内网可达性。真实本地模型及云端供应商请求、用户真实浏览器视觉效果仍需现场验收。
 
 ---
 
@@ -1228,7 +1229,8 @@ python cli.py selftest                            # 实测：44/44，worst_rel_e
 
 ## 11. 验证状态（工程实现工程师交付说明）
 
-- **第 188 轮最新验证（2026-11-04，v0.99.36）**：`./.venv/bin/python -m pytest -q` **600 passed / 1 skipped**；`node tools/ui_assistant_check.cjs` **33 checks**；`node --check app/static/app.js`、`node --check tools/ui_assistant_check.cjs`、`py_compile`、`git diff --check` 通过。新增路由覆盖内置 SSE 摘录与来源名脱敏。未连接真实 Ollama/vLLM 或云端供应商；Windows / 现场浏览器视觉 / HTTPS 反代待用户实录。
+- **第 189 轮最新验证（2026-11-04，v0.99.37）**：全量 pytest **603 passed / 1 skipped**；定向助手 / API / UI **58 passed**；`node tools/ui_assistant_check.cjs` **42 checks**；`node --check` 与 `git diff --check` 通过。隔离 live preview 的首页、文档目录 API（7 份完整资料）、助手配置与 builtin 参数问答均 HTTP 200。未连接真实 Ollama/vLLM 或云端供应商；Windows / 现场浏览器视觉 / HTTPS 反代待用户实录。
+- **第 188 轮（2026-11-04，v0.99.36）**：`./.venv/bin/python -m pytest -q` **600 passed / 1 skipped**；`node tools/ui_assistant_check.cjs` **33 checks**；`node --check app/static/app.js`、`node --check tools/ui_assistant_check.cjs`、`py_compile`、`git diff --check` 通过。新增路由覆盖内置 SSE 摘录与来源名脱敏。真实模型和现场验收仍待用户实录。
 - **沙盒已验证（Linux / CPython 3.11.2，2026-10-10 实录）**
   - 安装：venv + `pip install -r requirements.txt`；离线安装（Linux 29 包 / Windows 目标 24 包下载）；最小安装报错提示
   - 算法：`selftest` 44/44（最差 1.508e-05）；`pytest tests/ -q` **257 passed, 1 skipped**（v0.11）
@@ -1261,6 +1263,7 @@ python cli.py selftest                            # 实测：44/44，worst_rel_e
 ---
 
 ## 🗒 变更记录
+- **v0.99.37（2026-11-04，智能问答固定复合侧栏与完整本地文档库）**：将助手由旧 dialog 改为同页固定侧栏，宽屏并列文档 / 问答、窄屏提供对应标签，标题为“智能问答助手”；新增白名单文档加载器与 `GET /api/assistant/documents`，服务启动读取设计、使用、部署、调参验证、助手说明、NILM 数据字典及平台参数资料，前端初始化获取并支持搜索 / 浏览安全 Markdown。参数清单从 `AppConfig` 代码默认、`configs/default.json`、`configs/branch.json` 生成三列，明确不等于当前运行值；参数问题对相关清单结果及命中字段优先排序，本地、云端 RAG 与 builtin 共用本地语料；管理员导入内容保持分离，既有 SSE / 会话 / 配置 / 脱敏能力保留。新增参数来源、RAG、API 与 UI 行为测试；全量 **603 passed / 1 skipped**，`node tools/ui_assistant_check.cjs` **42 checks**，`git diff --check` 通过。缺口：未连真实模型 / 云端、未做用户真实浏览器视觉验收；助手仍只提供有依据的实验步骤，不执行命令或改配置。
 - **v0.99.36（2026-11-04，智能问答零配置演示与嵌入抽屉）**：在 v0.99.35 问答上补齐用户验收要求。① 助手面板改为当前业务页内的**右侧全屏抽屉**（不跳独立页面，移动端铺满）；② 增加内置演示资料摘录集并设为新增安装默认：无模型 / API Key 也可零配置检索并返回本地摘录与引用，builtin 通道不建立任何模型请求；用户仍可显式切换 local/cloud。③ 来源名隐藏时，服务端把所有知识库文件名（不限于本轮命中）从 RAG 片段、模型提示、历史、答案、引用及 SSE 分片中脱敏。**暂定映射假设**：目前沿用总线配置 `branch.hide_ui` 作为服务端脱敏判据；它原义是隐藏分路侧界面，不是助手专用开关，若要独立控制需产品另行确认。验证：全量 **600 passed / 1 skipped**，`node tools/ui_assistant_check.cjs` **33 checks**，语法与 diff 检查通过。缺口：未接真实模型 / 云服务、未做用户浏览器视觉与现场网络验收；来源显隐仍依上述暂定映射。
 - **v0.99.35（2026-11-04，网页智能问答）**：新增本地 / 云端 OpenAI-compatible 模型适配器（本地走内网且绕开代理、云端 HTTPS）、SSE 流式回答、受限 Markdown、内存会话管理、切换模型确认新会话、本地 TF-IDF 文本知识库与来源引用、模型/RAG/页面范围配置。安全边界：服务端管理员口令保护配置与知识写操作；API Key 不回传且仅 UI 设置值留进程内存、环境变量优先；敏感词正文仅管理员接口可读；云端请求检查用户提问/历史/检索片段并明确提示上传风险；页面显隐不冒称账户授权。配置 / 知识库存于 gitignore 的 `output/assistant/`。验证：pytest **596 passed / 1 skipped**；`node tools/ui_assistant_check.cjs` **21 checks**。真实模型与 Windows / 内网现场部署未验证。
 - **v0.66（2026-10-22，周波窗内容与可用性）**：用户要求：① 数据处理页原「周波窗」改为该段的逐周波有效值；② 负荷辨识页「周波窗 2」只来自离线文件，实时源（模拟器 / TCP / 文件追加）下右键菜单项不可选。实现：`wpLoadCycleWindow(t, n, 1)` 改调 `/api/process/wave/rms`（`agg_cycles=1`，起止＝中心 ± N/2 周波）并用新 `wpDrawCycRms` 画到 `wp-cyc`（风格同有效值曲线，标题改「周波窗（逐周波有效值）」）；`which=2` 仍为采样瞬时值；负荷辨识趋势曲线右键菜单按本侧 `state.config.source.kind` 判断，非 `csv_file` 时「显示周波窗 2」`disabled` 并在提示中注明原因（原「显示周波窗」逻辑不变）。验证：`ui_r61` **47/47**（周波窗 1 ＝ 2 通道 × 50 个周波有效值、Ia 恒正且波动 <2×、请求走 rms；周波窗 2 仍 6400 点瞬时值且互不影响）；`ui_r12` **76/76**（模拟器源下「显示周波窗 2」灰显并提示只能离线文件、改回 csv_file 恢复可选）；全量 pytest **367 passed / 1 skipped**。

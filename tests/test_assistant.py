@@ -6,6 +6,7 @@ import json
 import pytest
 
 from app.assistant import AssistantError, AssistantService, DEFAULT_CONFIG, _number
+from app.assistant_docs import PLATFORM_PARAMETER_DOC_ID
 
 
 def test_integer_settings_reject_fractional_and_boolean_values():
@@ -64,7 +65,7 @@ def test_admin_config_keeps_api_keys_out_of_json_and_public_view(tmp_path, monke
         service.update_config({"sensitive_terms": [123]}, "test-admin-token")
 
 
-def test_builtin_demo_channel_is_zero_configuration_and_retrieves_excerpts(tmp_path, monkeypatch):
+def test_builtin_channel_is_zero_configuration_and_retrieves_bundled_docs(tmp_path, monkeypatch):
     monkeypatch.delenv("ELEC_TOOL_ASSISTANT_BACKEND", raising=False)
     monkeypatch.delenv("ELEC_TOOL_ASSISTANT_ENABLED", raising=False)
     monkeypatch.delenv("ELEC_TOOL_ASSISTANT_LOCAL_API_KEY", raising=False)
@@ -72,30 +73,68 @@ def test_builtin_demo_channel_is_zero_configuration_and_retrieves_excerpts(tmp_p
     service = AssistantService(data_dir=str(tmp_path))
     assert service.public_config()["default_model_type"] == "builtin"
 
-    plan = service.prepare_chat({"prompt": "设备画像匹配"})
+    plan = service.prepare_chat({"prompt": "设备画像匹配的 pre_cycles 与 window_cycles 参数默认值是什么？"})
     assert plan["model_type"] == "builtin"
-    assert plan["sources"] and plan["sources"][0]["name"] == "demo_profile_matching.md"
+    assert plan["sources"] and plan["sources"][0]["name"] == "平台参数清单"
     assert "无需配置或调用模型" in plan["answer"]
-    assert "pre_cycles" in plan["answer"]
+    assert "pre_cycles" in plan["answer"] and "window_cycles" in plan["answer"]
+    assert "demo_profile_matching.md" not in plan["answer"]
     assert "base_url" not in plan and "api_key" not in plan
 
     def no_model_request(*args, **kwargs):
-        raise AssertionError("builtin demo mode must not contact a model endpoint")
+        raise AssertionError("builtin local-doc mode must not contact a model endpoint")
     monkeypatch.setattr(service, "_open_request", no_model_request)
     assert service.complete(plan) == plan["answer"]
     import threading
     assert "".join(service.stream(plan, threading.Event())) == plan["answer"]
 
 
+def test_bundled_library_has_required_manuals_and_parameter_provenance(tmp_path):
+    service = AssistantService(data_dir=str(tmp_path))
+    library = service.document_library()
+    docs = {doc["id"]: doc for doc in library["documents"]}
+    assert library["count"] >= 7
+    assert library["characters"] == sum(doc["characters"] for doc in library["documents"])
+    assert {
+        "builtin-software-design", "builtin-software-usage", "builtin-software-deployment",
+        "builtin-algorithm-tuning-validation", PLATFORM_PARAMETER_DOC_ID,
+        "builtin-assistant-guide", "builtin-data-dictionary",
+    } <= docs.keys()
+    assert all(doc["content"] and doc["characters"] == len(doc["content"]) for doc in docs.values())
+
+    catalog = docs[PLATFORM_PARAMETER_DOC_ID]["content"]
+    assert "| 配置路径 | 代码默认值 | 总线模板值 | 分路模板值 |" in catalog
+    assert "`sampling.fs` | `6400.0` | `6400.0` | `6400.0`" in catalog
+    assert "`nilm.algorithms.profile.enabled` | `false`" in catalog
+    assert "`nilm.algorithms.threshold.min_delta_w` | `50.0` | `未显式配置` | `50.0`" in catalog
+    assert "实际有效值" in catalog
+
+    matches = service.search_knowledge("sampling.fs 参数默认值", 4, 0.08)
+    assert matches and matches[0]["id"] == PLATFORM_PARAMETER_DOC_ID
+    assert any("软件部署说明文档" == hit["name"] for hit in service.search_knowledge("如何部署软件？", 4, 0.08))
+
+
+def test_local_and_cloud_rag_context_uses_bundled_platform_catalog(tmp_path, monkeypatch):
+    monkeypatch.setenv("ELEC_TOOL_ASSISTANT_CLOUD_API_KEY", "cloud-test-key")
+    service = AssistantService(data_dir=str(tmp_path))
+    for backend in ("local", "cloud"):
+        plan = service.prepare_chat({"prompt": "sampling.fs 参数默认值是多少？", "model_type": backend})
+        assert plan["model_type"] == backend
+        assert plan["sources"] and plan["sources"][0]["id"] == PLATFORM_PARAMETER_DOC_ID
+        assert "sampling.fs" in plan["sources"][0]["snippet"]
+        assert "sampling.fs" in plan["messages"][0]["content"]
+        assert plan["messages"][-1] == {"role": "user", "content": "sampling.fs 参数默认值是多少？"}
+
+
 def test_local_knowledge_import_search_and_delete(tmp_path, monkeypatch):
     monkeypatch.setenv("ELEC_TOOL_ASSISTANT_ADMIN_TOKEN", "kb-admin")
     service = AssistantService(data_dir=str(tmp_path))
     imported = service.import_documents({"documents": [{
-        "name": "nilm-guide.md", "content": "负荷辨识画像匹配需要设置 pre_cycles、post_cycles 和 window_cycles。"
+        "name": "nilm-guide.md", "content": "现场专属标识 ZetaLab503：负荷辨识画像匹配验证记录。"
     }]}, "kb-admin")
     assert imported["count"] == 1
     assert imported["documents"][0]["name"] == "nilm-guide.md"
-    matches = service.search_knowledge("负荷辨识画像匹配 post_cycles", 4, 0.0)
+    matches = service.search_knowledge("ZetaLab503 画像验证", 4, 0.0)
     assert matches and matches[0]["name"] == "nilm-guide.md"
     result = service.delete_document(imported["documents"][0]["id"], "kb-admin")
     assert result["removed"] == 1 and result["count"] == 0

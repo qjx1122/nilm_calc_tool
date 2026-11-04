@@ -279,11 +279,12 @@ def test_profile_phases_control_and_payload(page):
 
 def test_assistant_ui_contract_and_safe_markdown_renderer(page):
     required_ids = (
-        "assistant-launcher", "assistant-dialog", "assistant-model-type", "assistant-conversation-select",
-        "assistant-new", "assistant-delete-conversation", "assistant-messages", "assistant-form",
-        "assistant-prompt", "assistant-stop", "assistant-settings", "assistant-admin-token",
-        "assistant-save-settings", "assistant-load-sensitive-terms", "assistant-clear-sensitive-terms",
-        "assistant-doc-files", "assistant-import-docs", "assistant-knowledge-list",
+        "assistant-launcher", "assistant-panel", "assistant-tab-docs", "assistant-tab-chat",
+        "assistant-doc-search", "assistant-doc-list", "assistant-doc-content", "assistant-doc-status",
+        "assistant-model-type", "assistant-conversation-select", "assistant-new", "assistant-delete-conversation",
+        "assistant-messages", "assistant-form", "assistant-prompt", "assistant-stop", "assistant-settings",
+        "assistant-admin-token", "assistant-save-settings", "assistant-load-sensitive-terms",
+        "assistant-clear-sensitive-terms", "assistant-doc-files", "assistant-import-docs", "assistant-knowledge-list",
     )
     for element_id in required_ids:
         assert element_id in page.ids, f"缺少智能问答界面 #{element_id}"
@@ -295,6 +296,8 @@ def test_assistant_ui_contract_and_safe_markdown_renderer(page):
     assert "text/event-stream" in assistant_js and "response.body.getReader" in assistant_js
     assert "assistantNewConversation(next)" in assistant_js and "window.confirm(message)" in assistant_js
     assert "visible_views" in assistant_js and "assistantSyncLauncher" in assistant_js
+    assert "/api/assistant/documents" in assistant_js and "assistantLoadDocuments" in assistant_js
+    assert "assistantSetMobilePane" in assistant_js and "assistantRenderDocumentList" in assistant_js
     assert "noopener noreferrer" in assistant_js, "Markdown 外链必须禁止 opener"
     assert "assistantRenderMarkdown" in assistant_js and "element.innerHTML" not in assistant_js
     assert "localStorage" not in assistant_js, "会话正文仅保存在页面内存，避免静默落浏览器持久存储"
@@ -303,16 +306,19 @@ def test_assistant_ui_contract_and_safe_markdown_renderer(page):
     assert "会话仅保存在当前页面内存" in HTML
 
 
-def test_assistant_is_an_embedded_right_drawer_with_zero_config_backend(page):
-    """问答应仍在当前业务页内，以右侧抽屉出现；内置演示通道排在默认首选。"""
+def test_assistant_is_a_fixed_composite_sidebar_with_zero_config_backend(page):
+    """同页固定侧栏融合文档与问答；窄屏提供文档 / 问答标签，内置通道免模型配置。"""
     assert page.selects["assistant-model-type"] == ["builtin", "local", "cloud"]
     assert page.selects["assistant-default-backend"] == ["builtin", "local", "cloud"]
-    assert '<dialog id="assistant-dialog"' in HTML and 'aria-modal="true"' in HTML
-    assert "assistant-launcher" in page.ids and "assistant-dialog" in page.ids
+    assert '<aside id="assistant-panel"' in HTML and 'aria-controls="assistant-panel"' in HTML
+    assert '<dialog id="assistant-dialog"' not in HTML and 'aria-modal="true"' not in HTML
+    assert "assistant-launcher" in page.ids and "assistant-panel" in page.ids
+    assert "assistant-doc-pane" in HTML and "assistant-chat-pane" in HTML
     style = (ROOT / "app/static/style.css").read_text(encoding="utf-8")
-    drawer = re.search(r"\.assistant-dialog\s*\{([^}]*)\}", style)
-    assert drawer, "style.css 缺少助手抽屉样式"
-    assert "position:fixed" in drawer.group(1) and "inset:0 0 0 auto" in drawer.group(1), drawer.group(1)
-    assert "width:min(560px,100vw)" in drawer.group(1) and "height:100dvh" in drawer.group(1)
-    assert "assistantNewConversation('builtin')" in APPJS, "新对话未默认进入免配置演示通道"
+    sidebar = re.search(r"\.assistant-panel\s*\{([^}]*)\}", style)
+    assert sidebar, "style.css 缺少固定侧栏样式"
+    assert "position:fixed" in sidebar.group(1) and "inset:0 0 0 auto" in sidebar.group(1), sidebar.group(1)
+    assert "width:min(900px,100vw)" in sidebar.group(1) and "height:100dvh" in sidebar.group(1)
+    assert "@media(max-width:760px)" in style and ".assistant-mode-tabs{display:flex" in style
+    assert "assistantNewConversation('builtin')" in APPJS, "新对话未默认进入免模型通道"
     assert "model_type: conv.backend || 'builtin'" in APPJS, "聊天载荷仍回退到需要模型配置的后端"

@@ -41,7 +41,12 @@ let lastConfigPayload = null;
 let lastChatPayload = null;
 let lastImportedDocuments = null;
 let knowledgeDocuments = [];
+const bundledDocuments = [
+  { id: 'builtin-platform-parameters', name: '平台参数清单', title: '平台参数清单', category: '平台参数', summary: '代码默认与两侧模板值', content: '# 平台参数清单\n\n| 配置路径 | 代码默认值 | 总线模板值 | 分路模板值 |\n| --- | --- | --- | --- |\n| `sampling.fs` | `6400.0` | `6400.0` | `6400.0` |', characters: 100 },
+  { id: 'builtin-software-design', name: '软件设计文档', title: '软件设计文档', category: '设计', summary: '架构与模块说明', content: '# 软件设计文档\n\n平台模块说明。', characters: 30 },
+];
 window.fetch = async (url, options = {}) => {
+  if (url === '/api/assistant/documents') return jsonResponse({ ok: true, count: bundledDocuments.length, characters: 130, documents: bundledDocuments });
   if (url === '/api/assistant/config' && (!options.method || options.method === 'GET')) {
     return jsonResponse({ ok: true, config, views });
   }
@@ -66,8 +71,8 @@ window.fetch = async (url, options = {}) => {
     const payload = JSON.parse(options.body); lastChatPayload = payload;
     if (!payload.stream || !['builtin', 'local'].includes(payload.model_type)) throw new Error('聊天请求参数不符合预期');
     const frames = [
-      { type: 'sources', sources: [{ name: payload.model_type === 'builtin' ? 'demo_profile_matching.md' : 'guide.md', score: 0.91 }] },
-      { type: 'delta', text: payload.model_type === 'builtin' ? '### 内置知识库（演示）\n\n设备画像匹配的本地演示摘录。' : '## 结论\n\n支持 **Markdown**、`代码`。\n\n```js\nalert(1)\n```\n\n<img src=x onerror=alert(1)>\n\n[坏链接](javascript:alert(1))' },
+      { type: 'sources', sources: [{ name: payload.model_type === 'builtin' ? '平台参数清单' : 'guide.md', score: 0.91 }] },
+      { type: 'delta', text: payload.model_type === 'builtin' ? '### 内置知识库｜本地文档检索\n\n平台参数清单摘录：`pre_cycles` 与 `window_cycles` 的代码默认值须与当前配置核对。' : '## 结论\n\n支持 **Markdown**、`代码`。\n\n```js\nalert(1)\n```\n\n<img src=x onerror=alert(1)>\n\n[坏链接](javascript:alert(1))' },
       { type: 'done' },
     ].map(frame => 'data: ' + JSON.stringify(frame) + '\n\n').join('');
     const bytes = encoder.encode(frames);
@@ -89,35 +94,49 @@ const check = (ok, message) => { if (!ok) throw new Error(message); checkCount +
 check($('assistant-launcher').hidden, '配置读取前问答入口应默认隐藏');
 
 (async () => {
-  // 等待首次配置读取。
-  for (let i = 0; i < 50 && !window.__assistantState.config; i++) await new Promise(resolve => setTimeout(resolve, 10));
+  // 等待首次配置读取及启动时加载的完整内置文档库。
+  for (let i = 0; i < 100 && (!window.__assistantState.config || !window.__assistantState.documents.length); i++) await new Promise(resolve => setTimeout(resolve, 10));
   check(!!window.__assistantState.config, '配置未加载');
   check(!$('assistant-launcher').hidden, '总览页应显示入口');
-  check($('assistant-model-type').value === 'builtin', '未配置模型时应默认选择内置演示通道');
-  check($('assistant-privacy-note').textContent.includes('无需配置模型'), '内置通道隐私说明未显示零配置语义');
-  check(style.includes('.assistant-dialog{position:fixed;inset:0 0 0 auto;'), '助手 CSS 未定位到当前页面右侧抽屉');
-  check(html.includes('aria-modal="true"'), '嵌入式对话面板缺少 dialog 语义');
+  check($('assistant-model-type').value === 'builtin', '未配置模型时应默认选择内置文档通道');
+  check($('assistant-privacy-note').textContent.includes('本地文档模式'), '内置通道隐私说明未显示本地文档语义');
+  check(window.__assistantState.documents.length === 2, '启动时未加载文档目录');
+  check($('assistant-doc-content').textContent.includes('sampling.fs'), '默认参数清单没有渲染为完整文档');
+  $('assistant-doc-search').value = '设计'; $('assistant-doc-search').dispatchEvent(new window.Event('input'));
+  check($('assistant-doc-list').querySelectorAll('button').length === 1, '文档搜索没有按标题和摘要过滤');
+  $('assistant-doc-list').querySelector('button').click();
+  check($('assistant-doc-content').textContent.includes('平台模块说明'), '选择本地文档后没有渲染完整正文');
+  $('assistant-doc-search').value = ''; $('assistant-doc-search').dispatchEvent(new window.Event('input'));
+  check($('assistant-doc-list').querySelectorAll('button').length === 2, '清除搜索后文档目录未恢复');
+  check(style.includes('.assistant-panel{box-sizing:border-box;position:fixed;inset:0 0 0 auto;'), '助手 CSS 未定位到当前页面固定侧栏');
+  check(style.includes('@media(max-width:760px)') && style.includes('.assistant-mode-tabs{display:flex'), '移动端文档 / 问答标签样式缺失');
+  check(html.includes('<aside id="assistant-panel"') && !html.includes('<dialog id="assistant-dialog"'), '助手必须使用同页侧栏而不是旧 dialog');
 
-  const drawer = $('assistant-dialog'); drawer.setAttribute('open', '');
-  drawer.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
-  check(!drawer.hasAttribute('open'), '点击抽屉遮罩未关闭面板');
+  const panel = $('assistant-panel'); $('assistant-launcher').click();
+  check(!panel.hidden && panel.getAttribute('aria-hidden') === 'false', '点击入口没有打开固定侧栏');
+  $('assistant-tab-docs').click();
+  check($('assistant-doc-pane').classList.contains('is-active') && $('assistant-tab-docs').getAttribute('aria-selected') === 'true', '窄屏文档标签未切换到文档栏');
+  $('assistant-tab-chat').click();
+  check($('assistant-chat-pane').classList.contains('is-active') && $('assistant-tab-chat').getAttribute('aria-selected') === 'true', '窄屏问答标签未切换到问答栏');
+  $('assistant-close').click();
+  check(panel.hidden && panel.getAttribute('aria-hidden') === 'true', '关闭按钮没有收起侧栏');
   window.S.view = 'nilm'; window.assistantSyncLauncher();
   check($('assistant-launcher').hidden, 'visible_views 未控制入口显隐');
   window.S.view = 'overview'; window.assistantSyncLauncher();
 
-  // 默认演示通道在不调用模型的情况下返回内置知识摘录和引用。
+  // 默认本地文档通道不调用模型，返回平台文档摘录和引用。
   $('assistant-prompt').value = '设备画像匹配有哪些注意事项？';
   await window.assistantSubmit();
   let messages = $('assistant-messages');
-  check(lastChatPayload && lastChatPayload.model_type === 'builtin', '首次聊天没有使用内置演示后端');
-  check(messages.textContent.includes('内置知识库（演示）') && messages.textContent.includes('本地演示摘录'), '内置摘录回答未渲染');
-  check(messages.textContent.includes('引用：demo_profile_matching.md'), '内置知识库引用未显示');
+  check(lastChatPayload && lastChatPayload.model_type === 'builtin', '首次聊天没有使用内置文档后端');
+  check(messages.textContent.includes('内置知识库｜本地文档检索') && messages.textContent.includes('pre_cycles'), '内置本地文档摘录未渲染');
+  check(messages.textContent.includes('引用：平台参数清单'), '平台参数清单引用未显示');
 
   // 切换到本地模型后验证 SSE 分片解析与安全 Markdown/XSS。
   const model = $('assistant-model-type'); model.value = 'local'; model.dispatchEvent(new window.Event('change'));
   check(window.__assistantState.conversations.length === 2, '切换模型未新建会话');
   check(window.__assistantState.conversations[0].backend === 'local', '新会话未采用所选模型');
-  check(window.__assistantState.conversations[1].messages.length === 2, '内置演示会话没有保留');
+  check(window.__assistantState.conversations[1].messages.length === 2, '内置文档会话没有保留');
   $('assistant-prompt').value = '如何查看画像参数？';
   await window.assistantSubmit();
   messages = $('assistant-messages');
@@ -132,7 +151,7 @@ check($('assistant-launcher').hidden, '配置读取前问答入口应默认隐�
   check(window.__assistantState.conversations.length === 3, '切换模型未新建独立会话');
   check(window.__assistantState.conversations[0].backend === 'cloud', '新会话未采用所选模型');
   check(window.__assistantState.conversations[1].backend === 'local' && window.__assistantState.conversations[1].messages.length === 2, '本地模型会话没有保留');
-  check(window.__assistantState.conversations[2].backend === 'builtin' && window.__assistantState.conversations[2].messages.length === 2, '内置演示会话没有保留');
+  check(window.__assistantState.conversations[2].backend === 'builtin' && window.__assistantState.conversations[2].messages.length === 2, '内置文档会话没有保留');
 
   // 配置保存必须带管理员口令，且密钥输入只作为 POST/PUT 参数，不回填页面。
   $('assistant-admin-token').value = 'admin'; $('assistant-admin-token').dispatchEvent(new window.Event('input'));
@@ -160,7 +179,7 @@ check($('assistant-launcher').hidden, '配置读取前问答入口应默认隐�
   await window.assistantLoadConfig();
   check($('assistant-launcher').hidden, 'enabled=false 时问答入口仍然可见');
 
-  console.log(`PASS ${checkCount} checks — embedded right drawer, builtin demo retrieval, safe Markdown/XSS, citations, model-switch sessions, admin config, local file import`);
+  console.log(`PASS ${checkCount} checks — fixed document/chat sidebar, bundled docs, mobile tabs, builtin retrieval, safe Markdown/XSS, citations, model-switch sessions, admin config, local file import`);
   dom.window.close();
 })().catch(error => {
   console.error('FAIL:', error && error.stack || error);

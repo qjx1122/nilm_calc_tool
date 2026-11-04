@@ -516,6 +516,23 @@ def test_assistant_chat_stream_and_nonstream_api(client, tmp_path, monkeypatch):
     assert invalid.status_code == 400 and "布尔值" in invalid.json()["error"]
 
 
+def test_assistant_documents_endpoint_returns_complete_bundled_library(client, tmp_path, monkeypatch):
+    from app.assistant import AssistantService
+
+    service = AssistantService(data_dir=str(tmp_path / "assistant"))
+    monkeypatch.setattr(client.srv, "assistant_service", service)
+    response = client.get("/api/assistant/documents")
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["ok"] is True and payload["count"] >= 7
+    assert payload["characters"] == sum(doc["characters"] for doc in payload["documents"])
+    by_id = {doc["id"]: doc for doc in payload["documents"]}
+    assert "builtin-platform-parameters" in by_id
+    assert "软件设计文档" in by_id["builtin-software-design"]["content"]
+    assert "sampling.fs" in by_id["builtin-platform-parameters"]["content"]
+    assert "智能问答模块说明文档" in by_id["builtin-assistant-guide"]["title"]
+
+
 def test_assistant_builtin_default_and_platform_source_name_redaction(client, tmp_path, monkeypatch):
     from app.assistant import AssistantService
 
@@ -527,19 +544,19 @@ def test_assistant_builtin_default_and_platform_source_name_redaction(client, tm
 
     visible = client.post("/api/assistant/chat", json={"prompt": "设备画像匹配", "stream": False})
     assert visible.status_code == 200, visible.text
-    assert visible.json()["answer"].startswith("### 内置知识库（演示）")
-    assert visible.json()["sources"][0]["name"] == "demo_profile_matching.md"
+    assert visible.json()["answer"].startswith("### 内置知识库｜本地文档检索")
+    assert visible.json()["sources"] and visible.json()["sources"][0]["name"] in {"软件使用文档", "软件算法调参与验证文档"}
 
     bus_config.branch.hide_ui = True
     hidden = client.post("/api/assistant/chat", json={"prompt": "设备画像匹配", "stream": False})
     assert hidden.status_code == 200, hidden.text
-    assert "demo_profile_matching.md" not in hidden.text
+    assert "软件使用文档" not in hidden.text
     assert hidden.json()["sources"] and all(s["name"].startswith("已脱敏资料") for s in hidden.json()["sources"])
     assert "已脱敏资料" in hidden.json()["answer"]
 
     streamed = client.post("/api/assistant/chat", json={"prompt": "设备画像匹配", "stream": True})
     assert streamed.status_code == 200 and "text/event-stream" in streamed.headers["content-type"]
-    assert "demo_profile_matching.md" not in streamed.text
+    assert "软件使用文档" not in streamed.text
     frames = [json.loads(line[6:]) for line in streamed.text.splitlines() if line.startswith("data: {")]
     source_frame = next(frame for frame in frames if frame["type"] == "sources")
     assert source_frame["sources"] and source_frame["sources"][0]["name"].startswith("已脱敏资料")

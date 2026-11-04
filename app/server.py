@@ -1425,6 +1425,12 @@ async def put_assistant_config(payload: Dict[str, Any], request: Request) -> Any
         return JSONResponse(status_code=exc.status_code, content={"ok": False, "error": exc.message})
 
 
+@app.get("/api/assistant/documents")
+async def get_assistant_documents() -> Dict[str, Any]:
+    """Read-only bundled product manuals; loaded from an allow-list at service startup."""
+    return assistant_service.document_library()
+
+
 @app.get("/api/assistant/knowledge")
 async def get_assistant_knowledge() -> Dict[str, Any]:
     return assistant_service.knowledge_list()

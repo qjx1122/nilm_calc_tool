@@ -3787,3 +3787,12 @@ delta_i_a  = d_i_obs
   - 来源隐藏判据分别覆盖隐藏 / 可见；隐藏时 API 的 JSON 与 SSE source frame、答案 delta 均不出现原支撑文件名，只返回脱敏来源名。右侧抽屉行为通过 jsdom 与 CSS 契约检查；没有声称已做真实浏览器像素级视觉验收。
 - 是否进入 REPORT.md（稳定结论）：否（是用户界面 / 工程实现及安全规则假设；暂无真实模型或现场验收稳定结论）。
 - 遗留问题：①未接真实 Ollama/vLLM 或云端 provider；②Windows / 用户内网 DNS、代理、HTTPS 反向代理和真实浏览器视觉仍待用户验收；③`branch.hide_ui` 原意是隐藏分路侧业务界面，并非助手专用来源开关，本轮暂作来源脱敏映射，若用户提供独立规则应调整服务端；④切换隐藏规则后，既有页面中已经渲染的历史消息不会被服务器追溯改写，后续新请求会按当时的服务端规则脱敏。
+
+## [2026-11-04] 专题：智能问答同页文档复合侧栏与完整本地资料库
+- 类型：用户专题 / 验证专题
+- 目标与假设：按用户新增要求，把助手改成同一业务页固定复合侧栏，左侧浏览完整结构化产品帮助和平台参数、右侧保留原会话问答 / 模型 / 管理员操作；标题“智能问答助手”，定位调参辅助文档助手，参数问题优先查平台参数清单。实验能力默认解释为提供可复现步骤，不声称可直接执行命令或改配置（当前无受控实验 API）。
+- 方法 / 数据 / 参数：新增 `app/assistant_docs.py`，服务启动时从白名单加载 7 类文档：README 架构 / 使用 / 部署章节、稳定结论 `REPORT.md`、设备画像算法方案、完整 `NILM_TUNING_GUIDE.md`、`NILM_DATA_DICT.md`、助手说明、平台参数清单；后者由 `AppConfig()` 代码默认与跟踪的 `configs/default.json` / `configs/branch.json` 生成，参数路径 264 个，三类来源分列，避免误报当前运行值。新增只读 `GET /api/assistant/documents` 返回目录 / 全文；builtin 与 local/cloud RAG 共用内置语料及管理员附加资料，参数问句提高清单检索权重，显式字段名再作片段级排序；文本分块尽量保留行边界、引用摘要按命中字段截取。`index.html/style.css/app.js` 改为固定 `<aside>`：桌面双栏、窄屏“文档 / 问答”切换，支持搜索、选择、安全 Markdown 正文；管理员上传知识仍独立可清空，会话 / 模型切换 / SSE / 配置 / 来源脱敏逻辑保留。
+- 用户执行命令（含实录路径；本节无用户命令则注明）：无（本节仅沙盒执行；`./.venv/bin/python -m pytest -q`、`node tools/ui_assistant_check.cjs`、`npm ci`，live preview 输出隔离 `/tmp/nilm-assistant-preview-189`）。
+- 结果 / 结论：全量 pytest **603 passed / 1 skipped**（138.94 s，1 条既有 Starlette/httpx deprecation warning）；定向 `tests/test_assistant.py tests/test_server.py tests/test_web_ui.py` **58 passed**；`node tools/ui_assistant_check.cjs` **42 checks**；`node --check app/static/app.js`、`node --check tools/ui_assistant_check.cjs` 与 `git diff --check` 通过。测试覆盖文档完整性 / 参数来源分列、字段优先命中、builtin 不调用模型、local/cloud RAG 上下文、`GET /api/assistant/documents`、脱敏、文档搜索 / 正文浏览 / 移动端标签、SSE / 会话 / 管理员兼容。隔离预览监听 `0.0.0.0:8001`：首页、文档 API（7 份 / 462,782 字符）、助手配置与 builtin `sampling.fs` 问答均 HTTP 200，引用摘要包含命中参数。`tmp/` 测试期间新增的 12 个当日输出已清理；任务前备份 `/tmp/nilm-tmp-before-188-sync.tar.gz` 中的原有工件已恢复，另将初始工作区已有的 12 个被测试覆盖的跟踪样本从当前 HEAD 恢复。最后一次全量测试前另存 `/tmp/nilm-tmp-before-final-pytest.tar.gz`，测试后 `diff -qr` 为空；未把任何 `tmp/` 路径纳入本轮提交，原有用户工件保持不变。
+- 是否进入 REPORT.md（稳定结论）：否（属于助手文档 / UI 工程实现与回归，没有新的算法稳定结论；真实模型和现场验收待后续）。
+- 遗留问题：真实 Ollama/vLLM、云端供应商与 API Key、Windows / 现场网络 / HTTPS、用户真实浏览器视觉仍待外部验收；`branch.hide_ui` 来源脱敏映射仍是既有暂定规则。当前仍为词项 TF-IDF 检索，不是语义向量或生成式内置回答。

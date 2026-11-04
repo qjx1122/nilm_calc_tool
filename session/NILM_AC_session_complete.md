@@ -832,3 +832,12 @@
 - 验证：全量 pytest **600 passed / 1 skipped**；`node tools/ui_assistant_check.cjs` **PASS 33 checks**；`node --check`、`py_compile`、`git diff --check` 通过；隔离配置 live preview `0.0.0.0:8001` 首页 / 配置 / builtin JSON + SSE 均 HTTP 200，未触碰 `tmp/` 工件。
 - 未决问题：真实 Ollama/vLLM、云端 provider、Windows / 现场内网与 HTTPS、真实浏览器视觉待用户实录；来源脱敏的正式控制规则待用户确认；已显示在页面中的旧历史消息不追溯清理。
 - 相关文件/分支：`app/assistant.py`、`app/server.py`、`app/static/{index.html,style.css,app.js}`、`tests/test_assistant.py`、`tests/test_server.py`、`tests/test_web_ui.py`、`tools/ui_assistant_check.cjs`、`README.md`、`STATUS.md`、`REPORT_TEST.md`；`arena/82e34fb8-nilm-calc-tool`。
+
+## [2026-11-04] 会话纪要
+- 目标：完成智能问答同页固定复合侧栏与完整本地文档库；文档用于浏览及 builtin / local / cloud RAG，参数查询优先平台参数清单。
+- 本会话角色：资深电力算法专家（默认）＋工程实现工程师（任务级覆盖）。
+- 完成项：新增 `app/assistant_docs.py` 与 `docs/智能问答助手说明.md`；启动加载 7 份白名单正式资料，参数表自动合并 `AppConfig` 代码默认 / 总线模板 / 分路模板（264 项）并分列；新增 `GET /api/assistant/documents`；完整资料接入三种问答通道检索；助手 UI 改为固定 `<aside>` 桌面双栏、窄屏文档 / 问答标签，完成文档搜索、浏览和安全 Markdown；扩展服务、API、UI 测试；README、STATUS 与专题报告已更新。
+- 关键决策：不读 `tmp/`、运行产物或用户数据；模板未写字段不推断最终值；完整内置文档与管理员附加文档分开管理；参数类问句优先参数清单与显式路径命中；实验“执行”只解释为给有依据的命令 / 页面步骤与判据，不直接执行操作。
+- 验证：全量 pytest **603 passed / 1 skipped**（138.94 s，1 条既有 deprecation warning）；定向助手 / 服务 / UI **58 passed**；`node tools/ui_assistant_check.cjs` **42 checks**；JS 语法与 diff 检查通过。隔离 live preview `0.0.0.0:8001` 的首页、7 份完整文档 API、助手配置与 builtin 参数问答均 HTTP 200。运行数据放 `/tmp/nilm-assistant-preview-189`；为全量测试前打包 `/tmp/nilm-tmp-before-final-pytest.tar.gz`，测试后 `diff -qr` 为空；`tmp/` 未暂存，原用户工件保持不变。
+- 未决问题：真实本地 / 云端模型、Windows / 现场网络 / HTTPS 与用户真实浏览器视觉尚待用户实录；来源脱敏仍沿用服务端 `branch.hide_ui` 暂定判据；模型连接不属于本次实现验收。
+- 相关文件/分支：`app/assistant_docs.py`、`docs/智能问答助手说明.md`、`app/assistant.py`、`app/server.py`、`app/static/{index.html,style.css,app.js}`、`tests/test_assistant.py`、`tests/test_server.py`、`tests/test_web_ui.py`、`tools/ui_assistant_check.cjs`、`README.md`、`STATUS.md`、`REPORT_TEST.md`；`arena/82e34fb8-nilm-calc-tool`。
