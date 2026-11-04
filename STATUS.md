@@ -1,20 +1,26 @@
 # STATUS.md
 
 > 续接文件（BOOTSTRAP.md v2.2 台账）。每次收尾必更新；只改本文件，不另建同类文件。
-> 最后更新：2026-11-04（第 191 轮智能问答受控工具实现、回归与文档已完成，待用户现场验收；分支 `arena/82e34fb8-nilm-calc-tool` 为 active；授权采用操作员令牌 + 每工具 scope；云端工具默认关闭；坏 allow-list fail-closed；禁止任意 shell / SQL）
+> 最后更新：2026-11-04（第 192 轮：生成并纳入助手知识库的五份正式文档；当前分支 `arena/82e34fb8-nilm-calc-tool` 为 active；沿用默认资深电力算法专家角色；不触碰 `tmp/`，不处理第 183 轮旧清单）
 > （第 186 轮 两层布局 v0.99.33，`576 passed`）
 > （第 185 轮 `stage_free` 列表框 v0.99.32，`575 passed`）
 > （上轮：第 184 轮 设备画像单相 / 分相支持 + v0.99.31 事件幅值口径，`574 passed`）
 
 ## 当前角色
 - 角色：**资深电力算法专家**（`ROLE.md` v1.4 指定的默认当前角色）
-- 本任务级覆盖：**工程实现工程师**（第 191 轮智能问答工具执行专题；本轮实现与验证已完成，下一任务恢复默认角色）
-- 生效范围：第 191 轮功能实现与本次收尾
+- 本任务级覆盖：无（沿用 `ROLE.md` 指定的默认资深电力算法专家；本轮为知识库文档生成与内容核对）
+- 生效范围：第 192 轮五份助手知识库文档
 - 默认执行模式：**混合**——沙盒侧（模式 A）写码 + 合成信号解析解自验证 + live preview 实跑，**已有实录**；用户侧（模式 B）Windows 部署 / 真实数据对账 / 生产常驻，**只出执行包，未获实录不下结论**（执行包见 `REPORT_TEST.md` T-002 的 W/R/P 三组）
   - 说明：更早任务用户显式指定过模式 B（仅对「补齐台账骨架」生效）；此后各任务用户均跳过模式澄清，故一律按上述混合模式执行并在此声明。第 5 轮（界面下拉框检查）沙盒侧＝jsdom 驱动真实页面打真实服务端 + REST 空值语义实录，**已✅实录**；用户侧＝浏览器手点 U 组 7 步，**🔶待回报**。**第 6 轮（四功能）**沙盒侧＝pytest 25 项 + jsdom 30 项 + REST/CLI 实录，**已✅实录**；用户侧＝浏览器手点 U6 组 8 步，**🔶待回报**。**第 7 轮（三功能）**沙盒侧＝pytest 18 项 + jsdom 39 项 + CLI/源层实录，**已✅实录**；用户侧＝U7 组 8 步，**🔶待回报**。**第 9 轮（间谐波/直流/事件）**沙盒侧＝pytest 13 项 + jsdom 28 项 + live preview 实跑，**已✅实录**；用户侧＝U9 组 6 步，**🔶待回报**。**第 10 轮（离线列映射开关）**沙盒侧＝pytest 8 项 + jsdom 15 项 + REST 实录，**已✅实录**；用户侧＝U10 组 6 步，**🔶待回报**。**第 11 轮（时标 UTC 开关）**沙盒侧＝pytest 6 项 + 双时区全量 + jsdom 11 项，**已✅实录**；用户侧＝U11 组 5 步，**🔶待回报**。**第 12 轮（负荷辨识）**沙盒侧＝pytest 8 项 + jsdom 16 项 + 引擎/CSV 实录，**已✅实录**；用户侧＝U12 组 5 步，**🔶待回报**
 
 ## 当前目标
-- **本任务（2026-11-04 第 191 轮已完成：智能问答接入受控业务工具，v0.99.38）**：在既有本地 / 云端模型、RAG、SSE 与固定文档侧栏上新增自然语言操作提案、用户确认、服务端复核和审计。
+- **本任务（2026-11-04 第 192 轮已完成：助手知识库五份正式文档）**：已交付软件设计、软件使用、软件部署说明、软件算法调参与验证、智能问答模块说明五份 Markdown。
+  - **角色 / 模式**：沿用默认资深电力算法专家；模式 A；只在当前固定 session 分支 `arena/82e34fb8-nilm-calc-tool`（active）工作。
+  - **范围 / 决策**：“智能问答模块说明文档”按用户明确的说明文档要求处理；原有 `docs/智能问答助手说明.md` 保留并更新。四份新文档由已跟踪 README、REPORT、设备画像算法方案和 `NILM_TUNING_GUIDE.md` 可重复生成；不处理第 183 轮指南修正清单，不读取 / 写入 / 暂存 `tmp/`。
+  - **实现**：新增 `tools/generate_assistant_docs.py`（支持 `--check`）；新建 `docs/软件设计文档.md`、`docs/软件使用文档.md`、`docs/软件部署说明文档.md`、`docs/软件算法调参与验证文档.md`；`app/assistant_docs.py` 常规加载改为读取四份静态手册，缺文件时保留来源回退；平台参数清单仍动态生成，NILM 数据字典仍保留；新增静态加载测试，更新助手说明、README。
+  - **验证**：生成后 `--check` 四份全 `OK`；定向助手测试 **17 passed**；排除 `tmp/` 的 `/tmp/nilm-calc-tool-test-192` 全量 **609 passed / 1 skipped / 1 warning**（134.70 s，既有 Starlette/httpx TestClient deprecation）；jsdom **50 checks passed**；Python 编译、两个 `node --check` 与 `git diff --check` 通过。
+  - **缺口**：真实模型 / 云端、用户浏览器视觉、Windows / 现场数据与部署未验；内置静态文档及平台模板参数不能替代实际运行配置。
+- **上一任务（2026-11-04 第 191 轮已完成：智能问答接入受控业务工具，v0.99.38）**：在既有本地 / 云端模型、RAG、SSE 与固定文档侧栏上新增自然语言操作提案、用户确认、服务端复核和审计。
   - **任务角色 / 模式**：工程实现工程师；模式 A，在当前固定 session 分支工作。
   - **授权决策（用户已选）**：无账户 / 角色体系，采用环境变量配置的**独立操作员令牌 + 每工具 scope**；网页仅页面内存持有令牌；云端工具执行默认关闭。所有操作只走 8 项固定注册工具和受控业务 API，不接受任意命令、路径或 SQL。
   - **实现**：`app/assistant_tools.py` 定义闭集工具与严格参数 schema；`app/assistant.py` 完成 token/scope 授权、function call 解析、5 分钟提案 TTL / 单次消费 / 侧别绑定 / 二次确认、JSONL 审计及 10 分钟临时导出；`app/server.py` 增加工具上下文与业务 API adapter、身份 / 确认 / 取消 / 下载 / 审计端点。JSON / SSE 都返回提案预览。前端新增操作员验证、提案确认 / 取消 / 下载、有效期与过期 / 已处理状态；管理员 UI 可配置总开关、云端独立开关、工具 allow-list、审计与查看日志。
@@ -269,6 +275,7 @@
 - 范围边界：~~本 session 不写业务代码~~ ❌**已失效**（该边界属上一任务；本任务即为写代码）；仍然遵守：不新建台账外散文件、不把数据/产物入库
 
 ## 已完成
+- **第 192 轮（2026-11-04，助手知识库正式文档）**：新增四份独立项目手册，更新 `docs/智能问答助手说明.md`；提供 `tools/generate_assistant_docs.py` 与 `--check`，助手服务常规读取静态文件；测试确认静态来源加载。生成一致性四项 OK；助手测试 **17 passed**；隔离全量 pytest **609 passed / 1 skipped / 1 warning**；jsdom **50 checks passed**；Python / JS 语法及 diff 检查通过。Windows、真实现场 / 模型和用户视觉仍待外部验收。
 - **v0.99.38（2026-11-04，第 191 轮）**：智能问答受控工具完成；8 项注册工具、操作员令牌 + scope、提案确认 / 服务端复核、云端工具默认关闭、审计与临时 CSV；无效可选令牌允许只读问答、坏 `enabled_tools` allow-list fail-closed。全量隔离 pytest **608 passed / 1 skipped**，jsdom **50 checks**；真实模型 / 浏览器 / Windows 现场验收待用户回报。
 - **v0.99.37（2026-11-04，第 189 轮续）**：智能问答升级为文档 + 问答固定侧栏；`app/assistant_docs.py` 加载 7 份白名单文档，参数清单含 264 个叶子路径、分列代码默认 / 两侧模板；`GET /api/assistant/documents` 返回完整文档；内置 / local / cloud RAG 接入语料，平台参数问题及显式配置键优先；新增助手说明文档，`app/static/` 实现桌面双栏 / 窄屏标签、文档搜索与安全 Markdown 浏览。验证：全量 **603 passed / 1 skipped**；jsdom **42 checks**；isolated preview 首页、文档 API、助手配置、builtin 参数问答均 HTTP 200；`node --check` 和 `git diff --check` 通过。仍待真实模型 / 云端和用户浏览器视觉验收；预览输出写 `/tmp/nilm-assistant-preview-189`。
 - **v0.99.36（2026-11-04，第 188 轮续）**：用户补充智能问答验收项已完成。`app/assistant.py` 新增 builtin 演示语料与 TF-IDF 摘录 / 引用通道，默认无模型也可用、builtin 不触达模型 endpoint；`app/static/` 改成当前业务页右侧全屏抽屉；服务端对检索内容、模型提示、历史、答案、引用与 SSE 流片统一脱敏知识库文件名。**暂定假设**：服务端脱敏按 `RUNNERS["bus"].cfg.branch.hide_ui` 判定，此字段原义是隐藏分路界面，非助手专用开关，已在 README / 专题报告明确标出。新增测试覆盖 builtin 零配置、上下文与非流式 / 流式文件名脱敏、抽屉与 JS 交互。验证：全量 **600 passed / 1 skipped**；jsdom **33 checks**；live preview 首页 / 配置 / builtin JSON + SSE **200**。真实模型、Windows / 内网与真实浏览器视觉仍待用户验收。
@@ -453,6 +460,7 @@
 - 等用户执行 T-002 的 W/R/P 组（Windows 部署 / 真实数据对账 / 生产常驻）并回报实录
 
 ## 下一步（TODO）
+- **第 192 轮文档任务**：沙盒交付、生成一致性与回归已完成；用户如指出文档术语 / 内容需要调整，再修改上游源文档并重生成；目前无必须的现场执行项，不因模板文档宣称真实部署或验收完成。
 - **第 191 轮 v0.99.38（沙盒交付完成）**：用户环境设置管理员工具开关与 `ELEC_TOOL_ASSISTANT_OPERATOR_TOKENS`，验收总线 / 分路工具的 proposal 预览、错误令牌、scope 撤销、过期 / 重放 / 侧别冲突、二次确认码及审计；另测真实 local/cloud function calling、浏览器移动端与 Windows 部署。云端工具默认保持关闭；`/api/chat` 别名尚未实现 / 评估。
 - **第 189 轮 v0.99.37（沙盒交付完成）**：用户视觉点检固定文档 / 问答侧栏、窄屏标签和助手入口；如有视觉问题按用户反馈迭代。真实 Ollama/vLLM 与云端供应商、Windows / 现场网络仍需用户环境实录。
 - **上一任务：第 188 轮 v0.99.36（沙盒实现完成）**：邀请用户在 live preview 检查嵌入式右抽屉与内置演示摘录；收集真实本地 / 云端模型及 Windows/内网浏览器实录。若来源隐藏规则不是 `branch.hide_ui`，按用户指出的正式开关调整。管理面板须配置 `ELEC_TOOL_ASSISTANT_ADMIN_TOKEN`，并仅在 HTTPS / 受信网络使用；`visible_views` 不是账户授权。
@@ -476,6 +484,7 @@
 10. **T-004 遗留**：自定义播放时间目前只对 `csv_file` 生效（`csv_tail` 若现场文件也是 0/00/00 写法需扩展）；趋势历史随「重新启动数据源」清空，跨运行/跨进程的 24 h 需落盘（SQLite/滚动 CSV）；`history_hours`/`history_max_points` 未上界面；曲线横轴跨午夜不显示日期；自定义起始时间按本地时区（若现场要 UTC 需加 `tz` 字段）
 
 ## 决策记录 / 踩坑
+- 2026-11-04｜**第 192 轮（正式知识库文档）**：四份项目手册落盘并由生成脚本从已跟踪正式源文件派生，助手加载器优先读这些静态文件；仅在静态文档缺失时回退拼装。参数清单仍依赖 AppConfig 与两侧出厂模板，必须标明“不代表当前运行值”；保留数据字典和既有助手说明。生成 / 测试均排除 `tmp/`，不执行第 183 轮旧清单。
 - 2026-11-04｜**第 191 轮（受控工具授权与 fail-closed）**：在无账号体系下使用服务端操作员令牌 + 每工具 scope，令牌只留页面内存；模型工具调用只产生 proposal，用户确认时重新校验令牌、actor、scope、开关、有效期、侧别和二次码。无效 / 已撤销的可选令牌只禁用工具、保留只读问答；身份端点仍报认证错误。损坏的 `enabled_tools` 非列表必须回退空名单，不能像旧逻辑那样扩权成所有工具。云端工具保持默认关闭。全量测试在 `/tmp` 隔离副本执行以规避 `tmp/` 用户数据；工作区 `tmp/` 不加入本任务提交。
 - 2026-11-04｜**第 189 轮（智能问答文档 + 固定侧栏）**：内置资料只从仓库明确列出的正式文档、`AppConfig` 与跟踪的两侧模板读取；服务启动构建文档目录与完整参数表并交给 builtin/local/cloud 检索，代码默认 / 总线模板 / 分路模板分列，不冒充运行值；绝不读 `tmp/` 或运行产物。参数问句提高参数清单优先级，显式配置键再作片段级加权。侧栏改为非模态固定 `<aside>`，宽屏同屏浏览 / 问答、窄屏以标签切换；“执行实验操作”只提供 SOP / 命令 / 预期 / 判据，不直接执行，因为没有安全实验 API。将“文明文档”按“说明文档”处理。
 - 2026-11-04｜**第 188 轮（智能问答安全与边界）**：① 单页会话只留当前页面内存，不默认写 localStorage，避免静默持久化业务对话；② Markdown 用安全子集 DOM renderer（raw HTML 作为文本、链接限 http/https）；③ 公共配置不返回 API Key 或敏感词正文，受保护的 `/api/assistant/config/private` 需服务端管理员口令读取敏感词；④ `visible_views` 只显隐入口，不构成授权，因当前没有用户登录体系；⑤ 云端请求发送历史与命中的知识库片段，UI 常驻提示、服务端同时扫描历史/检索片段；⑥ UI key 只在进程内存，env key 优先，部署持久化 key 用环境变量；知识库与普通配置放 gitignore `output/assistant/`。
@@ -527,10 +536,11 @@
 ## 关键文件路径
 - `BOOTSTRAP.md` / `ROLE.md` — 协议 v2.2 与角色库 v1.4（默认角色：资深电力算法专家）
 - `STATUS.md` — 本文件，续接现场唯一入口
+- 第 192 轮知识库文档：`docs/软件设计文档.md`、`docs/软件使用文档.md`、`docs/软件部署说明文档.md`、`docs/软件算法调参与验证文档.md`、更新后的 `docs/智能问答助手说明.md`；生成器 `tools/generate_assistant_docs.py`；静态文档加载 `app/assistant_docs.py`；回归 `tests/test_assistant.py`；验证 / 会话记录 `README.md` §11、`REPORT_TEST.md`、`session/NILM_AC_session_complete.md`。
 - 第 191 轮智能问答 v0.99.38：`app/assistant_tools.py`（8 项闭集工具 / 参数 schema）、`app/assistant.py` / `app/server.py`（令牌 + scope、提案与服务端复核、受控业务 API、审计）、`app/static/index.html` / `app.js` / `style.css`（操作员验证、提案有效期 / 状态 / 二次确认）；回归 `tests/test_assistant.py`、`tests/test_server.py`、`tests/test_web_ui.py`、`tools/ui_assistant_check.cjs`；说明文档与报告见 `README.md` §3.6 / §11、`docs/智能问答助手说明.md`、`REPORT_TEST.md`、本文件与 `session/NILM_AC_session_complete.md`。
 - 第 189 轮智能问答 v0.99.37：`app/assistant_docs.py`（白名单完整文档与代码 / 两侧模板参数表）、`docs/智能问答助手说明.md`、`app/assistant.py` / `app/server.py`（builtin/local/cloud RAG、参数优先排序、`GET /api/assistant/documents`）、`app/static/index.html` / `app.js` / `style.css`（固定复合侧栏与移动标签）；测试 `tests/test_assistant.py`、`tests/test_server.py`、`tests/test_web_ui.py`、`tools/ui_assistant_check.cjs`；专题记录 `REPORT_TEST.md` 与 `session/NILM_AC_session_complete.md`。
 - 第 188 轮智能问答 v0.99.36：`app/assistant.py`（builtin / local-cloud 适配 / RAG / 脱敏 / 限流）、`app/server.py`（`/api/assistant/*` 与服务端脱敏判据）、`app/static/index.html` / `app.js` / `style.css`（右侧抽屉）；运行数据 `output/assistant/`（gitignore）
-- `README.md` — **v0.99.38**（第 191 轮智能问答增补：§3.6 受控提案 / 令牌 scope / fail-closed / 云端默认关闭，§11 当前 608 passed 与 50 jsdom checks；第 189 轮固定复合侧栏与参数文档索引保留）
+- `README.md` — **v0.99.38**（第 191 轮智能问答受控提案 / scope / fail-closed / 云端默认关闭；第 192 轮四份静态手册生成流程、§11 `609 passed / 1 skipped` 与 50 jsdom checks；第 189 轮固定复合侧栏及参数文档索引保留）
 - 历史 README 索引 — **v0.8**（§3.1 增「间谐波 / 直流偏置 / 事件 子界面」小节含假设与可配置项表、§3.4 `/api/events*` 与 WS `event`、§11 第 9 轮；v0.7：§3.1 增「数据处理子界面：离线波形 CSV 重采样」小节、§3.2 8 子命令、§3.4 4 个 `/api/process/resample*` 接口；v0.6：§3.1 增「实时落盘＋播放起点＋悬停取值」小节、§3.4 `/api/realtime`、§4.2 播放起点字段与 CLI、§8 七层验证）：§0 快速开始、§1 验收对照、**§2 本地部署（详细）**、**§3 运行说明（Web/CLI/库/REST 四种；§3.1 含数据源面板逐源可编辑/置灰字段表、两个保存入口语义对照、空值语义与 6 步手工点检清单）**、**§4 四种数据源详解（配置·三入口·实测·注意事项·验证，含 §4.6 四源对账表与 §4.8 一键复现）**、§5 数据目录、§6 配置结构、§7 输出产物、§8 五层验证、§9 生产推荐流程、§10 台账索引、§11 交付说明
 - `REPORT.md` — **v0.8**（新增 C-19 间谐波分组分辨率前提、C-20 事件状态机四规则；v0.7：新增 C-18 重采样时间轴/时标规则；v0.6：新增 C-16 三出口共用提取规则与按日期分文件、C-17 播放起点定位代价与可诊断）：稳定结论 C-01~C-08（电气量计算）+ C-09~C-12（四源等价性 / 切换前 drain / float32 禁存 epoch 秒与可诊断降级 / 无硬件验证路径）+ **C-13（界面层验证方法 + 深合并接口空值语义 + 推送覆盖用户输入）**；§3.3 十五类量口径；§5 六条实录教训
 - `REPORT_TEST.md` — **v0.8**（新增 **T-007** 第 9 轮间谐波/直流/事件：S1~S7 / F-29~F-31 / U9 组；v0.7：新增 **T-006** 第 8 轮数据处理子界面：S1~S7 / F-24~F-28 / U8 组；v0.6：新增 **T-005** 第 7 轮三功能：S1~S4 / F-17~F-21 / U7 组）：T-001（待回报）+ T-002（沙盒 A1~A10、B1/B2、用户侧 W/R/P）+ **T-003（沙盒 S1~S18 实录、四源对账表、F-01~F-10 修复、用户侧 S/U/D 三组执行包 + J-\* 判读 + 回收格式）**

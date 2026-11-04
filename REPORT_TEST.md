@@ -3866,3 +3866,20 @@ delta_i_a  = d_i_obs
   - 当前工作区的 `tmp/` 存在运行数据的修改 / 新增 / 删除状态；按用户约束保留原状并排除在本专题文件变更之外，不纳入本任务提交。
 - 是否进入 REPORT.md（稳定结论）：否（本专题为工程实现与安全回归，没有形成 NILM 算法稳定结论）。
 - 遗留问题：真实模型 function calling、云端 provider / Key、真实浏览器视觉 / 移动端、Windows / 生产网络与真实业务 API 操作仍需用户环境验收；无账号 / SSO 时审计只能关联 operator ID，不能证明自然人身份；`/api/chat` 别名未实现 / 未评估，现有兼容路径为 `/api/assistant/chat`；Starlette/httpx 弃用警告仍待依赖升级时处理。云端工具继续默认关闭。
+
+## [2026-11-04] 专题：智能问答知识库正式手册与静态文件加载
+- 类型：用户专题 / 文档与验证专题
+- 目标与假设：交付软件设计、软件使用、软件部署说明、软件算法调参与验证、智能问答模块说明五份正式文档。已有 `docs/智能问答助手说明.md` 应核对并更新，不再另建重复文件；四份项目手册落盘为可重复生成的 Markdown，并由 Assistant 文档库直接读取。
+- 方法 / 数据 / 参数：
+  - 新增 `tools/generate_assistant_docs.py`：软件设计文档由 README 指定架构 / 配置章节、`REPORT.md` 稳定记录和设备画像算法方案组成；软件使用文档来自完整 README；软件部署说明由 README 快速开始 / 安装 / Web / 生产章节组成；调参与验证文档来自完整 `NILM_TUNING_GUIDE.md`。脚本只写四个指定 `docs/*.md`，提供 `--check`，不读写 `tmp/`。
+  - `app/assistant_docs.py` 常规从四个静态 Markdown 加载内置知识库；静态文件缺失时保留旧源文档回退拼装。平台参数清单仍按 `AppConfig` 代码默认值、`configs/default.json`、`configs/branch.json` 动态生成，标注不代表当前运行值；`NILM_DATA_DICT.md` 与现有助手说明继续独立加载。
+  - 更新 `docs/智能问答助手说明.md`、README 的助手知识源 / 生成说明 / 验证记录；新增回归确认静态文件存在时不会触发动态回退拼装。未处理第 183 轮旧指南清单，未修改算法实现或 `tmp/`。
+- 用户执行命令（含实录路径；本节无用户命令则注明）：无用户侧命令。本节命令均由 Agent 在沙盒执行；全量测试隔离目录为 `/tmp/nilm-calc-tool-test-192-final`，归档时排除了仓库 `tmp/`。
+- 结果 / 结论：
+  - 四份生成文档最终长度：软件设计 **42,677** 字符、软件使用 **216,251**、软件部署 **36,580**、算法调参与验证 **142,220**；生成器 `--check` 对四份均输出 `OK`。
+  - `tests/test_assistant.py -q`：**17 passed**；最终隔离副本全量 `pytest -q`：**609 passed / 1 skipped / 1 warning**（131.13 s）。唯一 warning 是现有 Starlette/httpx `TestClient` 弃用提示。
+  - `node tools/ui_assistant_check.cjs`：**PASS 50 checks**；覆盖固定文档 / 问答侧栏、内置文档、窄屏标签、builtin 检索、安全 Markdown、引用、会话、管理员配置、导入及受控操作员确认流程。
+  - `python -m py_compile app/assistant_docs.py tools/generate_assistant_docs.py`、`node --check app/static/app.js`、`node --check tools/ui_assistant_check.cjs`、`git diff --check` 均通过。README 最终变化后重新生成使用手册、再次跑 `--check` 四项及助手定向测试，结果仍通过。
+  - 内容口径保持来源边界：平台模板 / 代码默认不冒充用户当前运行值；部署手册保留原文中 Windows / 现场网络等待验证标记，不宣称用户环境验收完成。工作树原 `tmp/` 运行数据状态完整排除在测试和文件变更范围外。
+- 是否进入 REPORT.md（稳定结论）：否（本专题为正式文档整理与知识库加载，不产生新的稳定算法结论）。
+- 遗留问题：真实 Ollama / 云端模型、用户真实浏览器视觉、Windows / 现场网络与部署、真实现场数据均未在本专题验证；生成后的静态文档需在服务重启后由 AssistantService 读取。后续若上游 README / REPORT / 算法方案 / 调参手册更新，需运行 `python tools/generate_assistant_docs.py` 再提交生成文件。

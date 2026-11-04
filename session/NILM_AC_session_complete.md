@@ -859,3 +859,12 @@
 - 验证方式 / 覆盖范围 / 缺口：全量 pytest **608 passed / 1 skipped / 1 warning**（134.16 s，Starlette/httpx TestClient deprecation）；`tests/test_assistant.py` **16 passed**，`tests/test_server.py` **27 passed**；`node tools/ui_assistant_check.cjs` **50 checks**；Python 编译、app.js 与 jsdom 工具 `node --check`、`git diff --check` 通过。覆盖畸形 allow-list fail-closed、只读 token 行为、身份拒绝、scope / TTL / 侧别 / 二次码复验、SSE proposal 与前端确认头。真实 local/cloud function calling、Windows、生产部署及用户浏览器视觉尚未验证。
 - 未决问题：需用户环境配置管理员工具开关及 `ELEC_TOOL_ASSISTANT_OPERATOR_TOKENS` 后验收总线 / 分路工具与错误 / 撤销 / 过期 / 重放场景；真实模型 / 云端服务与浏览器、Windows / HTTPS 部署仍待实录；无账号 / SSO 时 audit operator ID 不能证明自然人身份；`/api/chat` alias 仍未实现 / 评估。
 - 相关文件/分支：`app/assistant_tools.py`、`app/assistant.py`、`app/server.py`、`app/static/{index.html,app.js,style.css}`、`tests/test_assistant.py`、`tests/test_server.py`、`tests/test_web_ui.py`、`tools/ui_assistant_check.cjs`、`README.md`、`docs/智能问答助手说明.md`、`STATUS.md`、`REPORT_TEST.md`；分支 `arena/82e34fb8-nilm-calc-tool`。
+
+## [2026-11-04] 会话纪要
+- 目标：生成四份独立项目知识库手册，核对并更新既有智能问答模块说明，使助手直接读取正式文档，并为生成流程与加载方式补回归测试。
+- 本会话角色：资深电力算法专家（`ROLE.md` 默认角色）；模式 A；工作分支 `arena/82e34fb8-nilm-calc-tool`（active）。
+- 完成项：新增 `docs/软件设计文档.md`、`docs/软件使用文档.md`、`docs/软件部署说明文档.md`、`docs/软件算法调参与验证文档.md`；更新 `docs/智能问答助手说明.md` 和 README；新增 `tools/generate_assistant_docs.py`（支持 `--check`），将 `app/assistant_docs.py` 调整为常规读取四份静态手册并在缺失时回退源文件；`tests/test_assistant.py` 新增静态来源回归。保留动态平台参数清单及 `NILM_DATA_DICT.md`。
+- 关键决策：四份手册由已跟踪 README、REPORT、设备画像算法方案与 `NILM_TUNING_GUIDE.md` 派生；正式文件可重复生成，助手启动读取静态文件；模板 / 代码默认值不声称是当前运行值；现有助手说明文件原位更新；不顺带处理 P183-01~16，不碰、不暂存、不恢复 `tmp/`。
+- 验证：生成器 `--check` 四份 `OK`；助手定向 **17 passed**；最终隔离副本 `/tmp/nilm-calc-tool-test-192-final` 全量 pytest **609 passed / 1 skipped / 1 warning**（131.13 s，既有 Starlette/httpx `TestClient` deprecation）；jsdom `ui_assistant_check.cjs` **50 checks passed**；Python 编译、两个 `node --check`、`git diff --check` 通过。全量 pytest 副本明确排除 `tmp/`。
+- 未决问题：真实本地 / 云端模型、用户真实浏览器视觉、Windows / 现场部署和现场数据未验证；文档服务端加载需重启后更新。用户若提出文案或内容修订，再按源文档更新并重新生成。
+- 相关文件/分支：四份 `docs/软件*.md`、`docs/智能问答助手说明.md`、`tools/generate_assistant_docs.py`、`app/assistant_docs.py`、`tests/test_assistant.py`、`README.md`、`STATUS.md`、`REPORT_TEST.md`；分支 `arena/82e34fb8-nilm-calc-tool`。
