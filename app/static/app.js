@@ -5471,9 +5471,16 @@ function assistantIsCompactViewport() {
   return (window.matchMedia && window.matchMedia('(max-width: 680px)').matches) || (window.innerWidth || 0) <= 680;
 }
 function assistantSetSessionsCollapsed(collapsed) {
+  const isCollapsed = !!collapsed;
   const panel = assistantEl('assistant-panel'), toggle = assistantEl('assistant-session-toggle');
-  if (panel) panel.classList.toggle('sessions-collapsed', !!collapsed);
-  if (toggle) toggle.setAttribute('aria-expanded', String(!collapsed));
+  if (panel) panel.classList.toggle('sessions-collapsed', isCollapsed);
+  if (toggle) {
+    const label = isCollapsed ? '展开会话管理面板' : '收起会话管理面板';
+    toggle.setAttribute('aria-expanded', String(!isCollapsed));
+    toggle.setAttribute('aria-label', label);
+    toggle.title = label;
+    toggle.textContent = isCollapsed ? '☰ 显示会话' : '‹ 收起会话';
+  }
 }
 function assistantToggleSettings(open) {
   const settings = assistantEl('assistant-settings'), toggle = assistantEl('assistant-settings-open'); if (!settings) return;

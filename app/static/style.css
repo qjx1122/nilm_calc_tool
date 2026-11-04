@@ -379,7 +379,7 @@ input.flash{animation:ntflash 1.5s ease-out}
 .np-evsrc{margin-top:4px;font-size:11.5px}
 .np-tbl tr.np-stat td.np-stat:first-child{background:#17251f}
 
-/* 智能问答助手 v0.99.44：配置与附加知识库使用明确尺寸的独立滚动层 */
+/* 智能问答助手 v0.99.45：可收起会话管理侧栏；设置区使用明确尺寸的独立滚动层 */
 .assistant-launcher{position:fixed;right:22px;bottom:82px;z-index:30;border:1px solid #4485e8;background:linear-gradient(135deg,#1d4ed8,#2563eb);box-shadow:0 6px 22px #0008;border-radius:24px;padding:10px 16px;font-weight:700}
 .assistant-launcher[hidden]{display:none}
 .assistant-panel,.assistant-panel *{box-sizing:border-box}
@@ -392,6 +392,8 @@ input.flash{animation:ntflash 1.5s ease-out}
 .assistant-shell:focus-visible{outline:2px solid #4e8de8;outline-offset:-2px}
 .assistant-shell.settings-open{overflow-y:hidden}
 .assistant-workspace{display:grid;grid-template-columns:260px minmax(0,1fr);flex:1 0 420px;min-height:420px;gap:12px;overflow:visible}
+.assistant-panel.sessions-collapsed .assistant-workspace{grid-template-columns:minmax(0,1fr)}
+.assistant-panel.sessions-collapsed .assistant-session-pane{display:none}
 .assistant-session-pane{display:flex;flex-direction:column;gap:9px;min-width:0;min-height:0;padding:11px;border:1px solid var(--line);border-radius:11px;background:#111827;overflow:hidden}
 .assistant-session-heading{display:flex;justify-content:space-between;align-items:center;min-height:42px}
 .assistant-session-heading h2{margin:0;color:#eaf1ff;font-size:16px}
@@ -426,7 +428,7 @@ input.flash{animation:ntflash 1.5s ease-out}
 .assistant-subtitle{margin-top:4px;color:var(--mut);font-size:10px;line-height:1.35}
 .assistant-model-choice{display:flex;flex-direction:column;gap:4px;flex:0 0 auto;color:var(--mut);font-size:10px}
 .assistant-model-choice select{width:190px;max-width:25vw}
-.assistant-session-toggle{display:none;flex:0 0 auto}
+.assistant-session-toggle{display:inline-flex;flex:0 0 auto;align-items:center;justify-content:center;gap:4px;padding:6px 8px;font-size:11px;white-space:nowrap}
 .assistant-close{flex:0 0 auto}
 .assistant-privacy{flex:0 0 auto;color:var(--ok);font-size:10px;line-height:1.45;overflow-wrap:anywhere}
 .assistant-privacy.cloud{color:var(--warn)}
@@ -599,8 +601,6 @@ input.flash{animation:ntflash 1.5s ease-out}
   .assistant-workspace{position:relative;display:block;flex-basis:480px;min-height:480px}
   .assistant-chat-pane{width:100%;height:100%;gap:6px}
   .assistant-session-pane{position:absolute;inset:0 auto 0 0;z-index:35;width:min(300px,84vw);border-color:#50678f;box-shadow:12px 0 40px #0009}
-  .assistant-panel.sessions-collapsed .assistant-session-pane{display:none}
-  .assistant-session-toggle{display:inline-flex;padding:6px 8px;font-size:11px}
   .assistant-chat-header{gap:6px;padding:1px 0 7px}
   .assistant-title-group{min-width:0}
   .assistant-title-group h2{font-size:16px}

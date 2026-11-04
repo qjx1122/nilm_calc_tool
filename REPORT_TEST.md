@@ -4080,3 +4080,21 @@ delta_i_a  = d_i_obs
   - 上述自动化只证明当前静态契约与模拟行为；本环境没有原生浏览器布局 / scrollbar 工具，故不声称目标浏览器视觉、原生 wheel / 触屏或窄屏现场验收通过。
 - 是否进入 REPORT.md（稳定结论）：否（前端代码审计，没有新的稳定 NILM 算法结论）。
 - 遗留问题：用户需在目标浏览器依次检查长会话、消息、帮助文档 / 参数、审计区、短视口和窄屏的实际滚动条与 wheel / 触控滚动，并确认内层到边界后父级接管、设置后续内容可达。若 bar 闲置自动隐藏，应区分系统 overlay 策略与真正不可滚动；若仍复现，提供浏览器 / OS / 视口与复现步骤继续定位。`tmp/` 严格未读、未改、未暂存、未提交。
+
+## [2026-11-04] 专题：智能问答助手会话管理侧栏可收起
+- 类型：用户专题 / UI 功能实现与回归验证
+- 目标与假设：用户要求增加智能问答助手左侧会话管理面板收起功能。桌面应可从问答标题栏收起 / 恢复左栏，收起后问答区应占满可用宽度；窄屏保留现有抽屉式会话栏。
+- 方法 / 实现：
+  - 将现有 `#assistant-session-toggle` 从窄屏专用入口提升为所有尺寸可用的按钮。桌面默认显示会话栏，窄屏在打开助手时默认收起；点击后用 `sessions-collapsed` 状态隐藏 / 显示会话 pane。
+  - 桌面收起时工作区网格改为单列 `minmax(0,1fr)`，问答区占满侧栏；恢复时沿用原桌面 / 中等屏幕双栏尺寸。窄屏继续使用浮层式会话抽屉，不改变既有覆盖层交互。
+  - 按状态更新按钮可见文字、`title`、`aria-label` 与 `aria-expanded`；`aria-controls` 仍指向会话面板。折叠状态只存在于当前页面，不写入 localStorage / 配置，也不改对话状态。
+  - 扩展 `tests/test_web_ui.py` 样式 / HTML / JS 契约及 `tools/ui_assistant_check.cjs` 行为验证，覆盖桌面默认展开、收起、恢复，窄屏默认折叠、展开、再折叠；README §3.6 和 `docs/智能问答助手说明.md` 加入操作说明，并重新生成四份使用 / 部署知识库手册。
+- 用户执行命令（含实录路径；本节无用户命令则注明）：无；目标浏览器现场验收待用户执行。
+- 结果 / 结论：
+  - `.venv/bin/python -m pytest -o addopts='' tests/test_assistant.py tests/test_web_ui.py -q`：**46 passed**。
+  - `node tools/ui_assistant_check.cjs`：**PASS 150 checks**；包含桌面 / 窄屏侧栏状态切换和 `aria-expanded` / 名称同步。
+  - `node --check app/static/app.js`、`node --check tools/ui_assistant_check.cjs`、`.venv/bin/python -m py_compile tests/test_web_ui.py`、`git diff --check` 通过。
+  - `.venv/bin/python tools/generate_assistant_docs.py --check` 四份手册全部 `OK`：设计 **42,721**、使用 **227,563**、部署 **46,072**、算法调参与验证 **142,220** 字符。
+  - 本轮没有可用目标浏览器自动化；jsdom 测试验证行为状态，不证明真实桌面 / 窄屏视觉或实际键盘 / 屏幕阅读器验收。
+- 是否进入 REPORT.md（稳定结论）：否（智能问答 UI 交互，不涉及 NILM 算法结论）。
+- 遗留问题：请用户在目标浏览器桌面和窄屏检查标题栏按钮位置、收起后的问答宽度、恢复后的双栏宽度及 Tab / Enter 可操作性；如有异常请回报浏览器 / OS / 视口尺寸。仓库 `tmp/` 未读取、修改、暂存或提交。

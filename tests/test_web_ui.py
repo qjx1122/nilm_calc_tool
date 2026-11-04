@@ -415,7 +415,7 @@ def test_assistant_scroll_containers_preserve_reader_position_during_streaming()
 
 
 def test_assistant_is_a_fixed_session_and_chat_sidebar_with_zero_config_backend(page):
-    """同页固定侧栏改为会话管理 + 问答双栏；内置知识库免模型配置，窄屏可收起会话栏。"""
+    """同页固定侧栏支持会话管理栏收起 / 恢复；内置知识库免模型配置，窄屏保留抽屉行为。"""
     assert page.selects["assistant-model-type"] == ["builtin", "local", "cloud"]
     assert page.selects["assistant-default-backend"] == ["builtin", "local", "cloud"]
     assert '<aside id="assistant-panel"' in HTML and 'aria-controls="assistant-panel"' in HTML
@@ -431,6 +431,12 @@ def test_assistant_is_a_fixed_session_and_chat_sidebar_with_zero_config_backend(
     assert "position:fixed" in sidebar.group(1) and "inset:0 0 0 auto" in sidebar.group(1), sidebar.group(1)
     assert "width:min(1120px,100vw)" in sidebar.group(1) and "height:100dvh" in sidebar.group(1)
     assert ".assistant-workspace{display:grid;grid-template-columns:260px minmax(0,1fr)" in style
-    assert "@media(max-width:680px)" in style and ".assistant-session-toggle{display:inline-flex" in style
+    assert ".assistant-session-toggle{display:inline-flex;flex:0 0 auto" in style, "桌面会话栏开关必须显示在标题栏"
+    assert ".assistant-panel.sessions-collapsed .assistant-workspace{grid-template-columns:minmax(0,1fr)}" in style
+    assert ".assistant-panel.sessions-collapsed .assistant-session-pane{display:none}" in style
+    assert "@media(max-width:680px)" in style and ".assistant-session-pane{position:absolute;inset:0 auto 0 0;" in style, "窄屏应保留覆盖式会话栏"
+    assert 'aria-controls="assistant-session-pane" aria-expanded="true" aria-label="收起会话管理面板"' in HTML
+    assert "toggle.setAttribute('aria-expanded', String(!isCollapsed))" in APPJS
+    assert "toggle.setAttribute('aria-label', label)" in APPJS and "展开会话管理面板" in APPJS and "收起会话管理面板" in APPJS
     assert "assistantNewConversation('builtin')" in APPJS, "新对话未默认进入免模型通道"
     assert "model_type: conv.backend || 'builtin'" in APPJS, "聊天载荷仍回退到需要模型配置的后端"

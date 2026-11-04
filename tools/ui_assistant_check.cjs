@@ -135,6 +135,7 @@ window.fetch = async (url, options = {}) => {
   throw new Error('不应访问此 API：' + url);
 };
 
+Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1024 });
 window.eval(source.slice(start, end) + '\nwindow.__assistantState = ASSISTANT_UI;');
 window.assistantInit();
 const $ = id => window.document.getElementById(id);
@@ -187,7 +188,9 @@ check($('assistant-launcher').hidden, '配置读取前问答入口应默认隐�
   check(style.includes('.assistant-workspace{position:relative;display:block;flex-basis:480px;min-height:480px}'), '窄屏布局没有为外层滚动条保留完整高度');
   check(style.includes('.assistant-workspace{flex-basis:540px;min-height:540px}'), '极窄屏布局没有为换行后的控件保留高度');
   check(style.includes('.assistant-workspace{display:grid;grid-template-columns:260px minmax(0,1fr)'), '双栏会话 / 问答布局缺失');
-  check(style.includes('@media(max-width:680px)') && style.includes('.assistant-session-toggle{display:inline-flex'), '窄屏会话栏切换样式缺失');
+  check(style.includes('.assistant-session-toggle{display:inline-flex;flex:0 0 auto;align-items:center;justify-content:center;gap:4px;padding:6px 8px;font-size:11px;white-space:nowrap}'), '桌面端会话栏切换按钮必须可见且不被挤压');
+  check(style.includes('.assistant-panel.sessions-collapsed .assistant-session-pane{display:none}') && style.includes('.assistant-panel.sessions-collapsed .assistant-workspace{grid-template-columns:minmax(0,1fr)}'), '会话栏收起时左栏未隐藏或问答区未占满工作区');
+  check(style.includes('@media(max-width:680px)') && style.includes('.assistant-session-pane{position:absolute;inset:0 auto 0 0;'), '窄屏会话栏必须保留覆盖式抽屉布局');
   check(style.includes('.assistant-session-title{display:block;width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap'), '长会话标题省略样式缺失');
   const cssRule = selector => { const start = style.indexOf(selector + '{'); return start < 0 ? '' : style.slice(start, style.indexOf('}', start)); };
   const messageScrollCss = cssRule('.assistant-messages');
@@ -205,6 +208,13 @@ check($('assistant-launcher').hidden, '配置读取前问答入口应默认隐�
 
   const panel = $('assistant-panel'); $('assistant-launcher').click();
   check(!panel.hidden && panel.getAttribute('aria-hidden') === 'false', '点击入口没有打开固定侧栏');
+  const sessionToggle = $('assistant-session-toggle');
+  check(!panel.classList.contains('sessions-collapsed') && sessionToggle.getAttribute('aria-expanded') === 'true', '桌面端打开助手时应默认显示会话管理栏');
+  sessionToggle.click();
+  check(panel.classList.contains('sessions-collapsed') && sessionToggle.getAttribute('aria-expanded') === 'false', '桌面端按钮未收起会话栏或 aria-expanded 未同步');
+  check(sessionToggle.getAttribute('aria-label') === '展开会话管理面板' && sessionToggle.title === '展开会话管理面板' && sessionToggle.textContent.includes('显示会话'), '桌面端收起后按钮提示 / 可访问名称未更新');
+  sessionToggle.click();
+  check(!panel.classList.contains('sessions-collapsed') && sessionToggle.getAttribute('aria-expanded') === 'true', '桌面端会话栏无法从收起状态恢复');
   window.assistantSetBusy(true);
   check(!$('assistant-thinking').hidden, '请求忙碌时没有显示思考状态');
   window.assistantSetBusy(false);
@@ -217,10 +227,13 @@ check($('assistant-launcher').hidden, '配置读取前问答入口应默认隐�
   $('assistant-settings-close').click();
   check(!$('assistant-settings').open, '设置区关闭按钮无效');
   Object.defineProperty(window, 'innerWidth', { configurable: true, value: 390 });
-  $('assistant-session-toggle').click();
-  check(panel.classList.contains('sessions-collapsed'), '窄屏会话列表未折叠');
-  $('assistant-session-toggle').click();
-  check(!panel.classList.contains('sessions-collapsed'), '窄屏会话按钮无法重新展开');
+  window.assistantTogglePanel(false); window.assistantTogglePanel(true);
+  check(panel.classList.contains('sessions-collapsed') && sessionToggle.getAttribute('aria-expanded') === 'false', '窄屏打开助手时会话管理栏应默认折叠');
+  check(sessionToggle.getAttribute('aria-label') === '展开会话管理面板' && sessionToggle.title === '展开会话管理面板' && sessionToggle.textContent.includes('显示会话'), '窄屏初始折叠状态的按钮提示不正确');
+  sessionToggle.click();
+  check(!panel.classList.contains('sessions-collapsed') && sessionToggle.getAttribute('aria-expanded') === 'true', '窄屏会话栏无法展开');
+  sessionToggle.click();
+  check(panel.classList.contains('sessions-collapsed') && sessionToggle.getAttribute('aria-expanded') === 'false', '窄屏会话栏无法再次折叠');
   Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1024 });
   $('assistant-close').click();
   check(panel.hidden && panel.getAttribute('aria-hidden') === 'true', '关闭按钮没有收起侧栏');
@@ -478,7 +491,7 @@ check($('assistant-launcher').hidden, '配置读取前问答入口应默认隐�
   await window.assistantLoadConfig();
   check($('assistant-launcher').hidden, 'enabled=false 时问答入口仍然可见');
 
-  console.log(`PASS ${checkCount} checks — two-column fixed assistant sidebar, session search/groups/time/rename/delete/drag, bundled docs in settings, responsive sessions, builtin retrieval, safe Markdown/XSS, citations, editable local-model discovery, admin config, image upload/preview/cloud confirmation, local import, operator-token proposal confirmation`);
+  console.log(`PASS ${checkCount} checks — two-column fixed assistant sidebar, desktop/mobile collapsible sessions, session search/groups/time/rename/delete/drag, bundled docs in settings, builtin retrieval, safe Markdown/XSS, citations, editable local-model discovery, admin config, image upload/preview/cloud confirmation, local import, operator-token proposal confirmation`);
   dom.window.close();
 })().catch(error => {
   console.error('FAIL:', error && error.stack || error);

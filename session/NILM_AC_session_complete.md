@@ -968,3 +968,12 @@
 - 验证方式 / 覆盖范围 / 缺口：`.venv/bin/python -m pytest -o addopts='' tests/test_web_ui.py -q` **23 passed**；`node tools/ui_assistant_check.cjs` **142 checks**；`node --check app/static/app.js`、`node --check tools/ui_assistant_check.cjs` 通过。环境无 Chromium / Firefox / Playwright / Puppeteer，未验证原生 scrollbar 外观、触屏、窄屏和滚轮惯性。没有运行全量 pytest（本轮未改代码）。
 - 未决问题：请用户在目标浏览器检查长列表 / 长消息 / 展开帮助文档和完整参数 / 审计区、短视口 / 窄屏，并回报浏览器、OS、视口尺寸及现象；尤其区分系统 overlay scrollbar 自动隐藏与无法滚动。`tmp/` 未读未改。
 - 相关文件 / 分支：审查 `app/static/style.css`、`app/static/index.html`、`app/static/app.js`；测试 `tests/test_web_ui.py`、`tools/ui_assistant_check.cjs`；台账 `STATUS.md`、`REPORT_TEST.md`、本文件；活动分支 `arena/82e34fb8-nilm-calc-tool`。
+
+## [2026-11-04] 会话纪要
+- 目标：为智能问答助手增加左侧会话管理面板可收起 / 恢复功能。
+- 本会话角色：资深电力算法专家（`ROLE.md` 默认角色）＋工程实现工程师（第 204 轮任务级覆盖）；模式 A；活动分支 `arena/82e34fb8-nilm-calc-tool`。
+- 完成项：标题栏会话开关在桌面与窄屏均可见；桌面默认双栏，收起左栏后问答区切换为全宽单列，再次点击恢复；窄屏打开助手时默认折叠，展开为覆盖式会话抽屉，保持既有布局行为。按钮文字、title、`aria-label`、`aria-expanded` 动态同步。更新 CSS / HTML / JS、静态 UI 契约与 jsdom 行为检查、README §3.6、助手专用说明与生成的四份使用 / 部署手册；不持久化折叠偏好，不改变会话数据 / 安全边界。
+- 关键决策：保留桌面默认展开与窄屏默认折叠；用同一个标题栏按钮完成隐藏 / 显示。桌面收起时工作区显式转为单列，避免只隐藏左栏却留下 260px 空白；窄屏保持会话 pane 覆盖在问答区上方。没有目标浏览器自动化时仅报告模拟回归，不宣称视觉 / 键盘现场验收通过。`tmp/` 不读不改。
+- 验证方式 / 覆盖范围 / 缺口：`.venv/bin/python -m pytest -o addopts='' tests/test_assistant.py tests/test_web_ui.py -q` **46 passed**；`node tools/ui_assistant_check.cjs` **150 checks**；app.js / harness `node --check`、测试文件 `py_compile`、`git diff --check` 通过；生成手册 `--check` 四份全 OK。无真实 Chromium / Firefox / Playwright / Puppeteer，本轮没有目标浏览器视觉、真实键盘或屏幕阅读器测试。
+- 未决问题：待用户在桌面、窄屏目标浏览器点检折叠 / 恢复、消息区全宽、按钮焦点与读屏状态；若复现问题，记录浏览器、OS 和视口尺寸。
+- 相关文件 / 分支：`app/static/{index.html,style.css,app.js}`、`tests/test_web_ui.py`、`tools/ui_assistant_check.cjs`、`README.md`、`docs/智能问答助手说明.md`、四份生成手册、`STATUS.md`、`REPORT_TEST.md`；分支 `arena/82e34fb8-nilm-calc-tool`。
