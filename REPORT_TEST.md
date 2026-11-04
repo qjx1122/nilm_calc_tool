@@ -4010,3 +4010,21 @@ delta_i_a  = d_i_obs
   - live preview `/`、`/static/app.js`、`/static/style.css` 均 HTTP 200 且含本轮滚动标记；这是服务 / 静态资源 smoke check，不代表真实浏览器布局或原生滚动条验收。
 - 是否进入 REPORT.md（稳定结论）：否（助手界面布局与滚动行为，不涉及稳定 NILM 算法结论）。
 - 遗留问题：需用户在目标浏览器用较矮窗口、窄屏、消息 / 会话列表及长设置文档实测实际滚动条显示、触控 / 鼠标滚轮与键盘访问；jsdom 不能验证浏览器原生滚动条外观。`tmp/` 用户数据不读取、不修改、不暂存或提交。
+
+## [2026-11-04] 专题：智能问答“配置与附加知识库”溢出滚动条
+- 类型：用户专题 / UI 可访问性与滚动回归
+- 目标与假设：用户要求当助手“配置与附加知识库”界面内容超出可用窗口高度时出现滚动条，以便访问完整配置和附加知识。现有 `.assistant-settings-body` 已处理纵向 overflow，但轨道透明、滑块过细且不够醒目；本轮保留该滚动容器和嵌套文档滚动，增强滚动条可见性，并提供键盘可达标记，不改变模型 / API 配置行为。
+- 方法 / 实现：
+  - `.assistant-settings-body` 使用 `scrollbar-width:auto`、有对比度的 thumb / track 颜色与稳定滚动条槽；为 WebKit 设置 12px 滚动条宽度、清晰轨道 / 滑块及 hover 样式。仍用 `overflow-y:auto`，仅在内容超出覆盖层可用高度时出现滚动条。
+  - 设置内容区增加 `role="region"`、中文 `aria-label` 与 `tabindex="0"`，可通过键盘聚焦和滚动；固定标题与关闭按钮仍在已有 sticky header 内，长文档内部滚动及设置外层滚动锁定逻辑保持不变。
+  - `tests/test_web_ui.py` 和 jsdom harness 增加滚动容器、scrollbar 颜色 / WebKit 轨道和键盘 region 的契约断言；既有 harness 继续覆盖设置正文、文档内层到边界时的滚轮路由。
+  - README 更新到 v0.99.42，助手说明增加设置区滚动说明；重新生成软件使用 / 部署等手册。
+- 用户执行命令：无；未提供真实浏览器自动化 / 视觉验收。
+- 结果 / 结论：
+  - 定向 `.venv/bin/pytest tests/test_assistant.py tests/test_server.py tests/test_web_ui.py -q`：**75 passed / 1 warning**（13.07 s）；既有 Starlette/httpx `TestClient` deprecation。
+  - 全量 `.venv/bin/pytest -q`：**620 passed / 1 skipped / 1 warning**（151.46 s）；同一既有弃用 warning。
+  - `node tools/ui_assistant_check.cjs`：**PASS 137 checks**；app.js / harness `node --check`、`tests/test_web_ui.py` `py_compile` 通过。
+  - 四份手册 `tools/generate_assistant_docs.py --check` 全 `OK`（设计 42,713、使用 224,949、部署 45,722、调参验证 142,220 字符）；排除 `tmp/` 的 `git diff --check` 通过。
+  - 当前 live preview 的 `/` 与 `/static/style.css` 均 HTTP 200，且包含设置区新标记；这是服务 / 资源 smoke check，不代表浏览器原生滚动条视觉或键盘验收。
+- 是否进入 REPORT.md（稳定结论）：否（界面可达性修复，不涉及稳定 NILM 算法结论）。
+- 遗留问题：需用户在目标浏览器缩小助手窗口高度、打开长设置页和文档列表，确认可见滚动条样式、滚轮及键盘访问；系统级 overlay scrollbar 策略可能影响常驻显示。`tmp/` 不读取、不修改、不暂存、不提交。

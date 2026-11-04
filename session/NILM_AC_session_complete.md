@@ -932,3 +932,12 @@
 - 验证方式 / 覆盖范围 / 缺口：定向 pytest **75 passed / 1 warning**（12.39 s）；全量 pytest **620 passed / 1 skipped / 1 warning**（149.72 s）；jsdom **133 checks**，覆盖消息与设置滚动边界传递、设置打开锁定 / 关闭解除；四份生成手册 `--check` 全 `OK`；JS 语法、Python 编译、`git diff --check` 通过；live preview 首页与 JS / CSS HTTP 200（服务 / 资源 smoke check）。未进行真实浏览器视觉、键盘或触屏验收，jsdom 不模拟真实浏览器滚动条。
 - 未决问题：请用户在目标浏览器缩短窗口 / 使用窄屏验证滚动条视觉、鼠标 / 触控滚动与键盘聚焦行为；特殊浏览器操作系统可能按系统设置自动隐藏滚动条。
 - 相关文件/分支：`app/static/style.css`、`app/static/index.html`、`app/static/app.js`、`tests/test_web_ui.py`、`tools/ui_assistant_check.cjs`、`README.md`、`docs/智能问答助手说明.md`、`docs/软件使用文档.md`、`docs/软件部署说明文档.md`、`STATUS.md`、`REPORT_TEST.md`；分支 `arena/82e34fb8-nilm-calc-tool`。
+
+## [2026-11-04] 会话纪要
+- 目标：为智能问答“配置与附加知识库”界面在内容超出可用窗口时增加醒目、可访问的滚动条，使全部设置可浏览。
+- 本会话角色：资深电力算法专家（默认）＋工程实现工程师（第 200 轮任务级覆盖）；模式 A；活动分支 `arena/82e34fb8-nilm-calc-tool`。
+- 完成项：保留 `.assistant-settings-body` 作为设置覆盖层唯一的纵向滚动容器，通过更粗、更高对比度的 Firefox / WebKit 滚动条样式强化溢出时的可见性，并给配置内容区增加可聚焦的无障碍 region 标记；固定标题 / 关闭入口与文档内部滚动仍保留。更新 README v0.99.42、助手使用说明及生成手册；为 CSS / HTML 标记和现有设置滚轮传递补回归。
+- 关键决策：不再叠加设置容器的第二个滚动条，避免双重滚动；继续由 `.assistant-settings-body` 处理整个配置表单的溢出，遇到长文档时由文档自身滚动、到边界再交给设置主体。系统按需显示滚动条，窗口内容未溢出时不强制显示。
+- 验证方式 / 覆盖范围 / 缺口：定向 pytest **75 passed / 1 warning**（13.07 s）；全量 pytest **620 passed / 1 skipped / 1 warning**（151.46 s）；jsdom **137 checks**；JS 语法、测试 Python 编译与四份生成手册 `--check` 通过；live preview 首页和 CSS HTTP 200。唯一 warning 为既有 Starlette/httpx TestClient deprecation。真实浏览器滚动条视觉、触控板 / 键盘现场验收未做，jsdom 不模拟原生 scrollbar。
+- 未决问题：请用户在目标浏览器窗口高度不足时打开设置页，确认滚动条可见、表单和附加知识各区完整可浏览、键盘聚焦可用；操作系统的自动隐藏 scrollbar 设置可能影响常驻显示。`tmp/` 未读取、修改、暂存或提交。
+- 相关文件/分支：`app/static/style.css`、`app/static/index.html`、`tests/test_web_ui.py`、`tools/ui_assistant_check.cjs`、`README.md`、`docs/智能问答助手说明.md`、生成的 `docs/软件使用文档.md` / `docs/软件部署说明文档.md`、`STATUS.md`、`REPORT_TEST.md`；分支 `arena/82e34fb8-nilm-calc-tool`。

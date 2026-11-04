@@ -371,6 +371,13 @@ def test_assistant_scroll_containers_preserve_reader_position_during_streaming()
         assert rule, f"缺少 {selector} 滚动容器"
         assert "overflow-y:auto" in rule.group(1), f"{selector} 应可纵向滚轮滚动"
         assert "overscroll-behavior-y:contain" in rule.group(1), f"{selector} 应在侧栏内处理滚动"
+    settings_rule = re.search(r"\.assistant-settings-body\{([^}]*)\}", css)
+    assert settings_rule and "scrollbar-width:auto" in settings_rule.group(1), "设置面板内容超出视口时应使用可见滚动条"
+    assert "scrollbar-color:#7898c5 #172338" in settings_rule.group(1), "设置面板滚动条的滑块 / 轨道对比度不足"
+    assert ".assistant-settings-body:focus-visible{outline:2px solid #4e8de8" in css, "键盘聚焦设置滚动区时应显示焦点指示"
+    assert ".assistant-settings-body::-webkit-scrollbar{width:12px}" in css
+    assert ".assistant-settings-body::-webkit-scrollbar-track{background:#172338" in css
+    assert 'class="assistant-settings-body" role="region" aria-label="配置与附加知识库设置内容，可滚动浏览" tabindex="0"' in HTML, "设置内容滚动区应可键盘访问并有无障碍名称"
     shell_rule = re.search(r"\.assistant-shell\{([^}]*)\}", css)
     assert shell_rule and "overflow-y:auto" in shell_rule.group(1), "助手外层在视口受限时必须能纵向滚动"
     assert "scrollbar-width:auto" in shell_rule.group(1) and "scrollbar-color:#3d527a #111827" in shell_rule.group(1), "助手外层滚动条应有清晰可见的轨道和滑块"

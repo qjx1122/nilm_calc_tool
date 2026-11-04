@@ -379,7 +379,7 @@ input.flash{animation:ntflash 1.5s ease-out}
 .np-evsrc{margin-top:4px;font-size:11.5px}
 .np-tbl tr.np-stat td.np-stat:first-child{background:#17251f}
 
-/* 智能问答助手 v0.99.41：受限视口外层滚动条与嵌套滚轮传递 */
+/* 智能问答助手 v0.99.42：设置与附加知识库滚动条可见性 */
 .assistant-launcher{position:fixed;right:22px;bottom:82px;z-index:30;border:1px solid #4485e8;background:linear-gradient(135deg,#1d4ed8,#2563eb);box-shadow:0 6px 22px #0008;border-radius:24px;padding:10px 16px;font-weight:700}
 .assistant-launcher[hidden]{display:none}
 .assistant-panel,.assistant-panel *{box-sizing:border-box}
@@ -493,7 +493,12 @@ input.flash{animation:ntflash 1.5s ease-out}
 .assistant-settings{display:none}
 .assistant-settings[open]{position:absolute;z-index:60;inset:12px;display:flex;flex-direction:column;max-height:none;margin:0;padding:10px;border:1px solid #50678f;border-radius:12px;background:#101827;box-shadow:0 16px 48px #000d;overflow:hidden}
 .assistant-settings>summary{position:absolute;width:1px;height:1px;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap}
-.assistant-settings-body{flex:1 1 auto;min-height:0;overflow-x:hidden;overflow-y:auto;overscroll-behavior-y:contain;padding:0 4px 8px;scrollbar-width:thin;scrollbar-color:#2b3a5c transparent}
+.assistant-settings-body{flex:1 1 auto;min-height:0;overflow-x:hidden;overflow-y:auto;overscroll-behavior-y:contain;padding:0 4px 8px;scrollbar-width:auto;scrollbar-color:#7898c5 #172338;scrollbar-gutter:stable}
+.assistant-settings-body:focus-visible{outline:2px solid #4e8de8;outline-offset:-2px}
+.assistant-settings-body::-webkit-scrollbar{width:12px}
+.assistant-settings-body::-webkit-scrollbar-thumb{background:#7898c5;border:2px solid #172338;border-radius:7px}
+.assistant-settings-body::-webkit-scrollbar-track{background:#172338;border-radius:7px}
+.assistant-settings-body::-webkit-scrollbar-thumb:hover{background:#a6bfdf}
 .assistant-settings-header{position:sticky;top:0;z-index:2;display:flex;justify-content:space-between;align-items:center;gap:12px;padding:8px 4px;border-bottom:1px solid var(--line);background:#101827}
 .assistant-settings-header h2{margin:0;color:#eaf1ff;font-size:19px}
 .assistant-settings-header p{margin:4px 0 0;color:var(--mut);font-size:11px}
