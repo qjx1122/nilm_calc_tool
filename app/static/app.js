@@ -4959,6 +4959,21 @@ const ASSISTANT_TOOL_LABELS = {
 function assistantEl(id) { return document.getElementById(id); }
 function assistantUid() { return window.crypto && crypto.randomUUID ? crypto.randomUUID() : 'chat-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 9); }
 function assistantCurrentConversation() { return ASSISTANT_UI.conversations.find(c => c.id === ASSISTANT_UI.activeId) || null; }
+function assistantConversationHasFormalExchange(conv) {
+  if (!conv || !Array.isArray(conv.messages)) return false;
+  const hasQuestion = conv.messages.some(msg => msg && msg.role === 'user' && String(msg.content || '').trim());
+  const hasAnswer = conv.messages.some(msg => msg && msg.role === 'assistant'
+    && (String(msg.content || '').trim() || (msg.proposal && typeof msg.proposal === 'object')));
+  return hasQuestion && hasAnswer;
+}
+function assistantRenderSessionTitle() {
+  const title = assistantEl('assistant-title'); if (!title) return;
+  const conv = assistantCurrentConversation();
+  const text = assistantConversationHasFormalExchange(conv) ? String(conv.title || '').trim() : '';
+  title.textContent = text;
+  title.hidden = !text;
+  if (text) title.title = text; else title.removeAttribute('title');
+}
 function assistantSetFeedback(id, text, isError = false) {
   const el = assistantEl(id); if (!el) return;
   el.textContent = text || ''; el.classList.toggle('is-error', !!isError);
@@ -4980,12 +4995,15 @@ function assistantSetPrivacy() {
     el.textContent = `本地模式：问答与主动附加的截图只发送到配置的本机 / 内网模型；模型须支持视觉输入。${toolNote}`;
   }
 }
+function assistantLauncherEnabledForView() {
+  const cfg = ASSISTANT_UI.config;
+  return !!(cfg && cfg.enabled && Array.isArray(cfg.visible_views) && cfg.visible_views.includes(S.view || 'overview'));
+}
 function assistantSyncLauncher() {
   const launcher = assistantEl('assistant-launcher'); if (!launcher) return;
-  const cfg = ASSISTANT_UI.config;
-  const visible = !!(cfg && cfg.enabled && Array.isArray(cfg.visible_views) && cfg.visible_views.includes(S.view || 'overview'));
-  launcher.hidden = !visible;
-  if (!visible) assistantTogglePanel(false);
+  const panel = assistantEl('assistant-panel'), enabled = assistantLauncherEnabledForView();
+  if (!enabled && panel && !panel.hidden) assistantTogglePanel(false);
+  launcher.hidden = !enabled || !!(panel && !panel.hidden);
 }
 function assistantUpdateBusy() {
   const busy = ASSISTANT_UI.busy;
@@ -5087,6 +5105,7 @@ function assistantRefreshMessage(msg) {
   if (msg._dom.proposal && msg._dom.proposal.parentNode) msg._dom.proposal.remove();
   msg._dom.proposal = assistantBuildProposal(msg);
   if (msg._dom.proposal) msg._dom.root.appendChild(msg._dom.proposal);
+  assistantRenderSessionTitle();
   if (followBottom) list.scrollTop = list.scrollHeight;
 }
 function assistantFormatConversationTime(value) {
@@ -5174,6 +5193,7 @@ function assistantRenderConversationList() {
     section.appendChild(list); root.appendChild(section);
   });
   const active = assistantCurrentConversation();
+  assistantRenderSessionTitle();
   const clear = assistantEl('assistant-clear-context'); if (clear) clear.disabled = ASSISTANT_UI.busy || !active || !active.messages.length;
   const clearMenu = assistantEl('assistant-clear-context-menu'); if (clearMenu) clearMenu.disabled = ASSISTANT_UI.busy || !(ASSISTANT_UI.conversations.find(conv => conv.id === ASSISTANT_UI.contextConversationId) || active || {}).messages?.length;
   const del = assistantEl('assistant-delete-conversation'); if (del) del.disabled = ASSISTANT_UI.busy || !ASSISTANT_UI.conversations.length;
@@ -5499,7 +5519,10 @@ function assistantTogglePanel(open) {
   const panel = assistantEl('assistant-panel'), launcher = assistantEl('assistant-launcher'); if (!panel) return;
   const nextOpen = typeof open === 'boolean' ? open : panel.hidden;
   panel.hidden = !nextOpen; panel.setAttribute('aria-hidden', String(!nextOpen));
-  if (launcher) launcher.setAttribute('aria-expanded', String(nextOpen));
+  if (launcher) {
+    launcher.setAttribute('aria-expanded', String(nextOpen));
+    launcher.hidden = nextOpen || !assistantLauncherEnabledForView();
+  }
   if (nextOpen) {
     const shell = assistantEl('assistant-shell'); if (shell) shell.scrollTop = 0;
     assistantToggleSettings(false); assistantCloseSessionContextMenu();

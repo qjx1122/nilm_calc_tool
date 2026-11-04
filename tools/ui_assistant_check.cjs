@@ -158,6 +158,16 @@ check($('assistant-launcher').hidden, '配置读取前问答入口应默认隐�
   for (let i = 0; i < 100 && (!window.__assistantState.config || !window.__assistantState.documents.length || !window.__assistantState.localModels.length); i++) await new Promise(resolve => setTimeout(resolve, 10));
   check(!!window.__assistantState.config, '配置未加载');
   check(!$('assistant-launcher').hidden, '总览页应显示入口');
+  const sessionHeading = $('assistant-session-pane').querySelector('.assistant-session-heading h2');
+  check(sessionHeading && sessionHeading.textContent === '智能问答助手', '会话管理侧栏标题应为“智能问答助手”');
+  check($('assistant-title').hidden && !$('assistant-title').textContent, '新会话尚无正式问答时，右侧标题应为空');
+  const modelControls = window.document.querySelector('.assistant-model-controls');
+  const chatHeader = window.document.querySelector('.assistant-chat-header');
+  check(modelControls && modelControls.contains($('assistant-model-type')) && modelControls.contains($('assistant-model-name'))
+    && modelControls.contains($('assistant-send')) && !chatHeader.contains($('assistant-model-type')) && !chatHeader.contains($('assistant-model-name')),
+  '后端 / 模型下拉应移至底部发送区而非标题栏');
+  check(modelControls.children[0].contains($('assistant-model-type')) && modelControls.children[1].contains($('assistant-model-name'))
+    && modelControls.children[2] === $('assistant-send'), '问答后端与具体模型下拉未紧邻发送按钮左侧');
   check($('assistant-model-type').value === 'builtin', '未配置模型时应默认选择内置文档通道');
   check($('assistant-privacy-note').textContent.includes('本地文档模式'), '内置通道隐私说明未显示本地文档语义');
   check(window.__assistantState.documents.length === 2, '启动时未加载文档目录');
@@ -193,6 +203,9 @@ check($('assistant-launcher').hidden, '配置读取前问答入口应默认隐�
   check(style.includes('@media(max-width:680px)') && style.includes('.assistant-session-pane{position:absolute;inset:0 auto 0 0;'), '窄屏会话栏必须保留覆盖式抽屉布局');
   check(style.includes('.assistant-session-title{display:block;width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap'), '长会话标题省略样式缺失');
   const cssRule = selector => { const start = style.indexOf(selector + '{'); return start < 0 ? '' : style.slice(start, style.indexOf('}', start)); };
+  check(cssRule('.assistant-model-controls').includes('display:flex') && cssRule('.assistant-model-controls').includes('align-items:flex-end'), '底部模型 / 发送控制组布局缺失');
+  check(style.includes('@media(max-width:420px){\n  .assistant-workspace{flex-basis:540px;min-height:540px}')
+    && style.includes('.assistant-model-controls{flex:1 1 100%;justify-content:flex-end;gap:4px}'), '极窄屏模型选择 / 发送区没有自适应布局');
   const messageScrollCss = cssRule('.assistant-messages');
   check(messageScrollCss.includes('overflow-y:auto') && messageScrollCss.includes('scroll-behavior:auto') && !messageScrollCss.includes('scroll-behavior:smooth'), '消息区必须有独立纵向滚轮且不能以平滑自动滚动抢占操作');
   check(cssRule('.assistant-conversation-list').includes('overflow-y:auto'), '会话列表必须可纵向滚动');
@@ -206,8 +219,9 @@ check($('assistant-launcher').hidden, '配置读取前问答入口应默认隐�
   check($('assistant-settings-scroll').contains(window.document.querySelector('.assistant-settings-body')) && $('assistant-settings-scroll').contains($('assistant-doc-pane')) && $('assistant-settings-scroll').contains($('assistant-admin-token')) && $('assistant-settings-scroll').contains($('assistant-knowledge-list')), 'HTML 解析后的真实 DOM 中，配置 / 文档 / 附加知识没有统一位于独立滚动区内');
   check(html.includes('<aside id="assistant-panel"') && !html.includes('<dialog id="assistant-dialog"'), '助手必须使用同页侧栏而不是旧 dialog');
 
-  const panel = $('assistant-panel'); $('assistant-launcher').click();
+  const panel = $('assistant-panel'), launcher = $('assistant-launcher'); launcher.click();
   check(!panel.hidden && panel.getAttribute('aria-hidden') === 'false', '点击入口没有打开固定侧栏');
+  check(launcher.hidden && launcher.getAttribute('aria-expanded') === 'true', '助手窗口打开时悬浮球应隐藏且展开状态同步');
   const sessionToggle = $('assistant-session-toggle');
   check(!panel.classList.contains('sessions-collapsed') && sessionToggle.getAttribute('aria-expanded') === 'true', '桌面端打开助手时应默认显示会话管理栏');
   sessionToggle.click();
@@ -237,6 +251,11 @@ check($('assistant-launcher').hidden, '配置读取前问答入口应默认隐�
   Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1024 });
   $('assistant-close').click();
   check(panel.hidden && panel.getAttribute('aria-hidden') === 'true', '关闭按钮没有收起侧栏');
+  check(!launcher.hidden && launcher.getAttribute('aria-expanded') === 'false', '关闭助手窗口后悬浮球应恢复显示');
+  launcher.click();
+  check(launcher.hidden && !panel.hidden, '通过悬浮球再次打开助手时，悬浮球没有隐藏');
+  window.document.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+  check(panel.hidden && !launcher.hidden && window.document.activeElement === launcher, 'Escape 关闭助手后悬浮球未显示 / 焦点未返回');
   window.S.view = 'nilm'; window.assistantSyncLauncher();
   check($('assistant-launcher').hidden, 'visible_views 未控制入口显隐');
   window.S.view = 'overview'; window.assistantSyncLauncher();
@@ -246,12 +265,15 @@ check($('assistant-launcher').hidden, '配置读取前问答入口应默认隐�
   await window.assistantSubmit();
   let messages = $('assistant-messages');
   check(lastChatPayload && lastChatPayload.model_type === 'builtin', '首次聊天没有使用内置文档后端');
+  check(!$('assistant-title').hidden && $('assistant-title').textContent === window.__assistantState.conversations[0].title,
+    '助手形成有效回答后，右侧标题未显示当前会话名');
   check(messages.textContent.includes('内置知识库｜本地文档检索') && messages.textContent.includes('pre_cycles'), '内置本地文档摘录未渲染');
   check(messages.textContent.includes('引用：平台参数清单'), '平台参数清单引用未显示');
 
   // 切换到本地模型后验证 SSE 分片解析与安全 Markdown/XSS。
   const model = $('assistant-model-type'); model.value = 'local'; model.dispatchEvent(new window.Event('change'));
   check(window.__assistantState.conversations.length === 2, '切换模型未新建会话');
+  check($('assistant-title').hidden && !$('assistant-title').textContent, '切换后新建的空会话不应显示右侧标题');
   check(window.__assistantState.conversations[0].backend === 'local', '新会话未采用所选模型');
   check(window.__assistantState.conversations[1].messages.length === 2, '内置文档会话没有保留');
   const modelName = $('assistant-model-name');
@@ -264,6 +286,8 @@ check($('assistant-launcher').hidden, '配置读取前问答入口应默认隐�
   messages = $('assistant-messages');
   check(messages.querySelectorAll('.assistant-message').length === 2, '本地模型会话没有显示用户与助手消息');
   check(lastChatPayload.model_name === 'llama3.2:latest', '本地聊天请求没有携带所选模型名称');
+  check(!$('assistant-title').hidden && $('assistant-title').textContent === window.__assistantState.conversations[0].title,
+    '本地模型回答完成后右侧标题未与当前会话同步');
   check(!!messages.querySelector('h2') && !!messages.querySelector('strong') && !!messages.querySelector('pre code'), 'Markdown 标题/强调/代码块未渲染');
   check(!messages.querySelector('img, a[href^="javascript:"]'), '不可信 Markdown 被解释成活动 HTML');
   check(messages.textContent.includes('<img src=x onerror=alert(1)>'), '原始 HTML 应作为普通文本展示');
@@ -292,9 +316,18 @@ check($('assistant-launcher').hidden, '配置读取前问答入口应默认隐�
   modelName.value = 'qwen-local'; modelName.dispatchEvent(new window.Event('change'));
   check(window.__assistantState.conversations.length === 3, '切换具体本地模型未创建独立会话');
   check(window.__assistantState.conversations[0].modelName === 'qwen-local' && !window.__assistantState.conversations[0].messages.length, '新模型会话未使用所选模型或不为空');
+  check($('assistant-title').hidden && !$('assistant-title').textContent, '切换具体模型后空会话显示了右侧标题');
   check(window.__assistantState.conversations[1].modelName === 'llama3.2:latest' && window.__assistantState.conversations[1].messages.length === 2, '切换具体模型破坏或更改了旧会话');
+  const qwenConversationId = window.__assistantState.conversations[0].id;
+  window.assistantSelectConversation(window.__assistantState.conversations[1].id);
+  check(!$('assistant-title').hidden && $('assistant-title').textContent === window.__assistantState.conversations[1].title,
+    '切换到已有问答的会话后，右侧标题没有更新');
+  window.assistantSelectConversation(qwenConversationId);
+  check($('assistant-title').hidden, '切回空会话后右侧标题未清空');
   $('assistant-prompt').value = '使用另一个模型继续提问'; await window.assistantSubmit();
   check(lastChatPayload.model_name === 'qwen-local', '新模型会话请求没有路由到所选模型');
+  check(!$('assistant-title').hidden && $('assistant-title').textContent === window.__assistantState.conversations[0].title,
+    '新会话回答完成后，右侧标题未显示当前会话名');
   const sessionScroll = mockScrollArea($('assistant-conversation-list'), 900, 300, 40);
   const sessionWheel = new window.WheelEvent('wheel', { deltaY: 60, bubbles: true, cancelable: true });
   check(!window.document.querySelector('.assistant-session-heading').dispatchEvent(sessionWheel) && sessionScroll.top === 100, '在会话标题 / 空白区使用滚轮没有转发到会话列表');
@@ -472,7 +505,14 @@ check($('assistant-launcher').hidden, '配置读取前问答入口应默认隐�
   check(!$('assistant-session-context-menu').hidden, '会话右键菜单未打开');
   nextPromptValue = '手动命名的会话标题'; $('assistant-rename-conversation').click();
   check(window.__assistantState.conversations.find(conv => conv.id === renameId).title === '手动命名的会话标题', '会话重命名未生效');
-  $('assistant-session-search').value = '手动命名'; $('assistant-session-search').dispatchEvent(new window.Event('input'));
+  check($('assistant-title').hidden, '尚无正式问答的空会话不应仅因重命名就显示右侧标题');
+  $('assistant-prompt').value = '验证命名后的会话标题'; await window.assistantSubmit();
+  check(!$('assistant-title').hidden && $('assistant-title').textContent === '手动命名的会话标题', '问答完成后右侧没有显示手动会话名');
+  nextPromptValue = '问答完成后的手动标题'; window.assistantRenameConversation();
+  check($('assistant-title').textContent === '问答完成后的手动标题', '重命名已有问答的会话后右侧标题未同步');
+  window.assistantClearContext();
+  check($('assistant-title').hidden && !$('assistant-title').textContent, '清空问答后右侧标题没有隐藏');
+  $('assistant-session-search').value = '手动标题'; $('assistant-session-search').dispatchEvent(new window.Event('input'));
   check(conversationList.querySelectorAll('.assistant-session-row').length === 1, '会话标题搜索未过滤列表');
   $('assistant-session-search').value = ''; $('assistant-session-search').dispatchEvent(new window.Event('input'));
   const beforeDrag = window.__assistantState.conversations.map(conv => conv.id);
@@ -490,8 +530,10 @@ check($('assistant-launcher').hidden, '配置读取前问答入口应默认隐�
   config = { ...config, enabled: false };
   await window.assistantLoadConfig();
   check($('assistant-launcher').hidden, 'enabled=false 时问答入口仍然可见');
+  check($('assistant-panel').hidden && $('assistant-panel').getAttribute('aria-hidden') === 'true'
+    && $('assistant-launcher').getAttribute('aria-expanded') === 'false', '助手被禁用后仍保持打开或展开状态');
 
-  console.log(`PASS ${checkCount} checks — two-column fixed assistant sidebar, desktop/mobile collapsible sessions, session search/groups/time/rename/delete/drag, bundled docs in settings, builtin retrieval, safe Markdown/XSS, citations, editable local-model discovery, admin config, image upload/preview/cloud confirmation, local import, operator-token proposal confirmation`);
+  console.log(`PASS ${checkCount} checks — assistant launcher visibility, current-session titles, bottom backend/model controls, two-column sidebar, desktop/mobile collapsible sessions, session search/groups/time/rename/delete/drag, bundled docs, builtin retrieval, safe Markdown/XSS, citations, editable local-model discovery, admin config, image upload/preview/cloud confirmation, local import, operator-token proposal confirmation`);
   dom.window.close();
 })().catch(error => {
   console.error('FAIL:', error && error.stack || error);

@@ -977,3 +977,12 @@
 - 验证方式 / 覆盖范围 / 缺口：`.venv/bin/python -m pytest -o addopts='' tests/test_assistant.py tests/test_web_ui.py -q` **46 passed**；`node tools/ui_assistant_check.cjs` **150 checks**；app.js / harness `node --check`、测试文件 `py_compile`、`git diff --check` 通过；生成手册 `--check` 四份全 OK。无真实 Chromium / Firefox / Playwright / Puppeteer，本轮没有目标浏览器视觉、真实键盘或屏幕阅读器测试。
 - 未决问题：待用户在桌面、窄屏目标浏览器点检折叠 / 恢复、消息区全宽、按钮焦点与读屏状态；若复现问题，记录浏览器、OS 和视口尺寸。
 - 相关文件 / 分支：`app/static/{index.html,style.css,app.js}`、`tests/test_web_ui.py`、`tools/ui_assistant_check.cjs`、`README.md`、`docs/智能问答助手说明.md`、四份生成手册、`STATUS.md`、`REPORT_TEST.md`；分支 `arena/82e34fb8-nilm-calc-tool`。
+
+## [2026-11-04] 会话纪要
+- 目标：按用户三项要求调整智能问答助手悬浮球显隐、左右标题与后端 / 具体模型下拉位置。
+- 本会话角色：资深电力算法专家（`ROLE.md` 默认角色）＋工程实现工程师（第 205 轮任务级覆盖）；模式 A；活动分支 `arena/82e34fb8-nilm-calc-tool`。
+- 完成项：助手打开时隐藏悬浮入口，关闭按钮 / Escape 关闭助手后按启用状态和 `visible_views` 恢复；侧栏标题为“智能问答助手”，右侧仅在当前会话有非空问题与助手有效回答 / 操作提案时显示当前会话名，新会话、尚无正式答复和清空上下文时隐藏。后端和具体模型选择器移入右侧输入区底部，并与发送按钮排在同一控制组、位于其左侧；保留原模型选择 / 发送逻辑和安全约束。更新 UI 静态契约与 jsdom 回归、README §3.6、助手说明及四份生成手册。
+- 关键决策：以“用户问题 + 助手有效回答或操作提案”判定已形成正式问答；仅有空助手占位、等待中、失败且无回答时不显示右侧会话标题。折叠 / 标题不写入持久化存储。悬浮球仍受既有权限控制，不在未授权页面强制显示。Escape 先按层级关闭设置 / 抽屉；助手真正关闭后才显示悬浮入口。
+- 验证方式 / 覆盖范围 / 缺口：定向 `tests/test_assistant.py tests/test_web_ui.py` **46 passed**；`node tools/ui_assistant_check.cjs` **172 checks**，覆盖开关状态、会话名生命周期、模型下拉 DOM 排列及既有交互；app.js / harness `node --check`、测试文件 `py_compile`、四份生成手册 `--check` 与明确文件范围 `git diff --check` 通过。未运行全量 pytest；未做真实浏览器视觉、实际键盘 / 屏幕阅读器验收。
+- 未决问题：待用户在目标浏览器确认悬浮球开 / 关显隐，空会话与完成问答的右侧标题，以及桌面 / 窄屏下模型下拉和发送按钮位置。`tmp/` 未读取、修改、暂存或提交。
+- 相关文件/分支：`app/static/app.js`、`app/static/index.html`、`app/static/style.css`、`tests/test_web_ui.py`、`tools/ui_assistant_check.cjs`、`README.md`、`docs/智能问答助手说明.md`、生成的四份 `docs/软件*.md`、`REPORT_TEST.md`、`STATUS.md`、本文件；活动分支 `arena/82e34fb8-nilm-calc-tool`。

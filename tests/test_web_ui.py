@@ -282,7 +282,7 @@ def test_assistant_ui_contract_and_safe_markdown_renderer(page):
         "assistant-launcher", "assistant-panel", "assistant-session-pane", "assistant-session-search",
         "assistant-conversation-list", "assistant-session-context-menu", "assistant-rename-conversation",
         "assistant-clear-context-menu", "assistant-delete-conversation", "assistant-new", "assistant-clear-context",
-        "assistant-model-type", "assistant-model-name", "assistant-session-toggle", "assistant-close", "assistant-privacy-note",
+        "assistant-model-type", "assistant-model-name", "assistant-title", "assistant-session-toggle", "assistant-close", "assistant-privacy-note",
         "assistant-doc-search", "assistant-doc-list", "assistant-doc-content", "assistant-doc-status",
         "assistant-messages", "assistant-thinking", "assistant-form", "assistant-prompt", "assistant-stop",
         "assistant-image-input", "assistant-image-previews", "assistant-attach-image", "assistant-settings-open",
@@ -295,6 +295,20 @@ def test_assistant_ui_contract_and_safe_markdown_renderer(page):
     )
     for element_id in required_ids:
         assert element_id in page.ids, f"缺少智能问答界面 #{element_id}"
+
+    assert '<h2>智能问答助手</h2>' in HTML, "会话侧栏标题应为“智能问答助手”"
+    assert re.search(r'<h2 id="assistant-title" hidden></h2>', HTML), "右侧当前会话标题初始应为空"
+    header_start = HTML.index('<header class="assistant-chat-header">')
+    header_end = HTML.index('</header>', header_start)
+    chat_header = HTML[header_start:header_end]
+    assert 'id="assistant-model-type"' not in chat_header and 'id="assistant-model-name"' not in chat_header, "后端 / 模型下拉不应留在问答标题栏"
+    buttons_start = HTML.index('<div class="assistant-compose-buttons">')
+    model_controls = HTML.index('<div class="assistant-model-controls"', buttons_start)
+    backend_select = HTML.index('id="assistant-model-type"', model_controls)
+    model_select = HTML.index('id="assistant-model-name"', backend_select)
+    send_button = HTML.index('id="assistant-send"', model_select)
+    settings_button = HTML.index('id="assistant-settings-open"', send_button)
+    assert buttons_start < model_controls < backend_select < model_select < send_button < settings_button, "模型选择器必须位于底部发送按钮左侧"
 
     start = APPJS.index("/* ------------------------------------------------------------------ 智能问答")
     end = APPJS.index("async function init() {", start)

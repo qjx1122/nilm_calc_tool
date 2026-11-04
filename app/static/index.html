@@ -1552,8 +1552,8 @@
 <aside id="assistant-panel" class="assistant-panel" aria-label="智能问答助手会话与问答侧栏" aria-hidden="true" hidden>
   <div id="assistant-shell" class="assistant-shell" role="region" aria-label="智能问答助手内容，可滚动浏览全部界面" tabindex="0">
     <div class="assistant-workspace">
-      <aside id="assistant-session-pane" class="assistant-session-pane" aria-label="会话管理">
-        <div class="assistant-session-heading"><div><h2>会话</h2><span>最近 5 条 · 会话仅保存在当前页面内存</span></div></div>
+      <aside id="assistant-session-pane" class="assistant-session-pane" aria-label="智能问答助手会话管理">
+        <div class="assistant-session-heading"><div><h2>智能问答助手</h2><span>最近 5 条 · 会话仅保存在当前页面内存</span></div></div>
         <button id="assistant-new" class="assistant-new-session primary" type="button">＋ 新建对话</button>
         <label class="assistant-session-search-label" for="assistant-session-search">搜索历史会话
           <input id="assistant-session-search" type="search" autocomplete="off" placeholder="搜索会话标题">
@@ -1564,19 +1564,7 @@
       <main id="assistant-chat-pane" class="assistant-chat-pane" aria-label="智能问答">
         <header class="assistant-chat-header">
           <button id="assistant-session-toggle" class="assistant-session-toggle" type="button" aria-controls="assistant-session-pane" aria-expanded="true" aria-label="收起会话管理面板" title="收起会话管理面板">‹ 收起会话</button>
-          <div class="assistant-title-group"><h2 id="assistant-title">智能问答助手</h2><div class="assistant-subtitle">平台参数优先 · RAG 调参辅助 · 受控操作先预览、确认后执行</div></div>
-          <label class="assistant-model-choice">问答后端
-            <select id="assistant-model-type" aria-label="选择问答后端">
-              <option value="builtin">内置知识库</option>
-              <option value="local">本地大模型</option>
-              <option value="cloud">云端大模型</option>
-            </select>
-          </label>
-          <label class="assistant-model-choice">具体模型
-            <select id="assistant-model-name" aria-label="选择具体模型" disabled>
-              <option value="">由后端配置决定</option>
-            </select>
-          </label>
+          <div class="assistant-title-group"><h2 id="assistant-title" hidden></h2><div class="assistant-subtitle">平台参数优先 · RAG 调参辅助 · 受控操作先预览、确认后执行</div></div>
           <button id="assistant-close" class="assistant-close" type="button" aria-label="关闭智能问答助手">关闭</button>
         </header>
         <div id="assistant-privacy-note" class="assistant-privacy" role="status">本地文档模式：不调用大模型。</div>
@@ -1598,7 +1586,21 @@
             <div class="assistant-compose-buttons">
               <button id="assistant-attach-image" type="button" title="选择波形截图">添加截图</button>
               <button id="assistant-stop" type="button" style="display:none">停止生成</button>
-              <button id="assistant-send" class="primary" type="submit" form="assistant-form">发送</button>
+              <div class="assistant-model-controls" role="group" aria-label="问答后端与具体模型">
+                <label class="assistant-model-choice">问答后端
+                  <select id="assistant-model-type" aria-label="选择问答后端">
+                    <option value="builtin">内置知识库</option>
+                    <option value="local">本地大模型</option>
+                    <option value="cloud">云端大模型</option>
+                  </select>
+                </label>
+                <label class="assistant-model-choice">具体模型
+                  <select id="assistant-model-name" aria-label="选择具体模型" disabled>
+                    <option value="">由后端配置决定</option>
+                  </select>
+                </label>
+                <button id="assistant-send" class="primary" type="submit" form="assistant-form">发送</button>
+              </div>
               <button id="assistant-settings-open" type="button" aria-controls="assistant-settings" aria-expanded="false">⚙ 配置与附加知识库</button>
             </div>
           </div>
