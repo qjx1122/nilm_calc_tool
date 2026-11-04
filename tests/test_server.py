@@ -129,8 +129,10 @@ def test_index_page_has_nav_and_one_subview_per_quantity(client):
                  "fundamental", "harmonic", "spectrum", "windows", "export", "selftest"):
         assert f'id="view-{view}"' in html, f"缺少子界面 view-{view}"
         assert f'data-view="{view}"' in html, f"导航条缺少 {view} 入口"
-    # 预览/内网环境无外网：页面不得依赖任何 CDN 或外部资源
-    assert "cdn" not in html.lower() and "https://" not in html and "http://" not in html
+    # 预览/内网环境无外网：页面不得加载 CDN 或绝对地址的外部脚本/样式（模型 URL 只是可编辑配置占位符）
+    import re
+    assert "cdn" not in html.lower()
+    assert not re.search(r"<(?:script|link)\b[^>]*(?:src|href)=['\"]https?://", html, re.I)
 
 
 def test_static_assets_served_without_external_deps(client):
@@ -413,7 +415,8 @@ def test_openapi_documents_all_endpoints(client):
     paths = set(spec["paths"])
     for p in ("/api/health", "/api/state", "/api/config", "/api/engine/start",
               "/api/engine/stop", "/api/result", "/api/export", "/api/selftest",
-              "/api/probe", "/api/files"):
+              "/api/probe", "/api/files", "/api/assistant/config", "/api/assistant/config/private",
+              "/api/assistant/chat", "/api/assistant/knowledge", "/api/assistant/knowledge/import"):
         assert p in paths, sorted(paths)
     assert any(p.startswith("/api/history") for p in paths)
 
@@ -460,3 +463,54 @@ def test_elec_cycles_file_matches_nilm_cycles(client, csv_factory, tmp_path):
         assert "离线文件" in r.json()["error"]
     finally:
         _post(client, "/api/engine/stop", {})
+
+
+# --------------------------------------------------------------------- 智能问答 API
+
+def test_assistant_api_protects_configuration_secrets(client, tmp_path, monkeypatch):
+    from app.assistant import AssistantService
+
+    service = AssistantService(data_dir=str(tmp_path / "assistant"))
+    monkeypatch.setattr(client.srv, "assistant_service", service)
+    monkeypatch.setenv("ELEC_TOOL_ASSISTANT_ADMIN_TOKEN", "server-admin-test")
+    public = client.get("/api/assistant/config")
+    assert public.status_code == 200
+    assert public.json()["config"]["admin_configurable"] is True
+    assert public.json()["views"] and "cloud_api_key" not in public.json()["config"]
+    assert "sensitive_terms" not in public.json()["config"]
+    private_denied = client.get("/api/assistant/config/private")
+    assert private_denied.status_code == 403
+
+    denied = client.put("/api/assistant/config", json={"enabled": False})
+    assert denied.status_code == 403
+    secret = "never-return-this-cloud-key"
+    saved = client.put("/api/assistant/config", headers={"X-Assistant-Admin-Token": "server-admin-test"},
+                       json={"cloud_api_key": secret, "enabled": True, "sensitive_terms": ["INTERNAL-PROJECT-ALPHA"]})
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["config"]["cloud_api_key_set"] is True
+    assert "sensitive_terms" not in saved.json()["config"]
+    assert secret not in saved.text
+    private = client.get("/api/assistant/config/private", headers={"X-Assistant-Admin-Token": "server-admin-test"})
+    assert private.status_code == 200 and private.json()["config"]["sensitive_terms"] == ["INTERNAL-PROJECT-ALPHA"]
+    assert secret not in private.text
+    assert secret not in (tmp_path / "assistant" / "config.json").read_text(encoding="utf-8")
+
+
+def test_assistant_chat_stream_and_nonstream_api(client, tmp_path, monkeypatch):
+    from app.assistant import AssistantService
+
+    service = AssistantService(data_dir=str(tmp_path / "assistant"))
+    monkeypatch.setattr(client.srv, "assistant_service", service)
+    monkeypatch.setattr(service, "stream", lambda plan, cancel: iter(["流式", "回答"]))
+    streamed = client.post("/api/assistant/chat", json={"prompt": "介绍画像匹配", "model_type": "local", "stream": True})
+    assert streamed.status_code == 200, streamed.text
+    assert "text/event-stream" in streamed.headers.get("content-type", "")
+    assert '"type":"delta","text":"流式"' in streamed.text
+    assert '"type":"delta","text":"回答"' in streamed.text
+    assert '"type":"done"' in streamed.text
+
+    monkeypatch.setattr(service, "complete", lambda plan: "非流式回答")
+    plain = client.post("/api/assistant/chat", json={"prompt": "说明参数", "model_type": "local", "stream": False})
+    assert plain.status_code == 200 and plain.json()["answer"] == "非流式回答"
+    invalid = client.post("/api/assistant/chat", json={"prompt": "test", "stream": "yes"})
+    assert invalid.status_code == 400 and "布尔值" in invalid.json()["error"]

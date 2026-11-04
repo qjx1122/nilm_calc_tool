@@ -813,3 +813,13 @@
 - **行为变更（有意）**：纯时刻列时间轴基准 1900 负 epoch → 与 `00/00/00` 相同的 1970+1 天正 epoch；`mode` datetime→clock_time 并获得跨午夜展开（`_file_time_range`/`wave_preview` 同步改、两端同口径）。
 - 交付：`REPORT_TEST.md` §187、`README.md` v0.99.34、`tests/test_r187_playback_pace.py`、`STATUS.md`、本文件。
 - 仍未做（🔶）：真实用户文件复验；8× 贴预算（3.93 vs 3.75 s）、4× 内稳定，新瓶颈 compute+broadcast；时标缺口仍按跨度等待（跳过缺口属产品决策）。
+
+### 第 188 轮（2026-11-04）：网页本地 / 云端智能问答模块（v0.99.35）
+
+- 用户目标：在业务页面中加入面向 NILM、电能质量、算法参数、工具操作与报错排查的智能问答，支持本地私有模型与云端模型、流式对话、Markdown、会话管理、RAG、配置与安全边界。
+- 本会话角色：工程实现工程师（沿用任务级角色覆盖）；默认角色仍按 `ROLE.md`。
+- 完成：新增 `app/assistant.py` OpenAI-compatible local/cloud 适配器、SSE 上游解析、Friendly errors、限流、文本 TF-IDF RAG 与知识管理；`app/server.py` 新增 `/api/assistant/*` 路由；`index.html/app.js/style.css` 新增悬浮问答入口、流式安全 Markdown、会话新建/切换/删除、切换模型确认、模型配置与知识库管理。管理员写操作由 `ELEC_TOOL_ASSISTANT_ADMIN_TOKEN` 保护；公共配置不回传 API Key / 敏感词正文，敏感词须管理员接口读取，API Key 只在进程内存保存（环境变量优先），会话只留页面内存。更新 README v0.99.35、STATUS、专题验证报告；保留既有 `tmp/` 工件。
+- 关键决策：无账户/角色系统，`visible_views` 只控制入口显隐，不等于授权；云端明确会发送问题、历史和检索片段，敏感扫描不是完整 DLP；默认不预载项目内部资料，管理员只导入准许用于问答的文本；不加外部前端依赖，Markdown 不执行原始 HTML。
+- 验证：全量 `./.venv/bin/python -m pytest -q`＝**596 passed / 1 skipped**；`node tools/ui_assistant_check.cjs`＝**21 checks**；Python 编译、JS 语法与 `git diff --check` 通过；本地服务 `0.0.0.0:8001` 页面 / assistant config GET 返回 200。真实模型接口未联网验证；真实 Ollama/vLLM、云端供应商、Windows 与现场浏览器仍待用户实录。
+- 未决 / 用户执行命令：无本会话用户侧执行命令。后续现场验收需启动本地模型并验证云端 HTTPS / API Key / 敏感拦截，建议仅在受信网络/HTTPS 暴露管理面板。
+- 相关文件 / 分支：`app/assistant.py`、`app/server.py`、`app/static/{index.html,app.js,style.css}`、`tests/test_assistant.py`、`tests/test_server.py`、`tests/test_web_ui.py`、`tools/ui_assistant_check.cjs`、`README.md`、`STATUS.md`、`REPORT_TEST.md`；分支 `arena/82e34fb8-nilm-calc-tool`。

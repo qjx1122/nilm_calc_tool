@@ -275,3 +275,29 @@ def test_profile_phases_control_and_payload(page):
     assert "phases:" in APPJS and "np-phases" in APPJS, "app.js 没把 #np-phases 放进提取载荷"
     assert "设备相别" in APPJS, "app.js 结果区没有「设备相别」卡片"
     assert set(PHASES_ALL) == {"A", "B", "C"}
+
+
+def test_assistant_ui_contract_and_safe_markdown_renderer(page):
+    required_ids = (
+        "assistant-launcher", "assistant-dialog", "assistant-model-type", "assistant-conversation-select",
+        "assistant-new", "assistant-delete-conversation", "assistant-messages", "assistant-form",
+        "assistant-prompt", "assistant-stop", "assistant-settings", "assistant-admin-token",
+        "assistant-save-settings", "assistant-load-sensitive-terms", "assistant-clear-sensitive-terms",
+        "assistant-doc-files", "assistant-import-docs", "assistant-knowledge-list",
+    )
+    for element_id in required_ids:
+        assert element_id in page.ids, f"缺少智能问答界面 #{element_id}"
+
+    start = APPJS.index("/* ------------------------------------------------------------------ 智能问答")
+    end = APPJS.index("async function init() {", start)
+    assistant_js = APPJS[start:end]
+    assert "fetch('/api/assistant/chat'" in assistant_js
+    assert "text/event-stream" in assistant_js and "response.body.getReader" in assistant_js
+    assert "assistantNewConversation(next)" in assistant_js and "window.confirm(message)" in assistant_js
+    assert "visible_views" in assistant_js and "assistantSyncLauncher" in assistant_js
+    assert "noopener noreferrer" in assistant_js, "Markdown 外链必须禁止 opener"
+    assert "assistantRenderMarkdown" in assistant_js and "element.innerHTML" not in assistant_js
+    assert "localStorage" not in assistant_js, "会话正文仅保存在页面内存，避免静默落浏览器持久存储"
+    assert "云端模式" in assistant_js and "敏感词拦截" in assistant_js
+    assert "X-Assistant-Admin-Token" in assistant_js
+    assert "会话仅保存在当前页面内存" in HTML

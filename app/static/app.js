@@ -1067,6 +1067,7 @@ async function switchView(v, side) {
   const want = side || 'bus';
   if (want !== S.side) await setSide(want, { silent: true });
   const prevView = S.view; S.view = v;
+  assistantSyncLauncher();
   $$('.navitem').forEach(b => b.classList.toggle('active', b.dataset.view === v && (b.dataset.side || 'bus') === S.side));
   $$('.view').forEach(s => s.classList.toggle('active', s.id === 'view-' + v));
   if (prevView !== v) window.scrollTo(0, 0);                                  // v0.99.9：切换页面回到顶部（原来保留上一页的滚动位置，短页面会看到空白）
@@ -4943,10 +4944,469 @@ function normalizeConfigForms(root = document) {
 }
 window.normalizeConfigForms = normalizeConfigForms;
 
+/* ------------------------------------------------------------------ 智能问答：同源 REST/SSE、无第三方渲染依赖 */
+const ASSISTANT_UI = { config: null, views: [], conversations: [], activeId: null, busy: false, controller: null, adminToken: '', initialized: false };
+const ASSISTANT_VIEW_LABELS = { overview: '总览面板', source: '数据源与控制', compare: '跨侧对比', voltage: '三相电压', current: '三相电流', power: '有功 / 无功 / 视在', power_factor: '功率因数', fundamental: '基波', harmonic: '谐波', interharmonic: '间谐波', dc: '直流偏置', spectrum: '频谱', events: '电能质量事件', nilm: '负荷辨识事件', windows: '窗口配置', export: '导出与日志', selftest: '算法自检', process: '数据处理' };
+function assistantEl(id) { return document.getElementById(id); }
+function assistantUid() { return window.crypto && crypto.randomUUID ? crypto.randomUUID() : 'chat-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 9); }
+function assistantCurrentConversation() { return ASSISTANT_UI.conversations.find(c => c.id === ASSISTANT_UI.activeId) || null; }
+function assistantSetFeedback(id, text, isError = false) {
+  const el = assistantEl(id); if (!el) return;
+  el.textContent = text || ''; el.classList.toggle('is-error', !!isError);
+}
+function assistantClearError() { const el = assistantEl('assistant-error'); if (el) { el.textContent = ''; el.style.display = 'none'; } }
+function assistantShowError(message) { const el = assistantEl('assistant-error'); if (el) { el.textContent = message || '请求失败'; el.style.display = ''; } }
+function assistantSetPrivacy() {
+  const el = assistantEl('assistant-privacy-note'); if (!el) return;
+  const cloud = assistantEl('assistant-model-type') && assistantEl('assistant-model-type').value === 'cloud';
+  el.classList.toggle('cloud', cloud);
+  el.textContent = cloud
+    ? '云端模式：提问、对话历史及命中的知识片段会发送给云端服务；敏感词拦截不能替代人工审查。'
+    : '本地模式：问题仅发送到配置的本机 / 内网模型服务，不会发送到云端。';
+}
+function assistantSyncLauncher() {
+  const launcher = assistantEl('assistant-launcher'); if (!launcher) return;
+  const cfg = ASSISTANT_UI.config;
+  if (!cfg || !Array.isArray(cfg.visible_views)) { launcher.hidden = true; return; }
+  launcher.hidden = !cfg.enabled || !cfg.visible_views.includes(S.view || 'overview');
+}
+function assistantUpdateBusy() {
+  const busy = ASSISTANT_UI.busy;
+  ['assistant-send', 'assistant-new', 'assistant-delete-conversation', 'assistant-conversation-select', 'assistant-model-type'].forEach(id => { const el = assistantEl(id); if (el) el.disabled = busy; });
+  const send = assistantEl('assistant-send'), stop = assistantEl('assistant-stop');
+  if (send) send.style.display = busy ? 'none' : '';
+  if (stop) stop.style.display = busy ? '' : 'none';
+}
+function assistantRenderSourceBadges(refs, sources) {
+  while (refs.firstChild) refs.removeChild(refs.firstChild);
+  (sources || []).forEach(source => {
+    const badge = document.createElement('span'); badge.className = 'assistant-source';
+    badge.textContent = '引用：' + String(source.name || '本地资料') + (Number.isFinite(Number(source.score)) ? ' · ' + Number(source.score).toFixed(2) : '');
+    refs.appendChild(badge);
+  });
+}
+function assistantBuildMessage(msg) {
+  const root = document.createElement('div'); root.className = 'assistant-message ' + (msg.role === 'user' ? 'user' : 'assistant');
+  const role = document.createElement('div'); role.className = 'assistant-role'; role.textContent = msg.role === 'user' ? '你' : '助手'; root.appendChild(role);
+  const body = document.createElement('div');
+  if (msg.role === 'user') { body.className = 'assistant-user-content'; body.style.whiteSpace = 'pre-wrap'; body.textContent = msg.content || ''; }
+  else { body.className = 'assistant-markdown'; assistantRenderMarkdown(body, msg.content || ''); }
+  root.appendChild(body);
+  const refs = document.createElement('div'); refs.className = 'assistant-sources'; refs.setAttribute('aria-label', '知识库引用');
+  assistantRenderSourceBadges(refs, msg.sources);
+  if (refs.childNodes.length) root.appendChild(refs);
+  msg._dom = { root, body, refs };
+  return root;
+}
+function assistantRefreshMessage(msg) {
+  if (!msg || !msg._dom) return;
+  if (msg.role === 'assistant') assistantRenderMarkdown(msg._dom.body, msg.content || '');
+  else msg._dom.body.textContent = msg.content || '';
+  assistantRenderSourceBadges(msg._dom.refs, msg.sources);
+  if (!msg._dom.refs.childNodes.length && msg._dom.refs.parentNode) msg._dom.refs.remove();
+  else if (msg._dom.refs.childNodes.length && !msg._dom.refs.parentNode) msg._dom.root.appendChild(msg._dom.refs);
+  const conv = assistantCurrentConversation();
+  if (conv && conv.messages.includes(msg)) {
+    const list = assistantEl('assistant-messages'); if (list) list.scrollTop = list.scrollHeight;
+  }
+}
+function assistantRenderConversationList() {
+  const select = assistantEl('assistant-conversation-select'); if (!select) return;
+  while (select.firstChild) select.removeChild(select.firstChild);
+  ASSISTANT_UI.conversations.forEach((conv, index) => {
+    const option = document.createElement('option'); option.value = conv.id;
+    const title = conv.title || '新对话'; option.textContent = (index + 1) + '. ' + title;
+    select.appendChild(option);
+  });
+  if (ASSISTANT_UI.activeId) select.value = ASSISTANT_UI.activeId;
+  const del = assistantEl('assistant-delete-conversation'); if (del) del.disabled = ASSISTANT_UI.busy || !ASSISTANT_UI.conversations.length;
+}
+function assistantRenderConversation() {
+  const list = assistantEl('assistant-messages'); if (!list) return;
+  Array.from(list.querySelectorAll('.assistant-message')).forEach(node => node.remove());
+  const empty = assistantEl('assistant-empty'), conv = assistantCurrentConversation();
+  const messages = conv ? conv.messages : [];
+  if (empty) empty.style.display = messages.length ? 'none' : '';
+  messages.forEach(msg => { msg._dom = null; list.appendChild(assistantBuildMessage(msg)); });
+  list.scrollTop = list.scrollHeight;
+  const model = assistantEl('assistant-model-type'); if (model && conv) model.value = conv.backend || 'local';
+  assistantRenderConversationList(); assistantSetPrivacy();
+}
+function assistantNewConversation(backend) {
+  if (ASSISTANT_UI.busy) return null;
+  const model = backend || (assistantEl('assistant-model-type') && assistantEl('assistant-model-type').value) || 'local';
+  const conv = { id: assistantUid(), title: '新对话', backend: model, messages: [], createdAt: Date.now() };
+  ASSISTANT_UI.conversations.unshift(conv);
+  if (ASSISTANT_UI.conversations.length > 30) ASSISTANT_UI.conversations.length = 30;
+  ASSISTANT_UI.activeId = conv.id;
+  const select = assistantEl('assistant-model-type'); if (select) select.value = model;
+  assistantClearError(); assistantRenderConversation();
+  return conv;
+}
+function assistantSelectConversation(id) {
+  if (ASSISTANT_UI.busy) { assistantSetFeedback('assistant-config-message', '请先停止当前生成，再切换会话。', true); assistantRenderConversationList(); return; }
+  const conv = ASSISTANT_UI.conversations.find(c => c.id === id); if (!conv) return;
+  ASSISTANT_UI.activeId = conv.id; assistantClearError(); assistantRenderConversation();
+}
+function assistantRemoveConversation() {
+  if (ASSISTANT_UI.busy) return;
+  const conv = assistantCurrentConversation(); if (!conv) return;
+  if (!window.confirm('删除当前对话？此操作仅影响当前页面内存中的会话。')) return;
+  ASSISTANT_UI.conversations = ASSISTANT_UI.conversations.filter(c => c.id !== conv.id);
+  if (!ASSISTANT_UI.conversations.length) assistantNewConversation((assistantEl('assistant-model-type') || {}).value || 'local');
+  else { ASSISTANT_UI.activeId = ASSISTANT_UI.conversations[0].id; assistantRenderConversation(); }
+}
+function assistantSetMessageTitle(conv) {
+  const first = conv.messages.find(m => m.role === 'user' && m.content);
+  if (first) conv.title = first.content.replace(/\s+/g, ' ').slice(0, 32) || '新对话';
+  assistantRenderConversationList();
+}
+
+/* 小型安全 Markdown 渲染器：只创建已知 DOM 元素，原始 HTML 一律当文本；链接仅允许 http(s)。 */
+function assistantAppendInline(parent, source) {
+  const text = String(source || '');
+  const re = /(`+)([\s\S]+?)\1|\*\*(.+?)\*\*|__(.+?)__|~~(.+?)~~|\*([^*\n]+)\*|_([^_\n]+)_|\[([^\]]+)\]\(([^)\s]+)\)|\$([^$\n]+)\$/g;
+  let cursor = 0, match;
+  while ((match = re.exec(text))) {
+    if (match.index > cursor) parent.appendChild(document.createTextNode(text.slice(cursor, match.index)));
+    let node;
+    if (match[1]) { node = document.createElement('code'); node.textContent = match[2]; }
+    else if (match[3] || match[4]) { node = document.createElement('strong'); assistantAppendInline(node, match[3] || match[4]); }
+    else if (match[5]) { node = document.createElement('del'); assistantAppendInline(node, match[5]); }
+    else if (match[6] || match[7]) { node = document.createElement('em'); assistantAppendInline(node, match[6] || match[7]); }
+    else if (match[8]) {
+      if (/^https?:\/\//i.test(match[9])) {
+        try { const safe = new URL(match[9]); if (safe.protocol === 'http:' || safe.protocol === 'https:') { node = document.createElement('a'); node.href = safe.href; node.target = '_blank'; node.rel = 'noopener noreferrer'; assistantAppendInline(node, match[8]); } } catch (e) { /* 作为普通文本 */ }
+      }
+      if (!node) node = document.createTextNode(match[0]);
+    } else { node = document.createElement('span'); node.className = 'assistant-math'; node.textContent = match[10]; }
+    parent.appendChild(node); cursor = re.lastIndex;
+  }
+  if (cursor < text.length) parent.appendChild(document.createTextNode(text.slice(cursor)));
+}
+function assistantTableCells(line) {
+  return String(line).trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map(cell => cell.trim());
+}
+function assistantIsBlockStart(lines, index) {
+  const line = (lines[index] || '').trim();
+  if (!line) return false;
+  if (/^(?:```|~~~)/.test(line) || /^#{1,6}\s/.test(line) || /^>/.test(line) || /^(?:-{3,}|\*{3,}|_{3,})$/.test(line) || /^\$\$/.test(line) || /^\s*(?:[-*+]|\d+[.)])\s+/.test(line)) return true;
+  if (index + 1 < lines.length && line.includes('|')) {
+    const cells = assistantTableCells(lines[index + 1]);
+    if (lines[index + 1].includes('|') && cells.length && cells.every(c => /^:?-{3,}:?$/.test(c))) return true;
+  }
+  return false;
+}
+function assistantRenderMarkdownBlocks(parent, lines) {
+  let i = 0;
+  while (i < lines.length) {
+    const line = lines[i], trimmed = line.trim();
+    if (!trimmed) { i++; continue; }
+    const fence = trimmed.match(/^(```|~~~)(.*)$/);
+    if (fence) {
+      const marker = fence[1], codeLines = []; i++;
+      while (i < lines.length && !lines[i].trim().startsWith(marker)) codeLines.push(lines[i++]);
+      if (i < lines.length) i++;
+      const pre = document.createElement('pre'), code = document.createElement('code'); code.textContent = codeLines.join('\n'); pre.appendChild(code); parent.appendChild(pre); continue;
+    }
+    if (/^\$\$/.test(trimmed)) {
+      let value = trimmed.slice(2); const end = value.indexOf('$$');
+      if (end >= 0) { value = value.slice(0, end); i++; }
+      else { i++; const math = []; if (value) math.push(value); while (i < lines.length && !lines[i].includes('$$')) math.push(lines[i++]); if (i < lines.length) { const part = lines[i].split('$$')[0]; if (part) math.push(part); i++; } value = math.join('\n'); }
+      const block = document.createElement('div'); block.className = 'assistant-math-block'; block.textContent = value; parent.appendChild(block); continue;
+    }
+    const heading = trimmed.match(/^(#{1,6})\s+(.+?)\s*#*$/);
+    if (heading) { const h = document.createElement('h' + heading[1].length); assistantAppendInline(h, heading[2]); parent.appendChild(h); i++; continue; }
+    if (/^(?:-{3,}|\*{3,}|_{3,})$/.test(trimmed)) { parent.appendChild(document.createElement('hr')); i++; continue; }
+    if (/^>\s?/.test(trimmed)) {
+      const quote = [];
+      while (i < lines.length && /^\s*>/.test(lines[i])) quote.push(lines[i++].replace(/^\s*>\s?/, ''));
+      const block = document.createElement('blockquote'); assistantRenderMarkdownBlocks(block, quote); parent.appendChild(block); continue;
+    }
+    if (i + 1 < lines.length && trimmed.includes('|')) {
+      const header = assistantTableCells(trimmed), divider = assistantTableCells(lines[i + 1]);
+      if (lines[i + 1].includes('|') && divider.length && divider.every(c => /^:?-{3,}:?$/.test(c))) {
+        const table = document.createElement('table'), thead = document.createElement('thead'), hr = document.createElement('tr');
+        header.forEach(cell => { const th = document.createElement('th'); assistantAppendInline(th, cell); hr.appendChild(th); }); thead.appendChild(hr); table.appendChild(thead);
+        const tbody = document.createElement('tbody'); i += 2;
+        while (i < lines.length && lines[i].includes('|') && lines[i].trim()) { const row = document.createElement('tr'); assistantTableCells(lines[i++]).forEach(cell => { const td = document.createElement('td'); assistantAppendInline(td, cell); row.appendChild(td); }); tbody.appendChild(row); }
+        table.appendChild(tbody); parent.appendChild(table); continue;
+      }
+    }
+    const listStart = trimmed.match(/^([-*+]|\d+[.)])\s+(.*)$/);
+    if (listStart) {
+      const ordered = /^\d/.test(listStart[1]), list = document.createElement(ordered ? 'ol' : 'ul');
+      while (i < lines.length) {
+        const m = lines[i].trim().match(/^([-*+]|\d+[.)])\s+(.*)$/);
+        if (!m || /^\d/.test(m[1]) !== ordered) break;
+        const li = document.createElement('li'); assistantAppendInline(li, m[2]); list.appendChild(li); i++;
+      }
+      parent.appendChild(list); continue;
+    }
+    const paragraph = [line]; i++;
+    while (i < lines.length && lines[i].trim() && !assistantIsBlockStart(lines, i)) paragraph.push(lines[i++]);
+    const p = document.createElement('p'); paragraph.forEach((part, n) => { if (n) p.appendChild(document.createElement('br')); assistantAppendInline(p, part.trim()); }); parent.appendChild(p);
+  }
+}
+function assistantRenderMarkdown(element, markdown) {
+  while (element.firstChild) element.removeChild(element.firstChild);
+  assistantRenderMarkdownBlocks(element, String(markdown || '').replace(/\r\n?/g, '\n').split('\n'));
+}
+
+async function assistantApi(path, options = {}) {
+  const response = await fetch(path, options); let data = null;
+  try { data = await response.json(); } catch (e) { data = null; }
+  if (!response.ok) throw new Error(data && data.error ? data.error : 'HTTP ' + response.status);
+  return data || {};
+}
+function assistantRenderViewChecks(selected) {
+  const root = assistantEl('assistant-visible-views'); if (!root) return;
+  while (root.firstChild) root.removeChild(root.firstChild);
+  ASSISTANT_UI.views.forEach(view => {
+    const id = String(view.id || ''); if (!id) return;
+    const label = document.createElement('label'), input = document.createElement('input');
+    input.type = 'checkbox'; input.dataset.viewId = id; input.checked = selected.includes(id);
+    const name = document.createElement('span'); name.textContent = view.label || ASSISTANT_VIEW_LABELS[id] || id;
+    label.appendChild(input); label.appendChild(name); root.appendChild(label);
+  });
+}
+function assistantFillConfigForm(cfg) {
+  const setValue = (id, value) => { const el = assistantEl(id); if (el) el.value = value == null ? '' : String(value); };
+  const setCheck = (id, value) => { const el = assistantEl(id); if (el) el.checked = !!value; };
+  setCheck('assistant-enabled', cfg.enabled); setValue('assistant-default-backend', cfg.default_model_type || 'local');
+  setValue('assistant-timeout', cfg.timeout_s); setValue('assistant-temperature', cfg.temperature); setValue('assistant-max-tokens', cfg.max_tokens);
+  setValue('assistant-local-url', cfg.local_base_url); setValue('assistant-local-model', cfg.local_model);
+  setValue('assistant-cloud-url', cfg.cloud_base_url); setValue('assistant-cloud-model', cfg.cloud_model);
+  setCheck('assistant-rag-enabled', cfg.rag_enabled); setValue('assistant-rag-top-k', cfg.rag_top_k); setValue('assistant-rag-threshold', cfg.rag_similarity_threshold);
+  setCheck('assistant-log-queries', cfg.log_queries); setValue('assistant-sensitive-terms', '');
+  const sensitive = assistantEl('assistant-sensitive-terms');
+  if (sensitive) sensitive.placeholder = cfg.sensitive_terms_configured
+    ? '服务端已保存 ' + (cfg.sensitive_terms_count || '若干') + ' 条拦截词（不公开回显）；使用下方按钮读取或输入新列表替换'
+    : '例如：项目代号、客户名称';
+  setCheck('assistant-clear-sensitive-terms', false);
+  const lk = assistantEl('assistant-local-key'), ck = assistantEl('assistant-cloud-key');
+  if (lk) { lk.value = ''; lk.placeholder = cfg.local_api_key_set ? '已在服务端配置（不回显）；输入新值可替换' : '留空＝保持现值；服务端环境变量优先'; }
+  if (ck) { ck.value = ''; ck.placeholder = cfg.cloud_api_key_set ? '已在服务端配置（不回显）；输入新值可替换' : '不会回显；环境变量优先'; }
+  setCheck('assistant-clear-local-key', false); setCheck('assistant-clear-cloud-key', false);
+  assistantRenderViewChecks(cfg.visible_views || []);
+  const status = assistantEl('assistant-admin-status');
+  if (status) status.textContent = cfg.admin_configurable ? '服务端管理员口令已启用。' : '尚未启用：请设置 ELEC_TOOL_ASSISTANT_ADMIN_TOKEN 并重启服务。';
+}
+async function assistantLoadKnowledge() {
+  try {
+    const data = await assistantApi('/api/assistant/knowledge'); const root = assistantEl('assistant-knowledge-list'); if (!root) return;
+    while (root.firstChild) root.removeChild(root.firstChild);
+    if (!data.documents || !data.documents.length) { root.textContent = '知识库为空。导入后以词项相似度检索；云端模式会发送命中的片段。'; return; }
+    data.documents.forEach(doc => {
+      const row = document.createElement('div'); row.className = 'assistant-knowledge-item';
+      const label = document.createElement('span'); label.textContent = doc.name + ' · ' + doc.characters + ' 字 / ' + doc.chunks + ' 段'; row.appendChild(label);
+      const del = document.createElement('button'); del.type = 'button'; del.textContent = '删除'; del.addEventListener('click', () => assistantDeleteKnowledge(doc.id, doc.name)); row.appendChild(del); root.appendChild(row);
+    });
+  } catch (e) { assistantSetFeedback('assistant-knowledge-message', '读取知识库失败：' + e.message, true); }
+}
+async function assistantLoadConfig() {
+  try {
+    const data = await assistantApi('/api/assistant/config'); ASSISTANT_UI.config = data.config || {};
+    ASSISTANT_UI.views = Array.isArray(data.views) ? data.views : [];
+    assistantFillConfigForm(ASSISTANT_UI.config);
+    const conv = assistantCurrentConversation();
+    if (conv && !conv.messages.length && ASSISTANT_UI.config.default_model_type) { conv.backend = ASSISTANT_UI.config.default_model_type; const model = assistantEl('assistant-model-type'); if (model) model.value = conv.backend; }
+    assistantRenderConversationList(); assistantSetPrivacy(); assistantSyncLauncher();
+    assistantSetFeedback('assistant-config-message', '配置已读取；API Key 不会回显。');
+    await assistantLoadKnowledge();
+  } catch (e) {
+    assistantSetFeedback('assistant-admin-status', '无法读取智能问答配置：' + e.message, true);
+    assistantSetFeedback('assistant-config-message', '配置读取失败：' + e.message, true);
+  }
+}
+function assistantSetBusy(value) { ASSISTANT_UI.busy = !!value; assistantUpdateBusy(); }
+function assistantHandleStreamData(raw, msg) {
+  const lines = raw.split('\n');
+  for (const line of lines) {
+    if (!line.startsWith('data:')) continue;
+    const text = line.slice(5).trim(); if (!text || text === '[DONE]') continue;
+    let data; try { data = JSON.parse(text); } catch (e) { continue; }
+    if (data.type === 'sources') { msg.sources = Array.isArray(data.sources) ? data.sources : []; assistantRefreshMessage(msg); }
+    else if (data.type === 'delta' && typeof data.text === 'string') { msg.content += data.text; assistantRefreshMessage(msg); }
+    else if (data.type === 'error') throw new Error(data.error || '模型生成失败');
+  }
+}
+async function assistantSubmit() {
+  if (ASSISTANT_UI.busy) return;
+  const input = assistantEl('assistant-prompt'), prompt = input ? input.value.trim() : '';
+  if (!prompt) { if (input) input.focus(); return; }
+  let conv = assistantCurrentConversation(); if (!conv) conv = assistantNewConversation('local');
+  if (!conv) return;
+  assistantClearError(); assistantSetFeedback('assistant-config-message', '');
+  const history = conv.messages.filter(m => (m.role === 'user' || m.role === 'assistant') && String(m.content || '').trim()).map(m => ({ role: m.role, content: m.content }));
+  const userMessage = { role: 'user', content: prompt, sources: [] };
+  const answerMessage = { role: 'assistant', content: '', sources: [] };
+  conv.messages.push(userMessage, answerMessage); assistantSetMessageTitle(conv);
+  if (input) input.value = '';
+  const count = assistantEl('assistant-count'); if (count) count.textContent = '0 / 12000';
+  assistantRenderConversation(); assistantSetBusy(true);
+  const controller = new AbortController(); ASSISTANT_UI.controller = controller;
+  let reader = null;
+  try {
+    const response = await fetch('/api/assistant/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: controller.signal,
+      body: JSON.stringify({ prompt, history, model_type: conv.backend || 'local', stream: true }) });
+    if (!response.ok) { let body = null; try { body = await response.json(); } catch (e) { /* response may not be JSON */ } throw new Error(body && body.error ? body.error : 'HTTP ' + response.status); }
+    const contentType = response.headers.get('content-type') || '';
+    if (!contentType.includes('text/event-stream')) {
+      const data = await response.json(); answerMessage.content = String(data.answer || ''); answerMessage.sources = Array.isArray(data.sources) ? data.sources : []; assistantRefreshMessage(answerMessage);
+    } else {
+      if (!response.body || !response.body.getReader) throw new Error('浏览器不支持流式读取，请更新浏览器后重试。');
+      reader = response.body.getReader(); const decoder = new TextDecoder('utf-8'); let buffer = '';
+      while (true) {
+        const chunk = await reader.read(); buffer += decoder.decode(chunk.value || new Uint8Array(), { stream: !chunk.done });
+        buffer = buffer.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+        let split;
+        while ((split = buffer.indexOf('\n\n')) >= 0) { const frame = buffer.slice(0, split); buffer = buffer.slice(split + 2); assistantHandleStreamData(frame, answerMessage); }
+        if (chunk.done) break;
+      }
+      if (buffer.trim()) assistantHandleStreamData(buffer, answerMessage);
+    }
+    if (!answerMessage.content.trim()) throw new Error('模型返回了空回答，请检查本地模型或云端接口。');
+  } catch (e) {
+    if (controller.signal.aborted) {
+      if (!answerMessage.content) conv.messages = conv.messages.filter(m => m !== answerMessage);
+      assistantShowError('已停止生成。');
+    } else {
+      if (!answerMessage.content) conv.messages = conv.messages.filter(m => m !== answerMessage);
+      assistantShowError(e && e.message ? e.message : '问答请求失败');
+    }
+  } finally {
+    if (reader) { try { await reader.cancel(); } catch (e) { /* stream already closed */ } }
+    ASSISTANT_UI.controller = null; assistantSetBusy(false); assistantRenderConversation();
+  }
+}
+function assistantChangeBackend() {
+  const select = assistantEl('assistant-model-type'), conv = assistantCurrentConversation(); if (!select) return;
+  const next = select.value === 'cloud' ? 'cloud' : 'local';
+  if (conv && conv.backend === next) { assistantSetPrivacy(); return; }
+  if (conv && conv.messages.length) {
+    const message = '切换模型后会新建一个独立会话，当前对话将保留并仍使用原模型。继续切换？';
+    if (!window.confirm(message)) { select.value = conv.backend || 'local'; assistantSetPrivacy(); return; }
+    assistantNewConversation(next);
+  } else {
+    if (conv) conv.backend = next; else assistantNewConversation(next);
+    assistantRenderConversation();
+  }
+  assistantSetPrivacy();
+}
+async function assistantSaveConfig() {
+  const tokenInput = assistantEl('assistant-admin-token');
+  if (tokenInput && tokenInput.value) ASSISTANT_UI.adminToken = tokenInput.value;
+  const get = id => assistantEl(id), number = id => Number(get(id).value);
+  const payload = {
+    enabled: get('assistant-enabled').checked, default_model_type: get('assistant-default-backend').value,
+    timeout_s: number('assistant-timeout'), temperature: number('assistant-temperature'), max_tokens: number('assistant-max-tokens'),
+    local_base_url: get('assistant-local-url').value.trim(), local_model: get('assistant-local-model').value.trim(),
+    cloud_base_url: get('assistant-cloud-url').value.trim(), cloud_model: get('assistant-cloud-model').value.trim(),
+    rag_enabled: get('assistant-rag-enabled').checked, rag_top_k: number('assistant-rag-top-k'), rag_similarity_threshold: number('assistant-rag-threshold'),
+    log_queries: get('assistant-log-queries').checked,
+    visible_views: Array.from(document.querySelectorAll('#assistant-visible-views input[data-view-id]:checked')).map(el => el.dataset.viewId),
+  };
+  const sensitiveTerms = get('assistant-sensitive-terms').value.split(/\r?\n/).map(s => s.trim()).filter(Boolean).slice(0, 30);
+  if (sensitiveTerms.length) payload.sensitive_terms = sensitiveTerms;
+  else if (get('assistant-clear-sensitive-terms').checked) payload.sensitive_terms = [];
+  const localKey = get('assistant-local-key').value, cloudKey = get('assistant-cloud-key').value;
+  if (localKey) payload.local_api_key = localKey;
+  if (cloudKey) payload.cloud_api_key = cloudKey;
+  if (get('assistant-clear-local-key').checked && !localKey) payload.clear_local_api_key = true;
+  if (get('assistant-clear-cloud-key').checked && !cloudKey) payload.clear_cloud_api_key = true;
+  try {
+    assistantSetFeedback('assistant-config-message', '正在保存…');
+    const data = await assistantApi('/api/assistant/config', { method: 'PUT', headers: { 'Content-Type': 'application/json', 'X-Assistant-Admin-Token': ASSISTANT_UI.adminToken }, body: JSON.stringify(payload) });
+    ASSISTANT_UI.config = data.config || ASSISTANT_UI.config;
+    const active = assistantCurrentConversation();
+    if (active && !active.messages.length && ASSISTANT_UI.config.default_model_type) {
+      active.backend = ASSISTANT_UI.config.default_model_type;
+      const modelSelect = assistantEl('assistant-model-type'); if (modelSelect) modelSelect.value = active.backend;
+    }
+    assistantFillConfigForm(ASSISTANT_UI.config); assistantRenderConversationList(); assistantSetPrivacy(); assistantSyncLauncher();
+    assistantSetFeedback('assistant-config-message', '设置已保存到服务端本地配置；API Key 不会回显，环境变量优先。');
+  } catch (e) { assistantSetFeedback('assistant-config-message', '保存失败：' + e.message, true); }
+}
+async function assistantLoadSensitiveTerms() {
+  const tokenInput = assistantEl('assistant-admin-token');
+  if (tokenInput && tokenInput.value) ASSISTANT_UI.adminToken = tokenInput.value;
+  try {
+    const data = await assistantApi('/api/assistant/config/private', { headers: { 'X-Assistant-Admin-Token': ASSISTANT_UI.adminToken } });
+    const terms = Array.isArray(data.config && data.config.sensitive_terms) ? data.config.sensitive_terms : [];
+    const field = assistantEl('assistant-sensitive-terms'); if (field) { field.value = terms.join('\n'); field.placeholder = '已从管理员接口读取；内容仅保存在当前页面内存中'; }
+    const clear = assistantEl('assistant-clear-sensitive-terms'); if (clear) clear.checked = false;
+    assistantSetFeedback('assistant-config-message', '已读取 ' + terms.length + ' 条拦截词；只有点击保存后才会更新服务端配置。');
+  } catch (e) { assistantSetFeedback('assistant-config-message', '读取拦截词失败：' + e.message, true); }
+}
+async function assistantImportKnowledge() {
+  const input = assistantEl('assistant-doc-files'), files = input ? Array.from(input.files || []) : [];
+  if (!files.length) { assistantSetFeedback('assistant-knowledge-message', '请先选择至少一个 UTF-8 文本文件。', true); return; }
+  if (assistantEl('assistant-admin-token') && assistantEl('assistant-admin-token').value) ASSISTANT_UI.adminToken = assistantEl('assistant-admin-token').value;
+  try {
+    if (files.length > 10) throw new Error('一次最多导入 10 个文件。');
+    const documents = []; let totalBytes = 0;
+    for (const file of files) {
+      if (file.size > 1_000_000) throw new Error(file.name + ' 超过 1 MB。');
+      totalBytes += file.size;
+      if (totalBytes > 5_000_000) throw new Error('本次导入总大小不能超过 5 MB。');
+      documents.push({ name: file.name, content: await file.text() });
+    }
+    assistantSetFeedback('assistant-knowledge-message', '正在导入…');
+    await assistantApi('/api/assistant/knowledge/import', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Assistant-Admin-Token': ASSISTANT_UI.adminToken }, body: JSON.stringify({ documents }) });
+    input.value = ''; assistantSetFeedback('assistant-knowledge-message', '导入完成，资料只保存在本地服务端。'); await assistantLoadKnowledge();
+  } catch (e) { assistantSetFeedback('assistant-knowledge-message', '导入失败：' + e.message, true); }
+}
+async function assistantDeleteKnowledge(id, name) {
+  if (!window.confirm('从本地知识库删除“' + String(name || '') + '”？')) return;
+  if (assistantEl('assistant-admin-token') && assistantEl('assistant-admin-token').value) ASSISTANT_UI.adminToken = assistantEl('assistant-admin-token').value;
+  try {
+    await assistantApi('/api/assistant/knowledge/' + encodeURIComponent(id), { method: 'DELETE', headers: { 'X-Assistant-Admin-Token': ASSISTANT_UI.adminToken } });
+    assistantSetFeedback('assistant-knowledge-message', '已删除：' + name); await assistantLoadKnowledge();
+  } catch (e) { assistantSetFeedback('assistant-knowledge-message', '删除失败：' + e.message, true); }
+}
+async function assistantClearKnowledge() {
+  if (!window.confirm('确认清空所有本地知识库资料？此操作不可撤销。')) return;
+  if (assistantEl('assistant-admin-token') && assistantEl('assistant-admin-token').value) ASSISTANT_UI.adminToken = assistantEl('assistant-admin-token').value;
+  try {
+    await assistantApi('/api/assistant/knowledge', { method: 'DELETE', headers: { 'X-Assistant-Admin-Token': ASSISTANT_UI.adminToken } });
+    assistantSetFeedback('assistant-knowledge-message', '本地知识库已清空。'); await assistantLoadKnowledge();
+  } catch (e) { assistantSetFeedback('assistant-knowledge-message', '清空失败：' + e.message, true); }
+}
+function assistantInit() {
+  if (ASSISTANT_UI.initialized) return; ASSISTANT_UI.initialized = true;
+  assistantNewConversation('local');
+  const launcher = assistantEl('assistant-launcher'), dialog = assistantEl('assistant-dialog');
+  if (launcher && dialog) launcher.addEventListener('click', () => { assistantClearError(); if (dialog.showModal) dialog.showModal(); else dialog.setAttribute('open', ''); assistantEl('assistant-prompt').focus(); });
+  const close = assistantEl('assistant-close'); if (close && dialog) close.addEventListener('click', () => { if (dialog.close) dialog.close(); else dialog.removeAttribute('open'); });
+  const form = assistantEl('assistant-form'); if (form) form.addEventListener('submit', event => { event.preventDefault(); assistantSubmit(); });
+  const prompt = assistantEl('assistant-prompt'); if (prompt) {
+    prompt.addEventListener('input', () => { const count = assistantEl('assistant-count'); if (count) count.textContent = prompt.value.length + ' / 12000'; });
+    prompt.addEventListener('keydown', event => { if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) { event.preventDefault(); if (form && form.requestSubmit) form.requestSubmit(); else assistantSubmit(); } });
+  }
+  const model = assistantEl('assistant-model-type'); if (model) model.addEventListener('change', assistantChangeBackend);
+  const convSelect = assistantEl('assistant-conversation-select'); if (convSelect) convSelect.addEventListener('change', () => assistantSelectConversation(convSelect.value));
+  const newButton = assistantEl('assistant-new'); if (newButton) newButton.addEventListener('click', () => { const current = assistantCurrentConversation(); assistantNewConversation(current ? current.backend : (model && model.value) || 'local'); });
+  const delButton = assistantEl('assistant-delete-conversation'); if (delButton) delButton.addEventListener('click', assistantRemoveConversation);
+  const stop = assistantEl('assistant-stop'); if (stop) stop.addEventListener('click', () => { if (ASSISTANT_UI.controller) ASSISTANT_UI.controller.abort(); });
+  const save = assistantEl('assistant-save-settings'); if (save) save.addEventListener('click', assistantSaveConfig);
+  const importButton = assistantEl('assistant-import-docs'); if (importButton) importButton.addEventListener('click', assistantImportKnowledge);
+  const clearDocs = assistantEl('assistant-clear-docs'); if (clearDocs) clearDocs.addEventListener('click', assistantClearKnowledge);
+  const token = assistantEl('assistant-admin-token'); if (token) token.addEventListener('input', () => { ASSISTANT_UI.adminToken = token.value; });
+  const loadTerms = assistantEl('assistant-load-sensitive-terms'); if (loadTerms) loadTerms.addEventListener('click', assistantLoadSensitiveTerms);
+  const sensitiveField = assistantEl('assistant-sensitive-terms'), clearTerms = assistantEl('assistant-clear-sensitive-terms');
+  if (clearTerms && sensitiveField) {
+    clearTerms.addEventListener('change', () => { if (clearTerms.checked) sensitiveField.value = ''; });
+    sensitiveField.addEventListener('input', () => { if (sensitiveField.value) clearTerms.checked = false; });
+  }
+  assistantUpdateBusy(); assistantSetPrivacy(); assistantRenderConversation(); assistantSyncLauncher(); assistantLoadConfig();
+}
+
 async function init() {
   normalizeConfigForms();
   buildDualViews();
   bind();
+  assistantInit();
   setInterval(tickElapsed, 1000);                                   // v0.99.14：顶栏播放耗时每秒走表
   // v0.99.9：顶栏高度 → CSS 变量 --topbar-h（导航条 sticky top / 高度随之变化；窗口缩放、状态行换行时实时更新）
   const syncTopbar = () => { const tb = $('#topbar'); if (tb) document.documentElement.style.setProperty('--topbar-h', Math.ceil(tb.getBoundingClientRect().height) + 'px'); };

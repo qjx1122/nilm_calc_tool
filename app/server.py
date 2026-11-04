@@ -21,6 +21,7 @@ import shutil
 import re
 import threading
 import platform
+import queue
 import sys
 import time
 from collections import deque
@@ -32,9 +33,11 @@ from contextlib import asynccontextmanager
 
 import numpy as np
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
+
+from app.assistant import BUSINESS_VIEWS, AssistantError, assistant_service, run_stream_to_queue, sse_event
 
 from elec_tool import __version__
 from elec_tool.config import (AppConfig, ConfigError, parse_time_text, CURVE_KEYS, QUANTITY_KEYS, SourceConfig, WindowSpec,
@@ -1394,6 +1397,140 @@ async def get_sides() -> Dict[str, Any]:
 async def health() -> Dict[str, Any]:
     return {"ok": True, "version": __version__, "time": time.time(),
             "running": bool(RUNNER.thread and RUNNER.thread.is_alive())}
+
+
+@app.get("/api/assistant/config")
+async def get_assistant_config() -> Dict[str, Any]:
+    """安全配置视图：API Key 只返回是否已配置，不返回其值。"""
+    return {"ok": True, "config": assistant_service.public_config(),
+            "views": [{"id": key, "label": label} for key, label in BUSINESS_VIEWS]}
+
+
+@app.get("/api/assistant/config/private")
+async def get_private_assistant_config(request: Request) -> Any:
+    """敏感词条目只在管理员口令校验后返回；API Key 始终不返回。"""
+    try:
+        cfg = assistant_service.admin_config(request.headers.get("x-assistant-admin-token", ""))
+        return {"ok": True, "config": cfg}
+    except AssistantError as exc:
+        return JSONResponse(status_code=exc.status_code, content={"ok": False, "error": exc.message})
+
+
+@app.put("/api/assistant/config")
+async def put_assistant_config(payload: Dict[str, Any], request: Request) -> Any:
+    try:
+        cfg = assistant_service.update_config(payload, request.headers.get("x-assistant-admin-token", ""))
+        return {"ok": True, "config": cfg}
+    except AssistantError as exc:
+        return JSONResponse(status_code=exc.status_code, content={"ok": False, "error": exc.message})
+
+
+@app.get("/api/assistant/knowledge")
+async def get_assistant_knowledge() -> Dict[str, Any]:
+    return assistant_service.knowledge_list()
+
+
+@app.post("/api/assistant/knowledge/import")
+async def import_assistant_knowledge(payload: Dict[str, Any], request: Request) -> Any:
+    try:
+        return assistant_service.import_documents(payload, request.headers.get("x-assistant-admin-token", ""))
+    except AssistantError as exc:
+        return JSONResponse(status_code=exc.status_code, content={"ok": False, "error": exc.message})
+
+
+@app.delete("/api/assistant/knowledge/{doc_id}")
+async def delete_assistant_document(doc_id: str, request: Request) -> Any:
+    try:
+        return assistant_service.delete_document(doc_id, request.headers.get("x-assistant-admin-token", ""))
+    except AssistantError as exc:
+        return JSONResponse(status_code=exc.status_code, content={"ok": False, "error": exc.message})
+
+
+@app.delete("/api/assistant/knowledge")
+async def clear_assistant_knowledge(request: Request) -> Any:
+    try:
+        return assistant_service.clear_knowledge(request.headers.get("x-assistant-admin-token", ""))
+    except AssistantError as exc:
+        return JSONResponse(status_code=exc.status_code, content={"ok": False, "error": exc.message})
+
+
+@app.post("/api/assistant/chat")
+async def assistant_chat(payload: Dict[str, Any], request: Request) -> Any:
+    """OpenAI-compatible local/cloud gateway; stream=true returns server-sent events."""
+    stream = payload.get("stream", True) if isinstance(payload, dict) else True
+    if not isinstance(stream, bool):
+        return JSONResponse(status_code=400, content={"ok": False, "error": "stream 必须是布尔值"})
+    client_id = request.client.host if request.client else "unknown"
+    try:
+        assistant_service.acquire_request(client_id)
+    except AssistantError as exc:
+        return JSONResponse(status_code=exc.status_code, content={"ok": False, "error": exc.message})
+    try:
+        plan = assistant_service.prepare_chat(payload)
+    except AssistantError as exc:
+        assistant_service.release_request()
+        return JSONResponse(status_code=exc.status_code, content={"ok": False, "error": exc.message})
+    except Exception:
+        assistant_service.release_request()
+        log.exception("Assistant request preparation failed")
+        return JSONResponse(status_code=500, content={"ok": False, "error": "无法准备问答请求，请检查服务端配置后重试"})
+
+    if stream:
+        async def event_stream():
+            events: "queue.Queue" = queue.Queue(maxsize=32)
+            cancel = threading.Event()
+            worker = threading.Thread(target=run_stream_to_queue, args=(assistant_service, plan, events, cancel),
+                                      name="assistant-model-stream", daemon=True)
+            try:
+                worker.start()
+            except Exception:
+                cancel.set()
+                assistant_service.release_request()
+                yield sse_event({"type": "error", "error": "无法启动模型请求线程，请稍后重试"})
+                return
+            try:
+                while True:
+                    try:
+                        item = await asyncio.to_thread(events.get, True, 0.5)
+                    except queue.Empty:
+                        yield b": keepalive\n\n"
+                        continue
+                    if item is None:
+                        break
+                    yield sse_event(item)
+            finally:
+                cancel.set()
+        return StreamingResponse(event_stream(), media_type="text/event-stream",
+                                 headers={"Cache-Control": "no-cache, no-transform", "X-Accel-Buffering": "no"})
+
+    completion_started = threading.Event()
+
+    def complete_and_release():
+        completion_started.set()
+        try:
+            return assistant_service.complete(plan)
+        finally:
+            assistant_service.release_request()
+
+    try:
+        completion = asyncio.create_task(asyncio.to_thread(complete_and_release))
+    except Exception:
+        assistant_service.release_request()
+        log.exception("Unable to schedule non-streaming assistant request")
+        return JSONResponse(status_code=503, content={"ok": False, "error": "当前无法启动模型请求，请稍后重试"})
+    try:
+        answer = await asyncio.shield(completion)
+        return {"ok": True, "answer": answer, "sources": plan["sources"]}
+    except AssistantError as exc:
+        return JSONResponse(status_code=exc.status_code, content={"ok": False, "error": exc.message})
+    except asyncio.CancelledError:
+        # shield keeps the blocking urllib worker alive; it owns semaphore release on completion.
+        raise
+    except Exception:
+        if not completion_started.is_set():
+            assistant_service.release_request()
+        log.exception("Assistant completion failed unexpectedly")
+        return JSONResponse(status_code=500, content={"ok": False, "error": "模型请求发生未预期错误，请检查服务端日志"})
 
 
 @app.get("/api/state")

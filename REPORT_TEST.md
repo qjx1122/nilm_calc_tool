@@ -3760,3 +3760,12 @@ delta_i_a  = d_i_obs
 
 - **行为变更（有意）**：纯时刻列文件时间轴基准 1900 负 epoch → 与 `00/00/00` 相同的 1970+1 天正 epoch；`mode` datetime→clock_time，**获得跨午夜展开**（对齐已文档化语义；`_file_time_range`/`wave_preview` 同步改，公共时间段/自定义时间两端同口径）。
 - **缺口（🔶）**：① 真实用户文件复验（本沙盒为合成文件）；② 解析修复后 8× 已贴预算（3.93 vs 3.75 s），更重配置 / 更大 `block_samples` 下 8× 或略欠、**4× 内稳定**——新瓶颈为 compute+broadcast，如需再提可续挖；③ 时标缺口仍按跨度等待（"跳过缺口更快放"属产品决策，改动会破坏两侧同步/公共时间段口径，未动）；④ 界面/文档中"数据时间"口径说明未单独立条（数据时长=样本/fs，时标跨度=含缺口）。
+
+## [2026-11-04] 专题：业务网页智能问答（本地 / 云端模型、SSE、RAG 与安全边界）
+- 类型：用户专题 / 验证专题
+- 目标与假设：在现有 FastAPI + 原生 JS 网页内新增技术问答，覆盖 NILM、电能质量、算法参数、工具操作、报错排查；本地 / 云端统一 OpenAI-compatible Chat Completions 协议。既有应用没有用户登录 / 角色体系，因此页面可见范围只作入口显隐；必须显式交代云端数据边界。
+- 方法 / 数据 / 参数：新增 `app/assistant.py`（标准库 `urllib` 调模型、local 请求绕过代理、local 地址限制 loopback / 私有网段 / 明确内网域名、cloud HTTPS、SSE / 非流式解析、错误脱敏、60 秒 12 次限流 / 3 个并发、文本分块 + TF-IDF 词项检索）；新增 assistant REST 路由与前端弹窗。RAG 文件由管理员导入 UTF-8 md/txt/json/py/csv/html/yaml/log（单文件 1 MB、一次 10 个/5 MB、总 100 个/20 MB），普通配置和知识库默认位于 gitignore 的 `output/assistant/`。密钥环境变量优先、不会由 GET 回传、不写普通 JSON；UI 输入密钥仅在服务进程内存；敏感词正文仅管理员口令端点返回，聊天错误不回显匹配词。会话不写 localStorage；云端风险提示覆盖问题/历史/命中片段，说明扫描不是 DLP。
+- 用户执行命令（含实录路径；本节无用户命令则注明）：无（本轮沙盒实现与验证；现场模型验收待后续）。
+- 结果 / 结论：`./.venv/bin/python -m pytest -q` **596 passed / 1 skipped**（158.39 s，另有 1 条既有 Starlette/httpx deprecation warning）；`node tools/ui_assistant_check.cjs` **PASS 21 checks**（同一测试覆盖 DOM 页面显隐/禁用态、分片 SSE、Markdown / XSS 安全、引用、模型切换新会话、管理员配置/敏感词管理及本地文件导入）；`py_compile`、`node --check app/static/app.js`、`node --check tools/ui_assistant_check.cjs`、`git diff --check` 通过。新增 API 集成测试 mock 上游文本，验证 SSE / 非流式路由；服务单测检查 local/cloud request headers/body/proxy、上游 SSE、401 错误脱敏、RAG 文档导入/检索/删除、敏感历史与检索片段拦截、限流、密钥不落盘。应用已在沙盒 `0.0.0.0:8001` 启动，`GET /` 与 `GET /api/assistant/config` 为 200。
+- 是否进入 REPORT.md（稳定结论）：否（属于本轮工程实现 / 验证报告；尚无真实模型或现场性能稳定结论）。
+- 遗留问题：未连接真实 Ollama/vLLM，也未配置真实云端 Key/供应商，故 upstream 只用 mock 验证；Windows 安装、目标内网 DNS/代理、真实浏览器视觉与 HTTPS 反代仍待用户回报。`visible_views` 不是账户级权限；chat API 当前无登录，生产暴露仍需网络访问控制；敏感词检测不保证识别所有业务秘密。

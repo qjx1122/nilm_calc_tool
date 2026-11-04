@@ -1,9 +1,9 @@
 # README.md — nilm_calc_tool（电力系统各类电气量计算工具）
 
 > 台账文件（BOOTSTRAP.md v2.2）：安装与环境 / 运行命令 / 数据目录 / 配置结构 / 输出产物 / 生产推荐流程。
-> **当前状态：v0.11（2026-10-13）**——软件已实现并在沙盒跑通（算法核心 + 4 类数据源 + 计算引擎 + 电能质量事件 + **负荷辨识事件检测（6 算法）** + 离线重采样 + 列映射 / 时标时区开关 + CLI + Web 界面 + **506 项测试** + 11 项验证工具）。
+> **当前状态：v0.99.35（2026-11-04）**——软件已实现并在沙盒跑通（算法核心 + 4 类数据源 + 计算引擎 + 电能质量事件 + **负荷辨识事件检测与画像匹配** + 离线重采样 + CLI/Web + **本地/云端智能问答与本地知识库**；pytest **596 passed / 1 skipped**，另有智能问答 jsdom 行为检查）。
 > 状态标注：✅已确认（有代码 / 实录 / 官方来源佐证）｜🔶待确认（占位或推断，需用户回填）｜❌已废弃（不删行，只翻状态）
-> **本文所有 ✅ 均为沙盒实录：Linux 6.1.158+ / CPython 3.11.2 / numpy 2.4.6，采集时间 2026-10-10。**
+> **历史验收条目的 ✅ 实录以各条目所列日期 / 环境为准；README 早期基线环境为 Linux 6.1.158+ / CPython 3.11.2 / numpy 2.4.6（2026-10-10）。第 188 轮（2026-11-04）最新验证结果见 §11。**
 > **Windows 命令、真实现场数据、生产部署三项尚未在用户环境验证，一律标 🔶，请按 `REPORT_TEST.md`「T-002 本地部署与验收执行包」逐条回填。**
 
 ---
@@ -45,8 +45,9 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt          # Li
 | ④ | 输入支持实时采集数据与离线文件数据 | `elec_tool/sources/`：`csv_file`(离线)、`csv_tail`(实时追加)、`tcp`(实时流)、`simulator`(实时联调) | 实时链路 `test_realtime_simulator_streams_*`；离线链路 `test_offline_csv_end_to_end_values` | ✅沙盒（真实采集设备 🔶） |
 | ⑤ | 三相电压/电流、功率因数、有功、无功、基波、谐波(2–50)、频谱；**v0.8 增：间谐波、直流偏置、事件** | `elec_tool/analysis/{rms,harmonic,power,window}.py` + `metrics.py` + `events.py` | 数值对齐解析解（`expected_values()`），见 §8；间谐波/直流/事件见 `tests/test_r9_events.py` | ✅沙盒 |
 | ⑥ | 各电气量分别配置指定时间段计算 | `configs/*.json` 的 `windows.<量>.length_s/step_s`；引擎按量独立调度 | 实测：电压窗 1s→输出 6 次、谐波窗 0.2s→输出 26 次（同一份 5s 数据）；改 5s→输出 2 次、缓冲自动扩到 49280 点 | ✅沙盒 |
+| ⑦ | 网页智能问答：本地私有 / 云端 OpenAI-compatible 模型、SSE + Markdown、会话管理、本地知识检索与引用、配置及安全控制 | `app/assistant.py`、`app/server.py`、`app/static/` | `tests/test_assistant.py`、`tests/test_server.py`、`tests/test_web_ui.py`、`node tools/ui_assistant_check.cjs` | ✅沙盒实现；现场模型与云服务 🔶
 
-**代码规模**（`wc -l` 实录）：`elec_tool/` + `app/server.py` + `cli.py` = 4922 行；`app/static/`（HTML/CSS/JS）= 1318 行；`tests/` = 2006 行。
+**代码规模**（2026-11-04 沙盒快照，`wc -l`）：`elec_tool/` + `app/server.py` + `app/assistant.py` + `cli.py` = 17333 行；`app/static/`（HTML/CSS/JS）= 7543 行；`tests/*.py` = 12771 行。
 
 **技术栈**（沙盒实录）：Python 3.11.2、numpy 2.4.6、fastapi 0.143.0、uvicorn 0.54.0、starlette 1.7.0、pydantic 2.14.0、websockets 17.2、pytest 9.1.1、httpx 0.28.1。前端为原生 JS + canvas，**无任何 CDN/外部资源依赖**（内网可直接用，测试有断言）。
 
@@ -63,7 +64,7 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt          # Li
 | CPU/内存 | 单核即可跑实时（实测 6400 点/s 实时摄入，速率 6398–6400 点/s）。内存主要是环形缓冲：`容量 = ceil(最长窗长 × fs × 1.5) + max(每块点数, 64)`（且不小于 fs），按 7 通道 float64 计——实测 1s 窗 + 块 640 → 容量 10240 点 ≈ 0.55 MB；1s 窗 + 块 1280 → 10880 点；5s 窗 + 块 1280 → 49280 点 ≈ 2.7 MB。窗长变化时缓冲自动扩容并保留已有数据尾部 | ✅沙盒实录（2 核 / 3 GB 环境；公式见 `elec_tool/engine.py:LiveEngine.__init__`） |
 | 浏览器 | 任一现代浏览器（Chrome/Edge/Firefox），需支持 WebSocket；不支持时前端自动降级为 1.5 s 轮询 | ✅（降级逻辑见 `app.js:startPolling`） |
 | 磁盘 | 代码 + 依赖 ≈ 200 MB；结果 CSV 视时长而定（实测 5 s 数据导出 26 次结果 = 1.4 MB） | ✅沙盒实录 |
-| 网络 | **运行期完全离线**（无外部服务、无 CDN、无遥测）；仅安装依赖时需要 PyPI 或内网镜像 | ✅ |
+| 网络 | 默认本地模式可在内网 / 离线环境运行（仍需本机模型服务）；云端问答模式需访问配置的 HTTPS 模型服务，提问 / 历史 / 命中的知识片段会发给该服务；界面本身无 CDN / 遥测 | 本地/云端模型现场网络 🔶 |
 
 ### 2.2 获取代码
 
@@ -98,7 +99,7 @@ py -3.11 -m venv .venv
 | --- | --- | --- | --- |
 | 算法核心 | `numpy>=1.24` | 全部电气量计算 | ❌ 必需 |
 | Web 界面 | `fastapi>=0.110`、`uvicorn[standard]>=0.27`（Windows 自动降级为 `uvicorn` + `websockets`） | 子界面 + WebSocket 实时推送 | 可省（只用 CLI 时） |
-| 开发验证 | `pytest>=8.0`、`httpx>=0.27` | 跑 142 项测试（httpx 是 FastAPI TestClient 依赖） | 可省（生产机） |
+| 开发验证 | `pytest>=8.0`、`httpx>=0.27`；可选 `Node.js ≥18` + `npm ci`（jsdom） | pytest 全量回归；`node tools/ui_assistant_check.cjs` 做智能问答前端行为检查（Node/jsdom 仅开发依赖，不是生产运行依赖） | 可省（生产机） |
 
 **(a) 在线安装（有 PyPI 或内网镜像）** ✅沙盒实录
 
@@ -701,6 +702,11 @@ THDu(A)  = 10.593 %   5次 = 346.4 V
 | `POST /api/process/resample/cancel` | 取消运行中的重采样 |
 | `GET /api/process/resample/preview?path&fs_new` | 只算输出文件名与是否已存在 |
 | `GET /api/events?active=&limit=&types=&since_id=` | v0.8 事件列表 + 摘要（`counts/active_by_type/effective_limits/limit_scale/writer/osc/notes`）；`types` 逗号分隔；`since_id` 增量拉取 |
+| `GET /api/assistant/config` | 问答安全配置视图；API Key 与敏感词正文不回传 |
+| `GET /api/assistant/config/private` | 需 `X-Assistant-Admin-Token`；仅返回受保护的敏感词正文，仍不返回 API Key |
+| `PUT /api/assistant/config` | 需管理员口令；更新模型/RAG/页面可见范围；UI 输入的 API Key 只保存在服务进程内存 |
+| `GET /api/assistant/knowledge`、`POST /api/assistant/knowledge/import`、`DELETE /api/assistant/knowledge[/<id>]` | 列举、导入、删除或清空本地文本知识库；写操作需管理员口令 |
+| `POST /api/assistant/chat` | OpenAI-compatible local/cloud gateway；`stream=true` 返回 SSE (`sources/delta/done/error`)，false 返回 JSON |
 | `POST /api/events/clear` | 清空内存事件与活动状态（不删已落盘 CSV），并 WS 广播 `events_cleared` |
 | `WS /ws` 新消息 | `{"type":"event","data":[事件…]}`：每次有事件开始/结束即推（对象含 `id/type/type_name/subject/start_t/end_t/value_start/value_peak/limit/unit/direction/detail/active`） |
 | `GET /` `/static/*` | 界面与静态资源 |
@@ -733,6 +739,34 @@ curl -s "http://127.0.0.1:8000/api/export?fmt=csv" -o output/result.csv
 | 数值明显偏大/偏小 100 或 15 倍 | PT/CT 设置与实际不符，或输入本就是一次值 | 界面/配置里改 `transform.pt_ratio`、`ct_ratio`；`--no-scale` 可直接看二次值对账 | ✅ |
 | 长时间运行内存上涨 | 历史与结果缓存 | 环形缓冲上限 = 最长窗 × fs × 1.6（自动扩容，有上限）；`output.history_len`(默认 900) 与服务端结果缓存 `maxlen=2000` 都是定长队列 | ✅（架构实录） |
 | 改了界面配置，重启后没了 / 或出厂模板被改 | 配置持久化机制 | 界面保存写入 `configs/runtime.json`（gitignore），下次启动优先加载；`configs/default.json` 是出厂模板不会被界面污染。要恢复出厂：删掉 `runtime.json` | ✅沙盒实录 |
+
+### 3.6 智能问答模块（v0.99.35）
+
+业务页面右下角的「🤖 智能问答」入口由服务端 `visible_views` 配置控制显示页面。它不是账户权限：本应用当前没有登录 / 角色系统，知道 REST 地址的客户端仍可直接访问问答接口。
+
+**功能与数据边界**
+
+- 后端统一走 OpenAI-compatible `/chat/completions`。默认本地接口 `http://127.0.0.1:11434/v1`（Ollama OpenAI 兼容模式示例）+ `qwen2.5:7b`；云端默认 DeepSeek-compatible URL，但默认后端仍为 `local`，云端需要 API Key 才能调用。
+- 对话通过 SSE 增量显示；支持标题、列表、引用、代码块、表格和简单数学行内 / 块展示。原始 HTML 不执行，链接只允许 `http(s)`。会话可新建、切换、删除，并且**只在当前页面内存中**，刷新后清空；切换模型会先确认并新建独立会话。
+- 知识库仅接受文本：md/txt/json/py/csv/html/yaml/log；单文件 ≤1 MB、一次 ≤10 个 / 5 MB、总量最多 100 个 / 20 MB。依赖无外部向量服务：按文本分块与词项 TF-IDF 相似度检索，回答附来源文件名 / 相似度；这是词项检索，不是语义向量检索。默认不预载项目内部资料，管理员只导入允许用于问答的资料。
+- 知识库 / 普通配置默认写到 gitignore 覆盖的 `output/assistant/`（可用 `ELEC_TOOL_ASSISTANT_DATA_DIR` 改位置）；Linux 权限尽力收紧为目录 `0700`、JSON `0600`。普通配置会落盘；UI 输入的 API Key **只保存在服务进程内存**，进程重启后消失；部署持久密钥应使用环境变量。`*_API_KEY` 环境变量始终优先，密钥值不会经 GET 回传，也不会写进 `config.json`。
+- 云端模式会把本轮问题、最多 20 条对话历史及命中的知识片段发送给配置的云端服务；服务端会拦截明显的 API Key / 私钥特征及管理员配置的敏感词，但这不是 DLP，也不能保证识别所有个人信息 / 业务秘密。配置页会持续显示该提示。私有知识库应只用于本地模型，或经过人工脱敏后再使用云端。
+- 配置与知识库写操作使用 `ELEC_TOOL_ASSISTANT_ADMIN_TOKEN`；未配置时这些写操作返回 403。敏感词正文由独立的管理员接口读取；API Key 无论是否管理员都不回传。对外提供服务时必须使用 HTTPS / 受信任内网并保护管理员口令；聊天接口本身没有账户登录，限流（每客户端 60 秒 12 次、全局最多 3 个活跃模型请求）只能降低滥用，不能替代网络访问控制。
+
+**最小配置示例**（Linux shell；PowerShell 请使用 `$env:NAME="value"`）：
+
+```bash
+export ELEC_TOOL_ASSISTANT_ADMIN_TOKEN='替换为足够长的随机口令'
+export ELEC_TOOL_ASSISTANT_LOCAL_URL='http://127.0.0.1:11434/v1'
+export ELEC_TOOL_ASSISTANT_LOCAL_MODEL='qwen2.5:7b'
+export ELEC_TOOL_ASSISTANT_BACKEND='local'
+# 启动本地模型服务后再启动本工具
+.venv/bin/python cli.py serve --host 0.0.0.0 --port 8000
+```
+
+如使用云端，另行设置 `ELEC_TOOL_ASSISTANT_CLOUD_URL`、`ELEC_TOOL_ASSISTANT_CLOUD_MODEL` 与 `ELEC_TOOL_ASSISTANT_CLOUD_API_KEY`；云端地址须 HTTPS（localhost 测试例外）。本地模型地址只接受 loopback / 私有 IP 或显式内网域名，且本地模型请求不走系统 HTTP 代理。也可在问答弹窗「模型配置与本地知识库（管理员）」内调整地址、模型、超时、Temperature、token 数、RAG、敏感词和入口页面；UI 输入口令 / API Key 都不会写入浏览器存储。
+
+**验收 / 故障定位**：`node tools/ui_assistant_check.cjs`（jsdom，无网络模型，验证入口范围、分片 SSE、安全 Markdown、引用、模型切换新会话、管理员设置与本地文件导入）；`pytest tests/test_assistant.py tests/test_server.py tests/test_web_ui.py -q`。模型不可用时先确认本地 Ollama / vLLM 已启动、模型名和 `/v1` 基址正确；云端鉴权失败看模型服务的 Key / 权限；本地连接失败看服务端与模型同机/内网可达性。真实本地模型及云端供应商请求仍需现场验收。
 
 ---
 
@@ -1193,6 +1227,7 @@ python cli.py selftest                            # 实测：44/44，worst_rel_e
 
 ## 11. 验证状态（工程实现工程师交付说明）
 
+- **第 188 轮最新验证（2026-11-04，v0.99.35）**：`./.venv/bin/python -m pytest -q` **596 passed / 1 skipped**；`node tools/ui_assistant_check.cjs` **21 checks**；`py_compile`、`node --check`、`git diff --check` 通过。OpenAI-compatible 请求与上游 SSE 用 mock 验证，未连接真实 Ollama/vLLM 或云端供应商；Windows / 现场浏览器 / HTTPS 反代待用户实录。
 - **沙盒已验证（Linux / CPython 3.11.2，2026-10-10 实录）**
   - 安装：venv + `pip install -r requirements.txt`；离线安装（Linux 29 包 / Windows 目标 24 包下载）；最小安装报错提示
   - 算法：`selftest` 44/44（最差 1.508e-05）；`pytest tests/ -q` **257 passed, 1 skipped**（v0.11）
@@ -1225,6 +1260,7 @@ python cli.py selftest                            # 实测：44/44，worst_rel_e
 ---
 
 ## 🗒 变更记录
+- **v0.99.35（2026-11-04，网页智能问答）**：新增本地 / 云端 OpenAI-compatible 模型适配器（本地走内网且绕开代理、云端 HTTPS）、SSE 流式回答、受限 Markdown、内存会话管理、切换模型确认新会话、本地 TF-IDF 文本知识库与来源引用、模型/RAG/页面范围配置。安全边界：服务端管理员口令保护配置与知识写操作；API Key 不回传且仅 UI 设置值留进程内存、环境变量优先；敏感词正文仅管理员接口可读；云端请求检查用户提问/历史/检索片段并明确提示上传风险；页面显隐不冒称账户授权。配置 / 知识库存于 gitignore 的 `output/assistant/`。验证：pytest **596 passed / 1 skipped**；`node tools/ui_assistant_check.cjs` **21 checks**。真实模型与 Windows / 内网现场部署未验证。
 - **v0.66（2026-10-22，周波窗内容与可用性）**：用户要求：① 数据处理页原「周波窗」改为该段的逐周波有效值；② 负荷辨识页「周波窗 2」只来自离线文件，实时源（模拟器 / TCP / 文件追加）下右键菜单项不可选。实现：`wpLoadCycleWindow(t, n, 1)` 改调 `/api/process/wave/rms`（`agg_cycles=1`，起止＝中心 ± N/2 周波）并用新 `wpDrawCycRms` 画到 `wp-cyc`（风格同有效值曲线，标题改「周波窗（逐周波有效值）」）；`which=2` 仍为采样瞬时值；负荷辨识趋势曲线右键菜单按本侧 `state.config.source.kind` 判断，非 `csv_file` 时「显示周波窗 2」`disabled` 并在提示中注明原因（原「显示周波窗」逻辑不变）。验证：`ui_r61` **47/47**（周波窗 1 ＝ 2 通道 × 50 个周波有效值、Ia 恒正且波动 <2×、请求走 rms；周波窗 2 仍 6400 点瞬时值且互不影响）；`ui_r12` **76/76**（模拟器源下「显示周波窗 2」灰显并提示只能离线文件、改回 csv_file 恢复可选）；全量 pytest **367 passed / 1 skipped**。
 - **v0.67（2026-10-22，波形预览布局与标签）**：用户要求：有效值曲线下方三块曲线标签改为「**逐周波 RMS 曲线**」「**周波窗（有效值）曲线**」「**周波窗 2（瞬时值）**」；周波窗（有效值）与周波窗 2 左右布局；波形曲线配置与波形曲线并排、有效值曲线配置与逐周波 RMS 曲线并排。实现（仅 `index.html` / `style.css`，JS 不改）：公共配置 + 文件信息仍在顶部 `grid2`；下方三行 `.grid2.wp-pair`（左 2fr / 右 3fr，≤1100px 折成单列）：① `#wp-sec-wave` ‖ `#wp-wave`；② `#wp-sec-rms` ‖ `#wp-rms`；③ `#wp-cyc` ‖ `#wp-cyc2`。配置组与曲线的元素 id 全部保持，提示文案同步改为新标签。验证：`ui_r61` **47/47**、`ui_r12` **76/76**、全量 pytest **367 passed / 1 skipped**。
 - **v0.68（2026-10-22，波形预览列宽对齐 + 时间写法统一）**：用户要求：① 波形预览左右列宽与页面其它部分对齐；② 波形曲线 / 有效值曲线的「起始时刻 / 结束时刻」支持的时间格式与数据源页「指定时间段播放」的时间段起止一致。实现：`.wp-pair` 改为 `1fr 1fr`（与 `.grid2` 相同，≤1100px 单列）；起止时刻统一接受 **完整日期时间（`2026-10-12 08:00:00[.fff]`、`/`、`T` 写法）/ epoch 秒 / 只写 `HH:MM:SS[.fff]`**（文件时间模式：起点交给 csv_file 源按当天时刻比较，终点按文件数据起始时间当天折算，公式同 csv_file 源 `play_end_time`；自定义时间模式：只写时刻＝自定义起始时间当天的该时刻，不再报「请写完整日期时间」），占位提示 / tooltip 改为与数据源页相同的写法示例。新增 `test_r68_tod_time_text_in_custom_mode / _in_file_mode`（HH:MM:SS 与完整写法结果一致）。验证：`ui_r61` **47/47**、`ui_r12` **76/76**、全量 pytest **369 passed / 1 skipped**。缺口：`0/00/00 HH:MM:SS` 无日期时标文件在终点只写时刻时按本地时区当天折算，而 csv_file 源按文件时标解释偏移折算；两者时区不同时可能差一整天（起点不受影响）。
