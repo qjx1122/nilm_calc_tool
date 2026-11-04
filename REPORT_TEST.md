@@ -3897,3 +3897,21 @@ delta_i_a  = d_i_obs
   - 本轮没有修改 `app/` 执行代码；仓库 `tmp/` 状态未触碰、未暂存。
 - 是否进入 REPORT.md（稳定结论）：否（部署与权限说明专题，不产生稳定算法结论）。
 - 遗留问题：没有在用户的 Windows、systemd / Docker 或现场网络上实际设置变量和重启服务；需要部署方在目标系统按手册验证 secret 管理、网络访问控制、真实模型 tool/function calling 与审批流程。应用无账号 / SSO，操作员 ID 只是审计标签；不要向聊天、工单或 Git 提交真实令牌。
+
+## [2026-11-04] 专题：管理员 / 操作员令牌生成说明跨文档同步与排障
+- 类型：用户专题 / 文档与验证专题
+- 目标与假设：按现场 PowerShell 生成并重启后台服务后的验证反馈，把管理员口令与操作员令牌的生成方法、服务环境注入边界、scope 格式和错误判读同步到 README 及相关内置手册。保留现有权限实现与安全边界，不改助手授权执行逻辑。
+- 方法 / 数据 / 参数：
+  - 核对 `app/assistant.py` 的 `_operator_token_records()` / `authenticate_operator()` / `public_config()` 与 `app/server.py` 的公开配置接口；确认 `operator_tokens_configured` 只表示至少有一条格式有效记录，未知 scope 会被过滤而非使令牌身份记录整体失效。
+  - README §3.1 / §3.6 增加 Linux/macOS、Windows PowerShell 的 `secrets.token_urlsafe(32)` 生成示例，操作员最小 scope 使用纯文本 `recordings.read`、`profiles.read`；强调当前 shell 变量不会自动注入由 NSSM / 任务计划程序 / systemd / Docker 等另行启动的服务，且普通重启不应重新生成令牌。
+  - 更新 `docs/智能问答助手说明.md` §6.1 / §6.3 / §6.5：加入秘密元数据检查、公开配置的无秘密验证、Markdown 链接 scope 误填说明，以及“令牌未匹配”与“身份通过但 scope / 工具条件不满足”的区别。`app/assistant_docs.py` 的部署手册选择器新增 README §3.6，随后重生成软件使用 / 部署手册；新增文档回归检查三份助手 / 使用 / 部署内容。
+- 用户执行命令（含实录路径；本节无用户命令则注明）：无用户侧命令或真实令牌实录；所有生成的随机值均仅用于沙盒验证、未输出到记录。本轮没有在 Windows PowerShell / Windows Service / NSSM / systemd 现场执行。
+- 结果 / 结论：
+  - `.venv/bin/pytest tests/test_assistant.py -q`：**18 passed**。
+  - `.venv/bin/python tools/generate_assistant_docs.py --check`：软件设计、软件使用、软件部署、算法调参与验证四份均 `OK`；部署文档现包含 README §3.6。
+  - README 与助手说明的 Linux token 构造代码块均 `bash -n` 通过；实际执行 shell→JSON 示例并只输出元数据，验证 token 长度 43、scope 精确为 `recordings.read` / `profiles.read`。
+  - PowerShell 代码只做静态检查（venv 可执行路径、`&` 调用运算符、纯文本 scope），并未声称在 Windows 运行通过。`py_compile` 与 `git diff --check` 通过；全量 pytest 未运行。
+  - 权限逻辑不变。文档明确：错误“操作员令牌无效或已撤销”指服务进程无匹配的已解析记录；scope 拼成 Markdown 链接时一般被过滤，可能表现为身份验证通过但没有可用工具。`Remove-Item Env:OPERATOR_TOKEN` 只删临时变量，不会删 JSON 环境变量中的令牌。
+  - 仓库 `tmp/` 既有数据修改 / 删除 / 未跟踪文件未读取、未修改、未暂存或提交。
+- 是否进入 REPORT.md（稳定结论）：否（工程文档同步；未产生稳定算法结论或现场服务验证结果）。
+- 遗留问题：PowerShell 示例、Windows 服务管理器环境注入、真实 systemd / Docker secret 权限和现场模型工具调用都需部署方实测；`operator_tokens_configured=true` 不证明当前用户输入 token 匹配。遇后续环境反馈时只收集布尔值、ID、长度、scope 等不含秘密的诊断信息。

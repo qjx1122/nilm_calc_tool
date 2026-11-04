@@ -176,7 +176,7 @@ def build_project_documents(root: Path) -> List[Dict[str, Any]]:
         r"^## 1\.", r"^### 2\.6\b", r"^## 6\.", r"^## 8\.", r"^## 9\.",
     ))
     deployment_sections = _extract_markdown_sections(readme, (
-        r"^## 0\.", r"^## 2\.", r"^### 3\.1\b", r"^## 9\.",
+        r"^## 0\.", r"^## 2\.", r"^### 3\.1\b", r"^### 3\.6\b", r"^## 9\.",
     ))
     design_content = "\n\n".join(part for part in (
         "# 软件设计文档（架构与算法设计）",

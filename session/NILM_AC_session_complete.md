@@ -877,3 +877,12 @@
 - 验证：`tests/test_assistant.py` **18 passed**；Linux/macOS 示例 `bash -n` 与操作员 JSON 结构检查通过；PowerShell 路径 / 环境变量名称断言通过；四份项目手册 `--check` 全 OK，`git diff --check` 通过。未启动真实服务；PowerShell / systemd 实例尚未在目标系统执行。
 - 未决问题：现场 Windows / systemd / Docker 环境变量注入、HTTPS / 网络访问控制、真实模型工具调用与运维审批流程需部署方实测；`tmp/` 原有用户运行产物状态保持不变。
 - 相关文件 / 分支：`docs/智能问答助手说明.md`、`tests/test_assistant.py`、`STATUS.md`、`REPORT_TEST.md`；分支 `arena/82e34fb8-nilm-calc-tool`。
+
+## [2026-11-04] 会话纪要
+- 目标：根据用户反馈，将管理员口令 / 操作员令牌生成与服务后台环境注入说明同步到 README 及助手相关知识库文档，并解释验证失败 / scope 无效的区别。
+- 本会话角色：资深电力算法专家（`ROLE.md` 默认角色）；模式 A；分支 `arena/82e34fb8-nilm-calc-tool`（active）。
+- 完成项：更新 README §3.1 / §3.6，提供 Linux/macOS 和 Windows PowerShell 用 `secrets.token_urlsafe(32)` 生成独立管理员 / 操作员随机值的示例，起步 scope 只给 `recordings.read` / `profiles.read`；补充 shell 环境变量不会传给另行管理的服务进程、令牌轮换、秘密输出、PowerShell `&amp;` 转义与 `operator_tokens_configured` 诊断说明。修订 `docs/智能问答助手说明.md` §6.1 / §6.3 / §6.5，说明纯文本 scope 和“令牌不匹配”与“身份通过但没有有效工具”的区别。调整 `app/assistant_docs.py`，将 README §3.6 一并装入生成的部署手册；重新生成 `docs/软件使用文档.md` / `docs/软件部署说明文档.md`，扩充测试断言。更新 STATUS、README 验证与变更记录，并追加专题报告。
+- 关键决策：不改令牌认证或工具授权实现；`operator_tokens_configured` 只用作无秘密的“至少一条格式有效记录”提示，不能当作输入令牌匹配证明；管理员口令不授予操作员 scope；陌生 scope 会被过滤，和无匹配 token 的错误分开解释。PowerShell / 服务管理器未在 Windows 实测，不作现场通过声明；`tmp/` 原状态不触碰且不提交。
+- 验证方式 / 覆盖范围 / 缺口：`.venv/bin/pytest tests/test_assistant.py -q` **18 passed**；生成器 `--check` 四份 `OK`；README 与助手说明中的 bash 块 `bash -n` 通过；shell 示例生成 JSON 的实测只验证 ID / 长度 / scopes（不输出秘密）；PowerShell 仅静态检查；Python 编译与 `git diff --check` 通过。未运行全量测试、Windows PowerShell、Windows 服务管理器、systemd / Docker 现场验收。
+- 未决问题：需部署方在其真实服务管理器设置环境变量、重启后验证操作员身份与最小 scope；不应分享真实 token。此后若现场反馈错误，先收集 `operator_tokens_configured`、ID、token 长度和 scope，不收集 token 本身。
+- 相关文件/分支：`README.md`、`app/assistant_docs.py`、`docs/智能问答助手说明.md`、`docs/软件使用文档.md`、`docs/软件部署说明文档.md`、`tests/test_assistant.py`、`STATUS.md`、`REPORT_TEST.md`；`arena/82e34fb8-nilm-calc-tool`。

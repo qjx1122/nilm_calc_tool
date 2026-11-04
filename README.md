@@ -366,6 +366,8 @@ nohup .venv/bin/python cli.py serve --port 8000 > logs/serve.log 2>&1 &
 #   或「任务计划程序」→ 开机触发 → 操作填上述命令、起始于填仓库目录。
 ```
 
+> **助手令牌环境注入**：`ELEC_TOOL_ASSISTANT_ADMIN_TOKEN` 与 `ELEC_TOOL_ASSISTANT_OPERATOR_TOKENS` 必须出现在真正运行 Python 服务的进程环境中。当前 shell 的 `export` / PowerShell `$env:` 只传给该 shell 及其启动的子进程；若服务由 systemd、Docker、NSSM、任务计划程序或 IDE 管理，应在对应服务 / 容器的环境变量或 secret 配置中设置并重启。只在另一个交互终端设置变量、再单独重启已注册服务，不会把这些变量传入服务。生成方法和验证步骤见 §3.6。
+>
 > 单进程单 worker 即可满足 6400 Hz 实时（实测速率 6398–6400 点/s，CPU 单核占用不高）。**不要**加 `--workers N`：引擎与历史保存在进程内存中，多 worker 会导致各 worker 数据不一致。✅（架构约束，见 `app/server.py` 的 `EngineRunner` 单例）
 
 #### 趋势曲线＝最近 24 小时 ＋ 每条曲线可选「保存曲线数据」（v0.5）
@@ -761,18 +763,64 @@ curl -s "http://127.0.0.1:8000/api/export?fmt=csv" -o output/result.csv
 
 可用工具与 scope：`set_profile_parameters`→`profile.thresholds.write`；`set_wiring_mode`→`config.wiring.write`；`load_latest_profile`→`profile.load`；`start_current_source`→`engine.start`；`export_csv`→`data.export`；`list_recordings`→`recordings.read`；`list_profiles`→`profiles.read`；`clear_nilm_events`→`nilm.events.clear`。工具只接受封闭参数 schema；不允许任意 shell、SQL 或路径。`clear_nilm_events` 仅清当前侧内存事件，不删除磁盘 CSV、也不等同清缓存。工具审计默认追加至助手数据目录 `tool_audit.jsonl`。CSV 临时下载在内存保存 10 分钟；下载时再校验操作员 / scope / 侧别。总线侧确认用 `/api/assistant/tools/...`，分路侧必须使用 `/api/branch/assistant/tools/...`。
 
-**最小配置示例**（Linux shell；PowerShell 请使用 `$env:NAME="value"`）：
+**操作员验证失败的判读**
+
+- **“操作员令牌无效或已撤销”**表示服务端从 `ELEC_TOOL_ASSISTANT_OPERATOR_TOKENS` 解析出的有效记录里，没有一条令牌与输入值匹配。管理员状态显示已启用，只能说明服务读到了管理员口令，不代表它也读到了操作员令牌。先检查变量是否注入了实际服务进程、JSON 是否有效，以及 UI 输入是否是 JSON 内同一串操作员令牌；不要重新生成后仍用旧服务环境。`GET /api/assistant/config` 中的 `operator_tokens_configured` 可安全显示服务进程是否加载了至少一条格式有效的记录；`false` 表示未加载有效记录，`true` 不保证当前输入值匹配。
+- **令牌验证通过但没有可用工具**通常是 scope 或后续工具条件问题。未知 scope 会被过滤掉而不是让令牌记录整体失效，所以写成 `[recordings.read](http://recordings.read)` 可能造成“已验证、但无只读工具”；必须使用 `recordings.read`、`profiles.read` 等上表所列的纯文本。之后再查管理员 `tools_enabled`、`enabled_tools`、模型类型和云端独立开关。
+
+**管理员 / 操作员令牌生成示例**
+
+下面的 Linux / macOS 与 Windows PowerShell 示例分别生成**不同**的管理员口令和操作员令牌；操作员只获最小只读 scope：`recordings.read`、`profiles.read`。scope 必须是**原样纯文本**，不可包含 Markdown 链接格式（例如 `[recordings.read](http://recordings.read)`）。示例会在私密终端显示令牌，请保存到部署方的 secret 管理器；不要把实际值写入仓库、终端录制、日志或工单。
+
+**Linux / macOS（当前终端前台启动）**
 
 ```bash
-export ELEC_TOOL_ASSISTANT_ADMIN_TOKEN='替换为足够长的随机口令'
+# 在仓库根目录执行；每运行一次都会生成新值，不要在普通服务重启时重新生成
+ADMIN_TOKEN="$(.venv/bin/python -c 'import secrets; print(secrets.token_urlsafe(32))')"
+OPERATOR_TOKEN="$(.venv/bin/python -c 'import secrets; print(secrets.token_urlsafe(32))')"
+export ELEC_TOOL_ASSISTANT_ADMIN_TOKEN="$ADMIN_TOKEN"
+export ELEC_TOOL_ASSISTANT_OPERATOR_TOKENS="$(
+  OPERATOR_TOKEN="$OPERATOR_TOKEN" .venv/bin/python -c \
+  'import json, os; print(json.dumps([{"id":"field-readonly-1","token":os.environ["OPERATOR_TOKEN"],"scopes":["recordings.read","profiles.read"]}]))'
+)"
+# 下面两项按需设置本地模型；输出的两串令牌只在本机私密终端短暂显示
 export ELEC_TOOL_ASSISTANT_LOCAL_URL='http://127.0.0.1:11434/v1'
 export ELEC_TOOL_ASSISTANT_LOCAL_MODEL='qwen2.5:7b'
 export ELEC_TOOL_ASSISTANT_BACKEND='local'
-# （可选）为确需执行受控操作的人员配置各自的随机令牌与精确 scope；默认不开启工具。
-# 不要把真实令牌写入仓库。云端工具仍由管理员 UI 中 cloud_tools_enabled 单独控制且默认关闭。
-export ELEC_TOOL_ASSISTANT_OPERATOR_TOKENS='[{"id":"field-operator-1","token":"换成至少 16 字符高熵随机值","scopes":["engine.start","data.export"]}]'
-# 启动本地模型服务后再启动本工具
-.venv/bin/python cli.py serve --host 0.0.0.0 --port 8000
+printf '管理员口令：%s\n操作员令牌：%s\n' "$ADMIN_TOKEN" "$OPERATOR_TOKEN"
+unset ADMIN_TOKEN OPERATOR_TOKEN
+# 本例把当前 shell 环境传给前台服务；仅本机访问时绑定 loopback
+.venv/bin/python cli.py serve --host 127.0.0.1 --port 8000
+```
+
+**Windows PowerShell（当前终端前台启动）**
+
+```powershell
+# 在仓库根目录执行；每运行一次都会生成新值，不要在普通服务重启时重新生成
+$admin = (& .\.venv\Scripts\python.exe -c "import secrets; print(secrets.token_urlsafe(32))").Trim()
+$operator = (& .\.venv\Scripts\python.exe -c "import secrets; print(secrets.token_urlsafe(32))").Trim()
+$env:ELEC_TOOL_ASSISTANT_ADMIN_TOKEN = $admin
+$env:OPERATOR_TOKEN = $operator
+$env:ELEC_TOOL_ASSISTANT_OPERATOR_TOKENS = (& .\.venv\Scripts\python.exe -c "import json,os; print(json.dumps([{'id':'field-readonly-1','token':os.environ['OPERATOR_TOKEN'],'scopes':['recordings.read','profiles.read']}]))").Trim()
+Remove-Item Env:OPERATOR_TOKEN
+# 仅检查 ID、长度与 scope，不打印 JSON 中的令牌
+$rows = $env:ELEC_TOOL_ASSISTANT_OPERATOR_TOKENS | ConvertFrom-Json
+$rows | Select-Object id, @{Name='TokenLength';Expression={$_.token.Length}}, @{Name='Scopes';Expression={($_.scopes -join ',')}}
+# 如需连接本地模型，取消注释并按现场修改
+# $env:ELEC_TOOL_ASSISTANT_LOCAL_URL = 'http://127.0.0.1:11434/v1'
+# $env:ELEC_TOOL_ASSISTANT_LOCAL_MODEL = 'qwen2.5:7b'
+# $env:ELEC_TOOL_ASSISTANT_BACKEND = 'local'
+Write-Host "管理员口令：$admin"
+Write-Host "操作员令牌：$operator"
+& .\.venv\Scripts\python.exe cli.py serve --host 127.0.0.1 --port 8000
+```
+
+上述两段均是**当前终端直接启动服务**的演示；只在另一个 PowerShell / shell 设置 `$env:` / `export` 后再从服务管理器重启，不会把这些临时变量注入到已经由它管理的进程。NSSM、任务计划程序、systemd 或 Docker 部署时，应只生成一次、把变量安全配置到对应服务 / 容器环境并重启；不要在每次重启时重生成，否则管理器仍保存旧令牌而 UI 使用新令牌。PowerShell 调用运算符是 `&`；如果复制文本中出现字面 `&amp;`（HTML 转义），应改为 `&`。`Remove-Item Env:OPERATOR_TOKEN` 只移除临时辅助变量，不会清除已经生成的 `ELEC_TOOL_ASSISTANT_OPERATOR_TOKENS` JSON。
+
+服务启动后，可通过 `GET /api/assistant/config` 查看布尔字段 `operator_tokens_configured`，确认服务进程加载了至少一条格式有效的操作员记录；该字段不回传秘密，也不证明输入框里的这串令牌与记录匹配。PowerShell 可在另一个终端执行（端口按实际服务调整）：
+
+```powershell
+(Invoke-RestMethod 'http://127.0.0.1:8000/api/assistant/config').operator_tokens_configured
 ```
 
 如使用云端，另行设置 `ELEC_TOOL_ASSISTANT_CLOUD_URL`、`ELEC_TOOL_ASSISTANT_CLOUD_MODEL` 与 `ELEC_TOOL_ASSISTANT_CLOUD_API_KEY`；云端地址须 HTTPS（localhost 测试例外）。本地模型地址只接受 loopback / 私有 IP 或显式内网域名，且本地模型请求不走系统 HTTP 代理。也可在侧栏“模型配置与附加知识（管理员）”面板调整地址、模型、超时、Temperature、token 数、RAG、敏感词和入口页面；UI 输入口令 / API Key 都不会写入浏览器存储。
@@ -1238,6 +1286,7 @@ python cli.py selftest                            # 实测：44/44，worst_rel_e
 
 ## 11. 验证状态（工程实现工程师交付说明）
 
+- **第 194 轮文档同步（2026-11-04，管理员 / 操作员令牌生成与排障）**：README §3.1 / §3.6 与 `docs/智能问答助手说明.md` 同步列出 Linux / macOS、PowerShell 随机令牌生成，最小只读 scope，实际服务进程环境注入边界，以及“令牌未匹配”与“scope 无效 / 工具不可用”的区分；内置软件使用手册与部署说明由 README 重生成，部署说明新增助手 §3.6。验证：`tests/test_assistant.py` **18 passed**；`python tools/generate_assistant_docs.py --check` 四份全部 `OK`；两份 Linux/bash 示例 `bash -n` 通过，示例 shell JSON 实际解析得到 43 字符 token 与两个纯文本 scope；PowerShell 路径、调用运算符和 scope 内容静态检查通过；Python 编译与 `git diff --check` 通过。未在 Windows PowerShell / Windows Service 或真实服务管理器中实跑；未运行全量 pytest；仓库 `tmp/` 状态未触碰、未纳入改动。
 - **第 192 轮当前验证（2026-11-04，助手知识库正式文档）**：四份生成手册已写入 `docs/`；`python tools/generate_assistant_docs.py --check` 四项一致；`tests/test_assistant.py` **17 passed**；隔离副本 `/tmp/nilm-calc-tool-test-192` 全量 pytest **609 passed / 1 skipped / 1 warning**（134.70 s，既有 Starlette/httpx `TestClient` deprecation）；`node tools/ui_assistant_check.cjs` **50 checks passed**；Python 编译、`node --check app/static/app.js`、`node --check tools/ui_assistant_check.cjs` 与 `git diff --check` 通过。新回归确认知识库直接读取四份静态 Markdown，而非每次启动拼装；助手模块说明及 README 已列知识源、生成与重载流程。完整测试在排除 `tmp/` 的隔离副本运行，未覆盖仓库的用户运行数据。缺口：Windows、真实现场配置 / 数据和部署尚未验证；真实浏览器视觉、真实本地 / 云端模型未验收。
 - **第 191 轮（2026-11-04，v0.99.38）**：隔离源码副本全量 pytest **608 passed / 1 skipped / 1 warning**（134.16 s；既有 Starlette/httpx TestClient deprecation）；定向 `tests/test_assistant.py` **16 passed**、`tests/test_server.py` **27 passed**；`node tools/ui_assistant_check.cjs` **50 checks**；Python 编译、`node --check app/static/app.js` 与 `git diff --check` 通过。覆盖 malformed `enabled_tools` fail-closed、无效可选令牌只读问答 / 身份端点拒绝、提案过期与侧别复验、operator token + 二次确认码的 UI 确认流程及 `/api/branch/...` 执行路由。全量测试在 `/tmp` 隔离副本运行，未用测试覆盖原仓库 `tmp/`。真实模型 / 云端、浏览器视觉与 Windows / 现场部署仍待实测。
 - **第 188 轮（2026-11-04，v0.99.36）**：`./.venv/bin/python -m pytest -q` **600 passed / 1 skipped**；`node tools/ui_assistant_check.cjs` **33 checks**；`node --check app/static/app.js`、`node --check tools/ui_assistant_check.cjs`、`py_compile`、`git diff --check` 通过。新增路由覆盖内置 SSE 摘录与来源名脱敏。真实模型和现场验收仍待用户实录。
@@ -1273,6 +1322,7 @@ python cli.py selftest                            # 实测：44/44，worst_rel_e
 ---
 
 ## 🗒 变更记录
+- **2026-11-04 文档同步（程序版本保持 v0.99.38）**：README §3.1 / §3.6 与 `docs/智能问答助手说明.md` 补入管理员口令及操作员令牌生成、PowerShell / shell 环境作用范围、服务管理器注入说明、纯文本 scope 和验证失败排障；`docs/软件使用文档.md`、`docs/软件部署说明文档.md` 随生成器同步。
 - **v0.99.38（2026-11-04，智能问答受控确认式工具执行）**：新增 8 项闭集工具 schema 与严格参数校验；模型 function call 仅形成待确认 proposal，SSE / 非流式均返回预览，用户确认时服务端重验操作员 token、scope、工具开关、云端开关、有效期、侧别与二次确认码，再调用当前侧受控业务 API。新增操作员身份验证、取消、临时 CSV 导出 / 下载、默认开启的 JSONL 审计与管理员配置 UI；云端工具执行默认关闭；前端令牌只存页面内存，分路请求固定走 `/api/branch/...`。无效可选令牌仅禁用工具、不阻断只读问答，身份端点仍拒绝；损坏的非列表 `enabled_tools` fail-closed 为空名单；提案卡显示有效期及过期 / 已处理状态。未新增 shell / SQL / 任意路径工具；`clear_nilm_events` 明确只清内存事件，不删磁盘 CSV、不代表清缓存。同步新增四份由 `tools/generate_assistant_docs.py` 可重复生成的独立知识库手册，并更新助手模块说明与静态文件加载回归。全量 pytest **608 passed / 1 skipped**，jsdom **50 checks**；未连接真实模型 / 云端，浏览器视觉与 Windows 现场验收待实测。
 - **v0.99.37（2026-11-04，智能问答固定复合侧栏与完整本地文档库）**：将助手由旧 dialog 改为同页固定侧栏，宽屏并列文档 / 问答、窄屏提供对应标签，标题为“智能问答助手”；新增白名单文档加载器与 `GET /api/assistant/documents`，服务启动读取设计、使用、部署、调参验证、助手说明、NILM 数据字典及平台参数资料，前端初始化获取并支持搜索 / 浏览安全 Markdown。参数清单从 `AppConfig` 代码默认、`configs/default.json`、`configs/branch.json` 生成三列，明确不等于当前运行值；参数问题对相关清单结果及命中字段优先排序，本地、云端 RAG 与 builtin 共用本地语料；管理员导入内容保持分离，既有 SSE / 会话 / 配置 / 脱敏能力保留。新增参数来源、RAG、API 与 UI 行为测试；全量 **603 passed / 1 skipped**，`node tools/ui_assistant_check.cjs` **42 checks**，`git diff --check` 通过。缺口：未连真实模型 / 云端、未做用户真实浏览器视觉验收；助手仍只提供有依据的实验步骤，不执行命令或改配置。
 - **v0.99.36（2026-11-04，智能问答零配置演示与嵌入抽屉）**：在 v0.99.35 问答上补齐用户验收要求。① 助手面板改为当前业务页内的**右侧全屏抽屉**（不跳独立页面，移动端铺满）；② 增加内置演示资料摘录集并设为新增安装默认：无模型 / API Key 也可零配置检索并返回本地摘录与引用，builtin 通道不建立任何模型请求；用户仍可显式切换 local/cloud。③ 来源名隐藏时，服务端把所有知识库文件名（不限于本轮命中）从 RAG 片段、模型提示、历史、答案、引用及 SSE 分片中脱敏。**暂定映射假设**：目前沿用总线配置 `branch.hide_ui` 作为服务端脱敏判据；它原义是隐藏分路侧界面，不是助手专用开关，若要独立控制需产品另行确认。验证：全量 **600 passed / 1 skipped**，`node tools/ui_assistant_check.cjs` **33 checks**，语法与 diff 检查通过。缺口：未接真实模型 / 云服务、未做用户浏览器视觉与现场网络验收；来源显隐仍依上述暂定映射。

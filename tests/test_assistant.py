@@ -158,6 +158,8 @@ def test_assistant_manual_explains_admin_and_controlled_tool_setup(tmp_path):
     service = AssistantService(data_dir=str(tmp_path))
     docs = {doc["id"]: doc for doc in service.document_library()["documents"]}
     guide = docs["builtin-assistant-guide"]["content"]
+    usage = docs["builtin-software-usage"]["content"]
+    deployment = docs["builtin-software-deployment"]["content"]
     assert "ELEC_TOOL_ASSISTANT_ADMIN_TOKEN" in guide
     assert "ELEC_TOOL_ASSISTANT_OPERATOR_TOKENS" in guide
     assert "管理员口令本身不授予工具执行权限" in guide
@@ -166,7 +168,17 @@ def test_assistant_manual_explains_admin_and_controlled_tool_setup(tmp_path):
     assert "### 6.4 现场运维" in guide
     assert '"recordings.read","profiles.read"' in guide
     assert r".\.venv\Scripts\python.exe" in guide
+    assert "Markdown 链接" in guide
+    assert "operator_tokens_configured" in guide
+    assert "至少有一条格式有效记录" in guide
     assert "cloud_tools_enabled=true" in guide
+
+    assert "$env:OPERATOR_TOKEN = $operator" in usage
+    assert "field-readonly-1" in usage
+    assert "scope 必须是**原样纯文本**" in usage
+    assert "当前 shell 的 `export` / PowerShell `$env:`" in deployment
+    assert "operator_tokens_configured" in deployment
+    assert "### 3.6 智能问答模块" in deployment
 
 
 def test_local_and_cloud_rag_context_uses_bundled_platform_catalog(tmp_path, monkeypatch):
