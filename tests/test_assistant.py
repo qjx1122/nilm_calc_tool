@@ -23,6 +23,7 @@ def test_corrupted_persisted_config_falls_back_to_safe_defaults(tmp_path):
     (tmp_path / "config.json").write_text(json.dumps({
         "rag_top_k": "broken", "timeout_s": "NaN", "max_tokens": 25.7,
         "enabled": "false", "rag_enabled": "false", "local_base_url": "http://8.8.8.8/v1",
+        "local_model": "legacy-model-that-must-be-ignored",
     }), encoding="utf-8")
     service = AssistantService(data_dir=str(tmp_path))
     cfg = service.public_config()
@@ -32,6 +33,8 @@ def test_corrupted_persisted_config_falls_back_to_safe_defaults(tmp_path):
     assert cfg["enabled"] is True
     assert cfg["rag_enabled"] is True
     assert cfg["local_base_url"] == DEFAULT_CONFIG["local_base_url"]
+    assert "local_model" not in DEFAULT_CONFIG and "local_model" not in cfg
+    assert "local_model" not in json.loads((tmp_path / "config.json").read_text(encoding="utf-8"))
 
 
 def test_malformed_enabled_tools_allowlist_fails_closed(tmp_path, monkeypatch):
@@ -81,6 +84,9 @@ def test_admin_config_keeps_api_keys_out_of_json_and_public_view(tmp_path, monke
         service.update_config({"enabled": "false"}, "test-admin-token")
     with pytest.raises(AssistantError, match="本地模型地址"):
         service.update_config({"local_base_url": "http://8.8.8.8/v1"}, "test-admin-token")
+    with pytest.raises(AssistantError, match="本地模型名称由问答窗口"):
+        service.update_config({"local_model": "retired-config-value"}, "test-admin-token")
+    assert "local_model" not in service.public_config()
     with pytest.raises(AssistantError, match="API Key"):
         service.update_config({"cloud_api_key": {"unexpected": "object"}}, "test-admin-token")
     with pytest.raises(AssistantError, match="4096"):
@@ -251,10 +257,15 @@ def test_local_model_catalog_requires_admin_and_startup_prefetch_is_nonblocking(
         service.refresh_local_models("wrong-token")
     assert denied.value.status_code == 403
     with pytest.raises(AssistantError) as unsafe:
-        service.refresh_local_models(admin, "http://8.8.8.8/v1")
+        service.update_config({"local_base_url": "http://8.8.8.8/v1"}, admin)
     assert unsafe.value.status_code == 400
-    service.update_config({"local_model": "manual-custom-model"}, admin)
-    assert service.prepare_chat({"prompt": "测试自定义模型", "model_type": "local"})["model"] == "manual-custom-model"
+    with pytest.raises(TypeError):
+        service.refresh_local_models(admin, "http://8.8.8.8/v1")
+    with pytest.raises(AssistantError, match="本地模型名称由问答窗口"):
+        service.update_config({"local_model": "manual-custom-model"}, admin)
+    assert service.prepare_chat({"prompt": "默认本地模型", "model_type": "local"})["model"] == "qwen2.5:7b"
+    assert service.prepare_chat({"prompt": "选择本地模型", "model_type": "local",
+                                 "model_name": "startup-model"})["model"] == "startup-model"
 
     completed = threading.Event()
     calls = []
@@ -690,6 +701,101 @@ def test_tool_catalog_validation_and_closed_scope_proposal(tmp_path, monkeypatch
     with pytest.raises(AssistantError, match="关闭云端工具执行"):
         service.claim_tool_proposal(cloud_proposal["id"], operator, "branch", cloud_proposal["confirmation_code"])
     assert (tmp_path / "tool_audit.jsonl").exists()
+
+
+def test_expanded_tool_allowlist_is_closed_and_model_context_contains_only_safe_resource_ids(tmp_path, monkeypatch):
+    from app.assistant_tools import TOOL_BY_NAME, TOOL_CATALOG
+
+    admin = "expanded-tool-admin-token"
+    operator = "expanded-tool-operator-token-1234"
+    file_id = "0123456789abcdef01234567"
+    profile_id = "0123456789abcdef"
+    monkeypatch.setenv("ELEC_TOOL_ASSISTANT_ADMIN_TOKEN", admin)
+    monkeypatch.setenv("ELEC_TOOL_ASSISTANT_OPERATOR_TOKENS", json.dumps([
+        {"id": "expanded-operator", "token": operator,
+         "scopes": ["recordings.inspect", "profile.load", "engine.stop"]}
+    ]))
+    service = AssistantService(data_dir=str(tmp_path / "assistant-data"))
+    tool_names = {item["name"] for item in TOOL_CATALOG}
+    expected = {"get_runtime_status", "get_runtime_settings", "get_history", "compare_sides",
+                "select_recording_source", "inspect_recording", "analyze_recording_rms",
+                "set_window_parameters", "set_event_parameter", "set_nilm_parameter",
+                "extract_device_profile", "derive_profile_stages", "stop_current_source"}
+    assert expected <= tool_names
+    assert set(TOOL_NAMES) == set(TOOL_BY_NAME)
+    assert all(item["parameters"].get("additionalProperties") is False for item in TOOL_CATALOG)
+    for name in expected:
+        schema = next(item["function"]["parameters"] for item in openai_tool_schemas([name]))
+        assert schema.get("additionalProperties") is False
+
+    assert validate_tool_arguments("set_nilm_parameter", {
+        "algorithm": "profile", "parameter": "d2_max", "value": 9
+    }) == {"algorithm": "profile", "parameter": "d2_max", "value": 9.0}
+    assert validate_tool_arguments("set_electrical_parameters", {
+        "fs": 12800, "pt_ratio": 110, "invert_phases": ""
+    }) == {"fs": 12800.0, "pt_ratio": 110.0, "invert_phases": ""}
+    assert validate_tool_arguments("set_harmonic_parameters", {
+        "order_max": 25, "include_interharmonic": False
+    }) == {"order_max": 25, "include_interharmonic": False}
+    assert validate_tool_arguments("set_power_calculation_mode", {"apparent": "vector"}) == {"apparent": "vector"}
+    assert validate_tool_arguments("set_compare_alignment", {"offset_s": -2.5}) == {"offset_s": -2.5}
+    assert validate_tool_arguments("set_playback_speed", {"speed": 0}) == {"speed": 0.0}
+    assert validate_tool_arguments("set_file_time_utc", {"use_utc": True}) == {"use_utc": True}
+    assert validate_tool_arguments("set_event_detection_enabled", {"enabled": False}) == {"enabled": False}
+    for tool in ("set_electrical_parameters", "set_harmonic_parameters", "set_power_calculation_mode", "set_compare_alignment"):
+        with pytest.raises(ValueError, match="至少提供"):
+            validate_tool_arguments(tool, {})
+    with pytest.raises(ValueError, match="未注册字段"):
+        validate_tool_arguments("set_electrical_parameters", {"fs": 12800, "path": "/tmp/unsafe.csv"})
+    with pytest.raises(ValueError, match="JSON 布尔值"):
+        validate_tool_arguments("set_file_time_utc", {"use_utc": 1})
+    with pytest.raises(ValueError, match="不属于"):
+        validate_tool_arguments("set_nilm_parameter", {
+            "algorithm": "threshold", "parameter": "d2_max", "value": 9
+        })
+    with pytest.raises(ValueError, match="布尔"):
+        validate_tool_arguments("set_nilm_algorithm_enabled", {"algorithm": "threshold", "enabled": 1})
+    with pytest.raises(ValueError, match="未注册字段"):
+        validate_tool_arguments("inspect_recording", {"file_id": file_id, "path": "/private/capture.csv"})
+    with pytest.raises(ValueError, match="缺少必需字段"):
+        validate_tool_arguments("analyze_recording_rms", {"file_id": file_id})
+    assert validate_tool_arguments("analyze_recording_rms", {"file_id": file_id, "channel": "Ia"}) == {
+        "file_id": file_id, "channel": "Ia",
+    }
+    assert validate_tool_arguments("extract_device_profile", {
+        "file_id": file_id, "device_id": "motor-1", "labels": "08:00:00,start\\n08:00:05,stop"
+    })["labels"].startswith("08:00:00")
+
+    service.update_config({"tools_enabled": True, "cloud_tools_enabled": True,
+                           "enabled_tools": ["inspect_recording", "load_profile_by_id", "stop_current_source"]}, admin)
+    context = {
+        "side": "bus",
+        "source": {"kind": "csv_file", "name": "private_recording.csv", "has_path": True, "running": False,
+                   "path": "/private/absolute/source.csv"},
+        "recordings": [{"file_id": file_id, "folder": "data", "name": "private_recording.csv",
+                        "path": "/private/absolute/private_recording.csv", "size_bytes": 123}],
+        "profiles": [{"id": profile_id, "name": "secret_profile.json", "side": "bus", "size_bytes": 456}],
+        "profile_files": [{"id": profile_id, "path": "/private/absolute/secret_profile.json"}],
+    }
+    local_plan = service.prepare_chat({"prompt": "检查当前录波", "model_type": "local"},
+                                      operator_token=operator, tool_context=context)
+    local_system = local_plan["messages"][0]["content"]
+    assert file_id in local_system and profile_id in local_system
+    assert "/private/absolute" not in local_system
+
+    monkeypatch.setenv("ELEC_TOOL_ASSISTANT_CLOUD_API_KEY", "cloud-expanded-tool-test-key")
+    cloud_plan = service.prepare_chat({"prompt": "检查文件 ID " + file_id, "model_type": "cloud"},
+                                      operator_token=operator, tool_context=context)
+    cloud_system = cloud_plan["messages"][0]["content"]
+    assert file_id in cloud_system and profile_id in cloud_system
+    assert "private_recording.csv" not in cloud_system and "secret_profile.json" not in cloud_system
+    assert "/private/absolute" not in cloud_system
+    assert service.operator_tools(service.authenticate_operator(operator), "builtin") == []
+
+    with pytest.raises(AssistantError, match="资源清单"):
+        service.create_tool_proposal(local_plan, [{"function": {
+            "name": "inspect_recording", "arguments": {"file_id": "ffffffffffffffffffffffff"}
+        }}])
 
 
 def test_cloud_mode_blocks_local_file_references_but_allows_api_paths(tmp_path, monkeypatch):

@@ -1415,7 +1415,8 @@ def _assistant_profile_catalog(side: str) -> List[Dict[str, Any]]:
     for directory, dirs, files in os.walk(root, followlinks=False):
         rel_dir = os.path.relpath(directory, root)
         depth = 0 if rel_dir == "." else len(rel_dir.split(os.sep))
-        dirs[:] = [name for name in dirs if depth < 5 and not os.path.islink(os.path.join(directory, name))]
+        dirs[:] = [name for name in dirs if depth < 5 and name.lower() != "tmp"
+                   and not os.path.islink(os.path.join(directory, name))]
         for name in files:
             low = name.lower()
             if not low.endswith(".json") or "profile" not in low:
@@ -1450,7 +1451,112 @@ def _assistant_profile_catalog(side: str) -> List[Dict[str, Any]]:
     return found[:100]
 
 
-def _assistant_tool_context(side: str, hide_source_names: bool = False, include_profiles: bool = True) -> Dict[str, Any]:
+def _assistant_recording_catalog(limit: int = 100) -> List[Dict[str, Any]]:
+    """Issue opaque IDs for CSV/TXT files below the fixed data and configured output roots.
+
+    The catalog reads names and stat metadata only. No model-provided path is ever resolved;
+    each operation rechecks root containment, symlink status, size and file identity.
+    """
+    roots = (("data", os.path.join(ROOT, "data"), 2), ("output", _output_base(), 5))
+    found: List[Dict[str, Any]] = []
+    ignored_dirs = {"tmp", ".git", "__pycache__", ".assistant"}
+    for folder, configured_root, max_depth in roots:
+        try:
+            if os.path.islink(configured_root):
+                continue
+            root = os.path.realpath(configured_root)
+            if not os.path.isdir(root):
+                continue
+            for directory, dirs, names in os.walk(root, topdown=True, followlinks=False):
+                rel_dir = os.path.relpath(directory, root)
+                depth = 0 if rel_dir == "." else len(rel_dir.split(os.sep))
+                if depth >= max_depth:
+                    dirs[:] = []
+                else:
+                    dirs[:] = [name for name in dirs
+                               if name.lower() not in ignored_dirs and not os.path.islink(os.path.join(directory, name))]
+                for name in names:
+                    if os.path.splitext(name)[1].lower() not in {".csv", ".txt"}:
+                        continue
+                    path = os.path.join(directory, name)
+                    try:
+                        if os.path.islink(path) or not os.path.isfile(path):
+                            continue
+                        real = os.path.realpath(path)
+                        if os.path.commonpath([root, real]) != root:
+                            continue
+                        stat = os.stat(real, follow_symlinks=False)
+                        if not os.path.isfile(real):
+                            continue
+                        rel = os.path.relpath(real, root).replace(os.sep, "/")
+                        identity = (f"{folder}\\0{rel}\\0{stat.st_dev}\\0{stat.st_ino}\\0"
+                                    f"{stat.st_size}\\0{stat.st_mtime_ns}").encode("utf-8")
+                        file_id = hashlib.sha256(identity).hexdigest()[:24]
+                        found.append({"file_id": file_id, "folder": folder, "name": rel,
+                                      "path": real, "root": root, "relative": rel,
+                                      "size_bytes": int(stat.st_size), "mtime": float(stat.st_mtime),
+                                      "mtime_ns": int(stat.st_mtime_ns), "device": int(stat.st_dev),
+                                      "inode": int(stat.st_ino)})
+                    except (OSError, ValueError):
+                        continue
+        except (OSError, ValueError):
+            continue
+    found.sort(key=lambda item: (-item["mtime"], item["folder"], item["name"].casefold()))
+    return found[:max(1, min(int(limit), 100))]
+
+
+def _assistant_resolve_recording(pending: Dict[str, Any], file_id: str,
+                                 max_bytes: Optional[int] = None) -> Tuple[Dict[str, Any], str]:
+    context = pending.get("context") if isinstance(pending.get("context"), dict) else {}
+    item = next((row for row in context.get("recordings", [])
+                 if isinstance(row, dict) and row.get("file_id") == file_id), None)
+    if not isinstance(item, dict):
+        raise AssistantError(404, "录波 ID 已不在本轮受控资源清单中，请重新查询")
+    folder = item.get("folder")
+    configured_root = os.path.join(ROOT, "data") if folder == "data" else (_output_base() if folder == "output" else "")
+    try:
+        if not configured_root or os.path.islink(configured_root):
+            raise AssistantError(403, "录波目录不在固定允许范围内")
+        root = os.path.realpath(configured_root)
+        path = str(item.get("path") or "")
+        if not path or os.path.islink(path):
+            raise AssistantError(403, "录波文件已变为符号链接或不在允许范围内")
+        real = os.path.realpath(path)
+        if os.path.commonpath([root, real]) != root or real != path or not os.path.isfile(real):
+            raise AssistantError(403, "录波文件不在固定 data / output 目录内")
+        stat = os.stat(real, follow_symlinks=False)
+        if (int(stat.st_size) != int(item.get("size_bytes", -1))
+                or int(stat.st_mtime_ns) != int(item.get("mtime_ns", -1))
+                or int(stat.st_dev) != int(item.get("device", -1))
+                or int(stat.st_ino) != int(item.get("inode", -1))):
+            raise AssistantError(409, "录波文件在提出操作后发生变化，请重新查询并发起操作")
+        if max_bytes is not None and stat.st_size > max_bytes:
+            raise AssistantError(413, f"该操作只允许处理不超过 {max_bytes // (1024 * 1024)} MiB 的文件")
+        return item, real
+    except ValueError:
+        raise AssistantError(403, "录波文件路径边界校验失败") from None
+    except OSError:
+        raise AssistantError(404, "录波文件已不存在或不可访问") from None
+
+
+def _assistant_resolve_profile(pending: Dict[str, Any], profile_id: str) -> Dict[str, Any]:
+    context = pending.get("context") if isinstance(pending.get("context"), dict) else {}
+    snapshot = next((row for row in context.get("profile_files", [])
+                     if isinstance(row, dict) and row.get("id") == profile_id), None)
+    if not isinstance(snapshot, dict):
+        raise AssistantError(404, "画像 ID 已不在本轮当前侧受控资源清单中")
+    side = str(pending.get("side") or "")
+    current = next((row for row in _assistant_profile_catalog(side) if row.get("id") == profile_id), None)
+    if not isinstance(current, dict):
+        raise AssistantError(404, "设备画像已不存在，请重新查询")
+    if (current.get("path") != snapshot.get("path") or current.get("mtime_ns") != snapshot.get("mtime_ns")
+            or not hmac.compare_digest(str(current.get("sha256") or ""), str(snapshot.get("sha256") or ""))):
+        raise AssistantError(409, "设备画像在提出操作后发生变化，请重新查询并发起操作")
+    return current
+
+
+def _assistant_tool_context(side: str, hide_source_names: bool = False, include_profiles: bool = True,
+                            include_recordings: bool = False) -> Dict[str, Any]:
     runner = RUNNERS[side]
     cfg = runner.cfg
     source_path = str(getattr(cfg.source, "path", "") or "")
@@ -1472,10 +1578,15 @@ def _assistant_tool_context(side: str, hide_source_names: bool = False, include_
     latest = dict(profiles[0]) if profiles else None
     if latest and hide_source_names:
         latest["name"] = "已脱敏画像"
+    recordings = _assistant_recording_catalog() if include_recordings else []
+    if hide_source_names:
+        for recording in recordings:
+            recording["name"] = "已脱敏录波文件"
     return {"side": side, "source": {"kind": str(getattr(cfg.source, "kind", "")),
                                        "name": source_name, "running": running,
                                        "has_path": bool(source_path)},
-            "latest_profile": latest, "profiles": public_profiles}
+            "latest_profile": latest, "profiles": public_profiles,
+            "profile_files": profiles, "recordings": recordings}
 
 
 def _assistant_api_error(result: Any) -> None:
@@ -1492,12 +1603,392 @@ def _assistant_api_error(result: Any) -> None:
         raise AssistantError(400, str(result.get("error") or "业务接口执行失败"))
 
 
+def _assistant_compact_value(value: Any, depth: int = 0) -> Any:
+    """Bound tool output size and strip fields that can disclose filesystem/network details."""
+    if depth > 5:
+        return "…"
+    if isinstance(value, dict):
+        out: Dict[str, Any] = {}
+        private_keys = {"path", "path_display", "source_path", "file_path", "run_dir", "config_path",
+                        "config_persist_path", "directory", "dir_display", "out_dir", "host", "port"}
+        for key, item in list(value.items())[:60]:
+            if str(key).lower() in private_keys:
+                continue
+            out[str(key)[:80]] = _assistant_compact_value(item, depth + 1)
+        return out
+    if isinstance(value, (list, tuple)):
+        result = [_assistant_compact_value(item, depth + 1) for item in list(value)[:20]]
+        if len(value) > 20:
+            result.append(f"…（另有 {len(value) - 20} 项）")
+        return result
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value[:500] + "…" if isinstance(value, str) and len(value) > 500 else value
+    if hasattr(value, "item"):
+        try:
+            return _assistant_compact_value(value.item(), depth + 1)
+        except Exception:
+            pass
+    return str(value)[:200]
+
+
+def _assistant_public_config_update(result: Any, message: str, side: str) -> Dict[str, Any]:
+    _assistant_api_error(result)
+    if not isinstance(result, dict):
+        raise AssistantError(502, "配置接口返回格式无法识别")
+    return {"message": message, "side": side,
+            "config_file_updated": bool(result.get("config_file_updated")),
+            "changes": result.get("config_file_changes", [])}
+
+
 async def _execute_assistant_tool(pending: Dict[str, Any]) -> Dict[str, Any]:
     """Execute exactly one registered tool via existing in-process business API handlers."""
     name, args = pending["name"], pending.get("args", {})
     side = pending["side"]
     if side != current_side():
         raise AssistantError(409, "当前侧与确认预览不一致，请重新发起操作")
+    if name == "get_runtime_status":
+        state = await get_state()
+        cfg = RUNNER.cfg
+        engine = state.get("engine") if isinstance(state.get("engine"), dict) else {}
+        history = state.get("history") if isinstance(state.get("history"), dict) else {}
+        safe_engine = {key: engine.get(key) for key in ("samples_in", "blocks_in", "buffer_fill", "buffer_capacity",
+                                                        "data_duration_s", "ticks", "events_total", "events_active",
+                                                        "nilm_events_total", "nilm_cycles", "rate_samples_per_s") if key in engine}
+        return {"side": side, "running": bool(state.get("running")), "paused": bool(state.get("paused")),
+                "finished": bool(state.get("finished")), "source_kind": cfg.source.kind,
+                "source_configured": (cfg.source.kind not in {"csv_file", "csv_tail"} or bool(str(cfg.source.path or "").strip())),
+                "elapsed_s": state.get("elapsed_s"), "latest_quantities": state.get("latest_keys", []),
+                "latest_t_ref": state.get("latest_t_ref"), "stored_results": state.get("stored_results", 0),
+                "engine": safe_engine, "history": history,
+                "error_present": bool(state.get("error") or engine.get("errors"))}
+    if name == "get_runtime_settings":
+        cfg = RUNNER.cfg
+        from app.assistant_tools import EVENT_PARAMETER_KEYS
+        events = {key: getattr(cfg.events, key) for key in EVENT_PARAMETER_KEYS}
+        algorithms = {key: {"enabled": bool((cfg.nilm.algorithms.get(key) or {}).get("enabled", False))}
+                      for key in cfg.nilm.algorithms}
+        return {"side": side,
+                "sampling": {"fs": cfg.sampling.fs, "f_nom": cfg.sampling.f_nom,
+                             "f_min": cfg.sampling.f_min, "f_max": cfg.sampling.f_max},
+                "transform": {"wiring": cfg.transform.wiring, "pt_ratio": cfg.transform.pt_ratio,
+                              "ct_ratio": cfg.transform.ct_ratio, "reconstruct_3w": cfg.transform.reconstruct_3w,
+                              "invert_current": cfg.transform.invert_current, "invert_phases": cfg.transform.invert_phases},
+                "source": {"kind": cfg.source.kind, "has_path": bool(str(cfg.source.path or "").strip()),
+                           "file_speed": cfg.source.file_speed, "play_start_mode": cfg.source.play_start_mode},
+                "windows": {key: {"length_s": spec.length_s, "step_s": spec.step_s,
+                                  "policy": spec.policy, "window_fn": spec.window_fn, "remove_dc": spec.remove_dc}
+                            for key, spec in cfg.windows.items()},
+                "events": {"enabled": cfg.events.enabled, "hysteresis": cfg.events.hysteresis,
+                           "thresholds": events},
+                "nilm": {"enabled": cfg.nilm.enabled, "auto_params": cfg.nilm.auto_params,
+                         "quantity": cfg.nilm.quantity, "channels": list(cfg.nilm.channels),
+                         "window_cycles": cfg.nilm.window_cycles, "min_gap_cycles": cfg.nilm.min_gap_cycles,
+                         "rel_tol_pct": cfg.nilm.rel_tol_pct, "min_delta_pct": cfg.nilm.min_delta_pct,
+                         "algorithms": algorithms},
+                "output": {"history_hours": cfg.output.history_hours,
+                           "curve_save": {key: bool(cfg.output.curve_save.get(key, True)) for key in CURVE_KEYS}}}
+    if name == "get_electrical_result":
+        result = await get_result(full=False)
+        _assistant_api_error(result)
+        quantity = args["quantity"]
+        values = result.get("quantities", {}).get(quantity) if isinstance(result, dict) else None
+        if values is None:
+            raise AssistantError(404, f"当前侧尚无 {quantity} 的最新结果")
+        return {"side": side, "quantity": quantity, "t_ref": result.get("t_ref"),
+                "value": _assistant_compact_value(values)}
+    if name == "get_history":
+        result = await get_history(args["quantity"], hours=args.get("hours"),
+                                   max_points=args.get("max_points", 30))
+        _assistant_api_error(result)
+        return {"side": side, "quantity": result.get("quantity"), "count": result.get("count"),
+                "count_total": result.get("count_total"), "hours": result.get("hours"),
+                "t_first": result.get("t_first"), "t_last": result.get("t_last"),
+                "points": _assistant_compact_value(result.get("points", []))}
+    if name == "get_event_list":
+        event_type = args.get("event_type")
+        result = await get_events(active=bool(args.get("active", False)), limit=args.get("limit", 20),
+                                  types=event_type, since_id=0)
+        _assistant_api_error(result)
+        return {"side": side, "summary": _assistant_compact_value(result.get("summary", {})),
+                "events": _assistant_compact_value(result.get("events", []))}
+    if name == "get_nilm_events":
+        result = await get_nilm_events(limit=args.get("limit", 20), algos=args.get("algorithm"),
+                                       channel=args.get("channel"))
+        _assistant_api_error(result)
+        return {"side": side, "summary": _assistant_compact_value(result.get("summary", {})),
+                "events": _assistant_compact_value(result.get("events", []))}
+    if name == "compare_sides":
+        result = await get_compare(args["quantity"], hours=args.get("hours"),
+                                   max_points=args.get("max_points", 20))
+        _assistant_api_error(result)
+        return {"quantity": result.get("quantity"), "aligned_count": result.get("aligned_count"),
+                "bus_count": result.get("bus_count"), "branch_count": result.get("branch_count"),
+                "offset_s": result.get("offset_s"), "tol_s": result.get("tol_s"),
+                "latest": _assistant_compact_value(result.get("latest")),
+                "points": _assistant_compact_value(result.get("points", []))}
+    if name == "load_last_history":
+        result = await history_load_last({key: value for key, value in args.items()
+                                           if key in {"hours", "curves", "events", "nilm"}})
+        _assistant_api_error(result)
+        if not isinstance(result, dict):
+            raise AssistantError(502, "历史数据接口返回格式无法识别")
+        return {"message": "已将上次落盘历史载入当前侧内存", "side": side,
+                "hours": result.get("hours"), "curve_counts": result.get("curves", {}),
+                "events_loaded": result.get("events", 0), "nilm_events_loaded": result.get("nilm_events", 0),
+                "result_loaded": bool(result.get("result")), "notes": result.get("notes", [])}
+    if name == "start_current_source":
+        runner = RUNNERS[side]
+        with runner.lock:
+            running = bool(runner.thread and runner.thread.is_alive() and not runner.stop_event.is_set() and not runner._thread_done)
+        if running:
+            raise AssistantError(409, "当前侧数据源已在运行；助手不会自动停止或重启它")
+        source = runner.cfg.source
+        if source.kind in {"csv_file", "csv_tail"} and not str(source.path or "").strip():
+            raise AssistantError(400, "当前侧文件数据源尚未配置路径")
+        result = await engine_start({})
+        _assistant_api_error(result)
+        return {"message": "当前侧数据源检测已启动", "side": side,
+                "source_kind": result.get("config", {}).get("source", {}).get("kind", runner.cfg.source.kind)}
+    if name == "pause_current_source":
+        result = await engine_pause()
+        _assistant_api_error(result)
+        return {"message": "当前侧离线播放已暂停", "side": side, "paused": bool(result.get("paused"))}
+    if name == "resume_current_source":
+        result = await engine_resume()
+        _assistant_api_error(result)
+        return {"message": "当前侧离线播放已恢复", "side": side, "paused": bool(result.get("paused"))}
+    if name == "stop_current_source":
+        result = await engine_stop()
+        _assistant_api_error(result)
+        return {"message": "当前侧数据源已停止；总线侧操作可能同时停止分路侧", "side": side}
+    if name == "select_recording_source":
+        runner = RUNNERS[side]
+        with runner.lock:
+            running = bool(runner.thread and runner.thread.is_alive() and not runner.stop_event.is_set() and not runner._thread_done)
+        if running:
+            raise AssistantError(409, "当前侧数据源运行中，不能更改源文件；请先停止后再操作")
+        item, path = _assistant_resolve_recording(pending, args["file_id"], max_bytes=2_000_000_000)
+        try:
+            config_path = os.path.relpath(path, ROOT) if os.path.commonpath([os.path.realpath(ROOT), path]) == os.path.realpath(ROOT) else path
+        except ValueError:
+            raise AssistantError(403, "录波文件路径边界校验失败") from None
+        result = await put_config({"source": {"kind": "csv_file", "path": config_path}})
+        _assistant_api_error(result)
+        return {"message": f"已将 {item['name']} 设为当前侧离线文件数据源", "side": side,
+                "source_kind": "csv_file", "config_file_updated": bool(result.get("config_file_updated")),
+                "changes": result.get("config_file_changes", [])}
+    if name == "list_recordings":
+        entries = [item for item in _assistant_recording_catalog()
+                   if item.get("folder") == args["folder"]]
+        hide_names = bool(getattr(RUNNERS["bus"].cfg.branch, "hide_ui", False))
+        files = [{"file_id": item.get("file_id"),
+                  "name": "已脱敏录波文件" if hide_names else item.get("name"),
+                  "size_bytes": item.get("size_bytes"), "mtime": item.get("mtime")}
+                 for item in entries]
+        return {"message": f"找到 {len(entries)} 个当前可用录波 ID（每轮最多登记 100 个）", "folder": args["folder"],
+                "files": files}
+    if name == "inspect_recording":
+        item, path = _assistant_resolve_recording(pending, args["file_id"], max_bytes=200_000_000)
+        result = await process_wave_info(path=path)
+        _assistant_api_error(result)
+        if not isinstance(result, dict):
+            raise AssistantError(502, "波形信息接口返回格式无法识别")
+        safe_keys = ("size_mb", "n_channels", "channels", "rows", "fs", "fs_est", "fs_configured",
+                     "f_nom", "samples_per_cycle", "duration_s", "t_start_local", "t_end_local",
+                     "ts_mode", "has_header", "notes")
+        return {"file_id": item["file_id"], "name": item["name"],
+                **{key: _assistant_compact_value(result[key]) for key in safe_keys if key in result}}
+    if name == "analyze_recording_rms":
+        item, path = _assistant_resolve_recording(pending, args["file_id"], max_bytes=200_000_000)
+        cfg = RUNNER.cfg
+        channel = args["channel"]
+        result = await process_wave_rms(
+            path=path, duration_s=args.get("duration_s", 30.0), channels=channel,
+            agg_cycles=1, max_points=5000, fs=str(cfg.sampling.fs), f_nom=str(cfg.sampling.f_nom),
+            pt_ct_enabled=str(int(bool(cfg.transform.enabled))), pt_ratio=str(cfg.transform.pt_ratio),
+            ct_ratio=str(cfg.transform.ct_ratio), file_time_utc=str(int(bool(cfg.source.file_time_utc))),
+            wiring=cfg.transform.wiring, reconstruct_3w=str(int(bool(cfg.transform.reconstruct_3w))),
+            invert_current=str(int(bool(cfg.transform.invert_current))), invert_phases=cfg.transform.invert_phases,
+            col_map_enabled=str(int(bool(cfg.columns.mapping_enabled))),
+            col_map=json.dumps(cfg.columns.mapping, ensure_ascii=False))
+        _assistant_api_error(result)
+        if not isinstance(result, dict):
+            raise AssistantError(502, "波形分析接口返回格式无法识别")
+        values = result.get("channels", {}).get(channel) if isinstance(result.get("channels"), dict) else None
+        numeric = [float(value) for value in values or [] if isinstance(value, (int, float))]
+        return {"file_id": item["file_id"], "name": item["name"], "channel": channel,
+                "units": result.get("units", {}), "points": len(numeric), "cycles_total": result.get("cycles_total"),
+                "duration_s": args.get("duration_s", 30.0), "minimum": (min(numeric) if numeric else None),
+                "maximum": (max(numeric) if numeric else None),
+                "mean": (sum(numeric) / len(numeric) if numeric else None),
+                "first_values": numeric[:10], "notes": result.get("notes", [])}
+    if name == "tune_recording":
+        item, path = _assistant_resolve_recording(pending, args["file_id"], max_bytes=200_000_000)
+        result = await process_nilm_tune({"path": path, "base_mode": "running",
+                                          "max_cycles": args.get("max_cycles", 30_000), "save": False})
+        _assistant_api_error(result)
+        if not isinstance(result, dict):
+            raise AssistantError(502, "负荷辨识调参接口返回格式无法识别")
+        return {"file_id": item["file_id"], "name": item["name"], "measure": _assistant_compact_value(result.get("measure", {})),
+                "suggest": _assistant_compact_value(result.get("suggest", {})),
+                "notes": _assistant_compact_value(result.get("notes", [])), "quantity": result.get("quantity"),
+                "channel": result.get("channel"), "cycles": result.get("cycles"), "t_range": result.get("t_range")}
+    if name == "resample_recording":
+        item, path = _assistant_resolve_recording(pending, args["file_id"], max_bytes=500_000_000)
+        result = await process_resample({"path": path, "fs_new": args["fs_new"],
+                                         "method": args.get("method", "linear"), "overwrite": False,
+                                         "out_dir": "data", "err_report": False})
+        _assistant_api_error(result)
+        status = result.get("status") if isinstance(result, dict) else {}
+        status = status if isinstance(status, dict) else {}
+        return {"message": "重采样后台任务已启动", "file_id": item["file_id"], "running": bool(status.get("running", True)),
+                "stage": status.get("stage", "starting"), "progress": status.get("progress", 0.0)}
+    if name == "get_resample_status":
+        status = await process_resample_status()
+        _assistant_api_error(status)
+        safe_status = {key: _assistant_compact_value(status.get(key)) for key in
+                       ("ok", "running", "progress", "stage", "step", "steps", "step_progress", "rows_in", "rows_out", "elapsed_s")}
+        # Worker exception text may contain a source/output path; expose only whether one occurred.
+        safe_status["error_present"] = bool(status.get("error"))
+        return safe_status
+    if name == "cancel_resample":
+        result = await process_resample_cancel()
+        _assistant_api_error(result)
+        return {"message": "已发送重采样取消请求", "cancelling": bool(result.get("cancelling"))}
+    if name == "estimate_ct_ratio":
+        bus_item, bus_path = _assistant_resolve_recording(pending, args["bus_file_id"], max_bytes=200_000_000)
+        branch_item, branch_path = _assistant_resolve_recording(pending, args["branch_file_id"], max_bytes=200_000_000)
+        event = args["event"]
+        phase = args["phase"]
+        known_side = args.get("known_side")
+        known_ct = args.get("known_ct")
+        payload = {
+            "win_cycles": args.get("win_cycles", 50),
+            "bus": {"path": bus_path, "event": event, "t_begin": args["bus_t_begin"], "t_end": args["bus_t_end"],
+                    "phase": phase, "known": known_side == "bus", "ct": known_ct if known_side == "bus" else None},
+            "branch": {"path": branch_path, "event": event, "t_begin": args["branch_t_begin"], "t_end": args["branch_t_end"],
+                       "phase": phase, "known": known_side == "branch", "ct": known_ct if known_side == "branch" else None},
+        }
+        result = await process_ct_estimate(payload)
+        _assistant_api_error(result)
+        if not isinstance(result, dict):
+            raise AssistantError(502, "CT 估计接口返回格式无法识别")
+        def ct_measurement(value: Any) -> Any:
+            if not isinstance(value, dict):
+                return None
+            return {key: value.get(key) for key in ("phase", "event", "event_name", "t_begin", "t_end", "pre_a", "post_a",
+                                                     "delta_a", "direction", "noise_a", "snr", "win_cycles", "notes") if key in value}
+        return {"bus_file": bus_item["name"], "branch_file": branch_item["name"],
+                "bus": ct_measurement(result.get("bus")), "branch": ct_measurement(result.get("branch")),
+                "ratio_branch_over_bus": result.get("ratio_branch_over_bus"),
+                "estimates": _assistant_compact_value(result.get("estimates", {})),
+                "notes": _assistant_compact_value(result.get("notes", []))}
+    if name == "extract_device_profile":
+        item, path = _assistant_resolve_recording(pending, args["file_id"], max_bytes=500_000_000)
+        payload = {key: value for key, value in args.items() if key != "file_id"}
+        payload.update({"path": path, "base_mode": "running"})
+        result = await process_nilm_profile(payload)
+        _assistant_api_error(result)
+        if not isinstance(result, dict):
+            raise AssistantError(502, "设备画像提取接口返回格式无法识别")
+        profile = result.get("profile") if isinstance(result.get("profile"), dict) else {}
+        return {"message": "设备画像已生成", "file_id": item["file_id"],
+                "saved_name": os.path.basename(str(result.get("saved_to") or "")),
+                "device_id": args["device_id"], "profile": _assistant_compact_value({k: v for k, v in profile.items() if k != "path"}),
+                "events_count": len(result.get("events", [])), "notes": _assistant_compact_value(result.get("notes", []))}
+    if name == "derive_profile_stages":
+        profile = _assistant_resolve_profile(pending, args["profile_id"])
+        result = await process_nilm_profile_stage({"profile": profile["path"], "scales": args["scales"],
+                                                   "q_mode": args.get("q_mode", "scale"),
+                                                   "out_dir": os.path.dirname(profile["path"])})
+        _assistant_api_error(result)
+        if not isinstance(result, dict):
+            raise AssistantError(502, "画像档位派生接口返回格式无法识别")
+        rows = []
+        for row in result.get("rows", [])[:5]:
+            if isinstance(row, dict):
+                rows.append({key: value for key, value in row.items() if key not in {"path", "command"}})
+        return {"message": f"已生成 {len(rows)} 份派生画像", "profile_id": args["profile_id"],
+                "rows": rows, "notes": _assistant_compact_value(result.get("notes", []))}
+    if name == "set_profile_detection_enabled":
+        result = await put_config({"nilm": {"algorithms": {"profile": {"enabled": args["enabled"]}}}})
+        return _assistant_public_config_update(result, "设备画像匹配算法开关已更新", side)
+    if name == "set_electrical_parameters":
+        sampling = {key: args[key] for key in ("fs", "f_nom", "f_min", "f_max") if key in args}
+        transform = {key: args[key] for key in ("pt_ratio", "ct_ratio", "voltage_input", "invert_current",
+                                                  "invert_phases", "reconstruct_3w") if key in args}
+        patch = {}
+        if sampling: patch["sampling"] = sampling
+        if transform: patch["transform"] = transform
+        result = await put_config(patch)
+        return _assistant_public_config_update(result, "采样与电气变换参数已更新", side)
+    if name == "set_harmonic_parameters":
+        result = await put_config({"harmonic": dict(args)})
+        return _assistant_public_config_update(result, "谐波分析范围已更新", side)
+    if name == "set_power_calculation_mode":
+        result = await put_config({"power": dict(args)})
+        return _assistant_public_config_update(result, "功率计算口径已更新", side)
+    if name == "set_compare_alignment":
+        if side != "bus":
+            raise AssistantError(403, "跨侧对齐参数仅由总线侧配置")
+        branch_patch = {}
+        if "offset_s" in args: branch_patch["time_offset_s"] = args["offset_s"]
+        if "tolerance_s" in args: branch_patch["align_tol_s"] = args["tolerance_s"]
+        result = await put_config({"branch": branch_patch})
+        return _assistant_public_config_update(result, "跨侧时间对齐参数已更新", side)
+    if name == "set_playback_speed":
+        cfg = RUNNER.cfg
+        if cfg.source.kind != "csv_file":
+            raise AssistantError(409, f"离线播放倍速仅适用于 csv_file，当前来源为 {cfg.source.kind}")
+        result = await put_config({"source": {"file_speed": args["speed"]}})
+        return _assistant_public_config_update(result, "离线文件播放速度已更新", side)
+    if name == "set_file_time_utc":
+        cfg = RUNNER.cfg
+        if cfg.source.kind not in {"csv_file", "csv_tail"}:
+            raise AssistantError(409, "录波时标解释方式仅适用于 CSV 文件数据源")
+        result = await put_config({"source": {"file_time_utc": args["use_utc"]}})
+        return _assistant_public_config_update(result, "录波时标解释方式已更新", side)
+    if name == "set_window_parameters":
+        patch = {key: value for key, value in args.items() if key != "quantity"}
+        result = await put_config({"windows": {args["quantity"]: patch}})
+        return _assistant_public_config_update(result, f"{args['quantity']} 计算窗口已更新", side)
+    if name == "set_event_parameter":
+        result = await put_config({"events": {args["parameter"]: args["value"]}})
+        return _assistant_public_config_update(result, f"事件阈值 {args['parameter']} 已更新", side)
+    if name == "set_event_detection_enabled":
+        result = await put_config({"events": {"enabled": args["enabled"]}})
+        return _assistant_public_config_update(result, "电能质量事件检测开关已更新", side)
+    if name == "set_nilm_parameter":
+        patch = {"nilm": {"algorithms": {args["algorithm"]: {args["parameter"]: args["value"]}}}}
+        result = await put_config(patch)
+        return _assistant_public_config_update(result, f"负荷辨识参数 {args['algorithm']}.{args['parameter']} 已更新", side)
+    if name == "set_nilm_algorithm_enabled":
+        patch = {"nilm": {"algorithms": {args["algorithm"]: {"enabled": args["enabled"]}}}}
+        result = await put_config(patch)
+        return _assistant_public_config_update(result, f"负荷辨识算法 {args['algorithm']} 开关已更新", side)
+    if name == "set_nilm_core_parameters":
+        patch = dict(args)
+        channel = patch.pop("channel", None)
+        if channel is not None:
+            patch["channels"] = [channel]
+        result = await put_config({"nilm": patch})
+        return _assistant_public_config_update(result, "负荷辨识基础参数已更新", side)
+    if name == "set_curve_save_enabled":
+        result = await put_config({"output": {"curve_save": {args["quantity"]: args["enabled"]}}})
+        return _assistant_public_config_update(result, f"{args['quantity']} 曲线保存开关已更新", side)
+    if name == "clear_events":
+        result = await clear_events()
+        _assistant_api_error(result)
+        return {"message": f"已清空当前侧内存中的 {result.get('removed', 0)} 条电能质量事件；磁盘 CSV 保留。",
+                "side": side, "removed": result.get("removed", 0)}
+    if name == "run_algorithm_selftest":
+        cfg = RUNNER.cfg
+        result = await selftest(fs=float(cfg.sampling.fs), freq=float(cfg.sampling.f_nom),
+                                pt=float(cfg.transform.pt_ratio), ct=float(cfg.transform.ct_ratio),
+                                window=min(1.0, float(cfg.max_window_s)))
+        return {"summary": {key: value for key, value in result.items() if key not in {"checks", "conditions"}},
+                "conditions": result.get("conditions", {}),
+                "checks": _assistant_compact_value(result.get("checks", []))}
     if name == "set_profile_parameters":
         result = await put_config({"nilm": {"algorithms": {"profile": args}}})
         _assistant_api_error(result)
@@ -1539,20 +2030,26 @@ async def _execute_assistant_tool(pending: Dict[str, Any]) -> Dict[str, Any]:
         return {"message": f"已挂载并启用设备画像：{profile['name']}", "profile": profile["name"], "side": side,
                 "config_file_updated": bool(result.get("config_file_updated")),
                 "changes": result.get("config_file_changes", [])}
-    if name == "start_current_source":
-        runner = RUNNERS[side]
-        with runner.lock:
-            running = bool(runner.thread and runner.thread.is_alive() and not runner.stop_event.is_set() and not runner._thread_done)
-        if running:
-            raise AssistantError(409, "当前侧数据源已在运行；助手不会自动停止或重启它")
-        source = runner.cfg.source
-        if source.kind in {"csv_file", "csv_tail"} and not str(source.path or "").strip():
-            raise AssistantError(400, "当前侧文件数据源尚未配置路径")
-        result = await engine_start({})
+    if name == "load_profile_by_id":
+        profile = _assistant_resolve_profile(pending, args["profile_id"])
+        profile_name = ("已脱敏画像" if bool(getattr(RUNNERS["bus"].cfg.branch, "hide_ui", False))
+                        else profile["name"])
+        path = os.path.realpath(str(profile["path"]))
+        root = os.path.realpath(_output_base())
+        try:
+            if os.path.commonpath([root, path]) != root:
+                raise AssistantError(403, "画像文件不在受控 output 目录内")
+            inside_repo = os.path.commonpath([os.path.realpath(ROOT), path]) == os.path.realpath(ROOT)
+        except ValueError:
+            raise AssistantError(403, "画像文件路径不合法") from None
+        config_path = os.path.relpath(path, ROOT) if inside_repo else path
+        result = await put_config({"nilm": {"profile_path": config_path, "profile_paths": [],
+                                             "algorithms": {"profile": {"enabled": True}}}})
         _assistant_api_error(result)
-        return {"message": "当前侧数据源检测已启动", "side": side,
-                "source_kind": result.get("config", {}).get("source", {}).get("kind", source.kind),
-                "run_dir": result.get("run_dir")}
+        return {"message": f"已挂载并启用设备画像：{profile_name}", "profile_id": args["profile_id"],
+                "profile": profile_name, "side": side,
+                "config_file_updated": bool(result.get("config_file_updated")),
+                "changes": result.get("config_file_changes", [])}
     if name == "export_csv":
         dataset = args["dataset"]
         if dataset == "electrical_results":
@@ -1593,18 +2090,6 @@ async def _execute_assistant_tool(pending: Dict[str, Any]) -> Dict[str, Any]:
                                                        response.media_type or "text/csv; charset=utf-8")
         return {"message": f"已生成 {download['filename']}（{download['bytes']} bytes），可在 10 分钟内下载。",
                 "side": side, **download}
-    if name == "list_recordings":
-        result = await list_files(sub=args["folder"])
-        _assistant_api_error(result)
-        files = result.get("files", []) if isinstance(result, dict) else []
-        hide_names = bool(getattr(RUNNERS["bus"].cfg.branch, "hide_ui", False))
-        safe_files = []
-        for item in files[:100]:
-            safe_item = {key: item.get(key) for key in ("name", "size_mb", "mtime", "dir") if key in item}
-            if hide_names and "name" in safe_item:
-                safe_item["name"] = "已脱敏文件/目录"
-            safe_files.append(safe_item)
-        return {"message": f"找到 {len(files)} 项（最多返回 100 项）", "folder": args["folder"], "files": safe_files}
     if name == "list_profiles":
         hide_names = bool(getattr(RUNNERS["bus"].cfg.branch, "hide_ui", False))
         context = _assistant_tool_context(side, hide_names)
@@ -1679,8 +2164,11 @@ async def assistant_tool_audit(request: Request, limit: int = 100) -> Any:
 @app.get("/api/assistant/config")
 async def get_assistant_config() -> Dict[str, Any]:
     """安全配置视图：API Key 只返回是否已配置，不返回其值。"""
+    from app.assistant_tools import TOOL_CATALOG
     return {"ok": True, "config": assistant_service.public_config(),
-            "views": [{"id": key, "label": label} for key, label in BUSINESS_VIEWS]}
+            "views": [{"id": key, "label": label} for key, label in BUSINESS_VIEWS],
+            "tools": [{"id": item["name"], "title": item["title"], "scope": item["scope"]}
+                      for item in TOOL_CATALOG]}
 
 
 @app.get("/api/assistant/config/private")
@@ -1709,12 +2197,21 @@ async def get_assistant_local_models() -> Dict[str, Any]:
 
 
 @app.post("/api/assistant/local-models/refresh")
-async def refresh_assistant_local_models(request: Request, payload: Optional[Dict[str, Any]] = None) -> Any:
-    """Administrator-only refresh; accepts a validated unsaved URL to support edit-before-save workflows."""
+async def refresh_assistant_local_models(request: Request) -> Any:
+    """Administrator-only refresh using the same saved local endpoint used by chat completions."""
     try:
-        base_url = payload.get("base_url") if isinstance(payload, dict) else None
+        body = await request.body()
+        if body:
+            try:
+                payload = json.loads(body.decode("utf-8"))
+            except (UnicodeDecodeError, ValueError):
+                return JSONResponse(status_code=400, content={"ok": False, "error": "刷新接口不接受请求体；请先保存本地服务配置"})
+            if isinstance(payload, dict) and "base_url" in payload:
+                return JSONResponse(status_code=400, content={"ok": False, "error": "模型发现只能使用已保存的本地服务地址"})
+            if payload != {}:
+                return JSONResponse(status_code=400, content={"ok": False, "error": "刷新接口只接受空请求体或空 JSON 对象"})
         return await asyncio.to_thread(assistant_service.refresh_local_models,
-                                       request.headers.get("x-assistant-admin-token", ""), base_url)
+                                      request.headers.get("x-assistant-admin-token", ""))
     except AssistantError as exc:
         return JSONResponse(status_code=exc.status_code, content={"ok": False, "error": exc.message})
 
@@ -1798,8 +2295,13 @@ async def assistant_chat(request: Request) -> Any:
         hide_source_names = bool(getattr(RUNNERS["bus"].cfg.branch, "hide_ui", False))
         model_type = str(payload.get("model_type") or assistant_service.public_config().get("default_model_type", "builtin")).lower()
         available_tools = assistant_service.operator_tools(operator, model_type) if model_type in {"builtin", "local", "cloud"} else []
-        include_profiles = bool({"load_latest_profile", "list_profiles"} & set(available_tools))
-        context = _assistant_tool_context(current_side(), hide_source_names, include_profiles=include_profiles)
+        include_profiles = bool({"load_latest_profile", "load_profile_by_id", "derive_profile_stages", "list_profiles"}
+                                & set(available_tools))
+        recording_tools = {"list_recordings", "select_recording_source", "inspect_recording", "analyze_recording_rms",
+                           "tune_recording", "resample_recording", "estimate_ct_ratio", "extract_device_profile"}
+        include_recordings = bool(recording_tools & set(available_tools))
+        context = _assistant_tool_context(current_side(), hide_source_names,
+                                          include_profiles=include_profiles, include_recordings=include_recordings)
         plan = assistant_service.prepare_chat(payload, redact_source_names=hide_source_names,
                                               operator_token=operator_token if operator else "",
                                               side=current_side(), tool_context=context)

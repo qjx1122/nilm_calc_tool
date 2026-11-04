@@ -4945,16 +4945,36 @@ function normalizeConfigForms(root = document) {
 window.normalizeConfigForms = normalizeConfigForms;
 
 /* ------------------------------------------------------------------ 智能问答：同源 REST/SSE、无第三方渲染依赖 */
-const ASSISTANT_UI = { config: null, views: [], documents: [], localModels: [], cloudProfilesDraft: [], activeDocumentId: null, conversations: [], activeId: null, busy: false, controller: null, adminToken: '', operatorToken: '', operator: null, contextConversationId: null, draggingConversationId: null, pendingImages: [], initialized: false };
+const ASSISTANT_UI = { config: null, views: [], toolCatalog: [], documents: [], localModels: [], localModelStatus: null, localModelsRefreshing: false, cloudProfilesDraft: [], activeDocumentId: null, conversations: [], activeId: null, busy: false, controller: null, adminToken: '', operatorToken: '', operator: null, contextConversationId: null, draggingConversationId: null, pendingImages: [], initialBackendApplied: false, initialized: false };
 const ASSISTANT_IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp']);
 const ASSISTANT_IMAGE_MAX_BYTES = 3 * 1024 * 1024;
 const ASSISTANT_IMAGE_TOTAL_MAX_BYTES = 5 * 1024 * 1024;
 const ASSISTANT_IMAGE_MAX_COUNT = 3;
 const ASSISTANT_VIEW_LABELS = { overview: '总览面板', source: '数据源与控制', compare: '跨侧对比', voltage: '三相电压', current: '三相电流', power: '有功 / 无功 / 视在', power_factor: '功率因数', fundamental: '基波', harmonic: '谐波', interharmonic: '间谐波', dc: '直流偏置', spectrum: '频谱', events: '电能质量事件', nilm: '负荷辨识事件', windows: '窗口配置', export: '导出与日志', selftest: '算法自检', process: '数据处理' };
 const ASSISTANT_TOOL_LABELS = {
-  set_profile_parameters: '修改设备画像匹配阈值', set_wiring_mode: '切换接线模式', load_latest_profile: '加载当前侧最新画像',
-  start_current_source: '启动当前侧数据源检测', export_csv: '导出 CSV', list_recordings: '查询录波文件',
-  list_profiles: '查询设备画像', clear_nilm_events: '清空负荷辨识事件（内存）'
+  get_runtime_status: '查询当前侧运行状态', get_runtime_settings: '查询当前侧计算配置摘要',
+  get_electrical_result: '查询当前侧最新电气量结果', get_history: '查询当前侧趋势历史',
+  get_event_list: '查询电能质量事件', get_nilm_events: '查询负荷辨识事件', compare_sides: '查询两侧电气量对比',
+  load_last_history: '加载上次落盘的历史数据', start_current_source: '启动当前侧数据源检测',
+  pause_current_source: '暂停当前侧离线播放', resume_current_source: '恢复当前侧离线播放',
+  stop_current_source: '停止当前侧数据源', select_recording_source: '选择受控录波文件为数据源',
+  list_recordings: '查询可用录波文件', inspect_recording: '检查录波文件信息',
+  analyze_recording_rms: '分析录波有效值摘要', tune_recording: '生成负荷辨识调参建议',
+  resample_recording: '重采样录波文件', get_resample_status: '查询重采样任务状态',
+  cancel_resample: '取消重采样任务', estimate_ct_ratio: '估算两侧 CT 变比',
+  extract_device_profile: '从录波提取设备画像', derive_profile_stages: '派生多档位设备画像',
+  export_csv: '导出当前侧 CSV', set_profile_parameters: '修改设备画像匹配阈值',
+  set_profile_detection_enabled: '启用或停用画像匹配算法', load_latest_profile: '加载当前侧最新设备画像',
+  load_profile_by_id: '加载指定设备画像', list_profiles: '查询设备画像', set_wiring_mode: '切换当前侧接线模式',
+  set_electrical_parameters: '修改采样与电气变换参数', set_harmonic_parameters: '修改谐波分析范围',
+  set_power_calculation_mode: '修改功率计算口径', set_compare_alignment: '修改跨侧对齐参数',
+  set_playback_speed: '修改离线播放速度', set_file_time_utc: '设置录波时标解释方式',
+  set_window_parameters: '修改电气量计算窗口', set_event_parameter: '修改电能质量事件阈值',
+  set_event_detection_enabled: '启用或停用电能质量事件检测',
+  set_nilm_parameter: '修改负荷辨识算法参数', set_nilm_algorithm_enabled: '启用或停用负荷辨识算法',
+  set_nilm_core_parameters: '修改负荷辨识基础参数', set_curve_save_enabled: '设置趋势曲线保存开关',
+  clear_events: '清空电能质量事件（内存）', clear_nilm_events: '清空负荷辨识事件（内存）',
+  run_algorithm_selftest: '运行算法自检'
 };
 function assistantEl(id) { return document.getElementById(id); }
 function assistantUid() { return window.crypto && crypto.randomUUID ? crypto.randomUUID() : 'chat-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 9); }
@@ -5075,7 +5095,8 @@ function assistantInitLauncherDrag(launcher) {
 }
 function assistantUpdateBusy() {
   const busy = ASSISTANT_UI.busy;
-  ['assistant-send', 'assistant-new', 'assistant-clear-context', 'assistant-delete-conversation', 'assistant-clear-context-menu', 'assistant-rename-conversation', 'assistant-model-name', 'assistant-attach-image', 'assistant-image-input'].forEach(id => { const el = assistantEl(id); if (el) el.disabled = busy; });
+  ['assistant-send', 'assistant-new', 'assistant-clear-context', 'assistant-delete-conversation', 'assistant-clear-context-menu', 'assistant-rename-conversation', 'assistant-model-type', 'assistant-model-name', 'assistant-attach-image', 'assistant-image-input'].forEach(id => { const el = assistantEl(id); if (el) el.disabled = busy; });
+  const refreshModels = assistantEl('assistant-refresh-local-models'); if (refreshModels) refreshModels.disabled = busy || ASSISTANT_UI.localModelsRefreshing;
   const send = assistantEl('assistant-send'), stop = assistantEl('assistant-stop'), thinking = assistantEl('assistant-thinking');
   if (send) send.style.display = busy ? 'none' : '';
   if (stop) stop.style.display = busy ? '' : 'none';
@@ -5272,9 +5293,14 @@ function assistantNearMessagesBottom(list, threshold = 72) {
   return list.scrollHeight - list.clientHeight - list.scrollTop <= threshold;
 }
 function assistantRenderModelNameSelector(conv = assistantCurrentConversation()) {
-  const select = assistantEl('assistant-model-name'); if (!select) return;
+  const backendSelect = assistantEl('assistant-model-type'), select = assistantEl('assistant-model-name');
+  const refresh = assistantEl('assistant-refresh-local-models'), status = assistantEl('assistant-local-models-status');
   const cfg = ASSISTANT_UI.config || {};
   const backend = assistantCurrentBackend(conv);
+  if (backendSelect) { backendSelect.value = backend; backendSelect.disabled = ASSISTANT_UI.busy; }
+  if (refresh) { refresh.hidden = backend !== 'local'; refresh.disabled = ASSISTANT_UI.busy || ASSISTANT_UI.localModelsRefreshing; }
+  if (status) status.hidden = backend !== 'local';
+  if (!select) return;
   select.hidden = backend === 'builtin';
   while (select.firstChild) select.removeChild(select.firstChild);
   const addOption = (value, label, disabled = false) => {
@@ -5282,15 +5308,16 @@ function assistantRenderModelNameSelector(conv = assistantCurrentConversation())
   };
   if (backend === 'builtin') { select.value = ''; select.disabled = true; return; }
   if (backend === 'local') {
-    const discovered = Array.isArray(ASSISTANT_UI.localModels) ? ASSISTANT_UI.localModels : [];
-    const configured = typeof cfg.local_model === 'string' ? cfg.local_model.trim() : '';
-    const selected = conv && conv.modelName || configured || discovered[0] || '';
-    if (conv && !conv.modelName && selected) conv.modelName = selected;
-    const models = Array.from(new Set([...discovered, configured, selected].filter(name => typeof name === 'string' && name.trim())));
-    if (!models.length) addOption('', '请在设置中配置本地模型', true);
-    else models.forEach(name => addOption(name, name));
+    const models = Array.isArray(ASSISTANT_UI.localModels) ? ASSISTANT_UI.localModels : [];
+    let selected = conv && typeof conv.modelName === 'string' ? conv.modelName : '';
+    if (!selected && models.length) { selected = models[0]; if (conv) conv.modelName = selected; }
+    if (!models.length) addOption('', '暂无可用本地模型', true);
+    else {
+      if (selected && !models.includes(selected)) addOption(selected, `服务未发现：${selected}（请重新选择）`, true);
+      models.forEach(name => addOption(name, name));
+    }
     select.value = selected;
-    select.disabled = ASSISTANT_UI.busy;
+    select.disabled = ASSISTANT_UI.busy || !models.length;
     return;
   }
   const defaultModel = typeof cfg.cloud_model === 'string' && cfg.cloud_model ? cfg.cloud_model : '默认云端模型';
@@ -5323,29 +5350,43 @@ function assistantRenderConversation(options = {}) {
   assistantRenderModelNameSelector(conv);
   assistantRenderConversationList(); assistantSetPrivacy();
 }
-function assistantSetConversationBackend(conv, backend) {
-  const cfg = ASSISTANT_UI.config || {};
+function assistantSetConversationBackend(conv, backend, userInitiated = true) {
   const next = ['builtin', 'local', 'cloud'].includes(backend) ? backend : assistantDefaultBackend();
   conv.backend = next;
-  if (next === 'local') conv.modelName = String(cfg.local_model || ASSISTANT_UI.localModels[0] || '');
-  else delete conv.modelName;
-  if (next === 'cloud') conv.cloudProfileId = '__default__';
-  else delete conv.cloudProfileId;
+  if (next === 'local' && !conv.modelName && ASSISTANT_UI.localModels.length) conv.modelName = ASSISTANT_UI.localModels[0];
+  if (next === 'cloud' && !conv.cloudProfileId) conv.cloudProfileId = '__default__';
+  if (userInitiated) conv.backendTouched = true;
 }
 function assistantApplyDefaultBackendToEmptyConversation(conv) {
-  if (!conv || conv.messages.length) return false;
+  if (!conv || conv.messages.length || conv.backendTouched) return false;
   const previous = conv.backend;
-  assistantSetConversationBackend(conv, assistantDefaultBackend());
+  assistantSetConversationBackend(conv, assistantDefaultBackend(), false);
   return previous !== conv.backend;
 }
-function assistantNewConversation(backend, selection = null) {
+function assistantChangeBackend() {
+  const select = assistantEl('assistant-model-type'), conv = assistantCurrentConversation();
+  if (!select || !conv) return;
+  if (ASSISTANT_UI.busy) { assistantRenderModelNameSelector(conv); return; }
+  const next = ['builtin', 'local', 'cloud'].includes(select.value) ? select.value : assistantDefaultBackend();
+  if (next === conv.backend) { assistantRenderModelNameSelector(conv); return; }
+  if (conv.messages.length) {
+    if (!window.confirm('切换问答后端会新建一个独立会话，当前对话及其后端保持不变。继续切换？')) {
+      assistantRenderModelNameSelector(conv); return;
+    }
+    assistantNewConversation(next);
+  } else {
+    assistantSetConversationBackend(conv, next, true);
+    assistantRenderConversation();
+  }
+  if (ASSISTANT_UI.operatorToken) assistantVerifyOperator();
+}
+function assistantNewConversation(backend, selection = null, userInitiated = true) {
   if (ASSISTANT_UI.busy) return null;
   const model = ['builtin', 'local', 'cloud'].includes(backend) ? backend : assistantDefaultBackend();
-  const cfg = ASSISTANT_UI.config || {};
   const now = Date.now();
-  const conv = { id: assistantUid(), title: '新对话', backend: model, messages: [], createdAt: now, updatedAt: now, customTitle: false };
+  const conv = { id: assistantUid(), title: '新对话', backend: model, messages: [], createdAt: now, updatedAt: now, customTitle: false, backendTouched: !!userInitiated };
   if (model === 'local') conv.modelName = selection && typeof selection.modelName === 'string'
-    ? selection.modelName : String(cfg.local_model || ASSISTANT_UI.localModels[0] || '');
+    ? selection.modelName : (ASSISTANT_UI.localModels[0] || '');
   if (model === 'cloud') conv.cloudProfileId = selection && typeof selection.cloudProfileId === 'string'
     ? selection.cloudProfileId : '__default__';
   ASSISTANT_UI.conversations.unshift(conv);
@@ -5704,10 +5745,13 @@ function assistantRenderViewChecks(selected) {
 function assistantRenderToolChecks(selected) {
   const root = assistantEl('assistant-enabled-tool-checks'); if (!root) return;
   while (root.firstChild) root.removeChild(root.firstChild);
-  Object.entries(ASSISTANT_TOOL_LABELS).forEach(([id, title]) => {
+  const catalog = ASSISTANT_UI.toolCatalog.length ? ASSISTANT_UI.toolCatalog
+    : Object.entries(ASSISTANT_TOOL_LABELS).map(([id, title]) => ({ id, title }));
+  catalog.forEach(item => {
+    const id = String(item.id || item.name || ''); if (!id) return;
     const label = document.createElement('label'), input = document.createElement('input');
     input.type = 'checkbox'; input.dataset.toolId = id; input.checked = selected.includes(id);
-    const name = document.createElement('span'); name.textContent = title;
+    const name = document.createElement('span'); name.textContent = item.title || ASSISTANT_TOOL_LABELS[id] || id;
     label.appendChild(input); label.appendChild(name); root.appendChild(label);
   });
 }
@@ -5765,7 +5809,7 @@ function assistantFillConfigForm(cfg) {
   const setCheck = (id, value) => { const el = assistantEl(id); if (el) el.checked = !!value; };
   setCheck('assistant-enabled', cfg.enabled); setValue('assistant-default-backend', cfg.default_model_type || 'builtin');
   setValue('assistant-timeout', cfg.timeout_s); setValue('assistant-temperature', cfg.temperature); setValue('assistant-max-tokens', cfg.max_tokens);
-  setValue('assistant-local-url', cfg.local_base_url); setValue('assistant-local-model', cfg.local_model);
+  setValue('assistant-local-url', cfg.local_base_url);
   setValue('assistant-cloud-url', cfg.cloud_base_url); setValue('assistant-cloud-model', cfg.cloud_model);
   ASSISTANT_UI.cloudProfilesDraft = (Array.isArray(cfg.cloud_api_profiles) ? cfg.cloud_api_profiles : []).map(profile => ({
     id: String(profile.id || ''), name: String(profile.name || ''), base_url: String(profile.base_url || ''),
@@ -5790,54 +5834,46 @@ function assistantFillConfigForm(cfg) {
   const status = assistantEl('assistant-admin-status');
   if (status) status.textContent = cfg.admin_configurable ? '服务端管理员口令已启用。' : '尚未启用：请设置 ELEC_TOOL_ASSISTANT_ADMIN_TOKEN 并重启服务。';
 }
-function assistantSyncLocalModelPicker() {
-  const input = assistantEl('assistant-local-model'), select = assistantEl('assistant-local-model-select');
-  if (!select) return;
-  const model = input ? input.value.trim() : '';
-  select.value = model && Array.isArray(ASSISTANT_UI.localModels) && ASSISTANT_UI.localModels.includes(model) ? model : '';
+function assistantUpdateLocalModelStatus(data = ASSISTANT_UI.localModelStatus) {
+  if (!data) return;
+  const state = data.status, models = ASSISTANT_UI.localModels.length;
+  if (state === 'ready') assistantSetFeedback('assistant-local-models-status', `已从配置的本地服务发现 ${models} 个模型。`);
+  else if (state === 'empty') assistantSetFeedback('assistant-local-models-status', '本地服务未返回模型；请检查服务地址、API Key 或在模型服务中创建模型。');
+  else if (state === 'loading') assistantSetFeedback('assistant-local-models-status', '正在读取本地服务的模型列表…');
+  else if (state === 'error') assistantSetFeedback('assistant-local-models-status', data.error || '读取本地模型列表失败；可重试或检查配置。', true);
+  else assistantSetFeedback('assistant-local-models-status', '本地模型列表尚未载入。');
 }
 function assistantRenderLocalModels(data) {
-  const select = assistantEl('assistant-local-model-select');
   const models = Array.isArray(data && data.models)
     ? Array.from(new Set(data.models.filter(name => typeof name === 'string' && name.trim()).map(name => name.trim())))
     : [];
-  if (select) {
-    while (select.firstChild) select.removeChild(select.firstChild);
-    const placeholder = document.createElement('option'); placeholder.value = '';
-    placeholder.textContent = models.length ? '选择已发现的模型…' : '暂无候选；可手动输入模型名称';
-    select.appendChild(placeholder);
-    models.forEach(name => { const option = document.createElement('option'); option.value = name; option.textContent = name; select.appendChild(option); });
-  }
   ASSISTANT_UI.localModels = models;
-  assistantSyncLocalModelPicker(); assistantRenderModelNameSelector();
-  const state = data && data.status;
-  if (state === 'ready') assistantSetFeedback('assistant-local-models-status', `已读取 ${models.length} 个本地模型；也可手动输入其他名称。`);
-  else if (state === 'empty') assistantSetFeedback('assistant-local-models-status', '服务未返回模型列表；当前名称保留，仍可手动输入。');
-  else if (state === 'loading') assistantSetFeedback('assistant-local-models-status', '后台正在读取模型列表；也可直接手动输入。');
-  else if (state === 'error') assistantSetFeedback('assistant-local-models-status', (data.error || '读取模型列表失败') + '；当前名称保留，可重试或手动输入。', true);
-  else assistantSetFeedback('assistant-local-models-status', '模型候选列表尚未载入；可点击刷新，或手动输入名称。');
+  ASSISTANT_UI.localModelStatus = { status: data && data.status || 'unknown', error: data && data.error || '' };
+  assistantRenderModelNameSelector(); assistantUpdateLocalModelStatus();
 }
 async function assistantLoadLocalModels(attempt = 0) {
   try {
     const data = await assistantApi('/api/assistant/local-models'); assistantRenderLocalModels(data);
     if (data.status === 'loading' && attempt < 24) window.setTimeout(() => assistantLoadLocalModels(attempt + 1), 500);
-  } catch (e) { assistantSetFeedback('assistant-local-models-status', '读取模型列表失败：' + e.message + '；当前名称保留，可刷新或手动输入。', true); }
+  } catch (e) {
+    ASSISTANT_UI.localModelStatus = { status: 'error', error: '读取本地模型列表失败：' + e.message };
+    assistantUpdateLocalModelStatus();
+  }
 }
 async function assistantRefreshLocalModels() {
-  const tokenInput = assistantEl('assistant-admin-token'), modelInput = assistantEl('assistant-local-model');
+  const tokenInput = assistantEl('assistant-admin-token');
   if (tokenInput && tokenInput.value) ASSISTANT_UI.adminToken = tokenInput.value;
-  const button = assistantEl('assistant-refresh-local-models');
-  if (button) button.disabled = true;
-  assistantSetFeedback('assistant-local-models-status', '正在从本地模型服务读取候选…');
+  ASSISTANT_UI.localModelsRefreshing = true; assistantUpdateBusy();
+  ASSISTANT_UI.localModelStatus = { status: 'loading' }; assistantUpdateLocalModelStatus();
   try {
     const data = await assistantApi('/api/assistant/local-models/refresh', {
-      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Assistant-Admin-Token': ASSISTANT_UI.adminToken },
-      body: JSON.stringify({ base_url: modelInput && assistantEl('assistant-local-url') ? assistantEl('assistant-local-url').value.trim() : undefined })
+      method: 'POST', headers: { 'X-Assistant-Admin-Token': ASSISTANT_UI.adminToken },
     });
     assistantRenderLocalModels(data);
   } catch (e) {
-    assistantSetFeedback('assistant-local-models-status', '刷新失败：' + e.message + '；当前名称保留，请检查管理员口令 / 服务地址，或手动输入。', true);
-  } finally { if (button) button.disabled = false; }
+    ASSISTANT_UI.localModelStatus = { status: 'error', error: '刷新失败：' + e.message + '；请检查管理员口令和已保存的本地服务配置。' };
+    assistantUpdateLocalModelStatus();
+  } finally { ASSISTANT_UI.localModelsRefreshing = false; assistantUpdateBusy(); assistantRenderModelNameSelector(); }
 }
 async function assistantLoadKnowledge() {
   try {
@@ -5855,9 +5891,11 @@ async function assistantLoadConfig() {
   try {
     const data = await assistantApi('/api/assistant/config'); ASSISTANT_UI.config = data.config || {};
     ASSISTANT_UI.views = Array.isArray(data.views) ? data.views : [];
+    ASSISTANT_UI.toolCatalog = Array.isArray(data.tools) ? data.tools : [];
     assistantFillConfigForm(ASSISTANT_UI.config);
     const conv = assistantCurrentConversation();
-    const backendChanged = assistantApplyDefaultBackendToEmptyConversation(conv);
+    const backendChanged = !ASSISTANT_UI.initialBackendApplied && assistantApplyDefaultBackendToEmptyConversation(conv);
+    ASSISTANT_UI.initialBackendApplied = true;
     assistantRenderModelNameSelector(conv);
     assistantRenderConversationList(); assistantSetPrivacy(); assistantSyncLauncher();
     assistantSetFeedback('assistant-config-message', '配置已读取；API Key 不会回显。');
@@ -5981,7 +6019,10 @@ async function assistantSubmit() {
   let conv = assistantCurrentConversation(); if (!conv) conv = assistantNewConversation(assistantDefaultBackend());
   if (!conv) return;
   if (selectedImages.length && conv.backend === 'builtin') {
-    assistantShowError('内置知识库只做本地文本检索，不具备图像理解。请在“配置与附加知识库”中将默认后端设为支持视觉输入的本地或云端模型，保存后在新会话中附图。'); return;
+    assistantShowError('内置知识库只做本地文本检索，不具备图像理解。请在问答窗口底部切换到支持视觉输入的本地或云端模型后再附图。'); return;
+  }
+  if (conv.backend === 'local' && (!conv.modelName || !ASSISTANT_UI.localModels.includes(conv.modelName))) {
+    assistantShowError('当前本地服务尚未发现可用模型。请检查“配置与附加知识库”中的服务地址 / API Key，或刷新本地模型列表。'); return;
   }
   if (selectedImages.length && conv.backend === 'cloud' && !window.confirm('你附加的波形截图会发送给当前云端模型，且截图内容不经过文本敏感词扫描。请确认图片不含涉密 / 个人信息后继续。')) return;
   const prompt = typedPrompt || '请分析这张波形截图，概述主要波形特征、可能的电气暂态及需要核对的参数。';
@@ -5998,7 +6039,7 @@ async function assistantSubmit() {
   let reader = null;
   try {
     const payload = { prompt, history, model_type: conv.backend || 'builtin', stream: true };
-    if (conv.backend === 'local') payload.model_name = conv.modelName || (ASSISTANT_UI.config && ASSISTANT_UI.config.local_model) || '';
+    if (conv.backend === 'local') payload.model_name = conv.modelName;
     if (conv.backend === 'cloud' && conv.cloudProfileId && conv.cloudProfileId !== '__default__') payload.cloud_profile_id = conv.cloudProfileId;
     if (selectedImages.length) payload.images = selectedImages.map(image => ({ mime_type: image.mime_type, data: image.data }));
     const response = await fetch(assistantApiUrl('/api/assistant/chat'), { method: 'POST', headers: assistantOperatorHeaders({ 'Content-Type': 'application/json' }), signal: controller.signal,
@@ -6040,7 +6081,7 @@ function assistantChangeModelName() {
   let selection;
   if (conv.backend === 'local') {
     const modelName = String(select.value || '').trim();
-    if (!modelName || modelName === conv.modelName) return;
+    if (!modelName || !ASSISTANT_UI.localModels.includes(modelName) || modelName === conv.modelName) return;
     selection = { modelName };
   } else if (conv.backend === 'cloud') {
     const cloudProfileId = String(select.value || '__default__');
@@ -6067,7 +6108,7 @@ async function assistantSaveConfig() {
   const payload = {
     enabled: get('assistant-enabled').checked, default_model_type: get('assistant-default-backend').value,
     timeout_s: number('assistant-timeout'), temperature: number('assistant-temperature'), max_tokens: number('assistant-max-tokens'),
-    local_base_url: get('assistant-local-url').value.trim(), local_model: get('assistant-local-model').value.trim(),
+    local_base_url: get('assistant-local-url').value.trim(),
     cloud_base_url: get('assistant-cloud-url').value.trim(), cloud_model: get('assistant-cloud-model').value.trim(),
     rag_enabled: get('assistant-rag-enabled').checked, rag_top_k: number('assistant-rag-top-k'), rag_similarity_threshold: number('assistant-rag-threshold'),
     log_queries: get('assistant-log-queries').checked,
@@ -6095,9 +6136,10 @@ async function assistantSaveConfig() {
   if (sensitiveTerms.length) payload.sensitive_terms = sensitiveTerms;
   else if (get('assistant-clear-sensitive-terms').checked) payload.sensitive_terms = [];
   const localKey = get('assistant-local-key').value, cloudKey = get('assistant-cloud-key').value;
+  const clearLocalKey = get('assistant-clear-local-key').checked && !localKey;
   if (localKey) payload.local_api_key = localKey;
   if (cloudKey) payload.cloud_api_key = cloudKey;
-  if (get('assistant-clear-local-key').checked && !localKey) payload.clear_local_api_key = true;
+  if (clearLocalKey) payload.clear_local_api_key = true;
   if (get('assistant-clear-cloud-key').checked && !cloudKey) payload.clear_cloud_api_key = true;
   try {
     assistantSetFeedback('assistant-config-message', '正在保存…');
@@ -6105,12 +6147,10 @@ async function assistantSaveConfig() {
     ASSISTANT_UI.config = data.config || ASSISTANT_UI.config;
     const localUrlChanged = previousLocalUrl !== String(ASSISTANT_UI.config && ASSISTANT_UI.config.local_base_url || '').trim();
     const active = assistantCurrentConversation();
-    const backendChanged = assistantApplyDefaultBackendToEmptyConversation(active);
     assistantFillConfigForm(ASSISTANT_UI.config); assistantRenderModelNameSelector(active);
     assistantRenderConversationList(); assistantSetPrivacy(); assistantSyncLauncher();
     assistantSetFeedback('assistant-config-message', '设置已保存到服务端本地配置；API Key 不会回显，环境变量优先。');
-    if (backendChanged && ASSISTANT_UI.operatorToken) assistantVerifyOperator();
-    if (localUrlChanged) await assistantRefreshLocalModels();
+    if (localUrlChanged || !!localKey || clearLocalKey) await assistantRefreshLocalModels();
   } catch (e) { assistantSetFeedback('assistant-config-message', '保存失败：' + e.message, true); }
 }
 async function assistantLoadSensitiveTerms() {
@@ -6160,7 +6200,7 @@ async function assistantClearKnowledge() {
 }
 function assistantInit() {
   if (ASSISTANT_UI.initialized) return; ASSISTANT_UI.initialized = true;
-  assistantNewConversation('builtin');
+  assistantNewConversation('builtin', null, false);
   const launcher = assistantEl('assistant-launcher'), panel = assistantEl('assistant-panel');
   if (launcher && panel) {
     assistantInitLauncherDrag(launcher);
@@ -6206,6 +6246,7 @@ function assistantInit() {
       if (files.length) { event.preventDefault(); assistantAddImageFiles(files); }
     });
   }
+  const backendType = assistantEl('assistant-model-type'); if (backendType) backendType.addEventListener('change', assistantChangeBackend);
   const modelName = assistantEl('assistant-model-name'); if (modelName) modelName.addEventListener('change', assistantChangeModelName);
   const addCloudProfile = assistantEl('assistant-cloud-profile-add'); if (addCloudProfile) addCloudProfile.addEventListener('click', () => {
     if (ASSISTANT_UI.cloudProfilesDraft.length >= 10) {
@@ -6241,13 +6282,6 @@ function assistantInit() {
   if (imageInput) imageInput.addEventListener('change', async () => { await assistantAddImageFiles(imageInput.files); imageInput.value = ''; });
   const stop = assistantEl('assistant-stop'); if (stop) stop.addEventListener('click', () => { if (ASSISTANT_UI.controller) ASSISTANT_UI.controller.abort(); });
   const save = assistantEl('assistant-save-settings'); if (save) save.addEventListener('click', assistantSaveConfig);
-  const localModelInput = assistantEl('assistant-local-model'), localModelSelect = assistantEl('assistant-local-model-select');
-  if (localModelInput) localModelInput.addEventListener('input', assistantSyncLocalModelPicker);
-  if (localModelSelect) localModelSelect.addEventListener('change', () => {
-    if (!localModelSelect.value || !localModelInput) return;
-    localModelInput.value = localModelSelect.value;
-    assistantSyncLocalModelPicker();
-  });
   const refreshLocalModels = assistantEl('assistant-refresh-local-models'); if (refreshLocalModels) refreshLocalModels.addEventListener('click', assistantRefreshLocalModels);
   const importButton = assistantEl('assistant-import-docs'); if (importButton) importButton.addEventListener('click', assistantImportKnowledge);
   const clearDocs = assistantEl('assistant-clear-docs'); if (clearDocs) clearDocs.addEventListener('click', assistantClearKnowledge);

@@ -515,12 +515,11 @@ def test_assistant_local_model_catalog_api_is_cached_and_refresh_is_admin_only(c
     initial = client.get("/api/assistant/local-models")
     assert initial.status_code == 200
     assert initial.json() == {"ok": True, "status": "idle", "models": [], "error": "", "updated_at": None}
-    denied = client.post("/api/assistant/local-models/refresh", json={"base_url": "http://127.0.0.1:11434/v1"})
+    denied = client.post("/api/assistant/local-models/refresh")
     assert denied.status_code == 403
 
     refreshed = client.post("/api/assistant/local-models/refresh",
-                            headers={"X-Assistant-Admin-Token": admin},
-                            json={"base_url": "http://127.0.0.1:11434/v1"})
+                            headers={"X-Assistant-Admin-Token": admin})
     assert refreshed.status_code == 200, refreshed.text
     assert refreshed.json()["status"] == "ready"
     assert refreshed.json()["models"] == ["qwen2.5:7b", "llama3.2:latest"]
@@ -531,6 +530,20 @@ def test_assistant_local_model_catalog_api_is_cached_and_refresh_is_admin_only(c
     rejected = client.post("/api/assistant/local-models/refresh",
                            headers={"X-Assistant-Admin-Token": admin}, json={"base_url": "http://8.8.8.8/v1"})
     assert rejected.status_code == 400
+    custom = client.post("/api/assistant/local-models/refresh",
+                         headers={"X-Assistant-Admin-Token": admin}, json={"refresh": True})
+    assert custom.status_code == 400
+    null_body = client.post("/api/assistant/local-models/refresh",
+                            headers={"X-Assistant-Admin-Token": admin, "Content-Type": "application/json"},
+                            content=b"null")
+    assert null_body.status_code == 400
+    invalid_json = client.post("/api/assistant/local-models/refresh",
+                               headers={"X-Assistant-Admin-Token": admin, "Content-Type": "application/json"},
+                               content=b"{")
+    assert invalid_json.status_code == 400
+    empty_object = client.post("/api/assistant/local-models/refresh",
+                               headers={"X-Assistant-Admin-Token": admin}, json={})
+    assert empty_object.status_code == 200 and empty_object.json()["models"] == refreshed.json()["models"]
 
 
 def test_assistant_chat_stream_and_nonstream_api(client, tmp_path, monkeypatch):
@@ -700,6 +713,238 @@ def test_assistant_profile_catalog_is_confined_to_output_and_side_scoped(client,
     hidden = client.srv._assistant_tool_context("bus", hide_source_names=True)
     assert hidden["latest_profile"]["name"] == "已脱敏画像"
     assert all("path" not in item and "sha256" not in item for item in hidden["profiles"])
+
+
+def test_assistant_recording_catalog_uses_opaque_ids_and_revalidates_files(client, tmp_path, monkeypatch):
+    import re
+    from app.assistant import AssistantError
+
+    output = tmp_path / "controlled-output"
+    nested = output / "captures"
+    nested.mkdir(parents=True)
+    recording = nested / "capture.csv"
+    recording.write_text("timestamp,Ua\\n0,230\\n", encoding="utf-8")
+    outside = tmp_path / "outside.csv"
+    outside.write_text("timestamp,Ua\\n0,1\\n", encoding="utf-8")
+    try:
+        (nested / "linked.csv").symlink_to(outside)
+    except (OSError, NotImplementedError):
+        pass
+    monkeypatch.setenv("ELEC_TOOL_OUTPUT_DIR", str(output))
+
+    entries = client.srv._assistant_recording_catalog()
+    item = next(value for value in entries if value["name"] == "captures/capture.csv")
+    assert re.fullmatch(r"[0-9a-f]{24}", item["file_id"])
+    assert "path" in item and os.path.isabs(item["path"])
+    assert all(value["name"] != "captures/linked.csv" for value in entries)
+    context = client.srv._assistant_tool_context("bus", include_profiles=False, include_recordings=True)
+    pending = {"side": "bus", "context": context}
+    resolved, path = client.srv._assistant_resolve_recording(pending, item["file_id"])
+    assert resolved["file_id"] == item["file_id"] and path == str(recording.resolve())
+
+    recording.write_text("timestamp,Ua\\n0,changed content with a different size\\n", encoding="utf-8")
+    with pytest.raises(AssistantError, match="发生变化"):
+        client.srv._assistant_resolve_recording(pending, item["file_id"])
+
+
+def test_assistant_recording_tools_resolve_only_server_issued_ids(client, tmp_path, monkeypatch, csv_factory):
+    import asyncio
+    from app.assistant import AssistantError
+
+    output = tmp_path / "controlled-recordings"
+    output.mkdir()
+    artifact = csv_factory(str(output / "private_capture.csv"), duration_s=0.2)
+    monkeypatch.setenv("ELEC_TOOL_OUTPUT_DIR", str(output))
+    context = client.srv._assistant_tool_context("bus", include_profiles=False, include_recordings=True)
+    item = next(row for row in context["recordings"] if row["name"] == "private_capture.csv")
+    runner = client.srv.RUNNERS["bus"]
+    monkeypatch.setattr(runner, "thread", None)
+    captured = []
+
+    async def fake_put_config(payload):
+        captured.append(payload)
+        return {"ok": True, "config_file_updated": True, "config_file_changes": ["source.kind", "source.path"]}
+
+    monkeypatch.setattr(client.srv, "put_config", fake_put_config)
+    pending = {"name": "select_recording_source", "args": {"file_id": item["file_id"]},
+               "side": "bus", "context": context, "actor_id": "test-operator"}
+    result = asyncio.run(client.srv._execute_assistant_tool(pending))
+    assert captured == [{"source": {"kind": "csv_file", "path": str(artifact["path"])}}]
+    assert result["source_kind"] == "csv_file" and str(artifact["path"]) not in json.dumps(result)
+
+    inspect_pending = {"name": "inspect_recording", "args": {"file_id": item["file_id"]},
+                       "side": "bus", "context": context, "actor_id": "test-operator"}
+    inspected = asyncio.run(client.srv._execute_assistant_tool(inspect_pending))
+    assert inspected["rows"] > 0 and inspected["channels"]
+    assert str(artifact["path"]) not in json.dumps(inspected)
+
+    forged = {"name": "inspect_recording", "args": {"file_id": "ffffffffffffffffffffffff"},
+              "side": "bus", "context": context, "actor_id": "test-operator"}
+    with pytest.raises(AssistantError, match="受控资源清单"):
+        asyncio.run(client.srv._execute_assistant_tool(forged))
+
+
+def test_assistant_config_mutation_tools_map_only_to_fixed_business_fields(client, monkeypatch):
+    import asyncio
+    from app.assistant import AssistantError
+
+    captured = []
+
+    async def fake_put_config(payload):
+        captured.append(payload)
+        return {"ok": True, "config_file_updated": False, "config_file_changes": []}
+
+    monkeypatch.setattr(client.srv, "put_config", fake_put_config)
+    runner = client.srv.RUNNERS["bus"]
+    monkeypatch.setattr(runner.cfg.source, "kind", "csv_file")
+
+    def run(name, args, side="bus"):
+        return asyncio.run(client.srv._execute_assistant_tool({"name": name, "args": args, "side": side}))
+
+    assert run("set_electrical_parameters", {"fs": 12800.0, "ct_ratio": 50.0})["side"] == "bus"
+    assert captured[-1] == {"sampling": {"fs": 12800.0}, "transform": {"ct_ratio": 50.0}}
+    run("set_harmonic_parameters", {"order_max": 25})
+    assert captured[-1] == {"harmonic": {"order_max": 25}}
+    run("set_power_calculation_mode", {"apparent": "vector", "fundamental_power": False})
+    assert captured[-1] == {"power": {"apparent": "vector", "fundamental_power": False}}
+    run("set_compare_alignment", {"offset_s": -2.5, "tolerance_s": 0.25})
+    assert captured[-1] == {"branch": {"time_offset_s": -2.5, "align_tol_s": 0.25}}
+    run("set_event_detection_enabled", {"enabled": False})
+    assert captured[-1] == {"events": {"enabled": False}}
+    run("set_playback_speed", {"speed": 4.0})
+    assert captured[-1] == {"source": {"file_speed": 4.0}}
+    run("set_file_time_utc", {"use_utc": True})
+    assert captured[-1] == {"source": {"file_time_utc": True}}
+
+    monkeypatch.setattr(runner.cfg.source, "kind", "tcp")
+    with pytest.raises(AssistantError, match="仅适用于 csv_file"):
+        run("set_playback_speed", {"speed": 2.0})
+    with pytest.raises(AssistantError, match="仅适用于 CSV"):
+        run("set_file_time_utc", {"use_utc": False})
+    token = client.srv._SIDE.set("branch")
+    try:
+        with pytest.raises(AssistantError, match="仅由总线侧配置"):
+            run("set_compare_alignment", {"offset_s": 0.0}, side="branch")
+    finally:
+        client.srv._SIDE.reset(token)
+
+
+def test_assistant_tool_catalog_matches_server_dispatch_and_ui_labels():
+    import ast
+    import re
+    from pathlib import Path
+    from app.assistant_tools import TOOL_NAMES
+
+    root = Path(__file__).resolve().parents[1]
+    module = ast.parse((root / "app/server.py").read_text(encoding="utf-8"))
+    execute = next(node for node in module.body
+                   if isinstance(node, ast.AsyncFunctionDef) and node.name == "_execute_assistant_tool")
+    handled = set()
+    for node in ast.walk(execute):
+        if not isinstance(node, ast.Compare) or not isinstance(node.left, ast.Name) or node.left.id != "name":
+            continue
+        for operator, comparator in zip(node.ops, node.comparators):
+            if isinstance(operator, ast.Eq) and isinstance(comparator, ast.Constant) and isinstance(comparator.value, str):
+                handled.add(comparator.value)
+            elif isinstance(operator, ast.In) and isinstance(comparator, (ast.Set, ast.Tuple)):
+                handled.update(item.value for item in comparator.elts
+                               if isinstance(item, ast.Constant) and isinstance(item.value, str))
+    js = (root / "app/static/app.js").read_text(encoding="utf-8")
+    labels_block = js.split("const ASSISTANT_TOOL_LABELS = {", 1)[1].split("\n};", 1)[0]
+    labels = set(re.findall(r"(?:^|,)\s*([A-Za-z_][A-Za-z0-9_]*):\s*'", labels_block, re.MULTILINE))
+    assert len(TOOL_NAMES) == 46
+    assert set(TOOL_NAMES) == handled
+    assert set(TOOL_NAMES) == labels
+
+
+def test_assistant_hidden_source_mode_redacts_recording_catalog_results(client, monkeypatch):
+    import asyncio
+
+    srv = client.srv
+    monkeypatch.setattr(srv.RUNNERS["bus"].cfg.branch, "hide_ui", True)
+    monkeypatch.setattr(srv, "_assistant_recording_catalog", lambda: [{
+        "file_id": "opaque-file-id", "folder": "data", "name": "customer-secret/site-a.csv",
+        "size_bytes": 1234, "mtime": 1.0,
+    }])
+    result = asyncio.run(srv._execute_assistant_tool({
+        "name": "list_recordings", "args": {"folder": "data"}, "side": "bus",
+    }))
+    assert result["files"] == [{
+        "file_id": "opaque-file-id", "name": "已脱敏录波文件", "size_bytes": 1234, "mtime": 1.0,
+    }]
+    assert "customer-secret" not in json.dumps(result, ensure_ascii=False)
+
+
+def test_assistant_resample_status_does_not_expose_worker_error_paths(client, monkeypatch):
+    import asyncio
+
+    async def fake_status():
+        return {"ok": True, "running": False, "progress": 0.0, "stage": "failed",
+                "error": "FileNotFoundError: /private/customer-secret/capture.csv"}
+
+    monkeypatch.setattr(client.srv, "process_resample_status", fake_status)
+    result = asyncio.run(client.srv._execute_assistant_tool({
+        "name": "get_resample_status", "args": {}, "side": "bus",
+    }))
+    assert result["error_present"] is True
+    assert "error" not in result
+    assert "customer-secret" not in json.dumps(result, ensure_ascii=False)
+
+
+def test_assistant_hidden_source_mode_redacts_profile_list_and_load_results(client, tmp_path, monkeypatch):
+    import asyncio
+
+    srv = client.srv
+    output = tmp_path / "assistant-output"
+    profile_dir = output / "nilm"
+    profile_dir.mkdir(parents=True)
+    secret_name = "profile_bus_customer-secret.json"
+    profile_path = profile_dir / secret_name
+    profile_path.write_text(json.dumps({
+        "side": "bus", "pre_cycles": 10, "post_cycles": 50,
+        "startup": {"events": []}, "shutdown": {"events": []},
+    }), encoding="utf-8")
+    monkeypatch.setenv("ELEC_TOOL_OUTPUT_DIR", str(output))
+    monkeypatch.setattr(srv.RUNNERS["bus"].cfg.branch, "hide_ui", True)
+
+    context = srv._assistant_tool_context("bus", hide_source_names=True)
+    assert context["profiles"][0]["name"] == "已脱敏画像"
+    assert context["latest_profile"]["name"] == "已脱敏画像"
+    assert secret_name in context["profile_files"][0]["name"]  # server-only execution snapshot
+
+    listed = asyncio.run(srv._execute_assistant_tool({
+        "name": "list_profiles", "args": {}, "side": "bus",
+    }))
+    assert listed["profiles"][0]["name"] == "已脱敏画像"
+    assert secret_name not in json.dumps(listed, ensure_ascii=False)
+
+    async def fake_put_config(payload):
+        return {"ok": True, "config_file_updated": False, "config_file_changes": []}
+
+    monkeypatch.setattr(srv, "put_config", fake_put_config)
+    profile_id = context["profiles"][0]["id"]
+    loaded_by_id = asyncio.run(srv._execute_assistant_tool({
+        "name": "load_profile_by_id", "args": {"profile_id": profile_id},
+        "side": "bus", "context": context,
+    }))
+    loaded_latest = asyncio.run(srv._execute_assistant_tool({
+        "name": "load_latest_profile", "args": {}, "side": "bus", "context": context,
+    }))
+    for result in (loaded_by_id, loaded_latest):
+        assert result["profile"] == "已脱敏画像"
+        assert secret_name not in json.dumps(result, ensure_ascii=False)
+        assert str(profile_path) not in json.dumps(result, ensure_ascii=False)
+
+
+def test_assistant_config_endpoint_publishes_the_closed_tool_catalog(client):
+    from app.assistant_tools import TOOL_CATALOG
+
+    response = client.get("/api/assistant/config")
+    assert response.status_code == 200
+    data = response.json()
+    actual = {item["id"]: (item["title"], item["scope"]) for item in data["tools"]}
+    expected = {item["name"]: (item["title"], item["scope"]) for item in TOOL_CATALOG}
+    assert actual == expected
 
 
 def test_assistant_documents_endpoint_returns_complete_bundled_library(client, tmp_path, monkeypatch):

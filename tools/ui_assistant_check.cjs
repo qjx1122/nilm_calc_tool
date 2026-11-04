@@ -35,7 +35,7 @@ window.prompt = (_message, defaultValue) => {
 
 let config = {
   enabled: true, default_model_type: 'builtin',
-  local_base_url: 'http://127.0.0.1:11434/v1', local_model: 'qwen-local',
+  local_base_url: 'http://127.0.0.1:11434/v1',
   cloud_base_url: 'https://api.example.test/v1', cloud_model: 'cloud-model',
   cloud_api_profiles: [{ id: 'cloud-alt', name: '备用云端', base_url: 'https://api.alt.example/v1', model: 'alt-chat', api_key_set: true }],
   timeout_s: 90, temperature: 0.2, max_tokens: 2048,
@@ -73,7 +73,7 @@ window.fetch = async (url, options = {}) => {
   }
   if (url === '/api/assistant/local-models/refresh' && options.method === 'POST') {
     if (options.headers['X-Assistant-Admin-Token'] !== 'admin') throw new Error('刷新本地模型列表时缺少管理员口令');
-    lastLocalModelRefresh = { body: JSON.parse(options.body), headers: options.headers };
+    lastLocalModelRefresh = { body: options.body || null, headers: options.headers };
     if (nextLocalModelRefresh.fail) return jsonResponse({ ok: false, error: '本地服务暂不可用' }, 503);
     return jsonResponse({ ok: true, ...nextLocalModelRefresh, error: '', updated_at: 2 });
   }
@@ -171,28 +171,34 @@ check($('assistant-launcher').hidden, '配置读取前问答入口应默认隐�
   check($('assistant-title').hidden && !$('assistant-title').textContent, '新会话尚无正式问答时，右侧标题应为空');
   const modelControls = window.document.querySelector('.assistant-model-controls');
   const chatHeader = window.document.querySelector('.assistant-chat-header');
-  const modelNameControl = $('assistant-model-name'), attachButton = $('assistant-attach-image');
-  check(!$('assistant-model-type') && !html.includes('id="assistant-model-type"'), '右侧输入区不应显示问答后端下拉列表');
-  check(modelControls && modelControls.contains(modelNameControl) && modelControls.contains($('assistant-send'))
-    && !chatHeader.contains(modelNameControl), '具体模型与发送按钮应归入底部控制组，而不在标题栏');
-  check(modelControls.children[0] === modelNameControl && modelControls.children[1] === $('assistant-send'), '底部模型选择器应紧邻发送按钮左侧');
-  check(modelNameControl.hidden && modelNameControl.getAttribute('aria-label') === '选择具体模型'
-    && !window.document.querySelector('.assistant-model-controls label'), '内置模式应隐藏模型选择器且去掉可见标题、保留无障碍名称');
+  const backendType = $('assistant-model-type'), modelNameControl = $('assistant-model-name');
+  const attachButton = $('assistant-attach-image');
+  check(!!backendType && html.includes('id="assistant-model-type"'), '问答 composer 底部缺少后端选择器');
+  check(modelControls && modelControls.contains(backendType) && modelControls.contains(modelNameControl)
+    && modelControls.contains($('assistant-send')) && !chatHeader.contains(modelNameControl), '后端、模型与发送控件应归入底部控制组');
+  check(modelControls.children[0] === backendType && modelControls.children[1] === modelNameControl
+    && modelControls.children[2] === $('assistant-refresh-local-models') && modelControls.lastElementChild === $('assistant-send'), '底部后端、模型、刷新、发送控件顺序错误');
+  check(backendType.value === 'builtin' && modelNameControl.hidden && $('assistant-refresh-local-models').hidden
+    && $('assistant-local-models-status').hidden, '内置模式应隐藏模型、刷新与本地发现状态');
+  check(modelNameControl.getAttribute('aria-label') === '选择具体模型'
+    && !window.document.querySelector('.assistant-model-controls label'), '具体模型下拉应去掉可见标题并保留无障碍名称');
   check($('assistant-default-backend').value === 'builtin', '未配置模型时应从设置默认使用内置文档通道');
+  check(!Object.prototype.hasOwnProperty.call(config, 'local_model') && !$('assistant-local-model') && !$('assistant-local-model-select'), '管理员设置不得保留本地模型名称配置');
+  check($('assistant-local-url') && $('assistant-local-key'), '本地发现和聊天应共用管理员保存的地址与 API Key');
   check(attachButton.textContent.trim() === '附件' && attachButton.title === '附件'
     && attachButton.getAttribute('aria-label') === '添加附件', '附件按钮的可见文案或无障碍名称不正确');
   check($('assistant-privacy-note').textContent.includes('本地文档模式'), '内置通道隐私说明未显示本地文档语义');
   check(window.__assistantState.documents.length === 2, '启动时未加载文档目录');
   check(window.__assistantState.localModels.length === 2, '配置加载后未读取本地模型候选');
-  const localModelSelect = $('assistant-local-model-select'), localModelInput = $('assistant-local-model');
-  check(localModelInput.value === config.local_model, '初始模型列表加载覆盖了服务端保存的模型名');
-  check(Array.from(localModelSelect.querySelectorAll('option')).map(option => option.value).filter(Boolean).join(',') === 'qwen2.5:7b,llama3.2:latest', '本地模型候选没有填入显式下拉框');
-  check(localModelSelect.value === '', '列表外的手动模型名不应被下拉框覆盖');
-  localModelSelect.value = 'llama3.2:latest'; localModelSelect.dispatchEvent(new window.Event('change'));
-  check(localModelInput.value === 'llama3.2:latest', '选择下拉候选后没有填入模型名称');
-  localModelInput.value = 'my-manual-model'; localModelInput.dispatchEvent(new window.Event('input'));
-  check(localModelSelect.value === '', '手动输入列表外模型名后，下拉框应清除不匹配选择');
-  localModelInput.value = config.local_model; localModelInput.dispatchEvent(new window.Event('input'));
+  backendType.value = 'local'; backendType.dispatchEvent(new window.Event('change'));
+  check(window.__assistantState.conversations[0].backend === 'local' && !modelNameControl.hidden
+    && !$('assistant-refresh-local-models').hidden, '选择本地后端后模型列表与刷新入口未显示');
+  check(Array.from(modelNameControl.querySelectorAll('option')).map(option => option.value).filter(Boolean).join(',') === 'qwen2.5:7b,llama3.2:latest'
+    && modelNameControl.value === 'qwen2.5:7b', '本地会话没有使用服务发现模型作为候选 / 初始选择');
+  modelNameControl.value = 'llama3.2:latest'; modelNameControl.dispatchEvent(new window.Event('change'));
+  check(window.__assistantState.conversations[0].modelName === 'llama3.2:latest', '本地模型下拉选择没有写入当前会话');
+  backendType.value = 'builtin'; backendType.dispatchEvent(new window.Event('change'));
+  check(window.__assistantState.conversations[0].backend === 'builtin' && modelNameControl.hidden, '切回内置知识库后模型列表没有隐藏');
   check($('assistant-doc-content').textContent.includes('sampling.fs'), '默认参数清单没有渲染为完整文档');
   $('assistant-doc-search').value = '设计'; $('assistant-doc-search').dispatchEvent(new window.Event('input'));
   check($('assistant-doc-list').querySelectorAll('button').length === 1, '文档搜索没有按标题和摘要过滤');
@@ -220,7 +226,7 @@ check($('assistant-launcher').hidden, '配置读取前问答入口应默认隐�
   check(style.includes('.assistant-launcher.is-dragging{cursor:grabbing}')
     && html.includes('title="拖动可移动位置，点击打开智能问答助手"'), '悬浮球拖动状态或提示缺失');
   check(cssRule('.assistant-model-controls').includes('display:flex') && cssRule('.assistant-model-controls').includes('align-items:center')
-    && cssRule('.assistant-model-controls').includes('flex-wrap:nowrap'), '底部模型 / 发送控制组未对齐');
+    && cssRule('.assistant-model-controls').includes('flex-wrap:wrap'), '底部后端 / 模型 / 发送控制组未对齐');
   check(style.includes('@media(max-width:420px){\n  .assistant-workspace{flex-basis:540px;min-height:540px}')
     && style.includes('.assistant-model-controls{flex:0 1 auto;justify-content:flex-end;gap:4px}'), '极窄屏附件 / 模型 / 发送区没有自适应布局');
   const messageScrollCss = cssRule('.assistant-messages');
@@ -328,7 +334,7 @@ check($('assistant-launcher').hidden, '配置读取前问答入口应默认隐�
   check(window.__assistantState.conversations[1].messages.length === 2, '内置文档会话没有保留');
   const modelName = $('assistant-model-name');
   check(!modelName.hidden && modelName.getAttribute('aria-label') === '选择具体模型', 'local 后端应显示无可见标题且可访问的具体模型下拉');
-  check(Array.from(modelName.options).some(option => option.value === 'qwen-local'), '具体模型下拉没有包含管理员配置的本地模型');
+  check(Array.from(modelName.options).some(option => option.value === 'qwen2.5:7b'), '具体模型下拉没有包含服务发现的本地模型');
   check(Array.from(modelName.options).some(option => option.value === 'llama3.2:latest'), '具体模型下拉没有包含本地发现模型');
   modelName.value = 'llama3.2:latest'; modelName.dispatchEvent(new window.Event('change'));
   check(window.__assistantState.conversations[0].modelName === 'llama3.2:latest', '本地模型名称选择没有写入当前会话');
@@ -364,9 +370,9 @@ check($('assistant-launcher').hidden, '配置读取前问答入口应默认隐�
   messageScroll.top = messages.scrollHeight - messages.clientHeight;
   const outerAfterMessages = new window.WheelEvent('wheel', { deltaY: 80, bubbles: true, cancelable: true });
   check(!messages.dispatchEvent(outerAfterMessages) && shellScroll.top === 180, '消息区滚动到底后没有把滚轮交给助手外层面板');
-  modelName.value = 'qwen-local'; modelName.dispatchEvent(new window.Event('change'));
+  modelName.value = 'qwen2.5:7b'; modelName.dispatchEvent(new window.Event('change'));
   check(window.__assistantState.conversations.length === 3, '切换具体本地模型未创建独立会话');
-  check(window.__assistantState.conversations[0].modelName === 'qwen-local' && !window.__assistantState.conversations[0].messages.length, '新模型会话未使用所选模型或不为空');
+  check(window.__assistantState.conversations[0].modelName === 'qwen2.5:7b' && !window.__assistantState.conversations[0].messages.length, '新模型会话未使用所选模型或不为空');
   check($('assistant-title').hidden && !$('assistant-title').textContent, '切换具体模型后空会话显示了右侧标题');
   check(window.__assistantState.conversations[1].modelName === 'llama3.2:latest' && window.__assistantState.conversations[1].messages.length === 2, '切换具体模型破坏或更改了旧会话');
   const qwenConversationId = window.__assistantState.conversations[0].id;
@@ -376,7 +382,7 @@ check($('assistant-launcher').hidden, '配置读取前问答入口应默认隐�
   window.assistantSelectConversation(qwenConversationId);
   check($('assistant-title').hidden, '切回空会话后右侧标题未清空');
   $('assistant-prompt').value = '使用另一个模型继续提问'; await window.assistantSubmit();
-  check(lastChatPayload.model_name === 'qwen-local', '新模型会话请求没有路由到所选模型');
+  check(lastChatPayload.model_name === 'qwen2.5:7b', '新模型会话请求没有路由到所选模型');
   check(!$('assistant-title').hidden && $('assistant-title').textContent === window.__assistantState.conversations[0].title,
     '新会话回答完成后，右侧标题未显示当前会话名');
   const sessionScroll = mockScrollArea($('assistant-conversation-list'), 900, 300, 40);
@@ -408,7 +414,7 @@ check($('assistant-launcher').hidden, '配置读取前问答入口应默认隐�
   $('assistant-new').click();
   check(window.__assistantState.conversations.length === 4, '按新设置默认后端创建会话失败');
   check(window.__assistantState.conversations[0].backend === 'cloud', '新会话未采用所选后端');
-  check(window.__assistantState.conversations[1].backend === 'local' && window.__assistantState.conversations[1].modelName === 'qwen-local' && window.__assistantState.conversations[1].messages.length === 2, '本地模型会话没有保留');
+  check(window.__assistantState.conversations[1].backend === 'local' && window.__assistantState.conversations[1].modelName === 'qwen2.5:7b' && window.__assistantState.conversations[1].messages.length === 2, '本地模型会话没有保留');
   check(window.__assistantState.conversations[2].backend === 'local' && window.__assistantState.conversations[2].modelName === 'llama3.2:latest' && window.__assistantState.conversations[2].messages.length === 2, '旧本地模型会话没有保留');
   check(window.__assistantState.conversations[3].backend === 'builtin' && window.__assistantState.conversations[3].messages.length === 2, '内置文档会话没有保留');
   check(Array.from(modelName.options).some(option => option.value === '__default__' && option.textContent.includes('cloud-model')), '云端模型列表没有默认模型名称');
@@ -419,7 +425,6 @@ check($('assistant-launcher').hidden, '配置读取前问答入口应默认隐�
   // 配置保存必须带管理员口令，且密钥输入只作为 POST/PUT 参数，不回填页面。
   $('assistant-admin-token').value = 'admin'; $('assistant-admin-token').dispatchEvent(new window.Event('input'));
   const refreshModelsButton = $('assistant-refresh-local-models');
-  localModelSelect.value = 'qwen2.5:7b'; localModelSelect.dispatchEvent(new window.Event('change'));
   $('assistant-cloud-profile-add').click();
   const profileCards = Array.from($('assistant-cloud-profiles').querySelectorAll('.assistant-cloud-profile'));
   const addedProfileCard = profileCards[profileCards.length - 1];
@@ -434,7 +439,7 @@ check($('assistant-launcher').hidden, '配置读取前问答入口应默认隐�
   setProfileField('model', 'test-model-v2');
   setProfileField('api_key', addedProfileSecret);
   await window.assistantSaveConfig();
-  check(lastConfigPayload.local_model === 'qwen2.5:7b', '下拉选中的本地模型未沿用既有配置保存字段');
+  check(!Object.prototype.hasOwnProperty.call(lastConfigPayload, 'local_model'), '本地模型名称不应再作为管理员设置提交');
   check(lastConfigPayload.cloud_api_profiles.length === 2, '动态添加的云端档案没有一起保存');
   const addedProfile = lastConfigPayload.cloud_api_profiles.find(profile => profile.name === 'Test provider');
   check(!!addedProfile && addedProfile.model === 'test-model-v2' && addedProfile.base_url === 'https://api.test-provider.example/v1', '动态档案的名称 / endpoint / 模型 ID 保存错误');
@@ -444,30 +449,25 @@ check($('assistant-launcher').hidden, '配置读取前问答入口应默认隐�
   const savedProfileCard = Array.from($('assistant-cloud-profiles').querySelectorAll('.assistant-cloud-profile'))
     .find(card => card.textContent.includes('Test provider'));
   check(!!savedProfileCard && !savedProfileCard.querySelector('[data-cloud-profile-field="api_key"]').value, '保存后动态档案的 API Key 输入框未清空');
-  localModelInput.value = 'my-custom-local-model'; localModelInput.dispatchEvent(new window.Event('input'));
-  const waitForLocalRefresh = async () => {
-    for (let i = 0; i < 100 && refreshModelsButton.disabled; i++) await new Promise(resolve => setTimeout(resolve, 10));
-  };
-  refreshModelsButton.click(); await waitForLocalRefresh();
+  await window.assistantRefreshLocalModels();
   check(lastLocalModelRefresh && lastLocalModelRefresh.headers['X-Assistant-Admin-Token'] === 'admin', '刷新模型列表没有携带管理员口令');
-  check(lastLocalModelRefresh.body.base_url === config.local_base_url, '刷新列表没有使用本地服务地址输入值');
-  check(localModelInput.value === 'my-custom-local-model', '刷新候选覆盖了手动填写的模型名称');
-  check(Array.from($('assistant-local-model-select').querySelectorAll('option')).map(option => option.value).filter(Boolean).join(',') === 'refreshed-local-model', '刷新后的候选没有更新');
-  check($('assistant-local-model-select').value === '', '刷新候选覆盖了列表外的手动模型名');
+  check(lastLocalModelRefresh.body === null && lastConfigPayload.local_base_url === config.local_base_url,
+    '刷新请求应使用已保存的本地服务地址，而不能提交另一条临时 URL');
+  check(window.__assistantState.localModels.join(',') === 'refreshed-local-model', '刷新后的候选没有更新');
+  check(!Object.prototype.hasOwnProperty.call(config, 'local_model'), '模型发现结果被写回管理员模型名配置');
   nextLocalModelRefresh = { status: 'empty', models: [] };
-  refreshModelsButton.click(); await waitForLocalRefresh();
-  check(localModelInput.value === 'my-custom-local-model', '空模型列表意外清除了手动填写值');
-  check($('assistant-local-model-select').options.length === 1 && !$('assistant-local-model-select').options[0].value, '空响应后下拉仍显示过期候选');
+  await window.assistantRefreshLocalModels();
+  check(window.__assistantState.localModels.length === 0, '空模型响应后本地候选没有清空');
+  check($('assistant-local-models-status').textContent.includes('未返回模型'), '空模型发现状态未显示');
   nextLocalModelRefresh = { fail: true };
-  refreshModelsButton.click(); await waitForLocalRefresh();
-  check(localModelInput.value === 'my-custom-local-model', '刷新失败意外清除了手动填写值');
+  await window.assistantRefreshLocalModels();
   check($('assistant-local-models-status').textContent.includes('本地服务暂不可用'), '刷新失败状态未显示');
   nextLocalModelRefresh = { status: 'ready', models: ['refreshed-local-model'] };
   $('assistant-enabled').checked = true;
   $('assistant-cloud-key').value = 'temporary-cloud-secret';
   await window.assistantSaveConfig();
   check(!!lastConfigPayload && lastConfigPayload.cloud_api_key === 'temporary-cloud-secret', '配置保存载荷缺密钥');
-  check(lastConfigPayload.local_model === 'my-custom-local-model', '手动模型名称未沿用既有配置保存流程');
+  check(!Object.prototype.hasOwnProperty.call(lastConfigPayload, 'local_model'), '模型名称错误地保存在管理员配置中');
   check(!Object.prototype.hasOwnProperty.call(lastConfigPayload, 'sensitive_terms'), '普通配置保存不应覆盖未读取的敏感词');
   check(!$('assistant-cloud-key').value, '保存后 API Key 输入框未清空');
   check(!$('assistant-config-message').classList.contains('is-error'), '配置保存失败：' + $('assistant-config-message').textContent);
@@ -489,8 +489,9 @@ check($('assistant-launcher').hidden, '配置读取前问答入口应默认隐�
   $('assistant-operator-token').value = 'memory-only-operator-token';
   $('assistant-operator-token').dispatchEvent(new window.Event('input'));
   config = { ...config, default_model_type: 'local' }; await window.assistantLoadConfig();
-  check(lastIdentityModel === 'local' && lastIdentityToken === 'memory-only-operator-token', '默认后端变化后没有用新路由重新验证操作员令牌');
   $('assistant-new').click();
+  await new Promise(resolve => setTimeout(resolve, 1));
+  check(lastIdentityModel === 'local' && lastIdentityToken === 'memory-only-operator-token', '新会话切换到本地后端后没有用新路由重新验证操作员令牌');
   check(window.__assistantState.conversations[0].backend === 'local', '设置默认本地后端后新会话没有切换到 local');
   emitProposal = true;
   $('assistant-prompt').value = '把当前侧接线模式切换到 3p4w';

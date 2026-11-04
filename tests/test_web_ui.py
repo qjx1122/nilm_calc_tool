@@ -282,13 +282,13 @@ def test_assistant_ui_contract_and_safe_markdown_renderer(page):
         "assistant-launcher", "assistant-panel", "assistant-session-pane", "assistant-session-search",
         "assistant-conversation-list", "assistant-session-context-menu", "assistant-rename-conversation",
         "assistant-clear-context-menu", "assistant-delete-conversation", "assistant-new", "assistant-clear-context",
-        "assistant-model-name", "assistant-title", "assistant-session-toggle", "assistant-close", "assistant-privacy-note",
+        "assistant-model-type", "assistant-model-name", "assistant-title", "assistant-session-toggle", "assistant-close", "assistant-privacy-note",
         "assistant-doc-search", "assistant-doc-list", "assistant-doc-content", "assistant-doc-status",
         "assistant-messages", "assistant-thinking", "assistant-form", "assistant-prompt", "assistant-stop",
         "assistant-image-input", "assistant-image-previews", "assistant-attach-image", "assistant-settings-open",
         "assistant-settings-close", "assistant-settings", "assistant-settings-scroll", "assistant-operator-token", "assistant-verify-operator",
         "assistant-operator-status", "assistant-admin-token", "assistant-save-settings", "assistant-load-sensitive-terms",
-        "assistant-local-model", "assistant-local-model-select", "assistant-refresh-local-models", "assistant-local-models-status",
+        "assistant-local-url", "assistant-refresh-local-models", "assistant-local-models-status",
         "assistant-tools-enabled", "assistant-cloud-tools-enabled", "assistant-tool-audit-enabled",
         "assistant-enabled-tool-checks", "assistant-audit-refresh", "assistant-audit-list",
         "assistant-clear-sensitive-terms", "assistant-bundled-docs", "assistant-doc-files", "assistant-import-docs", "assistant-knowledge-list",
@@ -301,17 +301,22 @@ def test_assistant_ui_contract_and_safe_markdown_renderer(page):
     header_start = HTML.index('<header class="assistant-chat-header">')
     header_end = HTML.index('</header>', header_start)
     chat_header = HTML[header_start:header_end]
-    assert 'id="assistant-model-type"' not in HTML, "右侧输入区不应再显示问答后端下拉列表"
+    assert 'id="assistant-model-type"' not in chat_header, "问答后端选择器应留在 composer 底部"
     assert 'id="assistant-model-name"' not in chat_header, "具体模型选择器不应留在问答标题栏"
     assert not re.search(r'<label[^>]*>\s*具体模型', HTML), "具体模型可见标题应去掉"
     assert 'id="assistant-default-backend"' in HTML, "管理员设置中的默认后端配置应保留"
+    assert not re.search(r'id="assistant-local-model(?:-select)?"', HTML), "管理员设置不得保留本地模型名称或手动输入框"
     buttons_start = HTML.index('<div class="assistant-compose-buttons">')
     model_controls = HTML.index('<div class="assistant-model-controls"', buttons_start)
-    model_select = HTML.index('id="assistant-model-name"', model_controls)
-    send_button = HTML.index('id="assistant-send"', model_select)
+    backend_select = HTML.index('id="assistant-model-type"', model_controls)
+    model_select = HTML.index('id="assistant-model-name"', backend_select)
+    refresh_button = HTML.index('id="assistant-refresh-local-models"', model_select)
+    send_button = HTML.index('id="assistant-send"', refresh_button)
     settings_button = HTML.index('id="assistant-settings-open"', send_button)
     attach_button = HTML.index('id="assistant-attach-image"', buttons_start)
-    assert buttons_start < attach_button < model_controls < model_select < send_button < settings_button, "附件、模型、发送、配置控件应按底部布局顺序排列"
+    assert buttons_start < attach_button < model_controls < backend_select < model_select < refresh_button < send_button < settings_button, "附件、后端、模型、刷新、发送、配置控件顺序错误"
+    for backend_value in ("local", "cloud", "builtin"):
+        assert re.search(rf'<option value="{backend_value}">', HTML[backend_select:model_select]), f"后端选项缺少 {backend_value}"
     assert re.search(r'<button id="assistant-attach-image"[^>]*>附件</button>', HTML), "添加截图按钮文案应改为“附件”"
 
     start = APPJS.index("/* ------------------------------------------------------------------ 智能问答")
@@ -331,8 +336,8 @@ def test_assistant_ui_contract_and_safe_markdown_renderer(page):
     launcher_css = re.search(r"\.assistant-launcher\{([^}]*)\}", (ROOT / "app/static/style.css").read_text(encoding="utf-8"))
     assert launcher_css and all(token in launcher_css.group(1) for token in ("cursor:grab", "touch-action:none", "user-select:none"))
     assert 'title="拖动可移动位置，点击打开智能问答助手"' in HTML
-    assert "function assistantDefaultBackend()" in assistant_js and "assistantNewConversation(backend, selection)" in assistant_js
-    assert "window.confirm(message)" not in assistant_js, "后端已由设置默认值控制，不应保留底部后端切换确认逻辑"
+    assert "function assistantDefaultBackend()" in assistant_js and "assistantNewConversation(backend, selection = null, userInitiated = true)" in assistant_js
+    assert "function assistantChangeBackend()" in assistant_js and "切换问答后端会新建一个独立会话" in assistant_js
     assert "assistantRenderConversationList" in assistant_js and "assistantMoveConversation" in assistant_js
     assert "assistantSetSessionsCollapsed" in assistant_js and "assistantRenderDocumentList" in assistant_js
     assert "assistantAddImageFiles" in assistant_js and "payload.images" in assistant_js
@@ -350,10 +355,12 @@ def test_assistant_ui_contract_and_safe_markdown_renderer(page):
     assert "会话仅保存在当前页面内存" in HTML
 
 
-def test_assistant_local_model_picker_is_editable_and_uses_same_origin_discovery(page):
-    assert re.search(r'<select id="assistant-local-model-select"[^>]*>', HTML), "候选模型必须有可直接打开的下拉框"
-    assert re.search(r'<input id="assistant-local-model"[^>]*type="text"', HTML), "必须保留列表外模型名的手动输入"
-    assert 'for="assistant-local-model"' in HTML and "assistant-refresh-local-models" in HTML
+def test_assistant_local_model_picker_uses_session_select_and_same_origin_discovery(page):
+    assert page.selects["assistant-model-type"] == ["local", "cloud", "builtin"]
+    assert re.search(r'<select id="assistant-model-name"[^>]*>', HTML), "composer 需要模型候选下拉框"
+    assert re.search(r'<button id="assistant-refresh-local-models"[^>]*hidden>', HTML), "刷新入口应仅在本地模式显示"
+    assert not re.search(r'id="assistant-local-model(?:-select)?"', HTML), "管理员设置仍暴露本地模型名称输入"
+    assert 'id="assistant-local-url"' in HTML and 'id="assistant-local-key"' in HTML
     start = APPJS.index("/* ------------------------------------------------------------------ 智能问答")
     end = APPJS.index("async function init() {", start)
     assistant_js = APPJS[start:end]
@@ -361,14 +368,15 @@ def test_assistant_local_model_picker_is_editable_and_uses_same_origin_discovery
     assert "assistantApi('/api/assistant/local-models')" in assistant_js
     assert "assistantApi('/api/assistant/local-models/refresh'" in assistant_js
     assert "X-Assistant-Admin-Token" in assistant_js
-    assert "localModelSelect.addEventListener('change'" in assistant_js, "选择候选后应填入可编辑模型名"
-    assert "localModelInput.addEventListener('input', assistantSyncLocalModelPicker)" in assistant_js
+    assert "backendType.addEventListener('change', assistantChangeBackend)" in assistant_js
+    assert "assistantSetFeedback('assistant-local-models-status'" in assistant_js
     render_start = assistant_js.index("function assistantRenderLocalModels(data) {")
     render_end = assistant_js.index("async function assistantLoadLocalModels(", render_start)
     render_js = assistant_js[render_start:render_end]
-    assert "assistant-local-model-select" in render_js and "select.appendChild(option)" in render_js
-    assert "assistantSyncLocalModelPicker();" in render_js
-    assert "modelInput.value =" not in render_js, "刷新候选不得覆盖当前手填值"
+    assert "ASSISTANT_UI.localModels = models" in render_js
+    assert "assistantRenderModelNameSelector();" in render_js
+    assert "local_model" not in assistant_js, "本地模型名称不应再从管理员配置读取或提交"
+    assert "body: JSON.stringify({ base_url" not in assistant_js, "发现接口必须使用保存的本地服务地址"
 
 
 def test_assistant_model_name_picker_and_dynamic_cloud_profile_editor(page):
@@ -443,7 +451,7 @@ def test_assistant_scroll_containers_preserve_reader_position_during_streaming()
 
 def test_assistant_is_a_fixed_session_and_chat_sidebar_with_zero_config_backend(page):
     """同页固定侧栏支持会话管理栏收起 / 恢复；内置知识库免模型配置，窄屏保留抽屉行为。"""
-    assert "assistant-model-type" not in page.selects, "问答区不应再提供后端下拉列表"
+    assert page.selects["assistant-model-type"] == ["local", "cloud", "builtin"]
     assert page.selects["assistant-default-backend"] == ["builtin", "local", "cloud"]
     assert '<aside id="assistant-panel"' in HTML and 'aria-controls="assistant-panel"' in HTML
     assert '<dialog id="assistant-dialog"' not in HTML and 'aria-modal="true"' not in HTML
@@ -465,5 +473,5 @@ def test_assistant_is_a_fixed_session_and_chat_sidebar_with_zero_config_backend(
     assert 'aria-controls="assistant-session-pane" aria-expanded="true" aria-label="收起会话管理面板"' in HTML
     assert "toggle.setAttribute('aria-expanded', String(!isCollapsed))" in APPJS
     assert "toggle.setAttribute('aria-label', label)" in APPJS and "展开会话管理面板" in APPJS and "收起会话管理面板" in APPJS
-    assert "assistantNewConversation('builtin')" in APPJS, "新对话未默认进入免模型通道"
+    assert "assistantNewConversation('builtin', null, false)" in APPJS, "助手启动会话的初始免模型通道未正确初始化"
     assert "model_type: conv.backend || 'builtin'" in APPJS, "聊天载荷仍回退到需要模型配置的后端"
