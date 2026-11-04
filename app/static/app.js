@@ -4945,8 +4945,13 @@ function normalizeConfigForms(root = document) {
 window.normalizeConfigForms = normalizeConfigForms;
 
 /* ------------------------------------------------------------------ 智能问答：同源 REST/SSE、无第三方渲染依赖 */
-const ASSISTANT_UI = { config: null, views: [], documents: [], activeDocumentId: null, mobilePane: 'chat', conversations: [], activeId: null, busy: false, controller: null, adminToken: '', initialized: false };
+const ASSISTANT_UI = { config: null, views: [], documents: [], activeDocumentId: null, mobilePane: 'chat', conversations: [], activeId: null, busy: false, controller: null, adminToken: '', operatorToken: '', operator: null, initialized: false };
 const ASSISTANT_VIEW_LABELS = { overview: '总览面板', source: '数据源与控制', compare: '跨侧对比', voltage: '三相电压', current: '三相电流', power: '有功 / 无功 / 视在', power_factor: '功率因数', fundamental: '基波', harmonic: '谐波', interharmonic: '间谐波', dc: '直流偏置', spectrum: '频谱', events: '电能质量事件', nilm: '负荷辨识事件', windows: '窗口配置', export: '导出与日志', selftest: '算法自检', process: '数据处理' };
+const ASSISTANT_TOOL_LABELS = {
+  set_profile_parameters: '修改设备画像匹配阈值', set_wiring_mode: '切换接线模式', load_latest_profile: '加载当前侧最新画像',
+  start_current_source: '启动当前侧数据源检测', export_csv: '导出 CSV', list_recordings: '查询录波文件',
+  list_profiles: '查询设备画像', clear_nilm_events: '清空负荷辨识事件（内存）'
+};
 function assistantEl(id) { return document.getElementById(id); }
 function assistantUid() { return window.crypto && crypto.randomUUID ? crypto.randomUUID() : 'chat-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 9); }
 function assistantCurrentConversation() { return ASSISTANT_UI.conversations.find(c => c.id === ASSISTANT_UI.activeId) || null; }
@@ -4959,13 +4964,16 @@ function assistantShowError(message) { const el = assistantEl('assistant-error')
 function assistantSetPrivacy() {
   const el = assistantEl('assistant-privacy-note'); if (!el) return;
   const backend = assistantEl('assistant-model-type') ? assistantEl('assistant-model-type').value : 'builtin';
-  const cloud = backend === 'cloud'; el.classList.toggle('cloud', cloud);
+  const cfg = ASSISTANT_UI.config || {}, cloud = backend === 'cloud'; el.classList.toggle('cloud', cloud);
+  const operator = ASSISTANT_UI.operator;
+  const hasTools = !!(operator && Array.isArray(operator.available_tools) && operator.available_tools.length);
+  const toolNote = hasTools ? `已验证 ${operator.operator_id}，可用 ${operator.available_tools.length} 项受控工具。` : '工具执行未授权或被管理员关闭。';
   if (backend === 'builtin') {
-    el.textContent = '本地文档模式：无需配置模型或 API Key；检索内置与管理员导入资料，不调用大模型。';
+    el.textContent = '本地文档模式：不调用大模型，也不解析或执行操作指令。';
   } else if (cloud) {
-    el.textContent = '云端模式：提问、对话历史及命中的知识片段会发送给云端服务；敏感词拦截不能替代人工审查。';
+    el.textContent = `云端模式：问题与命中文档片段会发送到云端；文件路径 / 录波名会拦截。云端工具${cfg.cloud_tools_enabled ? '已配置独立开关' : '默认关闭'}。${toolNote}`;
   } else {
-    el.textContent = '本地模式：问题仅发送到配置的本机 / 内网模型服务，不会发送到云端。';
+    el.textContent = `本地模式：问答只发送到配置的本机 / 内网模型。${toolNote}`;
   }
 }
 function assistantSyncLauncher() {
@@ -4977,7 +4985,7 @@ function assistantSyncLauncher() {
 }
 function assistantUpdateBusy() {
   const busy = ASSISTANT_UI.busy;
-  ['assistant-send', 'assistant-new', 'assistant-delete-conversation', 'assistant-conversation-select', 'assistant-model-type'].forEach(id => { const el = assistantEl(id); if (el) el.disabled = busy; });
+  ['assistant-send', 'assistant-new', 'assistant-clear-context', 'assistant-delete-conversation', 'assistant-conversation-select', 'assistant-model-type'].forEach(id => { const el = assistantEl(id); if (el) el.disabled = busy; });
   const send = assistantEl('assistant-send'), stop = assistantEl('assistant-stop');
   if (send) send.style.display = busy ? 'none' : '';
   if (stop) stop.style.display = busy ? '' : 'none';
@@ -4990,6 +4998,48 @@ function assistantRenderSourceBadges(refs, sources) {
     refs.appendChild(badge);
   });
 }
+function assistantBuildProposal(msg) {
+  const proposal = msg && msg.proposal; if (!proposal) return null;
+  const card = document.createElement('section'); card.className = 'assistant-proposal assistant-proposal-' + String(proposal.status || 'pending');
+  const title = document.createElement('strong'); title.textContent = proposal.title || ASSISTANT_TOOL_LABELS[proposal.tool] || '待确认操作'; card.appendChild(title);
+  const summary = document.createElement('p'); summary.textContent = proposal.summary || ''; card.appendChild(summary);
+  const impact = document.createElement('p'); impact.className = 'assistant-proposal-impact'; impact.textContent = '影响：' + String(proposal.impact || ''); card.appendChild(impact);
+  if (Number.isFinite(Number(proposal.expires_at))) {
+    const expires = document.createElement('p'); expires.className = 'assistant-proposal-expiry';
+    expires.textContent = '确认有效期至：' + new Date(Number(proposal.expires_at) * 1000).toLocaleString(); card.appendChild(expires);
+  }
+  const args = document.createElement('pre'); args.textContent = JSON.stringify(proposal.arguments || {}, null, 2); card.appendChild(args);
+  if (proposal.requires_second_confirmation && proposal.status === 'pending') {
+    const code = document.createElement('p'); code.className = 'assistant-confirm-code'; code.textContent = '高风险操作二次确认码：' + String(proposal.confirmation_code || ''); card.appendChild(code);
+    const label = document.createElement('label'); label.className = 'assistant-confirm-code-input'; label.textContent = '再次输入确认码';
+    const input = document.createElement('input'); input.type = 'text'; input.autocomplete = 'off'; input.maxLength = 6; input.inputMode = 'numeric'; input.placeholder = '6 位数字'; label.appendChild(input); card.appendChild(label);
+    card._confirmationInput = input;
+  }
+  if (proposal.error) { const error = document.createElement('p'); error.className = 'assistant-proposal-error'; error.textContent = String(proposal.error); card.appendChild(error); }
+  if (proposal.status === 'pending') {
+    const actions = document.createElement('div'); actions.className = 'assistant-proposal-actions';
+    const confirm = document.createElement('button'); confirm.type = 'button'; confirm.className = 'primary'; confirm.textContent = '确认执行';
+    confirm.addEventListener('click', () => assistantConfirmProposal(msg, card._confirmationInput ? card._confirmationInput.value : ''));
+    const cancel = document.createElement('button'); cancel.type = 'button'; cancel.textContent = '取消';
+    cancel.addEventListener('click', () => assistantCancelProposal(msg));
+    actions.append(confirm, cancel); card.appendChild(actions);
+  } else if (proposal.status === 'executing') {
+    const status = document.createElement('p'); status.textContent = '正在调用业务接口…'; card.appendChild(status);
+  } else if (proposal.status === 'success' && proposal.result) {
+    const result = document.createElement('p'); result.className = 'assistant-proposal-result'; result.textContent = proposal.result.message || '操作已完成。'; card.appendChild(result);
+    const details = proposal.result.files || proposal.result.profiles;
+    if (Array.isArray(details) && details.length) { const pre = document.createElement('pre'); pre.textContent = JSON.stringify(details.slice(0, 100), null, 2); card.appendChild(pre); }
+    if (proposal.result.download_url) {
+      const download = document.createElement('button'); download.type = 'button'; download.textContent = '下载 CSV';
+      download.addEventListener('click', () => assistantDownloadExport(proposal.result)); card.appendChild(download);
+    }
+  } else if (proposal.status === 'cancelled') {
+    const status = document.createElement('p'); status.textContent = '已取消；未调用业务接口。'; card.appendChild(status);
+  } else if (proposal.status === 'expired') {
+    const status = document.createElement('p'); status.textContent = '预览已失效或已被处理；如仍需操作，请重新发起。'; card.appendChild(status);
+  }
+  return card;
+}
 function assistantBuildMessage(msg) {
   const root = document.createElement('div'); root.className = 'assistant-message ' + (msg.role === 'user' ? 'user' : 'assistant');
   const role = document.createElement('div'); role.className = 'assistant-role'; role.textContent = msg.role === 'user' ? '你' : '助手'; root.appendChild(role);
@@ -5000,7 +5050,8 @@ function assistantBuildMessage(msg) {
   const refs = document.createElement('div'); refs.className = 'assistant-sources'; refs.setAttribute('aria-label', '知识库引用');
   assistantRenderSourceBadges(refs, msg.sources);
   if (refs.childNodes.length) root.appendChild(refs);
-  msg._dom = { root, body, refs };
+  const proposal = assistantBuildProposal(msg); if (proposal) root.appendChild(proposal);
+  msg._dom = { root, body, refs, proposal };
   return root;
 }
 function assistantRefreshMessage(msg) {
@@ -5010,6 +5061,9 @@ function assistantRefreshMessage(msg) {
   assistantRenderSourceBadges(msg._dom.refs, msg.sources);
   if (!msg._dom.refs.childNodes.length && msg._dom.refs.parentNode) msg._dom.refs.remove();
   else if (msg._dom.refs.childNodes.length && !msg._dom.refs.parentNode) msg._dom.root.appendChild(msg._dom.refs);
+  if (msg._dom.proposal && msg._dom.proposal.parentNode) msg._dom.proposal.remove();
+  msg._dom.proposal = assistantBuildProposal(msg);
+  if (msg._dom.proposal) msg._dom.root.appendChild(msg._dom.proposal);
   const conv = assistantCurrentConversation();
   if (conv && conv.messages.includes(msg)) {
     const list = assistantEl('assistant-messages'); if (list) list.scrollTop = list.scrollHeight;
@@ -5052,6 +5106,7 @@ function assistantSelectConversation(id) {
   if (ASSISTANT_UI.busy) { assistantSetFeedback('assistant-config-message', '请先停止当前生成，再切换会话。', true); assistantRenderConversationList(); return; }
   const conv = ASSISTANT_UI.conversations.find(c => c.id === id); if (!conv) return;
   ASSISTANT_UI.activeId = conv.id; assistantClearError(); assistantRenderConversation();
+  if (ASSISTANT_UI.operatorToken) assistantVerifyOperator();
 }
 function assistantRemoveConversation() {
   if (ASSISTANT_UI.busy) return;
@@ -5060,6 +5115,12 @@ function assistantRemoveConversation() {
   ASSISTANT_UI.conversations = ASSISTANT_UI.conversations.filter(c => c.id !== conv.id);
   if (!ASSISTANT_UI.conversations.length) assistantNewConversation((assistantEl('assistant-model-type') || {}).value || 'builtin');
   else { ASSISTANT_UI.activeId = ASSISTANT_UI.conversations[0].id; assistantRenderConversation(); }
+}
+function assistantClearContext() {
+  if (ASSISTANT_UI.busy) return;
+  const conv = assistantCurrentConversation(); if (!conv || !conv.messages.length) return;
+  if (!window.confirm('清空当前对话中的全部消息与模型上下文？当前会话条目将保留。')) return;
+  conv.messages = []; conv.title = '新对话'; assistantClearError(); assistantRenderConversationList(); assistantRenderConversation();
 }
 function assistantSetMessageTitle(conv) {
   const first = conv.messages.find(m => m.role === 'user' && m.content);
@@ -5158,11 +5219,58 @@ function assistantRenderMarkdown(element, markdown) {
   assistantRenderMarkdownBlocks(element, String(markdown || '').replace(/\r\n?/g, '\n').split('\n'));
 }
 
+function assistantApiUrl(path) { return apiUrl(path, sideOf()); }
+function assistantOperatorHeaders(extra = {}) {
+  const headers = { ...extra };
+  const input = assistantEl('assistant-operator-token');
+  const token = input && input.value ? input.value.trim() : ASSISTANT_UI.operatorToken;
+  if (token) headers['X-Assistant-Operator-Token'] = token;
+  return headers;
+}
 async function assistantApi(path, options = {}) {
-  const response = await fetch(path, options); let data = null;
+  const response = await fetch(assistantApiUrl(path), options); let data = null;
   try { data = await response.json(); } catch (e) { data = null; }
   if (!response.ok) throw new Error(data && data.error ? data.error : 'HTTP ' + response.status);
   return data || {};
+}
+async function assistantConfirmProposal(msg, confirmationCode = '') {
+  const proposal = msg && msg.proposal; if (!proposal || proposal.status !== 'pending') return;
+  if (!window.confirm(`确认执行“${proposal.title || proposal.tool}”？\n${proposal.summary || ''}\n${proposal.impact || ''}`)) return;
+  proposal.status = 'executing'; proposal.error = ''; assistantRefreshMessage(msg);
+  try {
+    const data = await assistantApi('/api/assistant/tools/confirm', {
+      method: 'POST', headers: assistantOperatorHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ proposal_id: proposal.id, confirmation_code: confirmationCode })
+    });
+    proposal.status = 'success'; proposal.result = data.result || {}; proposal.error = '';
+  } catch (e) {
+    proposal.error = e && e.message ? e.message : '执行失败；操作未确认成功';
+    proposal.status = /过期|不存在|已取消|已执行/.test(proposal.error) ? 'expired' : 'pending';
+  }
+  assistantRefreshMessage(msg);
+}
+async function assistantCancelProposal(msg) {
+  const proposal = msg && msg.proposal; if (!proposal || proposal.status !== 'pending') return;
+  try {
+    await assistantApi('/api/assistant/tools/cancel', {
+      method: 'POST', headers: assistantOperatorHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ proposal_id: proposal.id })
+    });
+    proposal.status = 'cancelled'; proposal.error = '';
+  } catch (e) {
+    proposal.error = e && e.message ? e.message : '取消失败';
+    if (/过期|不存在|已取消|已执行/.test(proposal.error)) proposal.status = 'expired';
+  }
+  assistantRefreshMessage(msg);
+}
+async function assistantDownloadExport(result) {
+  try {
+    const response = await fetch(assistantApiUrl(result.download_url), { headers: assistantOperatorHeaders() });
+    if (!response.ok) { let data = null; try { data = await response.json(); } catch (e) {} throw new Error(data && data.error ? data.error : '下载失败：HTTP ' + response.status); }
+    const blob = await response.blob(), url = URL.createObjectURL(blob), link = document.createElement('a');
+    link.href = url; link.download = result.filename || 'assistant-export.csv'; document.body.appendChild(link); link.click(); link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 30000);
+  } catch (e) { assistantShowError(e && e.message ? e.message : '下载失败'); }
 }
 function assistantTogglePanel(open) {
   const panel = assistantEl('assistant-panel'), launcher = assistantEl('assistant-launcher'); if (!panel) return;
@@ -5236,6 +5344,16 @@ function assistantRenderViewChecks(selected) {
     label.appendChild(input); label.appendChild(name); root.appendChild(label);
   });
 }
+function assistantRenderToolChecks(selected) {
+  const root = assistantEl('assistant-enabled-tool-checks'); if (!root) return;
+  while (root.firstChild) root.removeChild(root.firstChild);
+  Object.entries(ASSISTANT_TOOL_LABELS).forEach(([id, title]) => {
+    const label = document.createElement('label'), input = document.createElement('input');
+    input.type = 'checkbox'; input.dataset.toolId = id; input.checked = selected.includes(id);
+    const name = document.createElement('span'); name.textContent = title;
+    label.appendChild(input); label.appendChild(name); root.appendChild(label);
+  });
+}
 function assistantFillConfigForm(cfg) {
   const setValue = (id, value) => { const el = assistantEl(id); if (el) el.value = value == null ? '' : String(value); };
   const setCheck = (id, value) => { const el = assistantEl(id); if (el) el.checked = !!value; };
@@ -5245,6 +5363,9 @@ function assistantFillConfigForm(cfg) {
   setValue('assistant-cloud-url', cfg.cloud_base_url); setValue('assistant-cloud-model', cfg.cloud_model);
   setCheck('assistant-rag-enabled', cfg.rag_enabled); setValue('assistant-rag-top-k', cfg.rag_top_k); setValue('assistant-rag-threshold', cfg.rag_similarity_threshold);
   setCheck('assistant-log-queries', cfg.log_queries); setValue('assistant-sensitive-terms', '');
+  setCheck('assistant-tools-enabled', cfg.tools_enabled); setCheck('assistant-cloud-tools-enabled', cfg.cloud_tools_enabled);
+  setCheck('assistant-tool-audit-enabled', cfg.tool_audit_enabled);
+  assistantRenderToolChecks(Array.isArray(cfg.enabled_tools) ? cfg.enabled_tools : Object.keys(ASSISTANT_TOOL_LABELS));
   const sensitive = assistantEl('assistant-sensitive-terms');
   if (sensitive) sensitive.placeholder = cfg.sensitive_terms_configured
     ? '服务端已保存 ' + (cfg.sensitive_terms_count || '若干') + ' 条拦截词（不公开回显）；使用下方按钮读取或输入新列表替换'
@@ -5285,6 +5406,47 @@ async function assistantLoadConfig() {
     assistantSetFeedback('assistant-config-message', '配置读取失败：' + e.message, true);
   }
 }
+async function assistantVerifyOperator() {
+  const input = assistantEl('assistant-operator-token'), status = assistantEl('assistant-operator-status');
+  const token = input ? input.value.trim() : '';
+  ASSISTANT_UI.operatorToken = token; ASSISTANT_UI.operator = null;
+  if (!token) { if (status) status.textContent = '请输入管理员分配的操作员令牌。'; assistantSetPrivacy(); return; }
+  const backend = assistantEl('assistant-model-type') ? assistantEl('assistant-model-type').value : 'builtin';
+  if (status) status.textContent = '正在验证权限…';
+  try {
+    const data = await assistantApi('/api/assistant/tools/identity?model_type=' + encodeURIComponent(backend), { headers: assistantOperatorHeaders() });
+    ASSISTANT_UI.operator = data;
+    const scopes = Array.isArray(data.scopes) ? data.scopes.join(', ') : '无';
+    const tools = Array.isArray(data.available_tools) ? data.available_tools.length : 0;
+    if (status) status.textContent = `验证成功：${data.operator_id || '操作员'} · scope: ${scopes} · 当前模型可用工具 ${tools} 项。`;
+  } catch (e) {
+    ASSISTANT_UI.operator = null;
+    if (status) status.textContent = '验证失败：' + (e && e.message ? e.message : '令牌无效或未授权');
+  }
+  assistantSetPrivacy();
+}
+async function assistantLoadAudit() {
+  const root = assistantEl('assistant-audit-list'), status = assistantEl('assistant-audit-status');
+  if (assistantEl('assistant-admin-token') && assistantEl('assistant-admin-token').value) ASSISTANT_UI.adminToken = assistantEl('assistant-admin-token').value;
+  if (status) status.textContent = '正在读取…';
+  try {
+    const data = await assistantApi('/api/assistant/tools/audit?limit=100', { headers: { 'X-Assistant-Admin-Token': ASSISTANT_UI.adminToken } });
+    const records = Array.isArray(data.records) ? data.records : Array.isArray(data.events) ? data.events : [];
+    if (root) {
+      while (root.firstChild) root.removeChild(root.firstChild);
+      if (!records.length) root.textContent = '暂无审计记录。';
+      records.slice().reverse().forEach(item => {
+        const row = document.createElement('div'); row.className = 'assistant-audit-item';
+        const title = document.createElement('strong'); title.textContent = [item.timestamp || item.ts || '', item.event || '', item.tool || ''].filter(Boolean).join(' · '); row.appendChild(title);
+        const details = document.createElement('span'); details.textContent = [item.actor_id || item.operator_id || '', item.side || '', item.status || '', item.model_type || ''].filter(Boolean).join(' · '); row.appendChild(details);
+        const pre = document.createElement('pre'); pre.textContent = JSON.stringify(item, null, 2); row.appendChild(pre); root.appendChild(row);
+      });
+    }
+    if (status) status.textContent = `读取完成：${records.length} 条（最多 100 条）。`;
+  } catch (e) {
+    if (status) status.textContent = '读取失败：' + (e && e.message ? e.message : '请求错误');
+  }
+}
 function assistantSetBusy(value) { ASSISTANT_UI.busy = !!value; assistantUpdateBusy(); }
 function assistantHandleStreamData(raw, msg) {
   const lines = raw.split('\n');
@@ -5294,6 +5456,7 @@ function assistantHandleStreamData(raw, msg) {
     let data; try { data = JSON.parse(text); } catch (e) { continue; }
     if (data.type === 'sources') { msg.sources = Array.isArray(data.sources) ? data.sources : []; assistantRefreshMessage(msg); }
     else if (data.type === 'delta' && typeof data.text === 'string') { msg.content += data.text; assistantRefreshMessage(msg); }
+    else if (data.type === 'proposal' && data.proposal && typeof data.proposal === 'object') { msg.proposal = data.proposal; assistantRefreshMessage(msg); }
     else if (data.type === 'error') throw new Error(data.error || '模型生成失败');
   }
 }
@@ -5314,12 +5477,12 @@ async function assistantSubmit() {
   const controller = new AbortController(); ASSISTANT_UI.controller = controller;
   let reader = null;
   try {
-    const response = await fetch('/api/assistant/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: controller.signal,
+    const response = await fetch(assistantApiUrl('/api/assistant/chat'), { method: 'POST', headers: assistantOperatorHeaders({ 'Content-Type': 'application/json' }), signal: controller.signal,
       body: JSON.stringify({ prompt, history, model_type: conv.backend || 'builtin', stream: true }) });
     if (!response.ok) { let body = null; try { body = await response.json(); } catch (e) { /* response may not be JSON */ } throw new Error(body && body.error ? body.error : 'HTTP ' + response.status); }
     const contentType = response.headers.get('content-type') || '';
     if (!contentType.includes('text/event-stream')) {
-      const data = await response.json(); answerMessage.content = String(data.answer || ''); answerMessage.sources = Array.isArray(data.sources) ? data.sources : []; assistantRefreshMessage(answerMessage);
+      const data = await response.json(); answerMessage.content = String(data.answer || ''); answerMessage.sources = Array.isArray(data.sources) ? data.sources : []; answerMessage.proposal = data.proposal || null; assistantRefreshMessage(answerMessage);
     } else {
       if (!response.body || !response.body.getReader) throw new Error('浏览器不支持流式读取，请更新浏览器后重试。');
       reader = response.body.getReader(); const decoder = new TextDecoder('utf-8'); let buffer = '';
@@ -5332,7 +5495,7 @@ async function assistantSubmit() {
       }
       if (buffer.trim()) assistantHandleStreamData(buffer, answerMessage);
     }
-    if (!answerMessage.content.trim()) throw new Error('模型返回了空回答，请检查本地模型或云端接口。');
+    if (!answerMessage.content.trim() && !answerMessage.proposal) throw new Error('模型返回了空回答，请检查本地模型或云端接口。');
   } catch (e) {
     if (controller.signal.aborted) {
       if (!answerMessage.content) conv.messages = conv.messages.filter(m => m !== answerMessage);
@@ -5359,6 +5522,7 @@ function assistantChangeBackend() {
     assistantRenderConversation();
   }
   assistantSetPrivacy();
+  if (ASSISTANT_UI.operatorToken) assistantVerifyOperator();
 }
 async function assistantSaveConfig() {
   const tokenInput = assistantEl('assistant-admin-token');
@@ -5371,6 +5535,10 @@ async function assistantSaveConfig() {
     cloud_base_url: get('assistant-cloud-url').value.trim(), cloud_model: get('assistant-cloud-model').value.trim(),
     rag_enabled: get('assistant-rag-enabled').checked, rag_top_k: number('assistant-rag-top-k'), rag_similarity_threshold: number('assistant-rag-threshold'),
     log_queries: get('assistant-log-queries').checked,
+    tools_enabled: get('assistant-tools-enabled').checked,
+    cloud_tools_enabled: get('assistant-cloud-tools-enabled').checked,
+    tool_audit_enabled: get('assistant-tool-audit-enabled').checked,
+    enabled_tools: Array.from(document.querySelectorAll('#assistant-enabled-tool-checks input[data-tool-id]:checked')).map(el => el.dataset.toolId),
     visible_views: Array.from(document.querySelectorAll('#assistant-visible-views input[data-view-id]:checked')).map(el => el.dataset.viewId),
   };
   const sensitiveTerms = get('assistant-sensitive-terms').value.split(/\r?\n/).map(s => s.trim()).filter(Boolean).slice(0, 30);
@@ -5459,11 +5627,19 @@ function assistantInit() {
   const convSelect = assistantEl('assistant-conversation-select'); if (convSelect) convSelect.addEventListener('change', () => assistantSelectConversation(convSelect.value));
   const newButton = assistantEl('assistant-new'); if (newButton) newButton.addEventListener('click', () => { const current = assistantCurrentConversation(); assistantNewConversation(current ? current.backend : (model && model.value) || 'builtin'); });
   const delButton = assistantEl('assistant-delete-conversation'); if (delButton) delButton.addEventListener('click', assistantRemoveConversation);
+  const clearContext = assistantEl('assistant-clear-context'); if (clearContext) clearContext.addEventListener('click', assistantClearContext);
   const stop = assistantEl('assistant-stop'); if (stop) stop.addEventListener('click', () => { if (ASSISTANT_UI.controller) ASSISTANT_UI.controller.abort(); });
   const save = assistantEl('assistant-save-settings'); if (save) save.addEventListener('click', assistantSaveConfig);
   const importButton = assistantEl('assistant-import-docs'); if (importButton) importButton.addEventListener('click', assistantImportKnowledge);
   const clearDocs = assistantEl('assistant-clear-docs'); if (clearDocs) clearDocs.addEventListener('click', assistantClearKnowledge);
   const token = assistantEl('assistant-admin-token'); if (token) token.addEventListener('input', () => { ASSISTANT_UI.adminToken = token.value; });
+  const operatorToken = assistantEl('assistant-operator-token');
+  if (operatorToken) operatorToken.addEventListener('input', () => {
+    ASSISTANT_UI.operatorToken = operatorToken.value.trim(); ASSISTANT_UI.operator = null;
+    const status = assistantEl('assistant-operator-status'); if (status) status.textContent = '令牌已变更；请重新验证。'; assistantSetPrivacy();
+  });
+  const verifyOperator = assistantEl('assistant-verify-operator'); if (verifyOperator) verifyOperator.addEventListener('click', assistantVerifyOperator);
+  const auditRefresh = assistantEl('assistant-audit-refresh'); if (auditRefresh) auditRefresh.addEventListener('click', assistantLoadAudit);
   const loadTerms = assistantEl('assistant-load-sensitive-terms'); if (loadTerms) loadTerms.addEventListener('click', assistantLoadSensitiveTerms);
   const sensitiveField = assistantEl('assistant-sensitive-terms'), clearTerms = assistantEl('assistant-clear-sensitive-terms');
   if (clearTerms && sensitiveField) {

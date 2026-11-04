@@ -16,7 +16,10 @@ if (start < 0 || end < 0) throw new Error('未找到智能问答模块代码');
 
 const dom = new JSDOM(html, { url: 'http://localhost/', runScripts: 'dangerously', pretendToBeVisual: true });
 const { window } = dom;
-window.S = { view: 'overview' };
+window.S = { view: 'overview', side: 'bus' };
+window.sideOf = () => window.S.side;
+window.apiUrl = (path, side = window.sideOf()) => side === 'branch' && typeof path === 'string' && path.startsWith('/api/')
+  ? '/api/branch/' + path.slice(5) : path;
 window.TextDecoder = TextDecoder;
 window.TextEncoder = TextEncoder;
 window.ReadableStream = ReadableStream;
@@ -39,6 +42,9 @@ const jsonResponse = (data, status = 200) => new Response(JSON.stringify(data), 
 });
 let lastConfigPayload = null;
 let lastChatPayload = null;
+let lastConfirmPayload = null;
+let lastConfirmHeaders = null;
+let emitProposal = false;
 let lastImportedDocuments = null;
 let knowledgeDocuments = [];
 const bundledDocuments = [
@@ -67,12 +73,22 @@ window.fetch = async (url, options = {}) => {
     config = { ...config, ...lastConfigPayload, cloud_api_key_set: !!lastConfigPayload.cloud_api_key, admin_configurable: true };
     return jsonResponse({ ok: true, config });
   }
+  if (url === '/api/assistant/tools/confirm' && options.method === 'POST') {
+    lastConfirmPayload = JSON.parse(options.body); lastConfirmHeaders = options.headers;
+    return jsonResponse({ ok: true, result: { message: '接线模式已切换为 3p4w', side: 'bus' } });
+  }
   if (url === '/api/assistant/chat') {
     const payload = JSON.parse(options.body); lastChatPayload = payload;
     if (!payload.stream || !['builtin', 'local'].includes(payload.model_type)) throw new Error('聊天请求参数不符合预期');
     const frames = [
       { type: 'sources', sources: [{ name: payload.model_type === 'builtin' ? '平台参数清单' : 'guide.md', score: 0.91 }] },
       { type: 'delta', text: payload.model_type === 'builtin' ? '### 内置知识库｜本地文档检索\n\n平台参数清单摘录：`pre_cycles` 与 `window_cycles` 的代码默认值须与当前配置核对。' : '## 结论\n\n支持 **Markdown**、`代码`。\n\n```js\nalert(1)\n```\n\n<img src=x onerror=alert(1)>\n\n[坏链接](javascript:alert(1))' },
+      ...(emitProposal ? [{ type: 'proposal', proposal: {
+        id: 'proposal-jsdom-1', tool: 'set_wiring_mode', title: '切换当前侧接线模式',
+        summary: '将当前侧接线模式切换为 3p4w', impact: '只改当前侧接线模式。',
+        arguments: { wiring: '3p4w' }, side: 'bus', status: 'pending',
+        requires_second_confirmation: true, confirmation_code: '123456', expires_at: Date.now() / 1000 + 300,
+      } }] : []),
       { type: 'done' },
     ].map(frame => 'data: ' + JSON.stringify(frame) + '\n\n').join('');
     const bytes = encoder.encode(frames);
@@ -175,11 +191,34 @@ check($('assistant-launcher').hidden, '配置读取前问答入口应默认隐�
   await window.assistantImportKnowledge();
   check(lastImportedDocuments && lastImportedDocuments[0].content === '画像参数与窗口配置说明', '本地知识库文件没有读取并提交 UTF-8 文本');
   check($('assistant-knowledge-list').textContent.includes('assistant-guide.md'), '导入后的知识库列表没有更新');
+
+  // 受控操作只显示预览；确认必须携带页面内存中的操作员令牌和二次确认码。
+  model.value = 'local'; model.dispatchEvent(new window.Event('change'));
+  $('assistant-operator-token').value = 'memory-only-operator-token';
+  $('assistant-operator-token').dispatchEvent(new window.Event('input'));
+  emitProposal = true;
+  $('assistant-prompt').value = '把当前侧接线模式切换到 3p4w';
+  await window.assistantSubmit();
+  emitProposal = false;
+  check(lastChatPayload.model_type === 'local', '操作提案请求没有走所选本地模型');
+  check(lastChatPayload.prompt.includes('接线模式'), '操作提案请求正文丢失');
+  let proposalCard = $('assistant-messages').querySelector('.assistant-proposal-pending');
+  check(!!proposalCard && proposalCard.textContent.includes('影响：'), 'SSE proposal 预览卡或影响说明未渲染');
+  check(proposalCard.textContent.includes('123456'), '高风险操作二次确认码未显示');
+  const codeInput = proposalCard.querySelector('input'); codeInput.value = '123456';
+  proposalCard.querySelector('button.primary').click();
+  for (let i = 0; i < 50 && !$('assistant-messages').querySelector('.assistant-proposal-success'); i++) await new Promise(resolve => setTimeout(resolve, 10));
+  proposalCard = $('assistant-messages').querySelector('.assistant-proposal-success');
+  check(lastConfirmPayload && lastConfirmPayload.proposal_id === 'proposal-jsdom-1', '确认接口没有携带 proposal id');
+  check(lastConfirmPayload.confirmation_code === '123456', '确认接口没有携带二次确认码');
+  check(lastConfirmHeaders['X-Assistant-Operator-Token'] === 'memory-only-operator-token', '确认接口没有带操作员令牌');
+  check(!!proposalCard && proposalCard.textContent.includes('接线模式已切换为 3p4w'), '确认执行结果未更新到提案卡');
+
   config = { ...config, enabled: false };
   await window.assistantLoadConfig();
   check($('assistant-launcher').hidden, 'enabled=false 时问答入口仍然可见');
 
-  console.log(`PASS ${checkCount} checks — fixed document/chat sidebar, bundled docs, mobile tabs, builtin retrieval, safe Markdown/XSS, citations, model-switch sessions, admin config, local file import`);
+  console.log(`PASS ${checkCount} checks — fixed document/chat sidebar, bundled docs, mobile tabs, builtin retrieval, safe Markdown/XSS, citations, model sessions, admin config, local import, operator-token proposal confirmation`);
   dom.window.close();
 })().catch(error => {
   console.error('FAIL:', error && error.stack || error);

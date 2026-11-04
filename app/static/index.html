@@ -1552,7 +1552,7 @@
 <aside id="assistant-panel" class="assistant-panel" aria-labelledby="assistant-title" aria-label="智能问答助手文档与问答侧栏" aria-hidden="true" hidden>
   <div class="assistant-shell">
     <header class="assistant-head">
-      <div><h2 id="assistant-title">智能问答助手</h2><div class="assistant-subtitle">调参辅助文档助手 · 平台参数优先 · 实验步骤与验证判据（不会直接运行命令或修改配置） · 会话仅保存在当前页面内存</div></div>
+      <div><h2 id="assistant-title">智能问答助手</h2><div class="assistant-subtitle">平台参数优先 · RAG 问答 · 受控操作先预览、确认后调用业务 API · 会话仅保存在当前页面内存</div></div>
       <button id="assistant-close" type="button" aria-label="关闭智能问答助手">关闭</button>
     </header>
     <div class="assistant-mode-tabs" role="tablist" aria-label="窄屏侧栏内容">
@@ -1577,14 +1577,20 @@
               <option value="cloud">云端大模型</option>
             </select>
           </label>
+          <label class="assistant-operator-label">操作员令牌
+            <input id="assistant-operator-token" type="password" autocomplete="off" placeholder="仅本页内存；由管理员分配">
+          </label>
+          <button id="assistant-verify-operator" type="button">验证操作权限</button>
+          <span id="assistant-operator-status" class="assistant-operator-status" role="status">未验证；问答仍可使用，指令执行需授权。</span>
           <div id="assistant-privacy-note" class="assistant-privacy" role="status">本地文档模式：只检索本地资料，不调用模型。</div>
           <label>会话<select id="assistant-conversation-select" aria-label="切换对话"></select></label>
           <button id="assistant-new" type="button">新建对话</button>
+          <button id="assistant-clear-context" type="button" title="清除当前对话消息，不删除会话">清空上下文</button>
           <button id="assistant-delete-conversation" type="button" title="删除当前对话">删除</button>
         </div>
         <div id="assistant-error" class="assistant-error" role="alert" style="display:none"></div>
         <div id="assistant-messages" class="assistant-messages" role="log" aria-live="polite" aria-relevant="additions text">
-          <div id="assistant-empty" class="assistant-empty">你好！我会优先查平台参数清单和调参验证文档，并给出操作步骤、预期现象与判据。当前只提供指导，不会直接执行命令或修改配置。<br>切到云端模型前，请勿发送未经脱敏的敏感业务数据。</div>
+          <div id="assistant-empty" class="assistant-empty">你好！我会优先检索平台参数与操作文档。需要执行受控操作时，我会先展示工具、参数和影响，再由你确认；未经确认不会执行。<br>本地模型数据留在内网；云端模型前请勿发送录波文件、文件路径或涉密配置。</div>
         </div>
         <div id="assistant-sources" class="assistant-sources" aria-label="知识库引用"></div>
         <form id="assistant-form" class="assistant-input-form">
@@ -1634,6 +1640,16 @@
             </div>
             <label class="assistant-wide">云端拦截词（每行一个；命中时阻止云端请求）<textarea id="assistant-sensitive-terms" rows="3" placeholder="已有词条不会公开回显；可输入新列表替换"></textarea></label>
             <div class="assistant-settings-actions"><button id="assistant-load-sensitive-terms" type="button">读取已保存拦截词（管理员）</button><label class="check"><input id="assistant-clear-sensitive-terms" type="checkbox"> 清空已保存拦截词</label></div>
+            <h3>受控业务工具与审计</h3>
+            <p class="assistant-warning">工具仅由服务端预注册的业务 API 执行；大模型输出只生成待确认预览。操作员令牌通过服务端环境变量 <code>ELEC_TOOL_ASSISTANT_OPERATOR_TOKENS</code> 配置 scope，令牌不会写入普通配置或浏览器存储。云端工具执行默认关闭；本地文件内容不会上传给模型。</p>
+            <div class="assistant-config-grid">
+              <label class="check"><input id="assistant-tools-enabled" type="checkbox"> 启用受控工具（仍需操作员令牌及 scope）</label>
+              <label class="check"><input id="assistant-cloud-tools-enabled" type="checkbox"> 允许云端模型提出工具操作（单独开关，默认关闭）</label>
+              <label class="check"><input id="assistant-tool-audit-enabled" type="checkbox"> 记录指令与执行审计（默认开启）</label>
+            </div>
+            <div class="assistant-tool-permissions"><b>全局允许的工具（另受每个操作员 token scope 限制）</b><div id="assistant-enabled-tool-checks" class="assistant-view-checks"></div></div>
+            <div class="assistant-settings-actions"><button id="assistant-audit-refresh" type="button">读取审计日志（管理员）</button><span id="assistant-audit-status" class="assistant-admin-status" role="status"></span></div>
+            <div id="assistant-audit-list" class="assistant-audit-list" aria-live="polite">审计记录未加载。</div>
             <div class="assistant-page-permissions">
               <b>在哪些业务页面显示问答入口</b>
               <div id="assistant-visible-views" class="assistant-view-checks"></div>

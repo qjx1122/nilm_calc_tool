@@ -7,6 +7,7 @@ import pytest
 
 from app.assistant import AssistantError, AssistantService, DEFAULT_CONFIG, _number
 from app.assistant_docs import PLATFORM_PARAMETER_DOC_ID
+from app.assistant_tools import TOOL_NAMES, openai_tool_schemas, validate_tool_arguments
 
 
 def test_integer_settings_reject_fractional_and_boolean_values():
@@ -30,6 +31,28 @@ def test_corrupted_persisted_config_falls_back_to_safe_defaults(tmp_path):
     assert cfg["enabled"] is True
     assert cfg["rag_enabled"] is True
     assert cfg["local_base_url"] == DEFAULT_CONFIG["local_base_url"]
+
+
+def test_malformed_enabled_tools_allowlist_fails_closed(tmp_path, monkeypatch):
+    admin = "malformed-tools-admin"
+    operator = "malformed-tools-operator-secret"
+    monkeypatch.setenv("ELEC_TOOL_ASSISTANT_ADMIN_TOKEN", admin)
+    monkeypatch.setenv("ELEC_TOOL_ASSISTANT_OPERATOR_TOKENS", json.dumps([
+        {"id": "operator", "token": operator, "scopes": ["config.wiring.write"]},
+    ]))
+    (tmp_path / "config.json").write_text(json.dumps({
+        "tools_enabled": True, "cloud_tools_enabled": True,
+        "enabled_tools": "set_wiring_mode",
+    }), encoding="utf-8")
+
+    service = AssistantService(data_dir=str(tmp_path))
+    assert service.public_config()["tools_enabled"] is True
+    assert service.public_config()["enabled_tools"] == []
+    authenticated = service.authenticate_operator(operator)
+    assert service.operator_tools(authenticated, "local") == []
+    plan = service.prepare_chat({"prompt": "切换接线模式到 3p4w", "model_type": "local"},
+                                operator_token=operator, side="bus")
+    assert plan["_available_tools"] == []
 
 
 def test_admin_config_keeps_api_keys_out_of_json_and_public_view(tmp_path, monkeypatch):
@@ -306,3 +329,109 @@ def test_upstream_sse_parsing_and_friendly_http_error(tmp_path, monkeypatch):
         service.complete(plan)
     assert error.value.status_code == 502
     assert "鉴权失败" in error.value.message and "local" not in error.value.message
+
+
+def test_tool_catalog_validation_and_closed_scope_proposal(tmp_path, monkeypatch):
+    import threading
+
+    admin = "tool-admin-test-token"
+    operator = "tool-operator-secret-12345"
+    monkeypatch.setenv("ELEC_TOOL_ASSISTANT_ADMIN_TOKEN", admin)
+    monkeypatch.setenv("ELEC_TOOL_ASSISTANT_OPERATOR_TOKENS", json.dumps([
+        {"id": "field-operator", "token": operator, "scopes": ["config.wiring.write"]},
+        {"id": "other-operator", "token": "other-operator-secret-123", "scopes": ["data.export"]},
+    ]))
+    service = AssistantService(data_dir=str(tmp_path))
+    assert service.public_config()["tools_enabled"] is False
+    assert service.public_config()["cloud_tools_enabled"] is False
+    assert set(TOOL_NAMES) == {item["function"]["name"] for item in openai_tool_schemas(TOOL_NAMES)}
+    assert validate_tool_arguments("set_wiring_mode", '{"wiring":"3p4w"}') == {"wiring": "3p4w"}
+    with pytest.raises(ValueError, match="未注册字段"):
+        validate_tool_arguments("set_wiring_mode", {"wiring": "3p4w", "path": "/etc/passwd"})
+    with pytest.raises(ValueError, match="JSON 数字"):
+        validate_tool_arguments("set_profile_parameters", {"d2_max": "9"})
+    with pytest.raises(ValueError):
+        validate_tool_arguments("export_csv", {"dataset": ["curves"]})
+
+    service.update_config({"tools_enabled": True, "enabled_tools": ["set_wiring_mode"]}, admin)
+    assert service.verify_operator(operator, "local")["available_tools"] == ["set_wiring_mode"]
+    assert service.verify_operator(operator, "cloud")["available_tools"] == []  # cloud tools default off
+    plan = service.prepare_chat({"prompt": "请切换接线模式为 3p4w", "model_type": "local"},
+                                operator_token=operator, side="branch",
+                                tool_context={"source": {"kind": "csv_file"}})
+    assert plan["_available_tools"] == ["set_wiring_mode"]
+
+    class FakeCompletionResponse:
+        def __enter__(self): return self
+        def __exit__(self, *args): return False
+        def read(self, limit):
+            return json.dumps({"choices": [{"message": {
+                "content": "", "tool_calls": [{"id": "call-1", "type": "function", "function": {
+                    "name": "set_wiring_mode", "arguments": '{"wiring":"3p4w"}'}}]}}]}).encode("utf-8")
+    monkeypatch.setattr(service, "_open_request", lambda request_plan, stream: FakeCompletionResponse())
+    answer = service.complete(plan)
+    proposal = plan["_tool_proposal"]
+    assert "请核对操作摘要" in answer
+    assert proposal["status"] == "pending" and proposal["side"] == "branch"
+    assert proposal["requires_second_confirmation"] and proposal["confirmation_code"]
+    with pytest.raises(AssistantError, match="另一位操作员"):
+        service.claim_tool_proposal(proposal["id"], "other-operator-secret-123", "branch", proposal["confirmation_code"])
+    with pytest.raises(AssistantError, match="预览时不同"):
+        service.claim_tool_proposal(proposal["id"], operator, "bus", proposal["confirmation_code"])
+    saved_tokens = json.dumps([
+        {"id": "field-operator", "token": operator, "scopes": []},
+        {"id": "other-operator", "token": "other-operator-secret-123", "scopes": ["data.export"]},
+    ])
+    monkeypatch.setenv("ELEC_TOOL_ASSISTANT_OPERATOR_TOKENS", saved_tokens)
+    with pytest.raises(AssistantError, match="已无该工具权限"):
+        service.claim_tool_proposal(proposal["id"], operator, "branch", proposal["confirmation_code"])
+    monkeypatch.setenv("ELEC_TOOL_ASSISTANT_OPERATOR_TOKENS", json.dumps([
+        {"id": "field-operator", "token": operator, "scopes": ["config.wiring.write"]},
+        {"id": "other-operator", "token": "other-operator-secret-123", "scopes": ["data.export"]},
+    ]))
+    service.update_config({"tools_enabled": False}, admin)
+    with pytest.raises(AssistantError, match="关闭该工具"):
+        service.claim_tool_proposal(proposal["id"], operator, "branch", proposal["confirmation_code"])
+    service.update_config({"tools_enabled": True}, admin)
+    with pytest.raises(AssistantError, match="不匹配"):
+        service.claim_tool_proposal(proposal["id"], operator, "branch", "000000" if proposal["confirmation_code"] != "000000" else "000001")
+    claimed = service.claim_tool_proposal(proposal["id"], operator, "branch", proposal["confirmation_code"])
+    assert claimed["name"] == "set_wiring_mode" and claimed["side"] == "branch"
+    with pytest.raises(AssistantError, match="不存在"):
+        service.claim_tool_proposal(proposal["id"], operator, "branch", proposal["confirmation_code"])
+    service.record_tool_result(claimed, "success", {"message": "updated"})
+
+    from app import assistant as assistant_module
+    old_ttl = assistant_module.PENDING_TOOL_TTL_S
+    monkeypatch.setattr(assistant_module, "PENDING_TOOL_TTL_S", -1.0)
+    expired = service.create_tool_proposal(plan, [{"function": {
+        "name": "set_wiring_mode", "arguments": {"wiring": "3p3w"}
+    }}])
+    with pytest.raises(AssistantError) as expired_error:
+        service.claim_tool_proposal(expired["id"], operator, "branch", expired["confirmation_code"])
+    assert expired_error.value.status_code == 410
+    monkeypatch.setattr(assistant_module, "PENDING_TOOL_TTL_S", old_ttl)
+
+    monkeypatch.setenv("ELEC_TOOL_ASSISTANT_CLOUD_API_KEY", "cloud-tool-test-key")
+    service.update_config({"cloud_tools_enabled": True}, admin)
+    cloud_plan = service.prepare_chat({"prompt": "切换接线模式到 3p3w", "model_type": "cloud"},
+                                      operator_token=operator, side="branch")
+    cloud_proposal = service.create_tool_proposal(cloud_plan, [{"function": {
+        "name": "set_wiring_mode", "arguments": {"wiring": "3p3w"}
+    }}])
+    service.update_config({"cloud_tools_enabled": False}, admin)
+    with pytest.raises(AssistantError, match="关闭云端工具执行"):
+        service.claim_tool_proposal(cloud_proposal["id"], operator, "branch", cloud_proposal["confirmation_code"])
+    assert (tmp_path / "tool_audit.jsonl").exists()
+
+
+def test_cloud_mode_blocks_local_file_references_but_allows_api_paths(tmp_path, monkeypatch):
+    monkeypatch.setenv("ELEC_TOOL_ASSISTANT_CLOUD_API_KEY", "cloud-test-key")
+    service = AssistantService(data_dir=str(tmp_path))
+    blocked = [r"C:\data\capture.csv", r"\\server\share\capture.csv", "/data/session/capture.csv",
+               "Please inspect capture.csv", "recording.dat", "recording.txt", "notes.md", "file:///tmp/recording.json"]
+    for prompt in blocked:
+        with pytest.raises(AssistantError, match="文件路径或录波文件名"):
+            service.prepare_chat({"prompt": prompt, "model_type": "cloud"})
+    allowed = service.prepare_chat({"prompt": "How does /api/assistant/chat work?", "model_type": "cloud"})
+    assert allowed["model_type"] == "cloud"

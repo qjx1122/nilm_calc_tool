@@ -281,9 +281,12 @@ def test_assistant_ui_contract_and_safe_markdown_renderer(page):
     required_ids = (
         "assistant-launcher", "assistant-panel", "assistant-tab-docs", "assistant-tab-chat",
         "assistant-doc-search", "assistant-doc-list", "assistant-doc-content", "assistant-doc-status",
-        "assistant-model-type", "assistant-conversation-select", "assistant-new", "assistant-delete-conversation",
+        "assistant-model-type", "assistant-conversation-select", "assistant-new", "assistant-clear-context",
+        "assistant-delete-conversation", "assistant-operator-token", "assistant-verify-operator", "assistant-operator-status",
         "assistant-messages", "assistant-form", "assistant-prompt", "assistant-stop", "assistant-settings",
         "assistant-admin-token", "assistant-save-settings", "assistant-load-sensitive-terms",
+        "assistant-tools-enabled", "assistant-cloud-tools-enabled", "assistant-tool-audit-enabled",
+        "assistant-enabled-tool-checks", "assistant-audit-refresh", "assistant-audit-list",
         "assistant-clear-sensitive-terms", "assistant-doc-files", "assistant-import-docs", "assistant-knowledge-list",
     )
     for element_id in required_ids:
@@ -292,8 +295,13 @@ def test_assistant_ui_contract_and_safe_markdown_renderer(page):
     start = APPJS.index("/* ------------------------------------------------------------------ 智能问答")
     end = APPJS.index("async function init() {", start)
     assistant_js = APPJS[start:end]
-    assert "fetch('/api/assistant/chat'" in assistant_js
+    assert "fetch(assistantApiUrl('/api/assistant/chat')" in assistant_js
+    assert "assistantApiUrl(path) { return apiUrl(path, sideOf()); }" in assistant_js
     assert "text/event-stream" in assistant_js and "response.body.getReader" in assistant_js
+    assert "data.type === 'proposal'" in assistant_js and "assistantConfirmProposal" in assistant_js
+    assert "assistantClearContext" in assistant_js and "assistantVerifyOperator" in assistant_js
+    assert "X-Assistant-Operator-Token" in assistant_js
+    assert "localStorage" not in assistant_js and "sessionStorage" not in assistant_js
     assert "assistantNewConversation(next)" in assistant_js and "window.confirm(message)" in assistant_js
     assert "visible_views" in assistant_js and "assistantSyncLauncher" in assistant_js
     assert "/api/assistant/documents" in assistant_js and "assistantLoadDocuments" in assistant_js
@@ -301,7 +309,7 @@ def test_assistant_ui_contract_and_safe_markdown_renderer(page):
     assert "noopener noreferrer" in assistant_js, "Markdown 外链必须禁止 opener"
     assert "assistantRenderMarkdown" in assistant_js and "element.innerHTML" not in assistant_js
     assert "localStorage" not in assistant_js, "会话正文仅保存在页面内存，避免静默落浏览器持久存储"
-    assert "云端模式" in assistant_js and "敏感词拦截" in assistant_js
+    assert "云端模式" in assistant_js and "文件路径 / 录波名会拦截" in assistant_js
     assert "X-Assistant-Admin-Token" in assistant_js
     assert "会话仅保存在当前页面内存" in HTML
 

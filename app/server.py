@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
+import hashlib
+import hmac
 import json
 import logging
 import os
@@ -1399,6 +1401,276 @@ async def health() -> Dict[str, Any]:
             "running": bool(RUNNER.thread and RUNNER.thread.is_alive())}
 
 
+def _assistant_profile_catalog(side: str) -> List[Dict[str, Any]]:
+    """Return safe metadata for profile JSON files below the configured output root only."""
+    root = os.path.realpath(_output_base())
+    if not os.path.isdir(root):
+        return []
+    found: List[Dict[str, Any]] = []
+    for directory, dirs, files in os.walk(root, followlinks=False):
+        rel_dir = os.path.relpath(directory, root)
+        depth = 0 if rel_dir == "." else len(rel_dir.split(os.sep))
+        dirs[:] = [name for name in dirs if depth < 5 and not os.path.islink(os.path.join(directory, name))]
+        for name in files:
+            low = name.lower()
+            if not low.endswith(".json") or "profile" not in low:
+                continue
+            path = os.path.join(directory, name)
+            try:
+                real = os.path.realpath(path)
+                if os.path.commonpath([root, real]) != root or os.path.getsize(real) > 2_000_000:
+                    continue
+                with open(real, "rb") as fh:
+                    raw = fh.read(2_000_001)
+                if len(raw) > 2_000_000:
+                    continue
+                profile = json.loads(raw.decode("utf-8"))
+                if not isinstance(profile, dict) or not ("startup" in profile or "shutdown" in profile):
+                    continue
+                marked_side = "branch" if re.match(r"^profile_branch(?:\d+)?_", low) or "_branch_profile" in low else (
+                    "bus" if re.match(r"^profile_bus(?:\d+)?_", low) or "_bus_profile" in low else str(profile.get("side") or "").lower())
+                if marked_side != side:
+                    continue
+                stat = os.stat(real)
+                rel = os.path.relpath(real, root).replace(os.sep, "/")
+                import hashlib as _hashlib
+                found.append({"id": _hashlib.sha256(rel.encode("utf-8")).hexdigest()[:16],
+                              "path": real, "name": name, "side": side, "mtime": stat.st_mtime,
+                              "mtime_ns": stat.st_mtime_ns, "sha256": _hashlib.sha256(raw).hexdigest(),
+                              "pre_cycles": profile.get("pre_cycles"), "post_cycles": profile.get("post_cycles"),
+                              "size_bytes": stat.st_size})
+            except (OSError, ValueError, TypeError):
+                continue
+    found.sort(key=lambda item: item["mtime"], reverse=True)
+    return found[:100]
+
+
+def _assistant_tool_context(side: str, hide_source_names: bool = False, include_profiles: bool = True) -> Dict[str, Any]:
+    runner = RUNNERS[side]
+    cfg = runner.cfg
+    source_path = str(getattr(cfg.source, "path", "") or "")
+    try:
+        running = bool(runner.thread and runner.thread.is_alive() and not runner.stop_event.is_set() and not runner._thread_done)
+    except Exception:
+        running = False
+    source_name = os.path.basename(source_path) if source_path else ""
+    if hide_source_names and source_name:
+        source_name = "已脱敏数据源"
+    profiles = _assistant_profile_catalog(side) if include_profiles else []
+    public_profiles = [
+        {key: value for key, value in item.items() if key in {"id", "name", "side", "mtime", "pre_cycles", "post_cycles", "size_bytes"}}
+        for item in profiles
+    ]
+    if hide_source_names:
+        for profile in public_profiles:
+            profile["name"] = "已脱敏画像"
+    latest = dict(profiles[0]) if profiles else None
+    if latest and hide_source_names:
+        latest["name"] = "已脱敏画像"
+    return {"side": side, "source": {"kind": str(getattr(cfg.source, "kind", "")),
+                                       "name": source_name, "running": running,
+                                       "has_path": bool(source_path)},
+            "latest_profile": latest, "profiles": public_profiles}
+
+
+def _assistant_api_error(result: Any) -> None:
+    if isinstance(result, Response) and result.status_code >= 400:
+        message = "业务接口执行失败"
+        try:
+            body = json.loads(result.body.decode("utf-8")) if getattr(result, "body", None) else {}
+            if isinstance(body, dict):
+                message = str(body.get("error") or message)
+        except (ValueError, UnicodeDecodeError, AttributeError):
+            pass
+        raise AssistantError(result.status_code, message)
+    if isinstance(result, dict) and result.get("ok") is False:
+        raise AssistantError(400, str(result.get("error") or "业务接口执行失败"))
+
+
+async def _execute_assistant_tool(pending: Dict[str, Any]) -> Dict[str, Any]:
+    """Execute exactly one registered tool via existing in-process business API handlers."""
+    name, args = pending["name"], pending.get("args", {})
+    side = pending["side"]
+    if side != current_side():
+        raise AssistantError(409, "当前侧与确认预览不一致，请重新发起操作")
+    if name == "set_profile_parameters":
+        result = await put_config({"nilm": {"algorithms": {"profile": args}}})
+        _assistant_api_error(result)
+        return {"message": "设备画像匹配参数已热更新", "side": side,
+                "config_file_updated": bool(result.get("config_file_updated")),
+                "changes": result.get("config_file_changes", [])}
+    if name == "set_wiring_mode":
+        result = await put_config({"transform": {"wiring": args["wiring"]}})
+        _assistant_api_error(result)
+        return {"message": f"接线模式已切换为 {args['wiring']}", "side": side,
+                "config_file_updated": bool(result.get("config_file_updated")),
+                "changes": result.get("config_file_changes", [])}
+    if name == "load_latest_profile":
+        profile = (pending.get("context") or {}).get("latest_profile")
+        if not isinstance(profile, dict) or not profile.get("path"):
+            raise AssistantError(404, "待加载画像已不存在，请重新查询后再操作")
+        root = os.path.realpath(_output_base())
+        path = os.path.realpath(str(profile["path"]))
+        try:
+            if os.path.commonpath([root, path]) != root or not os.path.isfile(path):
+                raise AssistantError(403, "画像文件不在受控 output 目录内")
+            if abs(os.path.getmtime(path) - float(profile["mtime"])) > 1e-4:
+                raise AssistantError(409, "最新画像在确认期间发生变化，请重新发起操作")
+            with open(path, "rb") as fh:
+                digest = hashlib.sha256(fh.read(2_000_001)).hexdigest()
+            if not profile.get("sha256") or not hmac.compare_digest(digest, str(profile["sha256"])):
+                raise AssistantError(409, "最新画像内容在确认期间发生变化，请重新发起操作")
+            try:
+                inside_repo = os.path.commonpath([os.path.realpath(ROOT), path]) == os.path.realpath(ROOT)
+            except ValueError:
+                inside_repo = False
+        except ValueError:
+            raise AssistantError(403, "画像文件路径不合法") from None
+        config_path = os.path.relpath(path, ROOT) if inside_repo else path
+        patch = {"nilm": {"profile_path": config_path, "profile_paths": [],
+                          "algorithms": {"profile": {"enabled": True}}}}
+        result = await put_config(patch)
+        _assistant_api_error(result)
+        return {"message": f"已挂载并启用设备画像：{profile['name']}", "profile": profile["name"], "side": side,
+                "config_file_updated": bool(result.get("config_file_updated")),
+                "changes": result.get("config_file_changes", [])}
+    if name == "start_current_source":
+        runner = RUNNERS[side]
+        with runner.lock:
+            running = bool(runner.thread and runner.thread.is_alive() and not runner.stop_event.is_set() and not runner._thread_done)
+        if running:
+            raise AssistantError(409, "当前侧数据源已在运行；助手不会自动停止或重启它")
+        source = runner.cfg.source
+        if source.kind in {"csv_file", "csv_tail"} and not str(source.path or "").strip():
+            raise AssistantError(400, "当前侧文件数据源尚未配置路径")
+        result = await engine_start({})
+        _assistant_api_error(result)
+        return {"message": "当前侧数据源检测已启动", "side": side,
+                "source_kind": result.get("config", {}).get("source", {}).get("kind", source.kind),
+                "run_dir": result.get("run_dir")}
+    if name == "export_csv":
+        dataset = args["dataset"]
+        if dataset == "electrical_results":
+            response = await export(fmt="csv")
+            default_name = "electrical_results.csv"
+        elif dataset == "curves":
+            response = await curves_export()
+            default_name = "curves.csv"
+        else:
+            data = await get_nilm_events(limit=5000)
+            events = data.get("events", []) if isinstance(data, dict) else []
+            if not events:
+                raise AssistantError(409, "当前侧没有负荷辨识事件可导出")
+            import csv as _csv
+            import io as _io
+            keys = sorted({str(key) for item in events if isinstance(item, dict) for key in item})
+            buf = _io.StringIO(newline="")
+            writer = _csv.DictWriter(buf, fieldnames=keys, extrasaction="ignore")
+            writer.writeheader()
+            for item in events:
+                if isinstance(item, dict):
+                    writer.writerow({key: (json.dumps(value, ensure_ascii=False) if isinstance(value, (dict, list)) else value)
+                                     for key, value in item.items()})
+            response = Response(content=buf.getvalue().encode("utf-8-sig"), media_type="text/csv; charset=utf-8")
+            default_name = "nilm_events.csv"
+        _assistant_api_error(response)
+        if not isinstance(response, Response):
+            raise AssistantError(502, "导出业务接口返回了无法识别的格式")
+        content = getattr(response, "body", b"") or b""
+        if isinstance(content, str):
+            content = content.encode("utf-8")
+        if not content:
+            raise AssistantError(409, "导出结果为空")
+        disposition = response.headers.get("content-disposition", "")
+        match = re.search(r'filename="?([^";]+)', disposition)
+        filename = match.group(1) if match else default_name
+        download = assistant_service.store_tool_export(pending["actor_id"], side, filename, content,
+                                                       response.media_type or "text/csv; charset=utf-8")
+        return {"message": f"已生成 {download['filename']}（{download['bytes']} bytes），可在 10 分钟内下载。",
+                "side": side, **download}
+    if name == "list_recordings":
+        result = await list_files(sub=args["folder"])
+        _assistant_api_error(result)
+        files = result.get("files", []) if isinstance(result, dict) else []
+        hide_names = bool(getattr(RUNNERS["bus"].cfg.branch, "hide_ui", False))
+        safe_files = []
+        for item in files[:100]:
+            safe_item = {key: item.get(key) for key in ("name", "size_mb", "mtime", "dir") if key in item}
+            if hide_names and "name" in safe_item:
+                safe_item["name"] = "已脱敏文件/目录"
+            safe_files.append(safe_item)
+        return {"message": f"找到 {len(files)} 项（最多返回 100 项）", "folder": args["folder"], "files": safe_files}
+    if name == "list_profiles":
+        hide_names = bool(getattr(RUNNERS["bus"].cfg.branch, "hide_ui", False))
+        context = _assistant_tool_context(side, hide_names)
+        return {"message": f"找到 {len(context['profiles'])} 份当前侧画像", "profiles": context["profiles"]}
+    if name == "clear_nilm_events":
+        result = await clear_nilm()
+        _assistant_api_error(result)
+        return {"message": f"已清空当前侧引擎内存中的 {result.get('removed', 0)} 条负荷辨识事件；磁盘 CSV 保留。",
+                "side": side, "removed": result.get("removed", 0)}
+    raise AssistantError(403, "未注册的业务工具，已拒绝执行")
+
+
+@app.get("/api/assistant/tools/identity")
+async def assistant_tool_identity(request: Request, model_type: str = "local") -> Any:
+    if model_type not in {"builtin", "local", "cloud"}:
+        return JSONResponse(status_code=400, content={"ok": False, "error": "model_type 无效"})
+    try:
+        return assistant_service.verify_operator(request.headers.get("x-assistant-operator-token", ""), model_type)
+    except AssistantError as exc:
+        return JSONResponse(status_code=exc.status_code, content={"ok": False, "error": exc.message})
+
+
+@app.post("/api/assistant/tools/confirm")
+async def assistant_tool_confirm(payload: Dict[str, Any], request: Request) -> Any:
+    token = request.headers.get("x-assistant-operator-token", "")
+    try:
+        pending = assistant_service.claim_tool_proposal(str(payload.get("proposal_id") or ""), token,
+                                                        current_side(), str(payload.get("confirmation_code") or ""))
+    except AssistantError as exc:
+        return JSONResponse(status_code=exc.status_code, content={"ok": False, "error": exc.message})
+    try:
+        result = await _execute_assistant_tool(pending)
+        assistant_service.record_tool_result(pending, "success", result)
+        return {"ok": True, "result": result}
+    except AssistantError as exc:
+        assistant_service.record_tool_result(pending, "failed", {"message": exc.message})
+        return JSONResponse(status_code=exc.status_code, content={"ok": False, "error": exc.message})
+    except Exception:
+        log.exception("Assistant tool execution failed")
+        assistant_service.record_tool_result(pending, "failed", {"message": "unexpected"})
+        return JSONResponse(status_code=500, content={"ok": False, "error": "业务操作失败，请查看服务端日志"})
+
+
+@app.post("/api/assistant/tools/cancel")
+async def assistant_tool_cancel(payload: Dict[str, Any], request: Request) -> Any:
+    try:
+        return assistant_service.cancel_tool_proposal(str(payload.get("proposal_id") or ""),
+                                                      request.headers.get("x-assistant-operator-token", ""),
+                                                      current_side())
+    except AssistantError as exc:
+        return JSONResponse(status_code=exc.status_code, content={"ok": False, "error": exc.message})
+
+
+@app.get("/api/assistant/tools/export/{export_id}")
+async def assistant_tool_export(export_id: str, request: Request) -> Any:
+    try:
+        item = assistant_service.get_tool_export(export_id, request.headers.get("x-assistant-operator-token", ""), current_side())
+        return Response(content=item["content"], media_type=item["media_type"],
+                        headers={"Content-Disposition": f'attachment; filename="{item["filename"]}"'})
+    except AssistantError as exc:
+        return JSONResponse(status_code=exc.status_code, content={"ok": False, "error": exc.message})
+
+
+@app.get("/api/assistant/tools/audit")
+async def assistant_tool_audit(request: Request, limit: int = 100) -> Any:
+    try:
+        return assistant_service.list_tool_audit(request.headers.get("x-assistant-admin-token", ""), limit)
+    except AssistantError as exc:
+        return JSONResponse(status_code=exc.status_code, content={"ok": False, "error": exc.message})
+
+
 @app.get("/api/assistant/config")
 async def get_assistant_config() -> Dict[str, Any]:
     """安全配置视图：API Key 只返回是否已配置，不返回其值。"""
@@ -1467,15 +1739,30 @@ async def assistant_chat(payload: Dict[str, Any], request: Request) -> Any:
     if not isinstance(stream, bool):
         return JSONResponse(status_code=400, content={"ok": False, "error": "stream 必须是布尔值"})
     client_id = request.client.host if request.client else "unknown"
+    operator_token = request.headers.get("x-assistant-operator-token", "")
+    operator = None
+    if operator_token:
+        try:
+            operator = assistant_service.authenticate_operator(operator_token)
+        except AssistantError:
+            # Invalid / stale optional credentials disable tool schemas but do not block read-only Q&A.
+            # The identity endpoint reports the authentication error; no tool can be proposed without a valid actor.
+            operator = None
     try:
-        assistant_service.acquire_request(client_id)
+        assistant_service.acquire_request(operator["id"] if operator else client_id)
     except AssistantError as exc:
         return JSONResponse(status_code=exc.status_code, content={"ok": False, "error": exc.message})
     try:
         # Platform visibility rule: when branch-side data is hidden, support filenames
         # must not leak through the assistant's answer, retrieval context, or citations.
         hide_source_names = bool(getattr(RUNNERS["bus"].cfg.branch, "hide_ui", False))
-        plan = assistant_service.prepare_chat(payload, redact_source_names=hide_source_names)
+        model_type = str(payload.get("model_type") or assistant_service.public_config().get("default_model_type", "builtin")).lower()
+        available_tools = assistant_service.operator_tools(operator, model_type) if model_type in {"builtin", "local", "cloud"} else []
+        include_profiles = bool({"load_latest_profile", "list_profiles"} & set(available_tools))
+        context = _assistant_tool_context(current_side(), hide_source_names, include_profiles=include_profiles)
+        plan = assistant_service.prepare_chat(payload, redact_source_names=hide_source_names,
+                                              operator_token=operator_token if operator else "",
+                                              side=current_side(), tool_context=context)
     except AssistantError as exc:
         assistant_service.release_request()
         return JSONResponse(status_code=exc.status_code, content={"ok": False, "error": exc.message})
@@ -1529,7 +1816,8 @@ async def assistant_chat(payload: Dict[str, Any], request: Request) -> Any:
         return JSONResponse(status_code=503, content={"ok": False, "error": "当前无法启动模型请求，请稍后重试"})
     try:
         answer = await asyncio.shield(completion)
-        return {"ok": True, "answer": answer, "sources": plan["sources"]}
+        return {"ok": True, "answer": answer, "sources": plan["sources"],
+                "proposal": plan.get("_tool_proposal")}
     except AssistantError as exc:
         return JSONResponse(status_code=exc.status_code, content={"ok": False, "error": exc.message})
     except asyncio.CancelledError:

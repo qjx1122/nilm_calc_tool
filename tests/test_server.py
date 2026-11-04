@@ -512,8 +512,109 @@ def test_assistant_chat_stream_and_nonstream_api(client, tmp_path, monkeypatch):
     monkeypatch.setattr(service, "complete", lambda plan: "非流式回答")
     plain = client.post("/api/assistant/chat", json={"prompt": "说明参数", "model_type": "local", "stream": False})
     assert plain.status_code == 200 and plain.json()["answer"] == "非流式回答"
+    stale_token = client.post("/api/assistant/chat", headers={"X-Assistant-Operator-Token": "stale-or-invalid"},
+                              json={"prompt": "普通问答", "model_type": "local", "stream": False})
+    assert stale_token.status_code == 200 and stale_token.json()["answer"] == "非流式回答"
+    invalid_identity = client.get("/api/assistant/tools/identity?model_type=local",
+                                  headers={"X-Assistant-Operator-Token": "stale-or-invalid"})
+    assert invalid_identity.status_code == 403
     invalid = client.post("/api/assistant/chat", json={"prompt": "test", "stream": "yes"})
     assert invalid.status_code == 400 and "布尔值" in invalid.json()["error"]
+
+
+def test_assistant_proposal_confirm_is_branch_scoped_and_reauthorized(client, tmp_path, monkeypatch):
+    from app.assistant import AssistantService
+
+    operator = "branch-operator-token-123456"
+    admin = "branch-assistant-admin"
+    monkeypatch.setenv("ELEC_TOOL_ASSISTANT_ADMIN_TOKEN", admin)
+    monkeypatch.setenv("ELEC_TOOL_ASSISTANT_OPERATOR_TOKENS", json.dumps([
+        {"id": "branch-operator", "token": operator, "scopes": ["config.wiring.write"]}
+    ]))
+    service = AssistantService(data_dir=str(tmp_path / "assistant-tools"))
+    service.update_config({"tools_enabled": True, "enabled_tools": ["set_wiring_mode"]}, admin)
+    monkeypatch.setattr(client.srv, "assistant_service", service)
+    observed = []
+
+    def propose(plan):
+        proposal = service.create_tool_proposal(plan, [{"function": {
+            "name": "set_wiring_mode", "arguments": {"wiring": "3p4w"}
+        }}])
+        plan["_tool_proposal"] = proposal
+        return "已生成操作预览。"
+
+    async def safe_put_config(payload):
+        observed.append((client.srv.current_side(), payload))
+        return {"ok": True, "config_file_updated": True, "config_file_changes": ["transform.wiring"]}
+
+    monkeypatch.setattr(service, "complete", propose)
+    monkeypatch.setattr(client.srv, "put_config", safe_put_config)
+    identity = client.get("/api/assistant/tools/identity?model_type=local",
+                          headers={"X-Assistant-Operator-Token": operator})
+    assert identity.status_code == 200 and identity.json()["available_tools"] == ["set_wiring_mode"]
+
+    response = client.post("/api/branch/assistant/chat", headers={"X-Assistant-Operator-Token": operator},
+                           json={"prompt": "切换接线模式到 3p4w", "model_type": "local", "stream": False})
+    assert response.status_code == 200, response.text
+    proposal = response.json()["proposal"]
+    assert proposal["side"] == "branch" and proposal["status"] == "pending"
+
+    def stream_with_proposal(plan, cancel):
+        plan["_tool_proposal"] = service.create_tool_proposal(plan, [{"function": {
+            "name": "set_wiring_mode", "arguments": {"wiring": "3p3w"}
+        }}])
+        yield "已生成流式预览。"
+    monkeypatch.setattr(service, "stream", stream_with_proposal)
+    streamed = client.post("/api/branch/assistant/chat", headers={"X-Assistant-Operator-Token": operator},
+                           json={"prompt": "切换接线模式到 3p3w", "model_type": "local", "stream": True})
+    assert streamed.status_code == 200
+    frames = [json.loads(line[6:]) for line in streamed.text.splitlines() if line.startswith("data: {")]
+    assert any(frame.get("type") == "proposal" and frame["proposal"]["side"] == "branch" for frame in frames)
+
+    wrong_side = client.post("/api/assistant/tools/confirm", headers={"X-Assistant-Operator-Token": operator},
+                             json={"proposal_id": proposal["id"], "confirmation_code": proposal["confirmation_code"]})
+    assert wrong_side.status_code == 409
+    wrong_actor = client.post("/api/branch/assistant/tools/confirm", headers={"X-Assistant-Operator-Token": "invalid-token"},
+                              json={"proposal_id": proposal["id"], "confirmation_code": proposal["confirmation_code"]})
+    assert wrong_actor.status_code == 403
+
+    confirmed = client.post("/api/branch/assistant/tools/confirm", headers={"X-Assistant-Operator-Token": operator},
+                            json={"proposal_id": proposal["id"], "confirmation_code": proposal["confirmation_code"]})
+    assert confirmed.status_code == 200, confirmed.text
+    assert observed == [("branch", {"transform": {"wiring": "3p4w"}})]
+    assert confirmed.json()["result"]["side"] == "branch"
+    assert confirmed.json()["result"]["config_file_updated"] is True
+
+
+def test_assistant_profile_catalog_is_confined_to_output_and_side_scoped(client, tmp_path, monkeypatch):
+    out = tmp_path / "assistant-output"
+    profiles = out / "nilm"
+    profiles.mkdir(parents=True)
+    bus_profile = profiles / "profile_bus_device.json"
+    bus_profile.write_text(json.dumps({"side": "bus", "pre_cycles": 200, "post_cycles": 3000,
+                                       "startup": {"events": []}, "shutdown": {"events": []}}), encoding="utf-8")
+    branch_profile = profiles / "profile_branch_device.json"
+    branch_profile.write_text(json.dumps({"side": "branch", "pre_cycles": 600, "post_cycles": 3000,
+                                          "startup": {"events": []}, "shutdown": {"events": []}}), encoding="utf-8")
+    branch_copy = profiles / "profile_branch1_copied.json"
+    branch_copy.write_text(json.dumps({"side": "bus", "pre_cycles": 10, "post_cycles": 50,
+                                       "startup": {"events": []}, "shutdown": {"events": []}}), encoding="utf-8")
+    outside = tmp_path / "outside.json"
+    outside.write_text(json.dumps({"side": "bus", "startup": {}, "shutdown": {}}), encoding="utf-8")
+    try:
+        (profiles / "profile_bus_external.json").symlink_to(outside)
+    except (OSError, NotImplementedError):  # Windows without Developer Mode / symlink privilege
+        pass
+    monkeypatch.setenv("ELEC_TOOL_OUTPUT_DIR", str(out))
+
+    bus = client.srv._assistant_profile_catalog("bus")
+    branch = client.srv._assistant_profile_catalog("branch")
+    assert [item["name"] for item in bus] == ["profile_bus_device.json"]
+    assert {item["name"] for item in branch} == {"profile_branch_device.json", "profile_branch1_copied.json"}
+    assert bus[0]["sha256"] and bus[0]["pre_cycles"] == 200
+    hidden = client.srv._assistant_tool_context("bus", hide_source_names=True)
+    assert hidden["latest_profile"]["name"] == "已脱敏画像"
+    assert all("path" not in item and "sha256" not in item for item in hidden["profiles"])
 
 
 def test_assistant_documents_endpoint_returns_complete_bundled_library(client, tmp_path, monkeypatch):
