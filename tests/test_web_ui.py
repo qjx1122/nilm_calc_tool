@@ -286,7 +286,7 @@ def test_assistant_ui_contract_and_safe_markdown_renderer(page):
         "assistant-doc-search", "assistant-doc-list", "assistant-doc-content", "assistant-doc-status",
         "assistant-messages", "assistant-thinking", "assistant-form", "assistant-prompt", "assistant-stop",
         "assistant-image-input", "assistant-image-previews", "assistant-attach-image", "assistant-settings-open",
-        "assistant-settings-close", "assistant-settings", "assistant-operator-token", "assistant-verify-operator",
+        "assistant-settings-close", "assistant-settings", "assistant-settings-scroll", "assistant-operator-token", "assistant-verify-operator",
         "assistant-operator-status", "assistant-admin-token", "assistant-save-settings", "assistant-load-sensitive-terms",
         "assistant-local-model", "assistant-local-model-select", "assistant-refresh-local-models", "assistant-local-models-status",
         "assistant-tools-enabled", "assistant-cloud-tools-enabled", "assistant-tool-audit-enabled",
@@ -372,14 +372,17 @@ def test_assistant_scroll_containers_preserve_reader_position_during_streaming()
         assert "overflow-y:auto" in rule.group(1), f"{selector} 应可纵向滚轮滚动"
         assert "overscroll-behavior-y:contain" in rule.group(1), f"{selector} 应在侧栏内处理滚动"
     settings_rule = re.search(r"\.assistant-settings\[open\]\{([^}]*)\}", css)
-    assert settings_rule and "overflow-y:scroll" in settings_rule.group(1), "设置覆盖层本身必须始终显示滚动条并容纳溢出内容"
-    assert "scrollbar-width:auto" in settings_rule.group(1) and "scrollbar-color:#7898c5 #172338" in settings_rule.group(1), "设置面板滚动条的滑块 / 轨道对比度不足"
-    assert ".assistant-settings[open]:focus-visible{outline:2px solid #4e8de8" in css, "键盘聚焦设置滚动区时应显示焦点指示"
-    assert ".assistant-settings[open]::-webkit-scrollbar{width:12px}" in css
-    assert ".assistant-settings[open]::-webkit-scrollbar-track{background:#172338" in css
+    assert settings_rule and "position:absolute" in settings_rule.group(1) and "overflow:hidden" in settings_rule.group(1), "设置面板应裁剪覆盖层，并将滚动交给内部明确尺寸的滚动区"
+    settings_scroll_rule = re.search(r"\.assistant-settings-scroll\{([^}]*)\}", css)
+    assert settings_scroll_rule and all(token in settings_scroll_rule.group(1) for token in ("position:absolute", "inset:0", "overflow-y:scroll", "overflow-x:hidden")), "独立设置滚动区必须有明确边界和强制纵向溢出"
+    assert "scrollbar-width:auto" in settings_scroll_rule.group(1) and "scrollbar-color:#7898c5 #172338" in settings_scroll_rule.group(1), "设置面板滚动条的滑块 / 轨道对比度不足"
+    assert ".assistant-settings-scroll:focus-visible{outline:2px solid #4e8de8" in css, "键盘聚焦设置滚动区时应显示焦点指示"
+    assert ".assistant-settings-scroll::-webkit-scrollbar{width:14px}" in css
+    assert ".assistant-settings-scroll::-webkit-scrollbar-track{background:#172338" in css
     header_rule = re.search(r"\.assistant-settings-header\{([^}]*)\}", css)
     assert header_rule and "position:sticky" in header_rule.group(1) and "top:0" in header_rule.group(1), "设置滚动时标题 / 关闭按钮应保持可见"
-    assert 'id="assistant-settings" class="assistant-settings" aria-label="配置与附加知识库" tabindex="0"' in HTML, "设置滚动区应可键盘访问并有无障碍名称"
+    assert 'id="assistant-settings-scroll" class="assistant-settings-scroll" role="region" aria-label="配置与附加知识库，可滚动浏览全部设置" tabindex="0"' in HTML, "独立设置滚动区应可键盘访问并有无障碍名称"
+    assert HTML.index('id="assistant-settings-scroll"') < HTML.index('class="assistant-settings-body"') < HTML.index('id="assistant-doc-pane"'), "配置正文 / 完整本地帮助文档必须位于实际滚动区内"
     shell_rule = re.search(r"\.assistant-shell\{([^}]*)\}", css)
     assert shell_rule and "overflow-y:auto" in shell_rule.group(1), "助手外层在视口受限时必须能纵向滚动"
     assert "scrollbar-width:auto" in shell_rule.group(1) and "scrollbar-color:#3d527a #111827" in shell_rule.group(1), "助手外层滚动条应有清晰可见的轨道和滑块"
@@ -402,8 +405,8 @@ def test_assistant_scroll_containers_preserve_reader_position_during_streaming()
     assert "function assistantHandlePanelWheel(event)" in assistant_js
     assert "function assistantScrollByWheel(target, event)" in assistant_js
     assert "assistantScrollByWheel(assistantEl('assistant-shell'), event)" in assistant_js
-    assert "const scrollable = '.assistant-doc-content, .assistant-doc-list, .assistant-settings[open]," in assistant_js
-    assert "? assistantEl('assistant-settings')" in assistant_js
+    assert "const scrollable = '.assistant-doc-content, .assistant-doc-list, .assistant-settings-scroll," in assistant_js
+    assert "? assistantEl('assistant-settings-scroll')" in assistant_js
     assert "if (inOpenSettings) { if (event.cancelable) event.preventDefault(); return; }" in assistant_js
     assert "panel.addEventListener('wheel', assistantHandlePanelWheel, { passive: false })" in assistant_js
     refresh = assistant_js[assistant_js.index("function assistantRefreshMessage(msg) {"):assistant_js.index("function assistantFormatConversationTime(")]

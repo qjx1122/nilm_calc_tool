@@ -950,3 +950,12 @@
 - 验证方式 / 覆盖范围 / 缺口：定向 pytest **75 passed / 1 warning**（13.56 s）；全量 pytest **620 passed / 1 skipped / 1 warning**（150.46 s）；jsdom **138 checks**；JS 语法、测试文件编译、四份生成手册 `--check`、`git diff --check` 均通过；preview `/`、CSS、JS HTTP 200。真实浏览器渲染、OS 滚动条样式和键盘手动验收未做；warning 为 Starlette/httpx TestClient 既有 deprecation。
 - 未决问题：请用户在目标浏览器展开本地文档 / 完整平台参数，验证滚动条显示、内层滚动传递与焦点操作；部分系统级 overlay scrollbar 可能在非交互时淡出。`tmp/` 保持未读、未改、未提交。
 - 相关文件/分支：`app/static/style.css`、`app/static/index.html`、`app/static/app.js`、`tests/test_web_ui.py`、`tools/ui_assistant_check.cjs`、`README.md`、`docs/智能问答助手说明.md`、生成的 `docs/软件使用文档.md` / `docs/软件部署说明文档.md`、`STATUS.md`、`REPORT_TEST.md`；分支 `arena/82e34fb8-nilm-calc-tool`。
+
+## [2026-11-04] 会话纪要
+- 目标：用户复验 v0.99.43 后指出展开“浏览本地帮助文档与完整平台参数清单”仍无滚动条、设置后续内容无法显示；本轮将滚动机制改为设置 overlay 内尺寸明确的独立 block 区域。
+- 本会话角色：资深电力算法专家（默认）＋工程实现工程师（第 202 轮任务级覆盖）；模式 A；仅在活动分支 `arena/82e34fb8-nilm-calc-tool` 工作。
+- 完成项：`.assistant-settings[open]` 作为 overflow 裁剪层；新增 `#assistant-settings-scroll` 普通绝对定位 `div`，`inset:0`、`overflow-y:scroll`，承担完整设置正文和本地文档 / 参数详情，使用高对比 14px WebKit / Firefox scrollbar、region / tabindex / focus ring；sticky 标题和关闭按钮保持在位，移动端重新配置 inset / padding。wheel handler 路由到实际 wrapper：长文档内层可滚时优先内滚，到边界后设置区接管，设置边界阻止底层助手面板移动。扩展静态契约与 UI harness 并更新 README v0.99.44、助手说明和四份生成手册。
+- 关键决策：第 200 轮 scrollbar 仅在 body、第 201 轮 scrollbar 放在 `<details>` 自身均未解决用户展开文档后的实际问题；第 202 轮改用普通 block `div` 作为独立滚动端点，通过其绝对定位 inset 明确 viewport 边界。jsdom / CSS 契约只作为回归，不作为真实浏览器验收证据。不得声称用户现场问题已通过视觉确认；系统级 overlay scrollbar 仍可能自动淡出。`tmp/` 严格不读取、不修改、不暂存、不提交。
+- 验证方式 / 覆盖范围 / 缺口：`.venv/bin/python -m pytest -o addopts='' tests/test_web_ui.py -q` **23 passed**（0.22 s）；排除仓库 `tmp/` 的隔离源码副本全量 pytest **620 passed / 1 skipped / 1 warning**（155.29 s，唯一 warning 为既有 Starlette/httpx TestClient deprecation）；`node tools/ui_assistant_check.cjs` **142 checks**，`node --check`（app.js + harness）、`py_compile` 通过；生成文档 `--check` 四份 OK（42,713 / 226,846 / 45,973 / 142,220 字符），`git diff --check` 通过。无可用真实 Chromium / Firefox / Playwright / Puppeteer，目标浏览器滚动条视觉、滚轮 / 键盘手动验收未做。
+- 未决问题：请用户在目标浏览器重新展开本地文档 / 完整参数，复验滚动条是否出现、文档内层到边界后是否可继续下滚、表单后半内容是否可达、标题 / 关闭按钮和 Tab 聚焦行为；窄屏和系统 overlay scrollbar 显示策略未验。未连真实模型 / 现场网络；仓库 `tmp/` 用户运行数据未读取或修改。
+- 相关文件 / 分支：`app/static/style.css`、`app/static/index.html`、`app/static/app.js`、`tests/test_web_ui.py`、`tools/ui_assistant_check.cjs`、`README.md`、`docs/智能问答助手说明.md`、生成的四份 `docs/软件*.md`、`REPORT_TEST.md`、`STATUS.md`、`session/NILM_AC_session_complete.md`；分支 `arena/82e34fb8-nilm-calc-tool`。

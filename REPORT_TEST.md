@@ -4045,3 +4045,22 @@ delta_i_a  = d_i_obs
   - 四份生成手册 `--check`、`git diff --check` 通过；live preview `/`、`/static/style.css`、`/static/app.js` 均 HTTP 200 且含新的设置 overlay scrollbar 标记。HTTP/jsdom 不等于浏览器视觉验收。
 - 是否进入 REPORT.md（稳定结论）：否（UI 滚动行为修正，不涉及 NILM 算法结论）。
 - 遗留问题：请用户再次展开本地文档 / 完整参数详情，确认设置 overlay 滚动条可见、从文档内层滚动到整层、关闭按钮始终可达；目标浏览器 / OS 的 scrollbar 自隐藏行为尚未实测。`tmp/` 未读取、修改、暂存或提交。
+
+## [2026-11-04] 专题：展开帮助文档后的设置独立滚动区复修
+- 类型：用户复测反馈 / UI 根因复核与回归验证专题
+- 目标与假设：用户指出第 201 轮后，展开“浏览本地帮助文档与完整平台参数清单”仍看不到滚动条、后续设置不可达。前两次方案分别把 scrollbar 放在 `.assistant-settings-body` 与 `<details>` overlay 上均未通过实际复验。本轮假设滚动端点需要成为设置 overlay 内的普通、边界尺寸明确的 block viewport，而不是依赖 details / flex 自动计算。
+- 方法 / 实现：
+  - `.assistant-settings[open]` 继续负责固定 overlay 定位和 `overflow:hidden` 裁剪；新增普通 `#assistant-settings-scroll.assistant-settings-scroll`，直接包住全部配置 / 文档内容，使用 `position:absolute; inset:0; overflow-x:hidden; overflow-y:scroll`，设置 Firefox / WebKit 高对比 scrollbar、14px WebKit track/thumb、`scrollbar-gutter:stable` 与 `overscroll-behavior-y:contain`。
+  - 键盘 region / `tabindex="0"` 与 focus ring 放到真正滚动的 wrapper；关闭入口仍在 sticky header。窄屏时外层 inset 为 5px、内部 padding 7px。
+  - `assistantHandlePanelWheel()` 的滚动节点与 fallback target 都改为 `#assistant-settings-scroll`：文档列表 / 正文可滚时先保留给内层，到达边界后转交设置 viewport；设置 viewport 到边界时阻止继续滚动被遮挡的助手 shell。
+  - 扩展 Python CSS / HTML / JS 契约与 jsdom harness：明确检查独立 wrapper 有绝对定位和 inset、全部设置及完整文档处于该节点、其高对比 scrollbar / 键盘标记存在；模拟展开本地文档、正文未到底时内层优先、正文到边界后设置区接管、正文无溢出时设置区继续滚动，以及设置底部不移动背景。
+  - README 升为 v0.99.44、修订 v0.99.43 历史描述以记录用户复验未通过；同步更新 `docs/智能问答助手说明.md`，重生成四份项目手册。
+- 用户执行命令（含实录路径；本节无用户命令则注明）：无用户命令；以下均由 Agent 在沙盒执行，实录为本会话工具输出，无用户侧日志路径。全量测试在临时隔离源码副本 `/tmp/nilm-calc-tool-test-202-gWiq1B` 执行，副本已在完成后清理；由 `git archive HEAD` 与排除 `tmp/` 的显式工作区 patch 构建，不读取仓库 `tmp/`。
+- 结果 / 结论：
+  - `.venv/bin/python -m pytest -o addopts='' tests/test_web_ui.py -q`：**23 passed**（0.22 s）。
+  - 隔离副本 `/home/user/nilm_calc_tool/.venv/bin/python -m pytest -o addopts='' -q`：**620 passed / 1 skipped / 1 warning**（155.29 s）；唯一 warning 为既有 Starlette/httpx `TestClient` 弃用提醒。
+  - `node tools/ui_assistant_check.cjs`：**PASS 142 checks**；`node --check app/static/app.js`、`node --check tools/ui_assistant_check.cjs` 和 `.venv/bin/python -m py_compile tests/test_web_ui.py` 通过。
+  - `.venv/bin/python tools/generate_assistant_docs.py --check` 四份均 `OK`：设计 **42,713**、使用 **226,846**、部署 **45,973**、算法调参与验证 **142,220** 字符；明确文件 `git diff --check` 通过。
+  - 这些是 Python 测试、静态 CSS / HTML 契约及 jsdom 行为模拟；不代表真实浏览器 layout、原生 scrollbar 外观或键盘 / 鼠标现场验收。
+- 是否进入 REPORT.md（稳定结论）：否（属于 UI 滚动行为修复，没有新的 NILM 算法或稳定工程结论）。
+- 遗留问题：请用户在实际目标浏览器重新展开帮助文档 / 参数清单，确认滚动条可见、滚轮可从文档内层传到后续设置、关闭按钮可达，并可用 Tab 聚焦设置区；窄屏及系统 overlay scrollbar 是否自动淡出仍待实测。真实浏览器未提供；仓库 `tmp/` 未读取、修改、暂存或提交。

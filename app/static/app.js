@@ -5518,7 +5518,7 @@ function assistantScrollByWheel(target, event) {
 function assistantHandlePanelWheel(event) {
   if (!event || event.defaultPrevented || !event.deltaY || event.ctrlKey || event.shiftKey || Math.abs(event.deltaX || 0) > Math.abs(event.deltaY)) return;
   const panel = assistantEl('assistant-panel'); if (!panel || panel.hidden) return;
-  const scrollable = '.assistant-doc-content, .assistant-doc-list, .assistant-settings[open], .assistant-audit-list, .assistant-image-previews, .assistant-conversation-list, .assistant-messages';
+  const scrollable = '.assistant-doc-content, .assistant-doc-list, .assistant-settings-scroll, .assistant-audit-list, .assistant-image-previews, .assistant-conversation-list, .assistant-messages';
   let passedInnerScroll = false;
   for (let node = event.target && event.target.nodeType === 1 ? event.target : event.target && event.target.parentElement; node && node !== panel; node = node.parentElement) {
     if (!node.matches || !node.matches(scrollable)) continue;
@@ -5535,7 +5535,7 @@ function assistantHandlePanelWheel(event) {
   const settings = assistantEl('assistant-settings'), sessionPane = assistantEl('assistant-session-pane');
   const inOpenSettings = !!(settings && settings.open && settings.contains(event.target));
   const target = inOpenSettings
-    ? assistantEl('assistant-settings')
+    ? assistantEl('assistant-settings-scroll')
     : sessionPane && sessionPane.contains(event.target)
       ? assistantEl('assistant-conversation-list')
       : assistantEl('assistant-messages');

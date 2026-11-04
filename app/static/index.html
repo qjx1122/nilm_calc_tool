@@ -1610,8 +1610,9 @@
       <button id="assistant-clear-context-menu" type="button" role="menuitem">清空上下文</button>
       <button id="assistant-delete-conversation" type="button" role="menuitem">删除会话</button>
     </div>
-    <details id="assistant-settings" class="assistant-settings" aria-label="配置与附加知识库" tabindex="0">
+    <details id="assistant-settings" class="assistant-settings" aria-label="配置与附加知识库">
           <summary>配置与附加知识库</summary>
+          <div id="assistant-settings-scroll" class="assistant-settings-scroll" role="region" aria-label="配置与附加知识库，可滚动浏览全部设置" tabindex="0">
           <div class="assistant-settings-body">
             <div class="assistant-settings-header"><div><h2>配置与附加知识库</h2><p>管理员配置、操作员授权、本地文档与附加知识均集中在这里。</p></div><button id="assistant-settings-close" type="button" aria-label="关闭配置与附加知识库">关闭</button></div>
             <section class="assistant-credentials" aria-labelledby="assistant-credentials-title">
@@ -1704,6 +1705,7 @@
               <div class="assistant-settings-actions"><button id="assistant-import-docs" type="button">导入附加知识</button><button id="assistant-clear-docs" class="danger" type="button">清空附加知识</button><span id="assistant-knowledge-message" class="assistant-admin-status" role="status"></span></div>
               <div id="assistant-knowledge-list" class="assistant-knowledge-list">正在读取附加知识列表…</div>
             </div>
+          </div>
           </div>
         </details>
   </div>
