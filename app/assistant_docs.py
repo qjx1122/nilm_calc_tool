@@ -17,6 +17,18 @@ log = logging.getLogger("elec_tool.assistant.docs")
 PLATFORM_PARAMETER_DOC_ID = "builtin-platform-parameters"
 MAX_BUNDLED_SOURCE_BYTES = 2_000_000
 
+GENERATED_DOCUMENTS = (
+    ("builtin-software-design", "软件设计文档", "软件设计", "docs/软件设计文档.md",
+     "系统定位、目录与配置结构、稳定算法口径、设备画像算法设计。"),
+    ("builtin-software-usage", "软件使用文档", "软件使用", "docs/软件使用文档.md",
+     "完整 README 用户手册，覆盖快速开始、Web / CLI / API 使用、数据源、配置、输出与验证。"),
+    ("builtin-software-deployment", "软件部署说明文档", "软件部署", "docs/软件部署说明文档.md",
+     "从快速开始到环境安装、Web 启动和生产部署的操作说明。"),
+    ("builtin-algorithm-tuning-validation", "软件算法调参与验证文档", "算法调参与验证",
+     "docs/软件算法调参与验证文档.md",
+     "完整 NILM 调参与验证手册，提供参数解释、实验步骤、回放对账、判据和常见失败排查。"),
+)
+
 
 def _read_text(root: Path, relative_path: str) -> str:
     path = root / relative_path
@@ -150,8 +162,8 @@ def _build_parameter_catalog(root: Path) -> str:
     return "\n".join(rows)
 
 
-def load_bundled_documents(root: Path) -> List[Dict[str, Any]]:
-    """Load the complete allow-listed local corpus at assistant service startup."""
+def build_project_documents(root: Path) -> List[Dict[str, Any]]:
+    """Compose generated manuals from the repository's current authoritative sources."""
     root = Path(root).resolve()
     readme = _read_text(root, "README.md")
     report = _read_text(root, "REPORT.md")
@@ -178,7 +190,7 @@ def load_bundled_documents(root: Path) -> List[Dict[str, Any]]:
         deployment_sections,
     ) if part)
 
-    docs = [
+    return [
         _document(
             "builtin-software-design", "软件设计文档", "软件设计",
             "系统定位、目录与配置结构、稳定算法口径、设备画像算法设计。",
@@ -215,4 +227,37 @@ def load_bundled_documents(root: Path) -> List[Dict[str, Any]]:
             data_dictionary,
         ),
     ]
+
+
+def load_bundled_documents(root: Path) -> List[Dict[str, Any]]:
+    """Load static generated manuals, plus the dynamic parameter catalog, at startup."""
+    root = Path(root).resolve()
+    fallback_docs: Dict[str, Dict[str, Any]] | None = None
+    docs: List[Dict[str, Any]] = []
+    for doc_id, title, category, relative_path, summary in GENERATED_DOCUMENTS:
+        content = _read_text(root, relative_path)
+        if not content:
+            # Build from the original tracked sources only when generated files are absent.
+            if fallback_docs is None:
+                fallback_docs = {doc["id"]: doc for doc in build_project_documents(root)}
+            content = fallback_docs[doc_id]["content"]
+        docs.append(_document(doc_id, title, category, summary, content))
+
+    docs.extend([
+        _document(
+            PLATFORM_PARAMETER_DOC_ID, "平台参数清单", "平台参数",
+            "总线侧与分路侧出厂 JSON 模板的完整参数路径及显式默认值。",
+            _build_parameter_catalog(root),
+        ),
+        _document(
+            "builtin-assistant-guide", "智能问答模块说明文档", "智能问答助手",
+            "知识来源、检索优先级、问答模式、实验指导边界、隐私与管理员配置说明。",
+            _read_text(root, "docs/智能问答助手说明.md"),
+        ),
+        _document(
+            "builtin-data-dictionary", "NILM 数据定义与质量说明", "数据定义",
+            "NILM 数据源、字段、粒度、质量与预处理规则。",
+            _read_text(root, "NILM_DATA_DICT.md"),
+        ),
+    ])
     return docs

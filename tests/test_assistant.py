@@ -137,6 +137,23 @@ def test_bundled_library_has_required_manuals_and_parameter_provenance(tmp_path)
     assert any("软件部署说明文档" == hit["name"] for hit in service.search_knowledge("如何部署软件？", 4, 0.08))
 
 
+def test_bundled_assistant_loads_generated_markdown_files(monkeypatch):
+    from pathlib import Path
+    from app import assistant_docs
+
+    root = Path(__file__).resolve().parents[1]
+    def unexpected_fallback(_root):
+        raise AssertionError("generated Markdown files should be the normal assistant corpus source")
+    monkeypatch.setattr(assistant_docs, "build_project_documents", unexpected_fallback)
+
+    docs = {doc["id"]: doc for doc in assistant_docs.load_bundled_documents(root)}
+    for doc_id, title, _category, relative_path, _summary in assistant_docs.GENERATED_DOCUMENTS:
+        expected = (root / relative_path).read_text(encoding="utf-8").strip()
+        assert docs[doc_id]["name"] == title
+        assert docs[doc_id]["content"] == expected
+        assert docs[doc_id]["characters"] == len(expected)
+
+
 def test_local_and_cloud_rag_context_uses_bundled_platform_catalog(tmp_path, monkeypatch):
     monkeypatch.setenv("ELEC_TOOL_ASSISTANT_CLOUD_API_KEY", "cloud-test-key")
     service = AssistantService(data_dir=str(tmp_path))
