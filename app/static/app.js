@@ -5075,6 +5075,10 @@ function assistantBuildMessage(msg) {
 }
 function assistantRefreshMessage(msg) {
   if (!msg || !msg._dom) return;
+  const conv = assistantCurrentConversation();
+  const list = assistantEl('assistant-messages');
+  const isActiveMessage = !!(conv && conv.messages.includes(msg) && list);
+  const followBottom = isActiveMessage && assistantNearMessagesBottom(list);
   if (msg.role === 'assistant') assistantRenderMarkdown(msg._dom.body, msg.content || '');
   else msg._dom.body.textContent = msg.content || '';
   assistantRenderSourceBadges(msg._dom.refs, msg.sources);
@@ -5083,10 +5087,7 @@ function assistantRefreshMessage(msg) {
   if (msg._dom.proposal && msg._dom.proposal.parentNode) msg._dom.proposal.remove();
   msg._dom.proposal = assistantBuildProposal(msg);
   if (msg._dom.proposal) msg._dom.root.appendChild(msg._dom.proposal);
-  const conv = assistantCurrentConversation();
-  if (conv && conv.messages.includes(msg)) {
-    const list = assistantEl('assistant-messages'); if (list) list.scrollTop = list.scrollHeight;
-  }
+  if (followBottom) list.scrollTop = list.scrollHeight;
 }
 function assistantFormatConversationTime(value) {
   const date = new Date(Number(value));
@@ -5178,14 +5179,21 @@ function assistantRenderConversationList() {
   const del = assistantEl('assistant-delete-conversation'); if (del) del.disabled = ASSISTANT_UI.busy || !ASSISTANT_UI.conversations.length;
   const rename = assistantEl('assistant-rename-conversation'); if (rename) rename.disabled = ASSISTANT_UI.busy || !ASSISTANT_UI.conversations.length;
 }
-function assistantRenderConversation() {
+function assistantNearMessagesBottom(list, threshold = 72) {
+  if (!list) return true;
+  return list.scrollHeight - list.clientHeight - list.scrollTop <= threshold;
+}
+function assistantRenderConversation(options = {}) {
   const list = assistantEl('assistant-messages'); if (!list) return;
+  const previousScrollTop = list.scrollTop;
+  const followBottom = !options.preserveScroll || assistantNearMessagesBottom(list);
   Array.from(list.querySelectorAll('.assistant-message')).forEach(node => node.remove());
   const empty = assistantEl('assistant-empty'), conv = assistantCurrentConversation();
   const messages = conv ? conv.messages : [];
   if (empty) empty.style.display = messages.length ? 'none' : '';
   messages.forEach(msg => { msg._dom = null; list.appendChild(assistantBuildMessage(msg)); });
-  list.scrollTop = list.scrollHeight;
+  if (followBottom) list.scrollTop = list.scrollHeight;
+  else list.scrollTop = previousScrollTop;
   const model = assistantEl('assistant-model-type'); if (model && conv) model.value = conv.backend || 'builtin';
   assistantRenderConversationList(); assistantSetPrivacy();
 }
@@ -5435,6 +5443,39 @@ function assistantTogglePanel(open) {
     if (launcher && !launcher.hidden) launcher.focus();
   }
 }
+function assistantHandlePanelWheel(event) {
+  if (!event || event.defaultPrevented || !event.deltaY || event.ctrlKey || event.shiftKey || Math.abs(event.deltaX || 0) > Math.abs(event.deltaY)) return;
+  const panel = assistantEl('assistant-panel'); if (!panel || panel.hidden) return;
+  const scrollable = '.assistant-doc-content, .assistant-doc-list, .assistant-settings-body, .assistant-audit-list, .assistant-image-previews, .assistant-conversation-list, .assistant-messages';
+  let passedInnerScroll = false;
+  for (let node = event.target && event.target.nodeType === 1 ? event.target : event.target && event.target.parentElement; node && node !== panel; node = node.parentElement) {
+    if (!node.matches || !node.matches(scrollable)) continue;
+    const max = Math.max(0, node.scrollHeight - node.clientHeight);
+    if (max <= 1) { passedInnerScroll = true; continue; }
+    const top = Number(node.scrollTop) || 0;
+    const canMove = event.deltaY < 0 ? top > 0 : top < max - 1;
+    if (canMove) {
+      if (!passedInnerScroll) return; // 原生滚动优先处理最近的可滚动区域。
+      const amount = event.deltaY * (event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? Math.max(1, node.clientHeight) : 1);
+      node.scrollTop = Math.max(0, Math.min(max, top + amount));
+      if (node.scrollTop !== top && event.cancelable) event.preventDefault();
+      return;
+    }
+    passedInnerScroll = true;
+  }
+  const settings = assistantEl('assistant-settings'), sessionPane = assistantEl('assistant-session-pane');
+  const target = settings && settings.open && settings.contains(event.target)
+    ? assistantEl('assistant-settings-body')
+    : sessionPane && sessionPane.contains(event.target)
+      ? assistantEl('assistant-conversation-list')
+      : assistantEl('assistant-messages');
+  if (!target) return;
+  const max = Math.max(0, target.scrollHeight - target.clientHeight), top = Number(target.scrollTop) || 0;
+  if (max <= 1) return;
+  const amount = event.deltaY * (event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? Math.max(1, target.clientHeight) : 1);
+  target.scrollTop = Math.max(0, Math.min(max, top + amount));
+  if (target.scrollTop !== top && event.cancelable) event.preventDefault();
+}
 function assistantRenderDocumentList() {
   const root = assistantEl('assistant-doc-list'); if (!root) return;
   while (root.firstChild) root.removeChild(root.firstChild);
@@ -5525,16 +5566,26 @@ function assistantFillConfigForm(cfg) {
   const status = assistantEl('assistant-admin-status');
   if (status) status.textContent = cfg.admin_configurable ? '服务端管理员口令已启用。' : '尚未启用：请设置 ELEC_TOOL_ASSISTANT_ADMIN_TOKEN 并重启服务。';
 }
+function assistantSyncLocalModelPicker() {
+  const input = assistantEl('assistant-local-model'), select = assistantEl('assistant-local-model-select');
+  if (!select) return;
+  const model = input ? input.value.trim() : '';
+  select.value = model && Array.isArray(ASSISTANT_UI.localModels) && ASSISTANT_UI.localModels.includes(model) ? model : '';
+}
 function assistantRenderLocalModels(data) {
-  const list = assistantEl('assistant-local-model-options');
+  const select = assistantEl('assistant-local-model-select');
   const models = Array.isArray(data && data.models)
     ? Array.from(new Set(data.models.filter(name => typeof name === 'string' && name.trim()).map(name => name.trim())))
     : [];
-  if (list) {
-    while (list.firstChild) list.removeChild(list.firstChild);
-    models.forEach(name => { const option = document.createElement('option'); option.value = name; list.appendChild(option); });
+  if (select) {
+    while (select.firstChild) select.removeChild(select.firstChild);
+    const placeholder = document.createElement('option'); placeholder.value = '';
+    placeholder.textContent = models.length ? '选择已发现的模型…' : '暂无候选；可手动输入模型名称';
+    select.appendChild(placeholder);
+    models.forEach(name => { const option = document.createElement('option'); option.value = name; option.textContent = name; select.appendChild(option); });
   }
   ASSISTANT_UI.localModels = models;
+  assistantSyncLocalModelPicker();
   const state = data && data.status;
   if (state === 'ready') assistantSetFeedback('assistant-local-models-status', `已读取 ${models.length} 个本地模型；也可手动输入其他名称。`);
   else if (state === 'empty') assistantSetFeedback('assistant-local-models-status', '服务未返回模型列表；当前名称保留，仍可手动输入。');
@@ -5751,7 +5802,7 @@ async function assistantSubmit() {
     }
   } finally {
     if (reader) { try { await reader.cancel(); } catch (e) { /* stream already closed */ } }
-    ASSISTANT_UI.controller = null; assistantSetBusy(false); assistantRenderConversation();
+    ASSISTANT_UI.controller = null; assistantSetBusy(false); assistantRenderConversation({ preserveScroll: true });
   }
 }
 function assistantChangeBackend() {
@@ -5860,6 +5911,7 @@ function assistantInit() {
   assistantNewConversation('builtin');
   const launcher = assistantEl('assistant-launcher'), panel = assistantEl('assistant-panel');
   if (launcher && panel) launcher.addEventListener('click', () => { assistantClearError(); assistantTogglePanel(true); });
+  if (panel) panel.addEventListener('wheel', assistantHandlePanelWheel, { passive: false });
   const close = assistantEl('assistant-close'); if (close && panel) close.addEventListener('click', () => assistantTogglePanel(false));
   const sessionToggle = assistantEl('assistant-session-toggle');
   if (sessionToggle) sessionToggle.addEventListener('click', () => assistantSetSessionsCollapsed(!panel.classList.contains('sessions-collapsed')));
@@ -5914,6 +5966,13 @@ function assistantInit() {
   if (imageInput) imageInput.addEventListener('change', async () => { await assistantAddImageFiles(imageInput.files); imageInput.value = ''; });
   const stop = assistantEl('assistant-stop'); if (stop) stop.addEventListener('click', () => { if (ASSISTANT_UI.controller) ASSISTANT_UI.controller.abort(); });
   const save = assistantEl('assistant-save-settings'); if (save) save.addEventListener('click', assistantSaveConfig);
+  const localModelInput = assistantEl('assistant-local-model'), localModelSelect = assistantEl('assistant-local-model-select');
+  if (localModelInput) localModelInput.addEventListener('input', assistantSyncLocalModelPicker);
+  if (localModelSelect) localModelSelect.addEventListener('change', () => {
+    if (!localModelSelect.value || !localModelInput) return;
+    localModelInput.value = localModelSelect.value;
+    assistantSyncLocalModelPicker();
+  });
   const refreshLocalModels = assistantEl('assistant-refresh-local-models'); if (refreshLocalModels) refreshLocalModels.addEventListener('click', assistantRefreshLocalModels);
   const importButton = assistantEl('assistant-import-docs'); if (importButton) importButton.addEventListener('click', assistantImportKnowledge);
   const clearDocs = assistantEl('assistant-clear-docs'); if (clearDocs) clearDocs.addEventListener('click', assistantClearKnowledge);

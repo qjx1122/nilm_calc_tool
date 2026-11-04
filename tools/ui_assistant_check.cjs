@@ -125,6 +125,16 @@ window.assistantInit();
 const $ = id => window.document.getElementById(id);
 let checkCount = 0;
 const check = (ok, message) => { if (!ok) throw new Error(message); checkCount += 1; };
+function mockScrollArea(element, height, viewport, initialTop = 0) {
+  let top = initialTop;
+  const getHeight = typeof height === 'function' ? height : () => height;
+  Object.defineProperties(element, {
+    scrollHeight: { configurable: true, get: getHeight },
+    clientHeight: { configurable: true, value: viewport },
+    scrollTop: { configurable: true, get: () => top, set: value => { top = Math.max(0, Math.min(getHeight() - viewport, Number(value) || 0)); } },
+  });
+  return { get top() { return top; }, set top(value) { top = Math.max(0, Math.min(getHeight() - viewport, Number(value) || 0)); } };
+}
 check($('assistant-launcher').hidden, '配置读取前问答入口应默认隐藏');
 
 (async () => {
@@ -136,8 +146,15 @@ check($('assistant-launcher').hidden, '配置读取前问答入口应默认隐�
   check($('assistant-privacy-note').textContent.includes('本地文档模式'), '内置通道隐私说明未显示本地文档语义');
   check(window.__assistantState.documents.length === 2, '启动时未加载文档目录');
   check(window.__assistantState.localModels.length === 2, '配置加载后未读取本地模型候选');
-  check($('assistant-local-model').value === config.local_model, '初始模型列表加载覆盖了服务端保存的模型名');
-  check(Array.from($('assistant-local-model-options').querySelectorAll('option')).map(option => option.value).join(',') === 'qwen2.5:7b,llama3.2:latest', '本地模型候选没有填入 datalist');
+  const localModelSelect = $('assistant-local-model-select'), localModelInput = $('assistant-local-model');
+  check(localModelInput.value === config.local_model, '初始模型列表加载覆盖了服务端保存的模型名');
+  check(Array.from(localModelSelect.querySelectorAll('option')).map(option => option.value).filter(Boolean).join(',') === 'qwen2.5:7b,llama3.2:latest', '本地模型候选没有填入显式下拉框');
+  check(localModelSelect.value === '', '列表外的手动模型名不应被下拉框覆盖');
+  localModelSelect.value = 'llama3.2:latest'; localModelSelect.dispatchEvent(new window.Event('change'));
+  check(localModelInput.value === 'llama3.2:latest', '选择下拉候选后没有填入模型名称');
+  localModelInput.value = 'my-manual-model'; localModelInput.dispatchEvent(new window.Event('input'));
+  check(localModelSelect.value === '', '手动输入列表外模型名后，下拉框应清除不匹配选择');
+  localModelInput.value = config.local_model; localModelInput.dispatchEvent(new window.Event('input'));
   check($('assistant-doc-content').textContent.includes('sampling.fs'), '默认参数清单没有渲染为完整文档');
   $('assistant-doc-search').value = '设计'; $('assistant-doc-search').dispatchEvent(new window.Event('input'));
   check($('assistant-doc-list').querySelectorAll('button').length === 1, '文档搜索没有按标题和摘要过滤');
@@ -149,6 +166,10 @@ check($('assistant-launcher').hidden, '配置读取前问答入口应默认隐�
   check(style.includes('.assistant-workspace{display:grid;grid-template-columns:260px minmax(0,1fr)'), '双栏会话 / 问答布局缺失');
   check(style.includes('@media(max-width:680px)') && style.includes('.assistant-session-toggle{display:inline-flex'), '窄屏会话栏切换样式缺失');
   check(style.includes('.assistant-session-title{display:block;width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap'), '长会话标题省略样式缺失');
+  const cssRule = selector => { const start = style.indexOf(selector + '{'); return start < 0 ? '' : style.slice(start, style.indexOf('}', start)); };
+  const messageScrollCss = cssRule('.assistant-messages');
+  check(messageScrollCss.includes('overflow-y:auto') && messageScrollCss.includes('scroll-behavior:auto') && !messageScrollCss.includes('scroll-behavior:smooth'), '消息区必须有独立纵向滚轮且不能以平滑自动滚动抢占操作');
+  check(cssRule('.assistant-conversation-list').includes('overflow-y:auto') && cssRule('.assistant-settings-body').includes('overflow-y:auto'), '会话栏与设置内容区必须可纵向滚动');
   check(html.includes('<aside id="assistant-panel"') && !html.includes('<dialog id="assistant-dialog"'), '助手必须使用同页侧栏而不是旧 dialog');
 
   const panel = $('assistant-panel'); $('assistant-launcher').click();
@@ -198,6 +219,36 @@ check($('assistant-launcher').hidden, '配置读取前问答入口应默认隐�
   check(messages.textContent.includes('<img src=x onerror=alert(1)>'), '原始 HTML 应作为普通文本展示');
   check(messages.textContent.includes('引用：guide.md'), '缺少知识库引用标记');
 
+  // 流式消息更新与请求结束重绘不能把用户从历史阅读位置强行拉回底部。
+  window.assistantTogglePanel(true);
+  const activeReply = window.__assistantState.conversations[0].messages[1];
+  const messageScroll = mockScrollArea(messages, () => 1100 + activeReply.content.length, 300, 140);
+  const headerWheel = new window.WheelEvent('wheel', { deltaY: 80, bubbles: true, cancelable: true });
+  check(!window.document.querySelector('.assistant-chat-header').dispatchEvent(headerWheel) && messageScroll.top === 220, '在聊天标题 / 空白区使用滚轮没有转发到消息区');
+  messageScroll.top = 140;
+  activeReply.content += '\\n用户正在查看较早内容'; window.assistantRefreshMessage(activeReply);
+  check(messageScroll.top === 140, '流式增量更新把用户滚动位置抢回底部');
+  window.assistantRenderConversation({ preserveScroll: true });
+  check(messageScroll.top === 140, '请求结束重绘把用户滚动位置抢回底部');
+  messageScroll.top = messages.scrollHeight - messages.clientHeight;
+  activeReply.content += '\\n继续生成的尾部内容'; window.assistantRefreshMessage(activeReply);
+  check(messageScroll.top === messages.scrollHeight - messages.clientHeight, '用户停留在底部时，流式更新没有继续跟随最新内容');
+  messageScroll.top = 180; window.assistantRenderConversation({ preserveScroll: true });
+  check(messageScroll.top === 180, '最终重绘未保留非底部阅读位置');
+  const sessionScroll = mockScrollArea($('assistant-conversation-list'), 900, 300, 40);
+  const sessionWheel = new window.WheelEvent('wheel', { deltaY: 60, bubbles: true, cancelable: true });
+  check(!window.document.querySelector('.assistant-session-heading').dispatchEvent(sessionWheel) && sessionScroll.top === 100, '在会话标题 / 空白区使用滚轮没有转发到会话列表');
+
+  $('assistant-settings-open').click();
+  const settingsScroll = mockScrollArea(window.document.querySelector('.assistant-settings-body'), 1000, 300, 100);
+  mockScrollArea($('assistant-doc-content'), 600, 200, 400);
+  const settingsWheel = new window.WheelEvent('wheel', { deltaY: 80, bubbles: true, cancelable: true });
+  check(!$('assistant-doc-content').dispatchEvent(settingsWheel) && settingsScroll.top === 180, '嵌套文档滚动到底后，滚轮没有继续滚动设置面板');
+  mockScrollArea($('assistant-doc-content'), 200, 200, 0);
+  const noInnerOverflowWheel = new window.WheelEvent('wheel', { deltaY: 80, bubbles: true, cancelable: true });
+  check(!$('assistant-doc-content').dispatchEvent(noInnerOverflowWheel) && settingsScroll.top === 260, '内层文档没有溢出时，滚轮没有滚动外层设置面板');
+  $('assistant-settings-close').click();
+
   // 切换云端模型必须先确认并创建新会话，内置和本地会话均保留。
   model.value = 'cloud'; model.dispatchEvent(new window.Event('change'));
   check(window.__assistantState.conversations.length === 3, '切换模型未新建独立会话');
@@ -207,8 +258,11 @@ check($('assistant-launcher').hidden, '配置读取前问答入口应默认隐�
 
   // 配置保存必须带管理员口令，且密钥输入只作为 POST/PUT 参数，不回填页面。
   $('assistant-admin-token').value = 'admin'; $('assistant-admin-token').dispatchEvent(new window.Event('input'));
-  const localModelInput = $('assistant-local-model'), refreshModelsButton = $('assistant-refresh-local-models');
-  localModelInput.value = 'my-custom-local-model';
+  const refreshModelsButton = $('assistant-refresh-local-models');
+  localModelSelect.value = 'qwen2.5:7b'; localModelSelect.dispatchEvent(new window.Event('change'));
+  await window.assistantSaveConfig();
+  check(lastConfigPayload.local_model === 'qwen2.5:7b', '下拉选中的本地模型未沿用既有配置保存字段');
+  localModelInput.value = 'my-custom-local-model'; localModelInput.dispatchEvent(new window.Event('input'));
   const waitForLocalRefresh = async () => {
     for (let i = 0; i < 100 && refreshModelsButton.disabled; i++) await new Promise(resolve => setTimeout(resolve, 10));
   };
@@ -216,11 +270,12 @@ check($('assistant-launcher').hidden, '配置读取前问答入口应默认隐�
   check(lastLocalModelRefresh && lastLocalModelRefresh.headers['X-Assistant-Admin-Token'] === 'admin', '刷新模型列表没有携带管理员口令');
   check(lastLocalModelRefresh.body.base_url === config.local_base_url, '刷新列表没有使用本地服务地址输入值');
   check(localModelInput.value === 'my-custom-local-model', '刷新候选覆盖了手动填写的模型名称');
-  check($('assistant-local-model-options').querySelector('option').value === 'refreshed-local-model', '刷新后的候选没有更新');
+  check(Array.from($('assistant-local-model-select').querySelectorAll('option')).map(option => option.value).filter(Boolean).join(',') === 'refreshed-local-model', '刷新后的候选没有更新');
+  check($('assistant-local-model-select').value === '', '刷新候选覆盖了列表外的手动模型名');
   nextLocalModelRefresh = { status: 'empty', models: [] };
   refreshModelsButton.click(); await waitForLocalRefresh();
   check(localModelInput.value === 'my-custom-local-model', '空模型列表意外清除了手动填写值');
-  check(!$('assistant-local-model-options').querySelector('option'), '空响应后 datalist 仍显示过期候选');
+  check($('assistant-local-model-select').options.length === 1 && !$('assistant-local-model-select').options[0].value, '空响应后下拉仍显示过期候选');
   nextLocalModelRefresh = { fail: true };
   refreshModelsButton.click(); await waitForLocalRefresh();
   check(localModelInput.value === 'my-custom-local-model', '刷新失败意外清除了手动填写值');

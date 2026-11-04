@@ -288,7 +288,7 @@ def test_assistant_ui_contract_and_safe_markdown_renderer(page):
         "assistant-image-input", "assistant-image-previews", "assistant-attach-image", "assistant-settings-open",
         "assistant-settings-close", "assistant-settings", "assistant-operator-token", "assistant-verify-operator",
         "assistant-operator-status", "assistant-admin-token", "assistant-save-settings", "assistant-load-sensitive-terms",
-        "assistant-local-model", "assistant-local-model-options", "assistant-refresh-local-models", "assistant-local-models-status",
+        "assistant-local-model", "assistant-local-model-select", "assistant-refresh-local-models", "assistant-local-models-status",
         "assistant-tools-enabled", "assistant-cloud-tools-enabled", "assistant-tool-audit-enabled",
         "assistant-enabled-tool-checks", "assistant-audit-refresh", "assistant-audit-list",
         "assistant-clear-sensitive-terms", "assistant-bundled-docs", "assistant-doc-files", "assistant-import-docs", "assistant-knowledge-list",
@@ -325,9 +325,9 @@ def test_assistant_ui_contract_and_safe_markdown_renderer(page):
 
 
 def test_assistant_local_model_picker_is_editable_and_uses_same_origin_discovery(page):
-    assert re.search(r'<input id="assistant-local-model"[^>]*type="text"[^>]*list="assistant-local-model-options"', HTML)
-    assert '<select id="assistant-local-model"' not in HTML, "本地模型名称必须保留任意手动输入"
-    assert "assistant-local-model-options" in HTML and "assistant-refresh-local-models" in HTML
+    assert re.search(r'<select id="assistant-local-model-select"[^>]*>', HTML), "候选模型必须有可直接打开的下拉框"
+    assert re.search(r'<input id="assistant-local-model"[^>]*type="text"', HTML), "必须保留列表外模型名的手动输入"
+    assert 'for="assistant-local-model"' in HTML and "assistant-refresh-local-models" in HTML
     start = APPJS.index("/* ------------------------------------------------------------------ 智能问答")
     end = APPJS.index("async function init() {", start)
     assistant_js = APPJS[start:end]
@@ -335,10 +335,35 @@ def test_assistant_local_model_picker_is_editable_and_uses_same_origin_discovery
     assert "assistantApi('/api/assistant/local-models')" in assistant_js
     assert "assistantApi('/api/assistant/local-models/refresh'" in assistant_js
     assert "X-Assistant-Admin-Token" in assistant_js
+    assert "localModelSelect.addEventListener('change'" in assistant_js, "选择候选后应填入可编辑模型名"
+    assert "localModelInput.addEventListener('input', assistantSyncLocalModelPicker)" in assistant_js
     render_start = assistant_js.index("function assistantRenderLocalModels(data) {")
     render_end = assistant_js.index("async function assistantLoadLocalModels(", render_start)
-    assert "assistant-local-model-options" in assistant_js[render_start:render_end]
-    assert "assistant-local-model').value" not in assistant_js[render_start:render_end], "刷新候选不得覆盖当前手填值"
+    render_js = assistant_js[render_start:render_end]
+    assert "assistant-local-model-select" in render_js and "select.appendChild(option)" in render_js
+    assert "assistantSyncLocalModelPicker();" in render_js
+    assert "modelInput.value =" not in render_js, "刷新候选不得覆盖当前手填值"
+
+
+def test_assistant_scroll_containers_preserve_reader_position_during_streaming():
+    css = (ROOT / "app/static/style.css").read_text(encoding="utf-8")
+    for selector in (".assistant-messages", ".assistant-conversation-list", ".assistant-settings-body"):
+        rule = re.search(re.escape(selector) + r"\{([^}]*)\}", css)
+        assert rule, f"缺少 {selector} 滚动容器"
+        assert "overflow-y:auto" in rule.group(1), f"{selector} 应可纵向滚轮滚动"
+        assert "overscroll-behavior-y:contain" in rule.group(1), f"{selector} 应在侧栏内处理滚动"
+    messages_rule = re.search(r"\.assistant-messages\{([^}]*)\}", css)
+    assert messages_rule and "scroll-behavior:smooth" not in messages_rule.group(1), "流式更新不能用平滑自动滚动抢占滚轮"
+    start = APPJS.index("/* ------------------------------------------------------------------ 智能问答")
+    end = APPJS.index("async function init() {", start)
+    assistant_js = APPJS[start:end]
+    assert "function assistantNearMessagesBottom" in assistant_js
+    assert "options.preserveScroll" in assistant_js
+    assert "function assistantHandlePanelWheel(event)" in assistant_js
+    assert "panel.addEventListener('wheel', assistantHandlePanelWheel, { passive: false })" in assistant_js
+    refresh = assistant_js[assistant_js.index("function assistantRefreshMessage(msg) {"):assistant_js.index("function assistantFormatConversationTime(")]
+    assert "assistantNearMessagesBottom(list)" in refresh and "if (followBottom) list.scrollTop = list.scrollHeight" in refresh
+    assert "assistantRenderConversation({ preserveScroll: true })" in assistant_js
 
 
 def test_assistant_is_a_fixed_session_and_chat_sidebar_with_zero_config_backend(page):

@@ -1647,9 +1647,9 @@
             <div class="assistant-config-grid">
               <label>服务地址<input id="assistant-local-url" type="url" placeholder="http://127.0.0.1:11434/v1"></label>
               <div class="assistant-local-model-field">
-                <label for="assistant-local-model">模型名称（可选择或手动输入）<input id="assistant-local-model" type="text" list="assistant-local-model-options" placeholder="qwen2.5:7b" autocomplete="off"></label>
+                <label for="assistant-local-model-select">已发现的本地模型<select id="assistant-local-model-select" aria-label="选择从本地服务读取的候选模型"><option value="">暂无候选；可手动输入模型名称</option></select></label>
                 <button id="assistant-refresh-local-models" type="button" title="从配置的本地模型服务重新读取候选模型">刷新模型列表</button>
-                <datalist id="assistant-local-model-options"></datalist>
+                <label for="assistant-local-model">模型名称（也可手动输入列表外名称）<input id="assistant-local-model" type="text" placeholder="qwen2.5:7b" autocomplete="off"></label>
                 <small id="assistant-local-models-status" role="status" aria-live="polite">页面加载后读取；手动刷新需管理员口令，也可自由手动输入。</small>
               </div>
               <label>可选 API Key<input id="assistant-local-key" type="password" autocomplete="new-password" placeholder="留空＝保持现值；服务端环境变量优先"></label>
