@@ -3796,3 +3796,56 @@ delta_i_a  = d_i_obs
 - 结果 / 结论：全量 pytest **603 passed / 1 skipped**（138.94 s，1 条既有 Starlette/httpx deprecation warning）；定向 `tests/test_assistant.py tests/test_server.py tests/test_web_ui.py` **58 passed**；`node tools/ui_assistant_check.cjs` **42 checks**；`node --check app/static/app.js`、`node --check tools/ui_assistant_check.cjs` 与 `git diff --check` 通过。测试覆盖文档完整性 / 参数来源分列、字段优先命中、builtin 不调用模型、local/cloud RAG 上下文、`GET /api/assistant/documents`、脱敏、文档搜索 / 正文浏览 / 移动端标签、SSE / 会话 / 管理员兼容。隔离预览监听 `0.0.0.0:8001`：首页、文档 API（7 份 / 462,782 字符）、助手配置与 builtin `sampling.fs` 问答均 HTTP 200，引用摘要包含命中参数。`tmp/` 测试期间新增的 12 个当日输出已清理；任务前备份 `/tmp/nilm-tmp-before-188-sync.tar.gz` 中的原有工件已恢复，另将初始工作区已有的 12 个被测试覆盖的跟踪样本从当前 HEAD 恢复。最后一次全量测试前另存 `/tmp/nilm-tmp-before-final-pytest.tar.gz`，测试后 `diff -qr` 为空；未把任何 `tmp/` 路径纳入本轮提交，原有用户工件保持不变。
 - 是否进入 REPORT.md（稳定结论）：否（属于助手文档 / UI 工程实现与回归，没有新的算法稳定结论；真实模型和现场验收待后续）。
 - 遗留问题：真实 Ollama/vLLM、云端供应商与 API Key、Windows / 现场网络 / HTTPS、用户真实浏览器视觉仍待外部验收；`branch.hide_ui` 来源脱敏映射仍是既有暂定规则。当前仍为词项 TF-IDF 检索，不是语义向量或生成式内置回答。
+
+## [2026-11-04] 专题：同一波形下 200/3000 与 600/3000 设备画像前窗对照
+
+- **类型**：用户专题 / 现场产物取证（未改算法代码）
+- **目标与假设**：按用户要求比较总线侧、分路侧以不同前后窗提取的画像，在相同波形回放时为何出现“能认停机 / 额外误报”。用户本轮文字两处都写 `600/3000`；刚拉取的最新提交 `1fad72a` 提交说明明确为「更新测试数据，比较前后窗区别（200/3000与600/3000）」，故将前一组按 **200/3000** 解读。误报真值按用户陈述处理；日志没有设备级人工真值标签。
+- **方法 / 数据 / 参数**：代码 / 工作树快进到 session 分支最新 `1fad72a`（其相对前一提交仅更新 `tmp/` 测试产物，算法代码未变）。核对 `tmp/run_info.json`、`config_bus.json`、`config_branch.json`、两份画像 JSON、`nilm_events_20261104.csv`、`nilm_profile_candidates_20261104.csv` 及 `tmp/realtime/*_20261104.csv`。按 `elec_tool.nilm_profile.mahalanobis_diag()` 使用两份画像的 μ/σ、`lambda_rel=0.02`，对候选 CSV 中的同一事件向量交叉复算；核对运行配置 `nilm.algorithms.profile` 默认阈值：`d2_max=9`、`min_confidence=0.3`、`margin=1.5`、`state_check=1`，两侧 `max_scale=1`、`min_scale=0.25`、`window_cycles=3000`。
+- **用户执行命令（含实录路径；本节无用户命令则注明）**：无新增用户命令；证据是已拉取并保留在 `tmp/` 的现场产物。原始 `D:\Work\testPython\NILM_Test2026\nilm_calc_tool\data\化工行业-海湾化工-bus-停止.csv` 不在沙盒 `data/` 中，因此本轮是对已落盘候选 / 事件 / 趋势的复核，不声称从原始周波 CSV 完整重放。
+
+### 1. 同波形与配置一致性
+
+- `run_info.json` 记 `source_id=0`（bus）与 `source_id=1`（branch）都播放 `化工行业-海湾化工-bus-停止.csv`；启动相差约 **0.760 s**。趋势产物按共同的 `(t_epoch_s, window_s)` 逐点对比，六类量均完全相同：`current/power/voltage` 各 **1,172** 对，`fundamental/harmonic/interharmonic` 各 **4,688** 对，所有物理字段最大差 **0**。因此现有回放输出支持“同一波形值”对照。
+- 对照映射：bus `source_id=0` 使用 `profile_bus_profile_device_20261104_090215.json`（画像 `pre/post=600/3000`）；branch `source_id=1` 使用 `profile_branch_profile_device_20261104_112427.json`（`200/3000`）。两份画像均由同一个设备文件 `...dev1.csv` 提取，`fs=10,000 Hz`、`f_nom=50 Hz`、`quantity=i`、3p4w、PT=CT=1、`phases=ABC`、`label_mode=auto`；两份 JSON 的内嵌 `side` 都是 **`bus`**。故文件名 / `source_id` 说明了本轮挂载位置，但不能证明 200 画像本身是按分路侧测量配置提取的。
+- **归档不一致项**：`run_info.json` 的 branch `source_path` 为 `...bus-停止.csv`，但 `config_branch.json` 的 `source.path` 为 `...bus-启动.csv`。趋势逐点一致支持本轮实际输出同源，但配置快照路径彼此矛盾；需现场确认哪个是生效配置，不能只凭 JSON 快照复现实验。
+- 两侧画像匹配参数相同；bus / branch 的 `rel_tol_pct`、`min_delta_pct` 数值不同，但它们只用于六个标量算法，不是画像匹配误报的原因。
+
+### 2. 回放结果：两者都识别了停机，200/3000 多报一次启动
+
+| 回放侧 / 画像窗 | 停机输出 | 额外启动输出 | 画像候选总数 |
+|---|---|---|---:|
+| bus / 600/3000 | 14:38:11.085 STOP `confirmed`；D²=11.113，D²/8=1.389，confidence=0.4993，scale=0.25 | 无已接受的 START | 52：1 条 STOP 确认；51 条 START 候选全部拒绝（49 条带 `window_crowded`，2 条 `d2_exceeds,trajectory_deviates`） |
+| branch / 200/3000 | 14:38:14.325 STOP `confirmed`；D²=6.474，D²/8=0.809，confidence=0.6672，scale=0.25 | 14:48:10.465 START `confirmed`；D²=17.297，D²/8=2.162，confidence=0.3392，margin=52.88 | 6：1 条 STOP、1 条 START 确认，4 条后续 START 拒绝 |
+
+**关键更正**：本轮的 `200/3000` 并未漏掉停机；它对停机的匹配反而比 `600/3000` 更近。差别是 `200/3000` 在后续 14:48 增加一条用户认为不属于目标设备的 START。`confirmed` 是算法通过判据，不是独立真值认证。
+
+停机向量交叉代入两份 shutdown 画像也均通过：
+
+| 候选向量来源 | 对 600/3000 shutdown 画像 | 对 200/3000 shutdown 画像 |
+|---|---|---|
+| bus 14:38:11.085 | D²/8=1.389，confidence=0.4993 | D²/8=1.265，confidence=0.5313 |
+| branch 14:38:14.325 | D²/8=0.907，confidence=0.6354 | D²/8=0.809，confidence=0.6672 |
+
+所以 600/3000 的停机识别有充分余量；但数据不支持“只有 600/3000 能识别停机”。
+
+### 3. 为什么 200/3000 会误识别
+
+1. **它不是随机噪声，而是一段与画像启动形态相似的缓慢负荷变化。** 同源 1 s 趋势在 14:48:08.621 为 `Ia/Ib/Ic=51.96/63.32/60.90 A`、`P/Q=−40.97/−7.36 kW/kvar`；14:48:58.797 为 `89.83/101.08/96.41 A`、`−64.71/−6.80 kW/kvar`。约 50.176 s 内 ΔP≈−23.74 kW、三相电流均增加约 35–38 A，接近画像启动的 `ΔP=−23.61 kW`、`ΔI=+35.19/+30.37/+41.74 A`。按用户的设备真值它是“他负荷 / 非目标动作”，但波形确有与目标启动相似的变化。
+2. **200 周波前窗把该长变化切出一个更像目标启动的局部候选。** 200/3000 记录的误报向量为 `dIa/dIb/dIc=+32.38/+33.97/+28.08 A`、`dP=−21.55 kW`、`dQ=+0.369 kvar`、`peak_ratio=1.397`、`dur=835 cycles`；目标 startup 为 `+35.19/+30.37/+41.74 A`、`−23.61 kW`、`+0.866 kvar`、`1.618`、`1288 cycles`。误报各维贡献最高为 `dIh=5.58`、`dQ=5.26`、`dIc=4.68`；都未形成单维硬否决，平均 D²/维仍是 2.162。
+3. **门槛允许它通过。** `confidence=exp(−D²/(2×8))≈0.3392`，高于 `min_confidence=0.3`；等价边界是 D²/维约 **2.408**，本候选 2.162。`d2_max=9` 检查的是平均 D²/维，并非每个特征必须低于 9；`stage_free=0`，单维档位否决不启用。它的方向 margin=52.88，方向很明确；设备在前一 STOP 后处于 off，故 START 也不违反 `state_check`。这些门槛回答“为什么被算法确认”，不等于证明它真是目标设备。
+4. **画像样本太少、容差由经验下限决定。** 两份画像均 `startup.n=1`、`shutdown.n=1`、`label_mode=auto`。单样本没有可估计的重复性，σ 按下限生成（主要幅值维约 15%，ΔQ 约 25%，持续周波约 50%）；JSON 自带“每方向建议 ≥3 次”警告。因此两份画像都容易接受电气量级相近的他负荷。
+5. **600/3000 本轮拒绝的是不同的特征切片，不是相同误报向量。** `600/3000` 在 14:48:17.105 附近的近邻候选变成 `dur=2638 cycles`、`dP=−18.32 kW`、`dQ=+0.170 kvar`、D²/8=3.548、confidence=0.1696，并带 `window_crowded`；后续同向候选亦未通过置信度。它比 startup 的 1288 周波长得多，也落在不同的局部前后窗，因此被拒。
+6. **不能把差异简单归因于两张画像的均值不同。** 两份 startup 的 μ/σ 各维差不超过约 **0.04%**，因为自动定位到同一个 1288 周波启动事件；shutdown μ 有约 2.4–5.5% 差别、dur 为 305 vs 320 周波。将 14:48:10.465 的同一向量交叉代入两份 startup μ/σ，得到 D²=17.294 / 17.297、D²/8=2.162、未计轨迹惩罚的 base confidence≈0.3393 / 0.3392；两份 startup template 自身 RMS 差仅 2.32×10⁻⁵，形状也几乎一致。候选 CSV 未保存该事件的 16 点轨迹模板，因此不能精确复算它在另一 profile 上的最终 trajectory penalty；但画像均值 / 方差没有显示出能拒掉该向量的差异。已观测到的 600 拒绝，是它生成了另一条不同候选（14:48:17.105、duration 2638）而不是同一向量被 600 均值拒绝。可复现证据支持前窗改变候选定位与比较几何；由于原始周波 CSV 不在仓库，候选形成的逐周波因果仍未实证。
+
+### 4. 前窗大小如何设置，以及本数据的建议
+
+- **单位是额定频率下的周波数，不是秒，也不是采样点数。** `pre_cycles=200/600` 在 50 Hz 下分别是 **4/12 s**；`post_cycles=3000` 是 **60 s**。当前 `fs=10 kHz`、50 Hz，每周波 200 个采样点，故 pre 约为 40,000 / 120,000 个原始采样点。
+- **在“数据处理 → 设备画像提取”配置**「前窗 (周波)」设 `600`、「后窗 (周波)」设 `3000`，然后重新提取；确认新 JSON 中 `pre_cycles=600`、`post_cycles=3000`，再让对应侧的 `nilm.profile_path` 指向这份 JSON 并重新回放。CLI 等价参数是 `--pre 600 --post 3000`（例如 `python tools/nilm_profile.py --file <设备侧CSV> --device device --config <基准配置> --quantity i --pre 600 --post 3000 --out <新画像.json>`）。
+- **改完必须重提画像**：匹配时读取的是画像 JSON 内保存的 `pre_cycles/post_cycles`，不是检测界面上另一个参数。不要把它与标量算法 `nilm.algorithms.two_window.pre_cycles`（只影响双滑窗算法）混淆；`nilm.window_cycles` 是循环缓存大小，也不是画像前窗。
+- **缓存需求核对**：按 `NilmDetector._profile_need_one()`，`need=pre×max_scale+dur_max+2×post×max_scale+10`。本轮 `max_scale=1`、`dur_max=1288`：200/3000 约 **7,498 cycles / 149.96 s**；600/3000 约 **7,898 cycles / 157.96 s**。配置 `window_cycles=3000`（60 s）小于需求，但本版本会自动按画像需求扩窗；不是两侧差别的直接来源。
+- **本波形暂行建议**：若 14:48:10 确认不是目标启动，当前这次 A/B 结果支持优先试 **pre=600、post=3000**，它对该段宽缓变化未生成确认启动；不要把 600 当所有设备的固定值。理想前窗应覆盖足以稳定估计事件前基线的稳态时长，同时避开更早的其他负荷变点。保持其他设置和标签不变，进一步以同一原始 CSV 做 `pre=200/400/600` 对照，并增加每方向至少 3 条人工核验事件，再定最终值。
+- **仅作敏感性推演，不是本轮实测部署建议**：把 `min_confidence` 从 0.30 提至 0.35 会过滤这条 0.3392 误报，同时保留本次两个 STOP 的 0.4993 / 0.6672；该结论只对这三条已记录事件成立，其他负荷 / 轻载真事件可能被误拒，需有标签的留出数据验证。
+
+- **是否进入 REPORT.md（稳定结论）**：否（单份用户波形、自动定位且每方向仅 1 样本；属于个案取证，尚不足以形成通用最优前窗结论）。
+- **遗留问题**：①确认 14:48:10.465 是否确为他负荷而非目标设备；②核对 `config_branch.json` 中 `bus-启动.csv` 是否为过期快照，并确认分路画像为何 `side=bus`；③提供原始 `bus-停止.csv` 或现场复跑记录后，才能固定其他参数做周期级 A/B；④每方向补足 ≥3 个已知动作，避免 σ 全靠经验下限。

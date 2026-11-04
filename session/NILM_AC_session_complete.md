@@ -841,3 +841,12 @@
 - 验证：全量 pytest **603 passed / 1 skipped**（138.94 s，1 条既有 deprecation warning）；定向助手 / 服务 / UI **58 passed**；`node tools/ui_assistant_check.cjs` **42 checks**；JS 语法与 diff 检查通过。隔离 live preview `0.0.0.0:8001` 的首页、7 份完整文档 API、助手配置与 builtin 参数问答均 HTTP 200。运行数据放 `/tmp/nilm-assistant-preview-189`；为全量测试前打包 `/tmp/nilm-tmp-before-final-pytest.tar.gz`，测试后 `diff -qr` 为空；`tmp/` 未暂存，原用户工件保持不变。
 - 未决问题：真实本地 / 云端模型、Windows / 现场网络 / HTTPS 与用户真实浏览器视觉尚待用户实录；来源脱敏仍沿用服务端 `branch.hide_ui` 暂定判据；模型连接不属于本次实现验收。
 - 相关文件/分支：`app/assistant_docs.py`、`docs/智能问答助手说明.md`、`app/assistant.py`、`app/server.py`、`app/static/{index.html,style.css,app.js}`、`tests/test_assistant.py`、`tests/test_server.py`、`tests/test_web_ui.py`、`tools/ui_assistant_check.cjs`、`README.md`、`STATUS.md`、`REPORT_TEST.md`；`arena/82e34fb8-nilm-calc-tool`。
+
+## [2026-11-04] 会话纪要
+- 目标：拉取 session 分支最新提交，使用同一批现场波形输出对比总线侧 600/3000 与分路侧 200/3000 设备画像，解释停机命中与额外误启动，并给出前窗配置方法。
+- 本会话角色：资深电力算法专家（默认）；分析专题，未覆盖角色。
+- 完成项：fast-forward 到 `1fad72a`；比对 `run_info/config/profile/events/candidates/realtime`。六类实时产物在两侧共同时间点完全一致（1,172 或 4,688 个点）；600/3000 识别 STOP（D²/8=1.389、conf=0.4993），200/3000 也识别 STOP（D²/8=0.809、conf=0.6672），但额外在 14:48:10.465 确认 START（D²/8=2.162、conf=0.3392）。同一误报向量对两组 μ/σ 的 D² 几乎相同（17.294/17.297），两张 startup template RMS 差仅 2.32e-5；候选 CSV 不含轨迹模板，故不把跨图像完整置信度说成实测。已观测差异主要在前窗改变候选定位与事件特征几何；将详细表格、阈值计算、窗口换算、配置命令与限制追加至 `REPORT_TEST.md` 本专题。未改算法代码，未暂存 `tmp/`。
+- 关键决策：最新提交信息明确对比 `200/3000` 与 `600/3000`，用户本轮重复写的第二个 `600/3000` 据此按 200/3000 解释；用户所称误报按其业务真值理解，但事件真值未在 CSV 中单独标注。`confirmed` 仅表示算法通过规则。保持 `REPORT.md` 不变，避免用单条现场记录断言通用最优前窗。
+- 取证限制：原始 Windows 波形不在沙盒；`run_info` 两侧路径相同且 trend points 完全一致，但 `config_branch.json` 路径写 bus-start，且分路挂载的画像 JSON `side=bus`，需用户确认配置快照与画像来源。画像启动 / 停机各只有 1 个自动样本。
+- 验证方式 / 覆盖范围 / 缺口：使用 `.venv` 运行公式复算；直接读取 2026-11-04 事件 / 候选 / 趋势输出；核对候选数量、conf、D²/维、画像 μ/σ、输入同一性及 `_profile_need_one`。覆盖已落盘画像匹配判定，不覆盖原始周波 CSV 重放或独立人工真值确认。建议本波形先验证 `pre=200/400/600`、保持 post=3000 和其他参数固定，并补每方向 ≥3 个标签样本；50 Hz 下 pre600=12 s、post3000=60 s。`window_cycles=3000` 小于需求，但当前代码自动扩窗到约 7,898 cycles（600/3000）或 7,498 cycles（200/3000）。
+- 相关文件 / 分支：`tmp/run_info.json`、`tmp/config_bus.json`、`tmp/config_branch.json`、`tmp/nilm/profile_*_20261104*.json`、`tmp/nilm/nilm_events_20261104.csv`、`tmp/nilm/nilm_profile_candidates_20261104.csv`、`tmp/realtime/*_20261104.csv`、`elec_tool/nilm_profile.py`、`elec_tool/nilm.py`、`tools/nilm_profile.py`、`app/static/index.html`、`app/static/app.js`；分支 `arena/82e34fb8-nilm-calc-tool`。
