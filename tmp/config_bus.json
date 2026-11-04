@@ -142,12 +142,13 @@
     },
     "sim_noise_ratio": 0.002,
     "sim_unbalance": 0.02,
-    "sim_speed": 1,
+    "sim_speed": 1.0,
     "custom_time": false,
     "custom_time_start": "",
     "file_time_utc": false,
     "play_start_mode": "begin",
-    "file_speed": 1,
+    "file_speed": 1.0,
+    "file_speed_follow": true,
     "play_start_value": "",
     "play_end_time": "",
     "play_window": false,
@@ -173,40 +174,89 @@
     "realtime_save": true,
     "realtime_dir": "output/realtime",
     "series_hidden": {
-      "nilm-pqs": [
-        "Pa",
-        "Pb",
+      "ov-p": [
         "Qa",
         "Qb",
         "Qc",
         "Sa",
         "Sb",
         "Sc",
-        "S",
-        "Q",
         "P",
+        "Q",
+        "S",
+        "Pb"
+      ],
+      "ov-p-br": [
+        "Qa",
+        "Qb",
+        "Qc",
+        "Sa",
+        "P",
+        "Q",
+        "S",
+        "Sb",
+        "Sc",
+        "Pc",
+        "Pb"
+      ],
+      "nilm-pqs": [
+        "Sa",
+        "Sb",
+        "Sc",
+        "Q",
+        "Qa",
+        "Qb",
+        "Qc",
+        "S",
         "Ib",
+        "Pb",
+        "Pc",
+        "Pa",
         "Ic"
       ],
       "nilm-pqs-br": [
-        "Pa",
-        "Pb",
         "Qa",
         "Qb",
         "Qc",
         "Sa",
         "Sb",
         "Sc",
-        "S",
-        "Q",
-        "P",
+        "Pc",
+        "Pb",
         "Ib",
-        "Ic"
-      ],
-      "p-trend-br": [
-        "P",
         "Q",
         "S",
+        "Ic",
+        "Pa"
+      ],
+      "pf-trend-br": [
+        "PFb",
+        "PFc",
+        "PF",
+        "DPF"
+      ],
+      "pf-trend": [
+        "PFb",
+        "PFc",
+        "DPF",
+        "PF"
+      ],
+      "wp-wave": [
+        "Ua (V)",
+        "Ub (V)",
+        "Uc (V)"
+      ],
+      "nilm-wave2-br": [
+        "Ua (V)",
+        "Ub (V)",
+        "Uc (V)",
+        "Ib (A)",
+        "Ic (A)"
+      ],
+      "p-wave-ph-br": [
+        "pA(t) A 相"
+      ],
+      "p-trend": [
         "Pa",
         "Pb",
         "Pc",
@@ -217,49 +267,32 @@
         "Sb",
         "Sc"
       ],
-      "pf-trend": [
-        "PFc",
-        "PF",
-        "DPF",
-        "PFa",
-        "PFb"
-      ],
-      "p-wave-ph-br": [
-        "pB(t) B 相",
-        "pC(t) C 相"
-      ],
-      "p-wave-ph": [
-        "pC(t) C 相",
-        "pB(t) B 相"
+      "nilm-wave2": [
+        "Ub (V)",
+        "Ib (A)",
+        "Uc (V)",
+        "Ua (V)"
       ],
       "wp-rms": [
         "Uc RMS (V)",
-        "Ub RMS (V)",
+        "Ic RMS (A)",
+        "Ib RMS (A)",
         "Ua RMS (V)"
       ],
+      "ov-i": [
+        "Ib",
+        "Ic"
+      ],
+      "ov-u-br": [
+        "Ub"
+      ],
+      "ov-u": [
+        "Ub"
+      ],
       "wp-cyc": [
-        "Ua (V)",
-        "Ub (V)",
-        "Uc (V)",
         "Ua RMS (V)",
-        "Ub RMS (V)",
-        "Uc RMS (V)"
-      ],
-      "wp-wave": [
-        "Ua (V)",
-        "Ub (V)",
-        "Uc (V)",
-        "Ic (A)",
-        "Ia (A)"
-      ],
-      "wp-cyc2": [
-        "Ua (V)",
-        "Ub (V)",
-        "Uc (V)"
-      ],
-      "p-wave-br": [
-        "p(t) 总有功（W）",
-        "p(t) C 相有功（W）"
+        "Uc RMS (V)",
+        "Ic RMS (A)"
       ]
     },
     "source_id": 0,
@@ -272,24 +305,24 @@
     "events_dir": "output/events",
     "max_log": 2000,
     "limits_secondary": true,
-    "u_nom": 57.74,
-    "u1_high_pct": 110.0,
-    "u1_low_pct": 90.0,
-    "i1_high": 6.0,
-    "hr_u_limit_pct": 5.0,
-    "hr_i_limit_pct": 10.0,
-    "thd_u_limit_pct": 5.0,
-    "thd_i_limit_pct": 10.0,
-    "ih_u_limit_pct": 1.0,
-    "ih_i_limit_pct": 2.0,
+    "u_nom": 220,
+    "u1_high_pct": 110,
+    "u1_low_pct": 90,
+    "i1_high": 6,
+    "hr_u_limit_pct": 5,
+    "hr_i_limit_pct": 10,
+    "thd_u_limit_pct": 5,
+    "thd_i_limit_pct": 10,
+    "ih_u_limit_pct": 1,
+    "ih_i_limit_pct": 2,
     "f_low": 49.5,
     "f_high": 50.5,
-    "rocof_limit": 1.0,
-    "osc_window_s": 10.0,
+    "rocof_limit": 1,
+    "osc_window_s": 10,
     "osc_f_min": 0.1,
     "osc_f_max": 2.5,
-    "osc_limit_pct": 5.0,
-    "osc_min_w": 1.0,
+    "osc_limit_pct": 5,
+    "osc_min_w": 1,
     "osc_min_points": 8
   },
   "nilm": {
@@ -301,73 +334,74 @@
       "A"
     ],
     "window_cycles": 3000,
-    "min_gap_cycles": 1000,
-    "rel_tol_pct": 1.0,
-    "min_delta_pct": 0.0,
+    "min_gap_cycles": 500,
+    "rel_tol_pct": 0.94,
+    "min_delta_pct": 9.04,
     "quantity": "i",
     "algorithms": {
       "threshold": {
-        "enabled": false,
+        "enabled": true,
         "min_delta_w": 50.0,
         "settle_cycles": 5,
         "settle_tol_w": 20.0,
         "max_rise_cycles": 40,
-        "min_delta_a": 0.3,
-        "settle_tol_a": 0.1
+        "min_delta_a": 0.049,
+        "settle_tol_a": 0.0051
       },
       "two_window": {
-        "enabled": false,
+        "enabled": true,
         "pre_cycles": 10,
         "post_cycles": 10,
         "min_delta_w": 50.0,
         "k_sigma": 3.0,
-        "min_delta_a": 0.3
+        "min_delta_a": 0.049
       },
       "cusum": {
-        "enabled": false,
+        "enabled": true,
         "drift_w": 10.0,
         "threshold_w": 200.0,
         "min_delta_w": 50.0,
         "settle_cycles": 5,
-        "drift_a": 0.05,
-        "threshold_a": 1.0,
-        "min_delta_a": 0.3
+        "drift_a": 0.013000000000000001,
+        "threshold_a": 0.07200000000000001,
+        "min_delta_a": 0.049
       },
       "glr": {
-        "enabled": false,
+        "enabled": true,
         "window_cycles": 15,
         "threshold": 25.0,
         "min_delta_w": 50.0,
         "noise_w": 10.0,
         "settle_cycles": 5,
-        "min_delta_a": 0.3,
-        "noise_a": 0.05
+        "min_delta_a": 0.049,
+        "noise_a": 0.0011
       },
       "steady_state": {
-        "enabled": false,
+        "enabled": true,
         "tol_w": 30.0,
         "min_steady_cycles": 10,
         "min_delta_w": 50.0,
         "max_transient_cycles": 100,
-        "tol_a": 0.15,
-        "min_delta_a": 0.3
+        "tol_a": 0.006,
+        "min_delta_a": 0.049
       },
       "median_diff": {
-        "enabled": false,
+        "enabled": true,
         "median_cycles": 5,
         "min_delta_w": 50.0,
         "settle_cycles": 5,
         "settle_tol_w": 20.0,
         "max_rise_cycles": 40,
-        "min_delta_a": 0.3,
-        "settle_tol_a": 0.1
+        "min_delta_a": 0.049,
+        "settle_tol_a": 0.0051
       },
       "profile": {
-        "enabled": true
+        "enabled": true,
+        "max_scale": 1
       }
     },
-    "auto_params": false,
-    "profile_path": "output\\nilm\\profile_device_20261104_000631.json"
+    "auto_params": true,
+    "profile_path": "output\\nilm\\profile_device_20261104_090215.json"
   },
   "branch": {
     "enabled": true,
@@ -382,7 +416,7 @@
   },
   "processing": {
     "error_report": true,
-    "error_window_s": 0.2
+    "error_window_s": 5.0
   },
   "windows": {
     "voltage": {
