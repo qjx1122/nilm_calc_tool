@@ -823,3 +823,12 @@
 - 验证：全量 `./.venv/bin/python -m pytest -q`＝**596 passed / 1 skipped**；`node tools/ui_assistant_check.cjs`＝**21 checks**；Python 编译、JS 语法与 `git diff --check` 通过；本地服务 `0.0.0.0:8001` 页面 / assistant config GET 返回 200。真实模型接口未联网验证；真实 Ollama/vLLM、云端供应商、Windows 与现场浏览器仍待用户实录。
 - 未决 / 用户执行命令：无本会话用户侧执行命令。后续现场验收需启动本地模型并验证云端 HTTPS / API Key / 敏感拦截，建议仅在受信网络/HTTPS 暴露管理面板。
 - 相关文件 / 分支：`app/assistant.py`、`app/server.py`、`app/static/{index.html,app.js,style.css}`、`tests/test_assistant.py`、`tests/test_server.py`、`tests/test_web_ui.py`、`tools/ui_assistant_check.cjs`、`README.md`、`STATUS.md`、`REPORT_TEST.md`；分支 `arena/82e34fb8-nilm-calc-tool`。
+
+## [2026-11-04] 会话纪要
+- 目标：承接网页智能问答，按用户新增要求完成 `tools/ui_assistant_check.cjs` 第 68 行响应模拟替换，并交付右侧嵌入抽屉、无模型默认演示摘录通道和来源文件名脱敏及验证。
+- 本会话角色：资深电力算法专家（默认）＋工程实现工程师（任务级覆盖）。
+- 完成项：builtin 演示知识库 / 检索摘录 / 引用为新安装默认，builtin 不调用本地或云端模型；助手面板改为当前业务页右侧全屏抽屉；服务端对全部知识库文件名做答案、引用、上下文与 SSE 分片脱敏；完善助手服务、API、UI 测试和 jsdom 流程检查；更新 `README.md` v0.99.36、`STATUS.md`，并追加 `REPORT_TEST.md` 专题。
+- 关键决策：新增安装默认 `builtin`，保留用户显式 local/cloud 配置；服务端隐藏来源名暂按 `RUNNERS["bus"].cfg.branch.hide_ui` 判定，这是已向用户说明的假设，不是现有助手专用来源开关。抽屉保留在同一页面 DOM，不另开页面。
+- 验证：全量 pytest **600 passed / 1 skipped**；`node tools/ui_assistant_check.cjs` **PASS 33 checks**；`node --check`、`py_compile`、`git diff --check` 通过；隔离配置 live preview `0.0.0.0:8001` 首页 / 配置 / builtin JSON + SSE 均 HTTP 200，未触碰 `tmp/` 工件。
+- 未决问题：真实 Ollama/vLLM、云端 provider、Windows / 现场内网与 HTTPS、真实浏览器视觉待用户实录；来源脱敏的正式控制规则待用户确认；已显示在页面中的旧历史消息不追溯清理。
+- 相关文件/分支：`app/assistant.py`、`app/server.py`、`app/static/{index.html,style.css,app.js}`、`tests/test_assistant.py`、`tests/test_server.py`、`tests/test_web_ui.py`、`tools/ui_assistant_check.cjs`、`README.md`、`STATUS.md`、`REPORT_TEST.md`；`arena/82e34fb8-nilm-calc-tool`。

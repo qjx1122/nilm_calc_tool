@@ -4958,11 +4958,15 @@ function assistantClearError() { const el = assistantEl('assistant-error'); if (
 function assistantShowError(message) { const el = assistantEl('assistant-error'); if (el) { el.textContent = message || '请求失败'; el.style.display = ''; } }
 function assistantSetPrivacy() {
   const el = assistantEl('assistant-privacy-note'); if (!el) return;
-  const cloud = assistantEl('assistant-model-type') && assistantEl('assistant-model-type').value === 'cloud';
-  el.classList.toggle('cloud', cloud);
-  el.textContent = cloud
-    ? '云端模式：提问、对话历史及命中的知识片段会发送给云端服务；敏感词拦截不能替代人工审查。'
-    : '本地模式：问题仅发送到配置的本机 / 内网模型服务，不会发送到云端。';
+  const backend = assistantEl('assistant-model-type') ? assistantEl('assistant-model-type').value : 'builtin';
+  const cloud = backend === 'cloud'; el.classList.toggle('cloud', cloud);
+  if (backend === 'builtin') {
+    el.textContent = '演示摘录通道：无需配置模型或 API Key；只在本机检索内置资料，不调用任何大模型。';
+  } else if (cloud) {
+    el.textContent = '云端模式：提问、对话历史及命中的知识片段会发送给云端服务；敏感词拦截不能替代人工审查。';
+  } else {
+    el.textContent = '本地模式：问题仅发送到配置的本机 / 内网模型服务，不会发送到云端。';
+  }
 }
 function assistantSyncLauncher() {
   const launcher = assistantEl('assistant-launcher'); if (!launcher) return;
@@ -5029,12 +5033,12 @@ function assistantRenderConversation() {
   if (empty) empty.style.display = messages.length ? 'none' : '';
   messages.forEach(msg => { msg._dom = null; list.appendChild(assistantBuildMessage(msg)); });
   list.scrollTop = list.scrollHeight;
-  const model = assistantEl('assistant-model-type'); if (model && conv) model.value = conv.backend || 'local';
+  const model = assistantEl('assistant-model-type'); if (model && conv) model.value = conv.backend || 'builtin';
   assistantRenderConversationList(); assistantSetPrivacy();
 }
 function assistantNewConversation(backend) {
   if (ASSISTANT_UI.busy) return null;
-  const model = backend || (assistantEl('assistant-model-type') && assistantEl('assistant-model-type').value) || 'local';
+  const model = backend || (assistantEl('assistant-model-type') && assistantEl('assistant-model-type').value) || 'builtin';
   const conv = { id: assistantUid(), title: '新对话', backend: model, messages: [], createdAt: Date.now() };
   ASSISTANT_UI.conversations.unshift(conv);
   if (ASSISTANT_UI.conversations.length > 30) ASSISTANT_UI.conversations.length = 30;
@@ -5053,7 +5057,7 @@ function assistantRemoveConversation() {
   const conv = assistantCurrentConversation(); if (!conv) return;
   if (!window.confirm('删除当前对话？此操作仅影响当前页面内存中的会话。')) return;
   ASSISTANT_UI.conversations = ASSISTANT_UI.conversations.filter(c => c.id !== conv.id);
-  if (!ASSISTANT_UI.conversations.length) assistantNewConversation((assistantEl('assistant-model-type') || {}).value || 'local');
+  if (!ASSISTANT_UI.conversations.length) assistantNewConversation((assistantEl('assistant-model-type') || {}).value || 'builtin');
   else { ASSISTANT_UI.activeId = ASSISTANT_UI.conversations[0].id; assistantRenderConversation(); }
 }
 function assistantSetMessageTitle(conv) {
@@ -5173,7 +5177,7 @@ function assistantRenderViewChecks(selected) {
 function assistantFillConfigForm(cfg) {
   const setValue = (id, value) => { const el = assistantEl(id); if (el) el.value = value == null ? '' : String(value); };
   const setCheck = (id, value) => { const el = assistantEl(id); if (el) el.checked = !!value; };
-  setCheck('assistant-enabled', cfg.enabled); setValue('assistant-default-backend', cfg.default_model_type || 'local');
+  setCheck('assistant-enabled', cfg.enabled); setValue('assistant-default-backend', cfg.default_model_type || 'builtin');
   setValue('assistant-timeout', cfg.timeout_s); setValue('assistant-temperature', cfg.temperature); setValue('assistant-max-tokens', cfg.max_tokens);
   setValue('assistant-local-url', cfg.local_base_url); setValue('assistant-local-model', cfg.local_model);
   setValue('assistant-cloud-url', cfg.cloud_base_url); setValue('assistant-cloud-model', cfg.cloud_model);
@@ -5235,7 +5239,7 @@ async function assistantSubmit() {
   if (ASSISTANT_UI.busy) return;
   const input = assistantEl('assistant-prompt'), prompt = input ? input.value.trim() : '';
   if (!prompt) { if (input) input.focus(); return; }
-  let conv = assistantCurrentConversation(); if (!conv) conv = assistantNewConversation('local');
+  let conv = assistantCurrentConversation(); if (!conv) conv = assistantNewConversation('builtin');
   if (!conv) return;
   assistantClearError(); assistantSetFeedback('assistant-config-message', '');
   const history = conv.messages.filter(m => (m.role === 'user' || m.role === 'assistant') && String(m.content || '').trim()).map(m => ({ role: m.role, content: m.content }));
@@ -5249,7 +5253,7 @@ async function assistantSubmit() {
   let reader = null;
   try {
     const response = await fetch('/api/assistant/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: controller.signal,
-      body: JSON.stringify({ prompt, history, model_type: conv.backend || 'local', stream: true }) });
+      body: JSON.stringify({ prompt, history, model_type: conv.backend || 'builtin', stream: true }) });
     if (!response.ok) { let body = null; try { body = await response.json(); } catch (e) { /* response may not be JSON */ } throw new Error(body && body.error ? body.error : 'HTTP ' + response.status); }
     const contentType = response.headers.get('content-type') || '';
     if (!contentType.includes('text/event-stream')) {
@@ -5282,11 +5286,11 @@ async function assistantSubmit() {
 }
 function assistantChangeBackend() {
   const select = assistantEl('assistant-model-type'), conv = assistantCurrentConversation(); if (!select) return;
-  const next = select.value === 'cloud' ? 'cloud' : 'local';
+  const next = ['builtin', 'local', 'cloud'].includes(select.value) ? select.value : 'builtin';
   if (conv && conv.backend === next) { assistantSetPrivacy(); return; }
   if (conv && conv.messages.length) {
     const message = '切换模型后会新建一个独立会话，当前对话将保留并仍使用原模型。继续切换？';
-    if (!window.confirm(message)) { select.value = conv.backend || 'local'; assistantSetPrivacy(); return; }
+    if (!window.confirm(message)) { select.value = conv.backend || 'builtin'; assistantSetPrivacy(); return; }
     assistantNewConversation(next);
   } else {
     if (conv) conv.backend = next; else assistantNewConversation(next);
@@ -5375,9 +5379,10 @@ async function assistantClearKnowledge() {
 }
 function assistantInit() {
   if (ASSISTANT_UI.initialized) return; ASSISTANT_UI.initialized = true;
-  assistantNewConversation('local');
+  assistantNewConversation('builtin');
   const launcher = assistantEl('assistant-launcher'), dialog = assistantEl('assistant-dialog');
   if (launcher && dialog) launcher.addEventListener('click', () => { assistantClearError(); if (dialog.showModal) dialog.showModal(); else dialog.setAttribute('open', ''); assistantEl('assistant-prompt').focus(); });
+  if (dialog) dialog.addEventListener('click', event => { if (event.target === dialog) { if (dialog.close) dialog.close(); else dialog.removeAttribute('open'); } });
   const close = assistantEl('assistant-close'); if (close && dialog) close.addEventListener('click', () => { if (dialog.close) dialog.close(); else dialog.removeAttribute('open'); });
   const form = assistantEl('assistant-form'); if (form) form.addEventListener('submit', event => { event.preventDefault(); assistantSubmit(); });
   const prompt = assistantEl('assistant-prompt'); if (prompt) {
@@ -5386,7 +5391,7 @@ function assistantInit() {
   }
   const model = assistantEl('assistant-model-type'); if (model) model.addEventListener('change', assistantChangeBackend);
   const convSelect = assistantEl('assistant-conversation-select'); if (convSelect) convSelect.addEventListener('change', () => assistantSelectConversation(convSelect.value));
-  const newButton = assistantEl('assistant-new'); if (newButton) newButton.addEventListener('click', () => { const current = assistantCurrentConversation(); assistantNewConversation(current ? current.backend : (model && model.value) || 'local'); });
+  const newButton = assistantEl('assistant-new'); if (newButton) newButton.addEventListener('click', () => { const current = assistantCurrentConversation(); assistantNewConversation(current ? current.backend : (model && model.value) || 'builtin'); });
   const delButton = assistantEl('assistant-delete-conversation'); if (delButton) delButton.addEventListener('click', assistantRemoveConversation);
   const stop = assistantEl('assistant-stop'); if (stop) stop.addEventListener('click', () => { if (ASSISTANT_UI.controller) ASSISTANT_UI.controller.abort(); });
   const save = assistantEl('assistant-save-settings'); if (save) save.addEventListener('click', assistantSaveConfig);

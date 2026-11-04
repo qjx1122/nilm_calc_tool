@@ -8,6 +8,7 @@ const { JSDOM } = require('jsdom');
 
 const ROOT = path.resolve(__dirname, '..');
 const html = fs.readFileSync(path.join(ROOT, 'app/static/index.html'), 'utf8');
+const style = fs.readFileSync(path.join(ROOT, 'app/static/style.css'), 'utf8');
 const source = fs.readFileSync(path.join(ROOT, 'app/static/app.js'), 'utf8');
 const start = source.indexOf('/* ------------------------------------------------------------------ 智能问答');
 const end = source.indexOf('async function init() {', start);
@@ -23,7 +24,7 @@ window.AbortController = AbortController;
 window.confirm = () => true;
 
 let config = {
-  enabled: true, default_model_type: 'local',
+  enabled: true, default_model_type: 'builtin',
   local_base_url: 'http://127.0.0.1:11434/v1', local_model: 'qwen-local',
   cloud_base_url: 'https://api.example.test/v1', cloud_model: 'cloud-model',
   timeout_s: 90, temperature: 0.2, max_tokens: 2048,
@@ -37,6 +38,7 @@ const jsonResponse = (data, status = 200) => new Response(JSON.stringify(data), 
   status, headers: { 'content-type': 'application/json' },
 });
 let lastConfigPayload = null;
+let lastChatPayload = null;
 let lastImportedDocuments = null;
 let knowledgeDocuments = [];
 window.fetch = async (url, options = {}) => {
@@ -61,11 +63,11 @@ window.fetch = async (url, options = {}) => {
     return jsonResponse({ ok: true, config });
   }
   if (url === '/api/assistant/chat') {
-    const payload = JSON.parse(options.body);
-    if (!payload.stream || payload.model_type !== 'local') throw new Error('聊天请求参数不符合预期');
+    const payload = JSON.parse(options.body); lastChatPayload = payload;
+    if (!payload.stream || !['builtin', 'local'].includes(payload.model_type)) throw new Error('聊天请求参数不符合预期');
     const frames = [
-      { type: 'sources', sources: [{ name: 'guide.md', score: 0.91 }] },
-      { type: 'delta', text: '## 结论\n\n支持 **Markdown**、`代码`。\n\n```js\nalert(1)\n```\n\n<img src=x onerror=alert(1)>\n\n[坏链接](javascript:alert(1))' },
+      { type: 'sources', sources: [{ name: payload.model_type === 'builtin' ? 'demo_profile_matching.md' : 'guide.md', score: 0.91 }] },
+      { type: 'delta', text: payload.model_type === 'builtin' ? '### 内置知识库（演示）\n\n设备画像匹配的本地演示摘录。' : '## 结论\n\n支持 **Markdown**、`代码`。\n\n```js\nalert(1)\n```\n\n<img src=x onerror=alert(1)>\n\n[坏链接](javascript:alert(1))' },
       { type: 'done' },
     ].map(frame => 'data: ' + JSON.stringify(frame) + '\n\n').join('');
     const bytes = encoder.encode(frames);
@@ -82,7 +84,8 @@ window.fetch = async (url, options = {}) => {
 window.eval(source.slice(start, end) + '\nwindow.__assistantState = ASSISTANT_UI;');
 window.assistantInit();
 const $ = id => window.document.getElementById(id);
-const check = (ok, message) => { if (!ok) throw new Error(message); };
+let checkCount = 0;
+const check = (ok, message) => { if (!ok) throw new Error(message); checkCount += 1; };
 check($('assistant-launcher').hidden, '配置读取前问答入口应默认隐藏');
 
 (async () => {
@@ -90,25 +93,46 @@ check($('assistant-launcher').hidden, '配置读取前问答入口应默认隐�
   for (let i = 0; i < 50 && !window.__assistantState.config; i++) await new Promise(resolve => setTimeout(resolve, 10));
   check(!!window.__assistantState.config, '配置未加载');
   check(!$('assistant-launcher').hidden, '总览页应显示入口');
+  check($('assistant-model-type').value === 'builtin', '未配置模型时应默认选择内置演示通道');
+  check($('assistant-privacy-note').textContent.includes('无需配置模型'), '内置通道隐私说明未显示零配置语义');
+  check(style.includes('.assistant-dialog{position:fixed;inset:0 0 0 auto;'), '助手 CSS 未定位到当前页面右侧抽屉');
+  check(html.includes('aria-modal="true"'), '嵌入式对话面板缺少 dialog 语义');
+
+  const drawer = $('assistant-dialog'); drawer.setAttribute('open', '');
+  drawer.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+  check(!drawer.hasAttribute('open'), '点击抽屉遮罩未关闭面板');
   window.S.view = 'nilm'; window.assistantSyncLauncher();
   check($('assistant-launcher').hidden, 'visible_views 未控制入口显隐');
   window.S.view = 'overview'; window.assistantSyncLauncher();
 
-  // 实际跑一次 SSE 聊天；Markdown 安全渲染不能创建原始 HTML 或 javascript: 链接。
+  // 默认演示通道在不调用模型的情况下返回内置知识摘录和引用。
+  $('assistant-prompt').value = '设备画像匹配有哪些注意事项？';
+  await window.assistantSubmit();
+  let messages = $('assistant-messages');
+  check(lastChatPayload && lastChatPayload.model_type === 'builtin', '首次聊天没有使用内置演示后端');
+  check(messages.textContent.includes('内置知识库（演示）') && messages.textContent.includes('本地演示摘录'), '内置摘录回答未渲染');
+  check(messages.textContent.includes('引用：demo_profile_matching.md'), '内置知识库引用未显示');
+
+  // 切换到本地模型后验证 SSE 分片解析与安全 Markdown/XSS。
+  const model = $('assistant-model-type'); model.value = 'local'; model.dispatchEvent(new window.Event('change'));
+  check(window.__assistantState.conversations.length === 2, '切换模型未新建会话');
+  check(window.__assistantState.conversations[0].backend === 'local', '新会话未采用所选模型');
+  check(window.__assistantState.conversations[1].messages.length === 2, '内置演示会话没有保留');
   $('assistant-prompt').value = '如何查看画像参数？';
   await window.assistantSubmit();
-  const messages = $('assistant-messages');
-  check(messages.querySelectorAll('.assistant-message').length === 2, '会话没有显示用户与助手消息');
+  messages = $('assistant-messages');
+  check(messages.querySelectorAll('.assistant-message').length === 2, '本地模型会话没有显示用户与助手消息');
   check(!!messages.querySelector('h2') && !!messages.querySelector('strong') && !!messages.querySelector('pre code'), 'Markdown 标题/强调/代码块未渲染');
   check(!messages.querySelector('img, a[href^="javascript:"]'), '不可信 Markdown 被解释成活动 HTML');
   check(messages.textContent.includes('<img src=x onerror=alert(1)>'), '原始 HTML 应作为普通文本展示');
   check(messages.textContent.includes('引用：guide.md'), '缺少知识库引用标记');
 
-  // 切换本地/云端模型必须先确认并创建新会话，旧会话仍然保留。
-  const model = $('assistant-model-type'); model.value = 'cloud'; model.dispatchEvent(new window.Event('change'));
-  check(window.__assistantState.conversations.length === 2, '切换模型未新建会话');
+  // 切换云端模型必须先确认并创建新会话，内置和本地会话均保留。
+  model.value = 'cloud'; model.dispatchEvent(new window.Event('change'));
+  check(window.__assistantState.conversations.length === 3, '切换模型未新建独立会话');
   check(window.__assistantState.conversations[0].backend === 'cloud', '新会话未采用所选模型');
-  check(window.__assistantState.conversations[1].messages.length === 2, '旧会话没有保留');
+  check(window.__assistantState.conversations[1].backend === 'local' && window.__assistantState.conversations[1].messages.length === 2, '本地模型会话没有保留');
+  check(window.__assistantState.conversations[2].backend === 'builtin' && window.__assistantState.conversations[2].messages.length === 2, '内置演示会话没有保留');
 
   // 配置保存必须带管理员口令，且密钥输入只作为 POST/PUT 参数，不回填页面。
   $('assistant-admin-token').value = 'admin'; $('assistant-admin-token').dispatchEvent(new window.Event('input'));
@@ -136,7 +160,7 @@ check($('assistant-launcher').hidden, '配置读取前问答入口应默认隐�
   await window.assistantLoadConfig();
   check($('assistant-launcher').hidden, 'enabled=false 时问答入口仍然可见');
 
-  console.log('PASS 21 checks — launcher scope/disabled state, SSE chunk parsing, safe Markdown/XSS, RAG citations, model-switch sessions, admin config, local file import');
+  console.log(`PASS ${checkCount} checks — embedded right drawer, builtin demo retrieval, safe Markdown/XSS, citations, model-switch sessions, admin config, local file import`);
   dom.window.close();
 })().catch(error => {
   console.error('FAIL:', error && error.stack || error);

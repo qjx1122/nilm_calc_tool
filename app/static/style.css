@@ -379,12 +379,12 @@ input.flash{animation:ntflash 1.5s ease-out}
 .np-evsrc{margin-top:4px;font-size:11.5px}
 .np-tbl tr.np-stat td.np-stat:first-child{background:#17251f}
 
-/* 智能问答（v0.99.35）：同源弹窗，原生 Markdown，无 CDN */
+/* 智能问答（v0.99.36）：同一业务页内的右侧抽屉，原生 Markdown，无 CDN */
 .assistant-launcher{position:fixed;right:22px;bottom:82px;z-index:30;border:1px solid #4485e8;background:linear-gradient(135deg,#1d4ed8,#2563eb);box-shadow:0 6px 22px #0008;border-radius:24px;padding:10px 16px;font-weight:700}
 .assistant-launcher[hidden]{display:none}
-.assistant-dialog{width:min(1040px,96vw);max-width:96vw;max-height:92vh;padding:0;border:1px solid #3a4a6d;border-radius:14px;background:#0f1420;color:var(--fg);box-shadow:0 24px 80px #000a;overflow:hidden}
-.assistant-dialog::backdrop{background:#050812bb;backdrop-filter:blur(3px)}
-.assistant-shell{display:flex;flex-direction:column;max-height:92vh;padding:16px;gap:10px}
+.assistant-dialog{position:fixed;inset:0 0 0 auto;margin:0;width:min(560px,100vw);max-width:100vw;height:100vh;height:100dvh;max-height:100vh;max-height:100dvh;padding:0;border:0;border-left:1px solid #3a4a6d;border-radius:14px 0 0 14px;background:#0f1420;color:var(--fg);box-shadow:-18px 0 60px #0008;overflow:hidden}
+.assistant-dialog::backdrop{background:#05081288;backdrop-filter:blur(2px)}
+.assistant-shell{box-sizing:border-box;display:flex;flex-direction:column;width:100%;height:100%;max-height:100vh;max-height:100dvh;padding:16px;gap:10px;overflow:hidden}
 .assistant-head{display:flex;align-items:center;justify-content:space-between;gap:12px;border-bottom:1px solid var(--line);padding-bottom:9px}
 .assistant-head h2{margin:0;color:var(--fg)}
 .assistant-subtitle,.assistant-count,.assistant-admin-status{font-size:11px;color:var(--mut)}
@@ -394,7 +394,7 @@ input.flash{animation:ntflash 1.5s ease-out}
 .assistant-privacy{flex:1;min-width:230px;color:var(--ok);font-size:12px}
 .assistant-privacy.cloud{color:var(--warn)}
 .assistant-error{padding:8px 10px;border:1px solid #8a3434;border-radius:7px;background:#32191d;color:#ffc4c4;font-size:12px}
-.assistant-messages{min-height:180px;max-height:min(48vh,560px);overflow:auto;padding:12px;background:#0b1020;border:1px solid var(--line);border-radius:10px;display:flex;flex-direction:column;gap:12px}
+.assistant-messages{flex:1 1 auto;min-height:160px;max-height:none;overflow:auto;padding:12px;background:#0b1020;border:1px solid var(--line);border-radius:10px;display:flex;flex-direction:column;gap:12px}
 .assistant-empty{margin:auto;color:var(--mut);text-align:center;line-height:1.9;padding:24px}
 .assistant-message{max-width:92%;padding:10px 13px;border:1px solid var(--line);border-radius:10px;background:#182033;overflow-wrap:anywhere}
 .assistant-message.user{align-self:flex-end;background:#17325a;border-color:#2b5b9b}
@@ -425,7 +425,7 @@ input.flash{animation:ntflash 1.5s ease-out}
 .assistant-input-label{font-size:11px;color:var(--mut)}
 #assistant-prompt{resize:vertical;min-height:66px;max-height:180px}
 .assistant-input-actions,.assistant-settings-actions{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap}
-.assistant-settings{border-top:1px solid var(--line);padding-top:7px;max-height:32vh;overflow:auto}
+.assistant-settings{flex:0 1 auto;border-top:1px solid var(--line);padding-top:7px;max-height:34vh;overflow:auto}
 .assistant-settings>summary{cursor:pointer;color:#b9c9ea;font-size:12px;font-weight:600}
 .assistant-settings-body{padding:10px 2px 4px}
 .assistant-warning{padding:8px 10px;border-left:3px solid var(--warn);background:#2a2519;color:#f4d9a5;font-size:11px;margin:4px 0 10px}
@@ -448,9 +448,9 @@ input.flash{animation:ntflash 1.5s ease-out}
 .assistant-knowledge-item button{padding:2px 7px;font-size:10px}
 @media(max-width:700px){
   .assistant-launcher{right:12px;bottom:72px}
-  .assistant-dialog{width:100vw;max-width:100vw;max-height:96vh;border-radius:10px}
-  .assistant-shell{padding:10px;max-height:96vh}
-  .assistant-messages{max-height:38vh}
+  .assistant-dialog{width:100vw;max-width:100vw;height:100vh;height:100dvh;max-height:100vh;max-height:100dvh;border-radius:0}
+  .assistant-shell{padding:10px;max-height:100vh;max-height:100dvh}
+  .assistant-settings{max-height:30vh}
   .assistant-config-grid{grid-template-columns:1fr}
   .assistant-view-checks{grid-template-columns:repeat(2,minmax(0,1fr))}
   .assistant-message{max-width:98%}

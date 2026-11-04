@@ -3769,3 +3769,21 @@ delta_i_a  = d_i_obs
 - 结果 / 结论：`./.venv/bin/python -m pytest -q` **596 passed / 1 skipped**（158.39 s，另有 1 条既有 Starlette/httpx deprecation warning）；`node tools/ui_assistant_check.cjs` **PASS 21 checks**（同一测试覆盖 DOM 页面显隐/禁用态、分片 SSE、Markdown / XSS 安全、引用、模型切换新会话、管理员配置/敏感词管理及本地文件导入）；`py_compile`、`node --check app/static/app.js`、`node --check tools/ui_assistant_check.cjs`、`git diff --check` 通过。新增 API 集成测试 mock 上游文本，验证 SSE / 非流式路由；服务单测检查 local/cloud request headers/body/proxy、上游 SSE、401 错误脱敏、RAG 文档导入/检索/删除、敏感历史与检索片段拦截、限流、密钥不落盘。应用已在沙盒 `0.0.0.0:8001` 启动，`GET /` 与 `GET /api/assistant/config` 为 200。
 - 是否进入 REPORT.md（稳定结论）：否（属于本轮工程实现 / 验证报告；尚无真实模型或现场性能稳定结论）。
 - 遗留问题：未连接真实 Ollama/vLLM，也未配置真实云端 Key/供应商，故 upstream 只用 mock 验证；Windows 安装、目标内网 DNS/代理、真实浏览器视觉与 HTTPS 反代仍待用户回报。`visible_views` 不是账户级权限；chat API 当前无登录，生产暴露仍需网络访问控制；敏感词检测不保证识别所有业务秘密。
+
+## [2026-11-04] 专题：智能问答零配置演示通道、右侧抽屉与来源文件名脱敏
+- 类型：用户专题 / 验证专题
+- 目标与假设：承接网页智能问答 v0.99.35，落实用户新增验收项：①在现有业务页面内用右侧抽屉呈现，而非跳转独立页面；②未配置本地或云端模型时可零配置使用“内置知识库（演示）”摘录通道，展示本地摘录与引用且不调用模型；③来源隐藏时，回答与引用内的支撑文件名必须脱敏。代码未找到助手专用来源显示开关；已向用户说明，暂按现有总线配置 `branch.hide_ui` 作为服务端隐藏判据，若非此规则需按用户指出的正式开关调整。此映射是本轮假设，不宣称是助手既有专用配置。
+- 方法 / 数据 / 参数：
+  - `app/assistant.py`：新增随程序打包的 4 条演示知识摘录；新增 `builtin` backend 与本地检索 / 引用，设为新安装默认；该 backend 构造本地答案，不访问 `urllib` 模型 endpoint。扩展来源名脱敏，知识库**全部**文件名（不仅是当前检索命中文件）参与脱敏；清理 RAG 片段、system context、问题 / 历史、completion 答案、来源 citation 与 SSE token 分片（覆盖文件名跨分片情况）。
+  - `app/server.py`：聊天路由只根据服务端 `RUNNERS["bus"].cfg.branch.hide_ui` 传递脱敏条件，忽略客户端是否要求显示文件名；非流式和 SSE 共用同一份已净化 plan。
+  - `app/static/index.html` / `style.css` / `app.js`：`<dialog>` 固定在当前业务页右侧，移动端全屏；助手首次会话、管理员默认后端和恢复配置均加入 builtin 选项；入口、面板关闭 / 遮罩、零配置说明联动。
+  - 测试：`tests/test_assistant.py` 覆盖无模型请求的 builtin 摘录与引用、提示 / 历史 / 检索内容清理、completion 与跨分片 streaming 文件名清理；`tests/test_server.py` 覆盖服务端隐藏判据及 JSON + SSE 路由；`tests/test_web_ui.py` 覆盖右抽屉与 builtin 默认静态契约；`tools/ui_assistant_check.cjs` 第 68 行按 backend 返回不同模拟引用 / 答案，新增 builtin 与 local 流程、抽屉和遮罩交互检查。
+  - 本地验证数据与配置隔离于 `/tmp/nilm-assistant-preview/`；未写入、删除或暂存 `tmp/` 用户工件。
+- 用户执行命令（含实录路径；本节无用户命令则注明）：无（仅沙盒侧验证；live preview 面向用户提供手工点检）。
+- 结果 / 结论：
+  - 全量 `./.venv/bin/python -m pytest -q`：**600 passed / 1 skipped**，174.88 s；另有一条既有 Starlette/httpx TestClient deprecation warning。
+  - `node tools/ui_assistant_check.cjs`：**PASS 33 checks**（业务页入口显隐、右侧抽屉 / 遮罩关闭、默认 builtin、零配置说明、内置摘录 / 引用、local 流式分片解析、Markdown / XSS 安全、会话切换、管理员配置与知识库导入）。`node --check`（app.js 与工具脚本）、`py_compile`、`git diff --check` 均通过。
+  - 隔离配置下 live preview 监听 `0.0.0.0:8001`：`GET /`、`GET /api/assistant/config` 均 HTTP 200，配置默认 backend=`builtin`；非流式 JSON 与 SSE 聊天均 HTTP 200，返回本地演示摘录与引用。builtin 请求由服务单测 monkeypatch `_open_request` 为立即失败，仍通过，证明不触发模型端点。
+  - 来源隐藏判据分别覆盖隐藏 / 可见；隐藏时 API 的 JSON 与 SSE source frame、答案 delta 均不出现原支撑文件名，只返回脱敏来源名。右侧抽屉行为通过 jsdom 与 CSS 契约检查；没有声称已做真实浏览器像素级视觉验收。
+- 是否进入 REPORT.md（稳定结论）：否（是用户界面 / 工程实现及安全规则假设；暂无真实模型或现场验收稳定结论）。
+- 遗留问题：①未接真实 Ollama/vLLM 或云端 provider；②Windows / 用户内网 DNS、代理、HTTPS 反向代理和真实浏览器视觉仍待用户验收；③`branch.hide_ui` 原意是隐藏分路侧业务界面，并非助手专用来源开关，本轮暂作来源脱敏映射，若用户提供独立规则应调整服务端；④切换隐藏规则后，既有页面中已经渲染的历史消息不会被服务器追溯改写，后续新请求会按当时的服务端规则脱敏。

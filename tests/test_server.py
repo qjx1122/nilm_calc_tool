@@ -514,3 +514,33 @@ def test_assistant_chat_stream_and_nonstream_api(client, tmp_path, monkeypatch):
     assert plain.status_code == 200 and plain.json()["answer"] == "非流式回答"
     invalid = client.post("/api/assistant/chat", json={"prompt": "test", "stream": "yes"})
     assert invalid.status_code == 400 and "布尔值" in invalid.json()["error"]
+
+
+def test_assistant_builtin_default_and_platform_source_name_redaction(client, tmp_path, monkeypatch):
+    from app.assistant import AssistantService
+
+    service = AssistantService(data_dir=str(tmp_path / "assistant"))
+    monkeypatch.setattr(client.srv, "assistant_service", service)
+    monkeypatch.setattr(service, "_open_request", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("unexpected model request")))
+    bus_config = client.srv.RUNNERS["bus"].cfg
+    monkeypatch.setattr(bus_config.branch, "hide_ui", False)
+
+    visible = client.post("/api/assistant/chat", json={"prompt": "设备画像匹配", "stream": False})
+    assert visible.status_code == 200, visible.text
+    assert visible.json()["answer"].startswith("### 内置知识库（演示）")
+    assert visible.json()["sources"][0]["name"] == "demo_profile_matching.md"
+
+    bus_config.branch.hide_ui = True
+    hidden = client.post("/api/assistant/chat", json={"prompt": "设备画像匹配", "stream": False})
+    assert hidden.status_code == 200, hidden.text
+    assert "demo_profile_matching.md" not in hidden.text
+    assert hidden.json()["sources"] and all(s["name"].startswith("已脱敏资料") for s in hidden.json()["sources"])
+    assert "已脱敏资料" in hidden.json()["answer"]
+
+    streamed = client.post("/api/assistant/chat", json={"prompt": "设备画像匹配", "stream": True})
+    assert streamed.status_code == 200 and "text/event-stream" in streamed.headers["content-type"]
+    assert "demo_profile_matching.md" not in streamed.text
+    frames = [json.loads(line[6:]) for line in streamed.text.splitlines() if line.startswith("data: {")]
+    source_frame = next(frame for frame in frames if frame["type"] == "sources")
+    assert source_frame["sources"] and source_frame["sources"][0]["name"].startswith("已脱敏资料")
+    assert any(frame["type"] == "delta" and "已脱敏资料" in frame["text"] for frame in frames)

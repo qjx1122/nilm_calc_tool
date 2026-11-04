@@ -1466,7 +1466,10 @@ async def assistant_chat(payload: Dict[str, Any], request: Request) -> Any:
     except AssistantError as exc:
         return JSONResponse(status_code=exc.status_code, content={"ok": False, "error": exc.message})
     try:
-        plan = assistant_service.prepare_chat(payload)
+        # Platform visibility rule: when branch-side data is hidden, support filenames
+        # must not leak through the assistant's answer, retrieval context, or citations.
+        hide_source_names = bool(getattr(RUNNERS["bus"].cfg.branch, "hide_ui", False))
+        plan = assistant_service.prepare_chat(payload, redact_source_names=hide_source_names)
     except AssistantError as exc:
         assistant_service.release_request()
         return JSONResponse(status_code=exc.status_code, content={"ok": False, "error": exc.message})

@@ -1548,16 +1548,17 @@
   </main>
 </div>
 
-<button id="assistant-launcher" class="assistant-launcher" type="button" hidden aria-haspopup="dialog" aria-controls="assistant-dialog" title="打开本地 / 云端技术问答">🤖 智能问答</button>
-<dialog id="assistant-dialog" class="assistant-dialog" aria-labelledby="assistant-title">
+<button id="assistant-launcher" class="assistant-launcher" type="button" hidden aria-haspopup="dialog" aria-controls="assistant-dialog" title="在当前业务页打开智能问答侧栏">🤖 智能问答</button>
+<dialog id="assistant-dialog" class="assistant-dialog" aria-labelledby="assistant-title" aria-modal="true">
   <div class="assistant-shell">
     <header class="assistant-head">
-      <div><h2 id="assistant-title">智能问答</h2><div class="assistant-subtitle">NILM · 电能质量 · 参数说明 · 操作与报错排查（会话仅保存在当前页面内存，刷新后清除）</div></div>
+      <div><h2 id="assistant-title">智能问答</h2><div class="assistant-subtitle">嵌入当前业务页的侧边面板 · NILM · 电能质量 · 参数说明与报错排查（会话仅保存在当前页面内存，刷新后清除）</div></div>
       <button id="assistant-close" type="button" aria-label="关闭智能问答">关闭</button>
     </header>
     <div class="assistant-modelbar">
       <label>模型后端
-        <select id="assistant-model-type" aria-label="选择模型后端">
+        <select id="assistant-model-type" aria-label="选择问答通道">
+          <option value="builtin">内置知识库（演示）</option>
           <option value="local">本地私有模型</option>
           <option value="cloud">云端大模型</option>
         </select>
@@ -1569,7 +1570,7 @@
     </div>
     <div id="assistant-error" class="assistant-error" role="alert" style="display:none"></div>
     <div id="assistant-messages" class="assistant-messages" role="log" aria-live="polite" aria-relevant="additions text">
-      <div id="assistant-empty" class="assistant-empty">你好！可以问我负荷辨识、电能质量计算、算法参数、工具使用或错误排查。<br>请勿在云端模式发送敏感业务数据。</div>
+      <div id="assistant-empty" class="assistant-empty">你好！默认使用“内置知识库（演示）”摘录通道：无需模型配置，会在本机返回相关演示资料片段。也可切换到本地或云端模型。<br>云端模式请勿发送未经脱敏的敏感业务数据。</div>
     </div>
     <div id="assistant-sources" class="assistant-sources" aria-label="知识库引用"></div>
     <form id="assistant-form" class="assistant-input-form">
@@ -1591,7 +1592,7 @@
         </div>
         <div class="assistant-config-grid">
           <label class="check"><input id="assistant-enabled" type="checkbox"> 启用智能问答</label>
-          <label>默认后端<select id="assistant-default-backend"><option value="local">本地私有模型</option><option value="cloud">云端大模型</option></select></label>
+          <label>默认后端<select id="assistant-default-backend"><option value="builtin">内置知识库（演示）</option><option value="local">本地私有模型</option><option value="cloud">云端大模型</option></select></label>
           <label>超时（秒）<input id="assistant-timeout" type="number" min="3" max="300" step="1"></label>
           <label>Temperature<input id="assistant-temperature" type="number" min="0" max="2" step="0.1"></label>
           <label>Max tokens<input id="assistant-max-tokens" type="number" min="1" max="8192" step="1"></label>

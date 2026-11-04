@@ -64,6 +64,29 @@ def test_admin_config_keeps_api_keys_out_of_json_and_public_view(tmp_path, monke
         service.update_config({"sensitive_terms": [123]}, "test-admin-token")
 
 
+def test_builtin_demo_channel_is_zero_configuration_and_retrieves_excerpts(tmp_path, monkeypatch):
+    monkeypatch.delenv("ELEC_TOOL_ASSISTANT_BACKEND", raising=False)
+    monkeypatch.delenv("ELEC_TOOL_ASSISTANT_ENABLED", raising=False)
+    monkeypatch.delenv("ELEC_TOOL_ASSISTANT_LOCAL_API_KEY", raising=False)
+    monkeypatch.delenv("ELEC_TOOL_ASSISTANT_CLOUD_API_KEY", raising=False)
+    service = AssistantService(data_dir=str(tmp_path))
+    assert service.public_config()["default_model_type"] == "builtin"
+
+    plan = service.prepare_chat({"prompt": "设备画像匹配"})
+    assert plan["model_type"] == "builtin"
+    assert plan["sources"] and plan["sources"][0]["name"] == "demo_profile_matching.md"
+    assert "无需配置或调用模型" in plan["answer"]
+    assert "pre_cycles" in plan["answer"]
+    assert "base_url" not in plan and "api_key" not in plan
+
+    def no_model_request(*args, **kwargs):
+        raise AssertionError("builtin demo mode must not contact a model endpoint")
+    monkeypatch.setattr(service, "_open_request", no_model_request)
+    assert service.complete(plan) == plan["answer"]
+    import threading
+    assert "".join(service.stream(plan, threading.Event())) == plan["answer"]
+
+
 def test_local_knowledge_import_search_and_delete(tmp_path, monkeypatch):
     monkeypatch.setenv("ELEC_TOOL_ASSISTANT_ADMIN_TOKEN", "kb-admin")
     service = AssistantService(data_dir=str(tmp_path))
@@ -76,6 +99,49 @@ def test_local_knowledge_import_search_and_delete(tmp_path, monkeypatch):
     assert matches and matches[0]["name"] == "nilm-guide.md"
     result = service.delete_document(imported["documents"][0]["id"], "kb-admin")
     assert result["removed"] == 1 and result["count"] == 0
+
+
+def test_hidden_source_filenames_are_redacted_from_context_citations_and_answers(tmp_path, monkeypatch):
+    import threading
+
+    monkeypatch.setenv("ELEC_TOOL_ASSISTANT_ADMIN_TOKEN", "redaction-admin")
+    service = AssistantService(data_dir=str(tmp_path))
+    filename = "confidential-site-report.md"
+    service.import_documents({"documents": [{
+        "name": filename,
+        "content": f"设备画像匹配参数说明；原始支撑文件名为 {filename}，前后窗口需要保持一致。",
+    }]}, "redaction-admin")
+    plan = service.prepare_chat({
+        "prompt": f"请说明设备画像匹配，参考 {filename}",
+        "history": [{"role": "user", "content": f"上次提到 {filename}"}],
+        "model_type": "local",
+    }, redact_source_names=True)
+
+    assert plan["sources"][0]["name"] == "已脱敏资料 1"
+    exposed_context = json.dumps({"sources": plan["sources"], "messages": plan["messages"]}, ensure_ascii=False)
+    assert filename not in exposed_context
+    assert filename in plan["_redact_names"]  # original name remains private service-side only
+
+    class FakeCompletionResponse:
+        def __enter__(self): return self
+        def __exit__(self, *args): return False
+        def read(self, limit):
+            return json.dumps({"choices": [{"message": {"content": f"答案引用 {filename}。"}}]}, ensure_ascii=False).encode("utf-8")
+
+    class FakeStreamResponse:
+        def __enter__(self): return self
+        def __exit__(self, *args): return False
+        def __iter__(self):
+            for piece in ("回答：引用 ", "confidential-site-", "report.md，建议复核。"):
+                frame = {"choices": [{"delta": {"content": piece}}]}
+                yield ("data: " + json.dumps(frame, ensure_ascii=False) + "\n").encode("utf-8")
+            yield b"data: [DONE]\n"
+
+    monkeypatch.setattr(service, "_open_request", lambda request_plan, stream: FakeStreamResponse() if stream else FakeCompletionResponse())
+    complete = service.complete(plan)
+    assert filename not in complete and "已脱敏资料" in complete
+    streamed = "".join(service.stream(plan, threading.Event()))
+    assert filename not in streamed and "已脱敏资料" in streamed
 
 
 def test_knowledge_total_limit_counts_utf8_bytes(tmp_path, monkeypatch):

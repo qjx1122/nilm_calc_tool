@@ -301,3 +301,18 @@ def test_assistant_ui_contract_and_safe_markdown_renderer(page):
     assert "云端模式" in assistant_js and "敏感词拦截" in assistant_js
     assert "X-Assistant-Admin-Token" in assistant_js
     assert "会话仅保存在当前页面内存" in HTML
+
+
+def test_assistant_is_an_embedded_right_drawer_with_zero_config_backend(page):
+    """问答应仍在当前业务页内，以右侧抽屉出现；内置演示通道排在默认首选。"""
+    assert page.selects["assistant-model-type"] == ["builtin", "local", "cloud"]
+    assert page.selects["assistant-default-backend"] == ["builtin", "local", "cloud"]
+    assert '<dialog id="assistant-dialog"' in HTML and 'aria-modal="true"' in HTML
+    assert "assistant-launcher" in page.ids and "assistant-dialog" in page.ids
+    style = (ROOT / "app/static/style.css").read_text(encoding="utf-8")
+    drawer = re.search(r"\.assistant-dialog\s*\{([^}]*)\}", style)
+    assert drawer, "style.css 缺少助手抽屉样式"
+    assert "position:fixed" in drawer.group(1) and "inset:0 0 0 auto" in drawer.group(1), drawer.group(1)
+    assert "width:min(560px,100vw)" in drawer.group(1) and "height:100dvh" in drawer.group(1)
+    assert "assistantNewConversation('builtin')" in APPJS, "新对话未默认进入免配置演示通道"
+    assert "model_type: conv.backend || 'builtin'" in APPJS, "聊天载荷仍回退到需要模型配置的后端"
