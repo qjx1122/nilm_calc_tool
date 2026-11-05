@@ -1048,7 +1048,117 @@ def test_explicit_source_start_rejects_running_or_unconfigured_source(tmp_path, 
                                              for item in service._pending_tools.values())
 
 
-def test_expanded_tool_allowlist_is_closed_and_model_context_contains_only_safe_resource_ids(tmp_path, monkeypatch):
+def test_offline_source_playback_regression_corpus(tmp_path, monkeypatch):
+    """回归语料：离线数据源启动意图的确定性路由边界，覆盖正/负/易混淆/复合/状态五类。"""
+    from app.assistant import _explicit_tool_command, _explicit_offline_source_start
+
+    # ---- 1. 正例：礼貌表达、口语表达、不同语序、省略、UI 位置词 ----
+    positive = (
+        # 礼貌表达
+        "请帮我播放离线数据源",
+        "麻烦启动当前侧数据源检测",
+        "请开始离线数据源CSV文件",
+        # 口语表达
+        "马上开始离线数据源",
+        "立即播放离线数据源CSV文件",
+        # 不同语序（动词开头的变体）
+        "播放当前侧离线数据源",
+        # 省略（含“离线”的核心表达）
+        "播放离线数据源",
+        # UI 位置词
+        "播放数据源与控制中的离线数据源CSV文件",
+        "启动数据源与控制中的离线数据源CSV文件",
+    )
+    for prompt in positive:
+        name = _explicit_tool_command(prompt)
+        assert name == "start_current_source", f"正例未命中: {prompt!r} -> {name}"
+    # 明确含“离线”的标记为离线启动；省略“离线”的通用表达不标记为离线
+    assert _explicit_offline_source_start("播放离线数据源") is True
+    assert _explicit_offline_source_start("播放数据源") is False
+
+    # ---- 2. 负例：疑问句、否定句、过去时陈述、引用命令 ----
+    negative = (
+        # 疑问句
+        "能否播放离线数据源？",
+        "为什么播放离线数据源会启动？",
+        # 否定句
+        "不要播放离线数据源",
+        "不需要启动当前侧数据源",
+        # 过去时陈述
+        "已经播放过离线数据源了",
+        "已启动了当前侧数据源",
+        # 引用命令（非本轮执行意图）
+        "系统说明里说“播放离线数据源”会启动数据源",
+    )
+    for prompt in negative:
+        assert _explicit_tool_command(prompt) is None, f"负例不应命中: {prompt!r}"
+
+    # ---- 3. 易混淆例：启动 vs 调速、选择文件 vs 播放当前文件 ----
+    assert _explicit_tool_command("将离线播放速度设置为 2 倍") is None
+    assert _explicit_tool_command("把离线数据源速度调快一点") is None
+    assert _explicit_tool_command("选择录波文件 capture-a.csv") is None
+    assert _explicit_tool_command("把受控录波文件设为当前数据源") is None
+
+    # ---- 4. 复合例：同时要求启动和调速（含速度意图，不应直接路由） ----
+    compound = (
+        "启动离线数据源并把速度调成2倍",
+        "播放离线数据源，速度设为1.5倍",
+        "开始播放离线数据源且倍速设为 2",
+    )
+    for prompt in compound:
+        assert _explicit_tool_command(prompt) is None, f"复合例不应直接路由: {prompt!r}"
+
+    # ---- 5. 状态例：通过 prepare_chat 验证服务端前置条件 ----
+    admin = "regression-admin"
+    operator = "regression-operator"
+    monkeypatch.setenv("ELEC_TOOL_ASSISTANT_ADMIN_TOKEN", admin)
+    monkeypatch.setenv("ELEC_TOOL_ASSISTANT_OPERATOR_TOKENS", json.dumps([
+        {"id": "regression-operator", "token": operator, "scopes": ["engine.start"]},
+    ]))
+    service = AssistantService(data_dir=str(tmp_path))
+    service.update_config({"tools_enabled": True, "enabled_tools": ["start_current_source"]}, admin)
+
+    base_payload = {"prompt": "播放离线数据源", "model_type": "local", "model_name": "qwen3:8b"}
+
+    # 5.1 无来源
+    with pytest.raises(AssistantError, match="没有可用的数据源配置"):
+        service.prepare_chat(base_payload, operator_token=operator, tool_context={"source": {}})
+
+    # 5.2 来源已运行
+    with pytest.raises(AssistantError, match="不会重复启动"):
+        service.prepare_chat(base_payload, operator_token=operator,
+                             tool_context={"source": {"kind": "csv_file", "has_path": True, "running": True}})
+
+    # 5.3 非离线来源（simulator/tcp）
+    with pytest.raises(AssistantError, match="不是离线文件数据源"):
+        service.prepare_chat(base_payload, operator_token=operator,
+                             tool_context={"source": {"kind": "simulator", "has_path": False, "running": False}})
+
+    # 5.4 文件不可用（离线来源但无路径）
+    with pytest.raises(AssistantError, match="未配置可用文件"):
+        service.prepare_chat(base_payload, operator_token=operator,
+                             tool_context={"source": {"kind": "csv_file", "has_path": False, "running": False}})
+
+    # 5.5 缺少 scope（engine.start） -> 403，不回退到调速或查询工具
+    readonly_operator = "regression-readonly"
+    monkeypatch.setenv("ELEC_TOOL_ASSISTANT_OPERATOR_TOKENS", json.dumps([
+        {"id": "regression-readonly", "token": readonly_operator, "scopes": ["recordings.read"]},
+    ]))
+    with pytest.raises(AssistantError, match="engine.start"):
+        service.prepare_chat(base_payload, operator_token=readonly_operator,
+                             tool_context={"source": {"kind": "csv_file", "has_path": True, "running": False}})
+
+    # 5.6 状态正常时应直接命中确定性路由，不调用模型
+    monkeypatch.setattr(service, "_open_request", lambda *args, **kwargs: pytest.fail("direct route must not call model"))
+    service.update_config({"enabled_tools": ["start_current_source"]}, admin)
+    monkeypatch.setenv("ELEC_TOOL_ASSISTANT_OPERATOR_TOKENS", json.dumps([
+        {"id": "regression-operator", "token": operator, "scopes": ["engine.start"]},
+    ]))
+    plan = service.prepare_chat(base_payload, operator_token=operator,
+                                tool_context={"source": {"kind": "csv_file", "has_path": True, "running": False}})
+    assert plan["_tool_proposal"]["tool"] == "start_current_source"
+    assert plan["_tool_call_origin"] == "deterministic"
+
     from app.assistant_tools import TOOL_BY_NAME, TOOL_CATALOG
 
     admin = "expanded-tool-admin-token"

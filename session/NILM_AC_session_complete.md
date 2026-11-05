@@ -1092,3 +1092,21 @@
 - 证据边界：沙盒日志样例来自当前代码＋受控假响应，不代表用户现场 provider 行为；未获得用户部署日志，故仍未确认现场根因。需用户重启实际服务后回传日志行与 trace ID（不要回传任何令牌或请求头凭证）。
 - 交付：T-017 写入 `REPORT_TEST.md` 并更新索引；`STATUS.md`、`docs/智能问答助手说明.md` §6.9 / §7 已同步。未暂存、commit 或 push；沿用 checkout 跟踪基线不完整的既有约束。
 - 相关文件 / 分支：`app/assistant.py`、`app/server.py`、`tests/test_assistant.py`、`tests/test_server.py`、`docs/智能问答助手说明.md`、`STATUS.md`、`REPORT_TEST.md` T-017、本纪要；`arena/82e34fb8-nilm-calc-tool`。
+
+## [2026-11-06] 会话纪要：离线数据源启动意图回归语料（T-018）
+
+- 目标：为“播放 / 启动离线数据源” → `start_current_source` 的确定性路由建立系统回归语料，覆盖五类：正例、负例、易混淆例、复合例、状态例。确保带修饰语（如“马上 / 立即 / 赶紧”）的口语表达能命中确定性路由，不落入模型路径；确保疑问、否定、过去时、调速、选择文件等不被误路由。
+- 角色 / 模式 / 分支：工程实现工程师；模式 A（实现＋沙盒回归）；`arena/82e34fb8-nilm-calc-tool`。未启动或重启用户部署服务；`tmp/` 未读取、修改、清理、暂存或提交。
+- 实现：
+  1. `app/assistant.py::_SOURCE_START_INTENT_RE` 新增可选修饰语 `(?:马上|立即|赶紧|现在|先|直接|就)?`，使“请马上开始离线数据源”“马上开始离线数据源”“立即播放离线数据源CSV文件”等表达能命中 `_explicit_tool_command` 返回 `start_current_source`。
+  2. `tests/test_assistant.py::test_offline_source_playback_regression_corpus` 建立回归语料，覆盖五类共 30+ 条语句：
+     - **正例（11条）**：礼貌表达（请帮我 / 麻烦 / 请）、口语表达（马上 / 立即）、不同语序、省略、UI 位置词（数据源与控制中的……），均应返回 `start_current_source`。
+     - **负例（7条）**：疑问句（能否……？）、否定句（不要……）、过去时陈述（已经……）、引用命令（系统说明里说……），均不应命中 `start_current_source`。
+     - **易混淆例（4条）**：调速（设置播放速度）、选择文件（选择录波文件 / 设为当前数据源），均不应命中 `start_current_source`。
+     - **复合例（3条）**：同时要求启动和调速，因含速度意图不应直接路由。
+     - **状态例（6条）**：通过 `prepare_chat` 验证服务端前置条件——无来源（409）、来源已运行（409）、非离线来源（409）、文件不可用（409）、缺少 scope（403）、状态正常直接命中确定性路由（不调用模型）。
+  3. `docs/智能问答助手说明.md` §6.7 更新，补充“命令前允许马上 / 立即 / 赶紧 / 现在 / 先 / 直接 / 就 等修饰语”的说明。
+- 验证：`.venv/bin/python -m pytest -o addopts='' tests/test_assistant.py tests/test_server.py tests/test_web_ui.py -q` → **96 passed / 1 warning**（20.32 s）；新增回归语料用例单独通过；`py_compile`、`node --check`、四份生成手册 `--check` 均通过。warning 为既有 Starlette / httpx 弃用提示。
+- 证据边界：沙盒验证来自当前代码＋pytest，不代表用户现场 provider 行为；未获得用户部署日志，故仍未确认现场根因。需用户重启实际服务后回传日志行与 trace ID（不要回传任何令牌或请求头凭证）。
+- 交付：T-018 写入 `REPORT_TEST.md` 并更新索引；`STATUS.md`、`docs/智能问答助手说明.md` §6.7 已同步。未暂存、commit 或 push；沿用 checkout 跟踪基线不完整的既有约束。
+- 相关文件 / 分支：`app/assistant.py`、`tests/test_assistant.py`、`docs/智能问答助手说明.md`、`STATUS.md`、`REPORT_TEST.md` T-018、本纪要；`arena/82e34fb8-nilm-calc-tool`。
