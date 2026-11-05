@@ -77,9 +77,11 @@ TOOL_CATALOG: List[Dict[str, Any]] = [
            "curves": {"type": "boolean"}, "events": {"type": "boolean"}, "nilm": {"type": "boolean"}}),
 
     _tool("start_current_source", "启动当前侧数据源检测", "engine.start",
-          "用户明确要求启动/开始播放当前侧已配置的数据源时使用本工具；不接受模型传入的文件路径，不重启正在运行的数据源。"
+          "用户明确说‘播放数据源’、‘播放/启动离线数据源或CSV文件’、‘开始播放当前数据源’时，表示启动当前侧已配置的数据源，使用本工具；这些说法不表示修改播放速度。"
+          "不接受模型传入的文件路径，不猜测或切换文件，不重启正在运行的数据源；未配置或当前来源不匹配时由服务端拒绝并提示。"
           "不得用查询可用录波或查询设备画像代替启动。总线侧可能按现有设置联动分路侧。",
           high_risk=True),
+
     _tool("pause_current_source", "暂停当前侧离线播放", "engine.pause",
           "暂停当前侧已运行的 csv_file 离线播放；实时源不支持暂停。总线侧按应用既有逻辑尝试同步分路侧。"),
     _tool("resume_current_source", "恢复当前侧离线播放", "engine.resume",
@@ -201,6 +203,7 @@ TOOL_CATALOG: List[Dict[str, Any]] = [
           {"offset_s": {"type": "number", "minimum": -86400, "maximum": 86400},
            "tolerance_s": {"type": "number", "minimum": 0, "maximum": 3600}}, high_risk=True),
     _tool("set_playback_speed", "修改离线播放速度", "config.source.write",
+          "仅当用户明确要求修改当前侧离线播放速度/倍速并给出目标数值时使用；‘播放’或‘启动’数据源不属于调速请求，本工具也不会启动数据源。"
           "只修改当前侧 csv_file 倍速；0 表示不限速，正值为实时倍数，不接受数据源路径或网络参数。",
           {"speed": {"type": "number", "minimum": 0, "maximum": 100}}, ["speed"], high_risk=True),
     _tool("set_file_time_utc", "设置录波时标解释方式", "config.source.write",
