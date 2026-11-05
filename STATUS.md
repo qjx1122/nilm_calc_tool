@@ -27,6 +27,7 @@
   - **全局工具核验**：回归验证 46 个工具 ID 与服务端 dispatcher、前端标签一致；精确标题确定性覆盖所有空参数校验通过的工具。需必填参数的自由表达仍由模型 `auto` 选择，未连接 Qwen 时不宣称自然语言识别全部通过。`/api/assistant/tools/identity` 可查看当前 token / model_type 的有效工具清单。
   - **验证**：`.venv/bin/python -m pytest -o addopts='' tests/test_assistant.py tests/test_server.py -q` → **66 passed / 1 warning**（18.97 s）；全量 `.venv/bin/python -m pytest -o addopts='' tests -q` → **634 passed / 1 skipped / 1 warning**（194.53 s）；`node tools/ui_assistant_check.cjs` → **188 checks**。`py_compile`、JS `node --check`、显式文件范围 `git diff --check` 均通过。唯一 warning 是 Starlette `TestClient` 与 httpx 弃用提示；npm 审计 0 漏洞。
   - **未决 / 下一步**：用户在真实 Qwen3:8b 上用新会话分别测试 exact title 与含否定补充的启动指令；核验提示及预览工具名为 `start_current_source`，确认工具未授权时应明确报权限原因而不是读工具；完成目标浏览器 / 原生键盘 / 触屏现场验收。真实模型 schema 与实际自然语言路由未实测。`tmp/` 未触碰。
+  - **交付**：commit `b6accec`（`fix: route explicit assistant tool commands deterministically`）已推送到 `origin/arena/82e34fb8-nilm-calc-tool`；仅显式提交 8 个代码 / 测试 / 指定文档文件，本轮未添加或提交 `tmp/`。
 - **上一任务（2026-11-04 第 207 轮：智能问答模型选择、本地模型配置精简与全局工具覆盖）**：
   - **角色 / 模式**：工程实现工程师；模式 A；固定活动分支 `arena/82e34fb8-nilm-calc-tool`；不读取、修改、暂存或提交 `tmp/`。
   - **用户要求**：①右侧问答窗口底部新增本地 / 云端 / 内置知识库后端选择；local 显示本地模型列表、cloud 显示管理员已配置的云端模型列表、builtin 隐藏模型列表。②从“配置与附加知识库”移除本地模型名称配置，模型名改由问答会话选择；本地服务地址与 API 连接配置共用，不引入每模型 endpoint。③审计全局允许工具，尽可能使软件用户功能可由助手提出受控操作。

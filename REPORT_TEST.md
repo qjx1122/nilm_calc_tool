@@ -4177,4 +4177,5 @@ delta_i_a  = d_i_obs
   - `./.venv/bin/python -m py_compile app/assistant.py app/assistant_tools.py tests/test_assistant.py tests/test_server.py`、`node --check app/static/app.js`、`node --check tools/ui_assistant_check.cjs` 与明确 8 文件范围的 `git diff --check` 均通过。真实 Qwen / provider 未连接；不得把自动化路由测试表述成 Qwen 识别效果通过。
 - **结果 / 结论**：已修复用户给出的精确启动命令误选查询工具：在权限满足时直接生成 `start_current_source` 的确认预览；若权限缺失则解释具体阻断项，而非返回查询工具。全局 catalog / schema / dispatcher / UI 标签有回归契约。精确标题以外的参数型或自由表达仍受 `tool_choice=auto` 的模型选择影响，真实 qwen3:8b 运行 schema 与识别效果待现场验证。
 - **是否进入 REPORT.md（稳定结论）**：否（助手工具路由与安全边界，不涉及 NILM 算法结论 / KPI）。
+- **提交 / 推送**：实现 commit `b6accec`（`fix: route explicit assistant tool commands deterministically`）已推送至 `origin/arena/82e34fb8-nilm-calc-tool`；本轮仅显式提交 8 个文件，未添加 / 提交 `tmp/`。
 - **遗留问题**：请用户在真实 Qwen3:8b 新会话复测两条原指令，确认提案工具为 `start_current_source`；另用不含 `engine.start` 的操作员 token 验证返回权限原因、不调用查询工具。需再以真实环境的 operator / model_type 查看 `/api/assistant/tools/identity` 中 `available_tools`，辨别实际授权清单。真实浏览器视觉 / 原生键盘 / 触屏待验；不得在聊天发送任何令牌或 API Key。`tmp/` 严格未读、未修改、未暂存、未提交。
