@@ -4179,3 +4179,10 @@ delta_i_a  = d_i_obs
 - **是否进入 REPORT.md（稳定结论）**：否（助手工具路由与安全边界，不涉及 NILM 算法结论 / KPI）。
 - **提交 / 推送**：实现 commit `b6accec`（`fix: route explicit assistant tool commands deterministically`）已推送至 `origin/arena/82e34fb8-nilm-calc-tool`；本轮仅显式提交 8 个文件，未添加 / 提交 `tmp/`。
 - **遗留问题**：请用户在真实 Qwen3:8b 新会话复测两条原指令，确认提案工具为 `start_current_source`；另用不含 `engine.start` 的操作员 token 验证返回权限原因、不调用查询工具。需再以真实环境的 operator / model_type 查看 `/api/assistant/tools/identity` 中 `available_tools`，辨别实际授权清单。真实浏览器视觉 / 原生键盘 / 触屏待验；不得在聊天发送任何令牌或 API Key。`tmp/` 严格未读、未修改、未暂存、未提交。
+
+### T-012 现场权限核验补记（2026-11-04）
+
+- **用户实测结果**：用户在助手界面点击“验证操作权限”，回报提示为：`验证成功：field-readonly-1 · scope: profiles.read, recordings.read · 当前模型可用工具 2 项。`
+- **判读**：身份有效，但该操作员只有画像 / 录波只读 scope；`start_current_source` 要求精确 `engine.start`，因此当前有效工具清单必然不含启动工具。这确认**当前部署存在授权缺项**；若最初两条启动请求使用同一操作员 token 与同一配置，Qwen 不可能从 schema 中选择启动工具，只能在可见的查询工具中误选。此回报没有显示管理员 `enabled_tools` allow-list 内容，不能排除 allow-list 也未勾选；也不是实际模型工具调用记录，不能单独证明最初请求的配置完全相同。
+- **处理建议 / 待验**：管理员需在操作员 scope 中增加 `engine.start`（可给专用最小权限 token），并确认助手总开关与 allow-list 同时启用 `start_current_source`；环境变量变更需重启实际服务。随后重新验证，确认工具出现在可用清单中，再用真实 Qwen3:8b 新会话复测，预期只收到启动工具待确认提案；高风险执行仍需服务端 6 位确认码。不要在聊天中提交 token 或 API Key。
+- **现场边界**：此 UI 权限检查是用户提供的现场结果；尚未回报补权后的可用清单、真实 Qwen 工具调用或确认执行结果。`tmp/` 未读取或修改。

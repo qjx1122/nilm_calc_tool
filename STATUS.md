@@ -1,8 +1,8 @@
 # STATUS.md
 
 > 续接文件（BOOTSTRAP.md v2.2 台账）。每次收尾必更新；只改本文件，不另建同类文件。
-> 最后更新：2026-11-04（本轮明确启动指令误路由复核 / 修复；活动分支状态 active；严格排除 `tmp/`）
-> （本轮沙盒实现与验证已完成：全量 pytest 634 passed / 1 skipped / 1 warning；定向助手 / 服务端 66 passed；jsdom 188 checks。真实 Qwen / 浏览器现场验收待用户，不声称已通过。）
+> 最后更新：2026-11-04（明确启动指令误路由修复；用户权限清单回报已定位 `engine.start` 缺失；活动分支 active；严格排除 `tmp/`）
+> （沙盒全量 634 passed / 1 skipped / 1 warning；助手 / 服务端 66 passed；jsdom 188 checks。用户实测身份 `field-readonly-1` 只有 `profiles.read`、`recordings.read`，当前模型 2 项工具；真实 Qwen 工具选择仍待补授权后复测，不声称已通过。）
 > （第 207 轮沙盒实现与验证已完成：定向 84 passed、全量 629 passed / 1 skipped；jsdom 188 checks；四份生成手册一致。真实浏览器 / 键盘 / 触屏与真实模型服务验收待用户，不声称已通过。）
 > （第 204 轮：桌面 / 窄屏会话管理栏收起功能、回归与文档已完成；46 passed / jsdom 150 checks；目标浏览器视觉待用户复验）
 > （第 202 轮：设置独立滚动区复修与沙盒回归已完成；目标浏览器现场复验待用户）
@@ -21,12 +21,13 @@
 ## 当前目标
 - **本任务（2026-11-04：智能问答明确启动指令误路由复核与修复）**：
   - **角色 / 模式**：工程实现工程师；模式 A；固定活动分支 `arena/82e34fb8-nilm-calc-tool`（active）；不读取、修改、暂存或提交 `tmp/`。
-  - **用户复现**：新建会话中“启动当前侧数据源检测”曾分别被选为 `list_recordings` 和 `list_profiles`；因此本轮不把这两次误路由归因于旧会话 history。真实运行请求当时的 schema 未留日志，尚不能倒推出 `start_current_source` 是否在那轮实际模型 schema 中。
-  - **代码审计结论**：`prepare_chat()` 先经 `tools_enabled`、`enabled_tools`、操作员 token 精确 scope 与 cloud 开关过滤，再生成受限 schema；`_open_request()` 使用 `tool_choice="auto"`；服务端按模型返回的注册工具名 dispatch，不会把启动工具重写为查询工具。真实 Qwen 未连接，模型自然语言选工具效果仍未验证。
+  - **用户复现**：新建会话中“启动当前侧数据源检测”曾分别被选为 `list_recordings` 和 `list_profiles`；这两次不应归因于旧会话 history。
+  - **用户现场权限回报**：在助手界面点“验证操作权限”，身份为 `field-readonly-1`，scope 只有 `profiles.read` 与 `recordings.read`，当前模型可用工具 2 项。因 `start_current_source` 需要 `engine.start`，该工具当前确定不在此身份的有效工具清单中；这证明当前权限至少缺一项。该结果本身不显示管理员 allow-list 状态，也不能证明原两次问答当时的配置完全相同；若当时使用同一 token / 配置，则模型只能从可用查询工具中选择，足以解释误路由。
+  - **代码审计结论**：`prepare_chat()` 先经 `tools_enabled`、`enabled_tools`、操作员 token 精确 scope 与 cloud 开关过滤，再生成受限 schema；`_open_request()` 使用 `tool_choice="auto"`；服务端按模型返回的注册工具名 dispatch，不会把启动工具重写为查询工具。真实 Qwen 的自然语言工具选择仍未连接实测。
   - **修复**：local / cloud 下对注册目录中空参数校验通过的精确工具标题加入确定性服务端路由；明确启动标题 + 已限定的“不查询或更换录波文件”补充语句直接选 `start_current_source`，不再由模型在查询工具间猜选。目标工具未进入有效授权清单时，返回具体阻断项（无操作员、总开关、cloud 开关、allow-list 或精确 scope），不以查询工具兜底。启动前检查当前侧配置 / 运行状态 / 离线文件状态；仍只创建预览，不自动执行。高风险 6 位确认码、token/scope、allow-list、二次服务端复验、侧别绑定与审计保持。
   - **全局工具核验**：回归验证 46 个工具 ID 与服务端 dispatcher、前端标签一致；精确标题确定性覆盖所有空参数校验通过的工具。需必填参数的自由表达仍由模型 `auto` 选择，未连接 Qwen 时不宣称自然语言识别全部通过。`/api/assistant/tools/identity` 可查看当前 token / model_type 的有效工具清单。
   - **验证**：`.venv/bin/python -m pytest -o addopts='' tests/test_assistant.py tests/test_server.py -q` → **66 passed / 1 warning**（18.97 s）；全量 `.venv/bin/python -m pytest -o addopts='' tests -q` → **634 passed / 1 skipped / 1 warning**（194.53 s）；`node tools/ui_assistant_check.cjs` → **188 checks**。`py_compile`、JS `node --check`、显式文件范围 `git diff --check` 均通过。唯一 warning 是 Starlette `TestClient` 与 httpx 弃用提示；npm 审计 0 漏洞。
-  - **未决 / 下一步**：用户在真实 Qwen3:8b 上用新会话分别测试 exact title 与含否定补充的启动指令；核验提示及预览工具名为 `start_current_source`，确认工具未授权时应明确报权限原因而不是读工具；完成目标浏览器 / 原生键盘 / 触屏现场验收。真实模型 schema 与实际自然语言路由未实测。`tmp/` 未触碰。
+  - **未决 / 下一步**：由管理员给操作员补 `engine.start`，并确认总开关 / allow-list 含 `start_current_source`；若通过环境变量更新 token，重启实际服务。再点“验证操作权限”，确认 `start_current_source` 出现在可用工具中，然后用真实 Qwen3:8b 新会话重测两条指令，核验只生成启动预览（高风险仍需 6 位确认码）。当前回报只证实 scope 缺项，allow-list 是否同时缺项尚未确认。真实模型 schema / 选择效果及目标浏览器 / 原生键盘 / 触屏仍待验。`tmp/` 未触碰。
   - **交付**：commit `b6accec`（`fix: route explicit assistant tool commands deterministically`）已推送到 `origin/arena/82e34fb8-nilm-calc-tool`；仅显式提交 8 个代码 / 测试 / 指定文档文件，本轮未添加或提交 `tmp/`。
 - **上一任务（2026-11-04 第 207 轮：智能问答模型选择、本地模型配置精简与全局工具覆盖）**：
   - **角色 / 模式**：工程实现工程师；模式 A；固定活动分支 `arena/82e34fb8-nilm-calc-tool`；不读取、修改、暂存或提交 `tmp/`。

@@ -1020,3 +1020,8 @@
 - **提交 / 推送**：实现 commit `b6accec`（`fix: route explicit assistant tool commands deterministically`）已推送到 `origin/arena/82e34fb8-nilm-calc-tool`；显式提交 8 个文件，`tmp/` 未纳入本轮。
 - **未决问题**：请用户在目标环境用两条原始指令新建会话复测；检查 `/api/assistant/tools/identity` 的实际 `available_tools`，分别验证授权成功与缺 `engine.start` 时的输出。不得提供 / 粘贴令牌或 API Key。`tmp/` 未读、未改、未暂存或提交。
 - **相关文件 / 分支**：`app/assistant.py`、`app/assistant_tools.py`、`tests/test_assistant.py`、`tests/test_server.py`、`docs/智能问答助手说明.md` §6.7、`STATUS.md`、`REPORT_TEST.md` T-012、本文件；固定活动分支 `arena/82e34fb8-nilm-calc-tool`。
+
+### 用户现场回报补记（2026-11-04）
+- 用户在助手界面点击“验证操作权限”，报告：`field-readonly-1`；scope 为 `profiles.read`、`recordings.read`；当前模型可用工具 2 项。
+- 判读：当前身份确定缺少 `engine.start`，故 `start_current_source` 不可能进入该身份的有效工具清单；这解释了使用同一 token / 配置时模型只能在只读工具中选。验证提示未显示管理员 allow-list 是否也缺项，且不是此前真实聊天请求的工具 schema 记录。
+- 下一步：管理员仅给需要启动功能的操作员增加 `engine.start`，同时核实工具总开关 / allow-list 含 `start_current_source`；环境 token 更新后重启服务。重验可用工具并用真实 Qwen 新会话测试启动预览；不要在对话中发送令牌或 API Key。尚无补权后或真实模型的复验结果。
