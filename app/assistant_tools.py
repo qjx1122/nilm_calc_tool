@@ -77,7 +77,8 @@ TOOL_CATALOG: List[Dict[str, Any]] = [
            "curves": {"type": "boolean"}, "events": {"type": "boolean"}, "nilm": {"type": "boolean"}}),
 
     _tool("start_current_source", "启动当前侧数据源检测", "engine.start",
-          "启动当前侧已配置的数据源；不接受模型传入的文件路径，不重启正在运行的数据源。总线侧可能按现有设置联动分路侧。",
+          "用户明确要求启动/开始播放当前侧已配置的数据源时使用本工具；不接受模型传入的文件路径，不重启正在运行的数据源。"
+          "不得用查询可用录波或查询设备画像代替启动。总线侧可能按现有设置联动分路侧。",
           high_risk=True),
     _tool("pause_current_source", "暂停当前侧离线播放", "engine.pause",
           "暂停当前侧已运行的 csv_file 离线播放；实时源不支持暂停。总线侧按应用既有逻辑尝试同步分路侧。"),
@@ -91,7 +92,8 @@ TOOL_CATALOG: List[Dict[str, Any]] = [
           {"file_id": {"type": "string", "pattern": _FILE_ID_RE.pattern}}, ["file_id"], high_risk=True),
 
     _tool("list_recordings", "查询可用录波文件", "recordings.read",
-          "列出固定 data / output 目录中服务端登记的 CSV/TXT 文件 ID、名称与大小；不会把文件内容交给模型。",
+          "仅在用户明确要求列出可用录波文件时使用；列出固定 data / output 目录中服务端登记的 CSV/TXT 文件 ID、名称与大小；"
+          "不会把文件内容交给模型，也不能代替启动当前数据源。",
           {"folder": {"type": "string", "enum": ["data", "output"]}}, ["folder"]),
     _tool("inspect_recording", "检查录波文件信息", "recordings.inspect",
           "通过服务端签发的 file_id 检查采样率、点数、时长、通道和时间范围；不接受路径，结果不包含绝对路径。",
@@ -160,7 +162,8 @@ TOOL_CATALOG: List[Dict[str, Any]] = [
           "只切换当前侧设备画像匹配算法开关，不修改画像文件或其他阈值。",
           {"enabled": {"type": "boolean"}}, ["enabled"], high_risk=True),
     _tool("list_profiles", "查询设备画像", "profiles.read",
-          "只列出应用 output 目录当前侧的设备画像 ID 与元数据，不读取原始波形或返回本地绝对路径。"),
+          "仅在用户明确要求查询设备画像时使用；只列出应用 output 目录当前侧的设备画像 ID 与元数据，"
+          "不读取原始波形或返回本地绝对路径，也不能代替启动当前数据源。"),
     _tool("load_latest_profile", "加载当前侧最新设备画像", "profile.load",
           "从应用 output 目录中选择当前侧最新设备画像，挂载并启用画像匹配；不能读取任意路径。",
           high_risk=True),

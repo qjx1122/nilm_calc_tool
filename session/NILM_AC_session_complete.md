@@ -987,7 +987,7 @@
 - 未决问题：待用户在目标浏览器确认悬浮球开 / 关显隐，空会话与完成问答的右侧标题，以及桌面 / 窄屏下模型下拉和发送按钮位置。`tmp/` 未读取、修改、暂存或提交。
 - 相关文件/分支：`app/static/app.js`、`app/static/index.html`、`app/static/style.css`、`tests/test_web_ui.py`、`tools/ui_assistant_check.cjs`、`README.md`、`docs/智能问答助手说明.md`、生成的四份 `docs/软件*.md`、`REPORT_TEST.md`、`STATUS.md`、本文件；活动分支 `arena/82e34fb8-nilm-calc-tool`。
 
-## [2026-11-05] 会话纪要
+## [2026-11-04] 会话纪要
 - 目标：实现用户提出的智能问答助手悬浮球可拖动、底部删除“问答后端”下拉和“具体模型”可见标题、截图按钮改名“附件”、底部布局整齐。
 - 本会话角色：资深电力算法专家（`ROLE.md` 默认）＋工程实现工程师（第 206 轮任务级覆盖）；模式 A；固定活动分支 `arena/82e34fb8-nilm-calc-tool`。
 - 完成项：悬浮球通过 Pointer Events 支持鼠标 / 触屏拖动，位置夹限于视口、缩放后可见时重新夹限，拖动不触发开窗，位置不跨页面刷新持久化；composer 移除单轮问答后端选择器，管理员默认后端配置仍在设置中，新会话使用最新默认值、旧会话保留原后端和模型；设置变更导致空会话路由变化时，使用新后端重新验证现有操作员令牌；具体模型 select 仅在 local / cloud 会话显示且不显示可见标签，保留 aria-label，builtin 隐藏；按钮显示 / title 改为“附件”。完成底部 flex / 窄屏规则、README / 助手说明与生成手册同步，以及静态契约 / jsdom 回归。
@@ -997,7 +997,7 @@
 - 提交 / 推送：commit `a67c137`（`feat: make assistant launcher draggable and simplify composer`）已推送到活动分支 `arena/82e34fb8-nilm-calc-tool`；提交显式列出 12 个文件，排除 `tmp/`。
 - 相关文件/分支：`app/static/app.js`、`app/static/index.html`、`app/static/style.css`、`tests/test_web_ui.py`、`tools/ui_assistant_check.cjs`、`README.md`、`docs/智能问答助手说明.md`、生成的 `docs/软件使用文档.md` / `docs/软件部署说明文档.md`、`STATUS.md`、`REPORT_TEST.md`、本文件；固定活动分支 `arena/82e34fb8-nilm-calc-tool`。
 
-## [2026-11-05] 会话纪要（第 207 轮：逐会话后端 / 模型选择、管理员本地模型配置收敛与工具覆盖）
+## [2026-11-04] 会话纪要（第 207 轮：逐会话后端 / 模型选择、管理员本地模型配置收敛与工具覆盖）
 - **目标**：恢复问答 composer 底部 local / cloud / builtin 逐会话后端选择；本地模型候选来自保存的服务发现，云端候选来自配置档案，移除管理员 local 模型名称；审查并扩展全局允许工具，同时把受控操作和未开放能力逐项文档化。
 - **本会话角色**：资深电力算法专家（`ROLE.md` 默认角色）＋工程实现工程师（第 207 轮任务级覆盖）；模式 A；固定活动分支 `arena/82e34fb8-nilm-calc-tool`。
 - **完成项**：composer 后端选择器保留，每个会话保持自己的后端 / 模型；管理员设置不再保存本地模型名称，本地地址与 API Key 仍共享，刷新 endpoint 仅接受空请求或 `{}`，拒绝 JSON `null`、非法 JSON 和其他自定义参数。工具目录 / server dispatcher / 前端工具标签统一为 46 项，`docs/智能问答助手说明.md` §6.6 完整矩阵列出每项工具、精确 scope、业务限制与确认级别；26 项高风险标注二次确认，并列出不开放的任意 shell、Python、SQL、文件路径和任意 API 等。隐藏来源名时录波 / 画像目录及画像加载结果保持名称脱敏；逐周波 RMS 工具要求显式指定单一通道；重采样状态工具只回报错误标记、不泄露 worker 异常路径。README、助手说明、四份生成手册、专题报告和状态台账已同步。
@@ -1006,3 +1006,16 @@
 - **未决问题**：等待用户在目标浏览器点检后端 / 模型切换、独立会话和窄屏布局；如接入真实模型，再核验服务发现 / 管理员刷新及 provider 兼容性。不得把 pytest / jsdom 结果表述为真实浏览器 / 模型验收通过。`tmp/` 用户数据严禁读取、修改、暂存或提交，本会话未触碰。
 - **相关文件 / 分支**：代码 `app/assistant_tools.py`、`app/assistant.py`、`app/server.py`、`app/static/{index.html,app.js,style.css}`；测试 `tests/test_assistant.py`、`tests/test_server.py`、`tests/test_web_ui.py`、`tools/ui_assistant_check.cjs`；文档 `README.md`、`docs/智能问答助手说明.md`、生成的四份 `docs/软件*.md`；记录 `REPORT_TEST.md` T-011、`STATUS.md`、本文件；固定活动分支 `arena/82e34fb8-nilm-calc-tool`。
 - **提交 / 推送**：实现交付 commit `d56c524`（`feat: restore assistant backend selector and controlled tools`）已显式提交 17 个允许文件并推送至 `origin/arena/82e34fb8-nilm-calc-tool`；排除 `tmp/`。
+
+## [2026-11-04] 会话纪要：智能问答工具误路由复核与明确指令确定性路由
+- **目标**：复核新会话中“启动当前侧数据源检测”被路由到 `list_recordings` / `list_profiles` 的原因，区分实际有效工具清单 / 权限过滤与模型 `tool_choice=auto` 选择错误；审计全局工具并修复，不以改写措辞代替代码处理。
+- **本会话角色**：资深电力算法专家（`ROLE.md` 默认角色）＋工程实现工程师（本任务覆盖）；模式 A；固定活动分支 `arena/82e34fb8-nilm-calc-tool`（active）。
+- **完成项**：
+  - 复核 schema 路由：工具由 `tools_enabled`、allow-list、操作员精确 scope 与 cloud 开关过滤；模型工具选择为 `auto`；server dispatcher 按注册名执行，不会将启动工具改写成查询工具。新会话复现不能证明当时 Qwen 收到的实际 schema。
+  - 在 `app/assistant.py` 增加精确工具标题的确定性提案入口，覆盖所有空参数 validator 通过的注册工具标题；启动标题及限定否定补充直接选 `start_current_source`。目标工具不可用时指出实际阻断项，不回退到相似查询；检查当前侧数据源、运行状态和离线文件条件。
+  - 更新 `app/assistant_tools.py` 的启动 / 录波 / 画像工具边界描述、system prompt 选择规则，并在助手说明 §6.7 记录确定性路由适用范围和真实模型验证限制。
+  - 新增单元 / API 回归：精确启动直接建提案、不触发模型请求；JSON / SSE 都返回侧别绑定的 `start_current_source` 预览；错误 scope / allow-list 被分别识别；高风险确认码仍有效；当前侧未配置、已运行、缺路径或离线请求对应非文件源时拒绝。
+- **关键决策**：精确目录标题且空参数合法时才走确定性路径，不尝试开放式意图解析；参数型工具和非精确自然语言仍由模型处理。权限清单缺项必须报错而不以查询工具兜底。预览继续是唯一入口：保留 operator token / scope、allow-list、用户确认、6 位高风险复验、服务端重新校验、side binding、审计和速率限制；不开放任意 shell / SQL / Python / 路径 / API。
+- **验证方式 / 覆盖范围 / 缺口**：`./.venv/bin/python -m pytest -o addopts='' tests/test_assistant.py tests/test_server.py -q` → **66 passed / 1 warning**（18.97 s）；`./.venv/bin/python -m pytest -o addopts='' tests -q` → **634 passed / 1 skipped / 1 warning**（194.53 s）；`node tools/ui_assistant_check.cjs` → **188 checks**；`py_compile` 与 JS `node --check` 通过。46 项 catalog / dispatcher / 前端标签一致性测试通过。Starlette `TestClient` 与 httpx 弃用提示为唯一 warning。真实 qwen3:8b / provider 与用户浏览器 / 原生键盘 / 触屏未测，不声明现场验收通过。
+- **未决问题**：请用户在目标环境用两条原始指令新建会话复测；检查 `/api/assistant/tools/identity` 的实际 `available_tools`，分别验证授权成功与缺 `engine.start` 时的输出。不得提供 / 粘贴令牌或 API Key。`tmp/` 未读、未改、未暂存或提交。
+- **相关文件 / 分支**：`app/assistant.py`、`app/assistant_tools.py`、`tests/test_assistant.py`、`tests/test_server.py`、`docs/智能问答助手说明.md` §6.7、`STATUS.md`、`REPORT_TEST.md` T-012、本文件；固定活动分支 `arena/82e34fb8-nilm-calc-tool`。

@@ -572,6 +572,52 @@ def test_assistant_chat_stream_and_nonstream_api(client, tmp_path, monkeypatch):
     assert invalid.status_code == 400 and "布尔值" in invalid.json()["error"]
 
 
+def test_assistant_explicit_source_start_routes_to_bound_proposal_without_model(client, tmp_path, monkeypatch):
+    from app.assistant import AssistantService
+
+    admin = "server-explicit-start-admin"
+    operator = "server-explicit-start-operator"
+    monkeypatch.setenv("ELEC_TOOL_ASSISTANT_ADMIN_TOKEN", admin)
+    monkeypatch.setenv("ELEC_TOOL_ASSISTANT_OPERATOR_TOKENS", json.dumps([
+        {"id": "field-operator", "token": operator, "scopes": ["engine.start"]},
+    ]))
+    service = AssistantService(data_dir=str(tmp_path / "assistant-explicit-start"))
+    service.update_config({"tools_enabled": True, "enabled_tools": ["start_current_source", "list_recordings", "list_profiles"]}, admin)
+    monkeypatch.setattr(client.srv, "assistant_service", service)
+    monkeypatch.setattr(service, "_open_request", lambda *args, **kwargs: pytest.fail("explicit route must not call model"))
+    monkeypatch.setattr(client.srv, "_assistant_tool_context", lambda side, *args, **kwargs: {
+        "side": side,
+        "source": {"kind": "csv_file", "name": "", "has_path": True, "running": False},
+    })
+    headers = {"X-Assistant-Operator-Token": operator}
+    payload = {
+        "prompt": "启动当前侧数据源检测，不要查询或更换录波文件",
+        "model_type": "local",
+        "model_name": "qwen3:8b",
+        "stream": False,
+    }
+
+    plain = client.post("/api/branch/assistant/chat", headers=headers, json=payload)
+    assert plain.status_code == 200, plain.text
+    result = plain.json()
+    assert result["proposal"]["tool"] == "start_current_source"
+    assert result["proposal"]["side"] == "branch"
+    assert result["proposal"]["requires_second_confirmation"] is True
+    assert "启动当前侧数据源检测" in result["answer"]
+
+    payload["prompt"] = "启动当前侧数据源检测"
+    payload["stream"] = True
+    streamed = client.post("/api/branch/assistant/chat", headers=headers, json=payload)
+    assert streamed.status_code == 200, streamed.text
+    frames = [json.loads(line[6:]) for line in streamed.text.splitlines() if line.startswith("data: {")]
+    proposals = [frame["proposal"] for frame in frames if frame.get("type") == "proposal"]
+    assert len(proposals) == 1
+    assert proposals[0]["tool"] == "start_current_source" and proposals[0]["side"] == "branch"
+    assert any(frame.get("type") == "done" for frame in frames)
+    assert len(service._pending_tools) == 2
+    assert all(item["name"] == "start_current_source" for item in service._pending_tools.values())
+
+
 def test_assistant_chat_image_payload_is_validated_and_passed_to_model_stream(client, tmp_path, monkeypatch):
     import base64
     from app.assistant import AssistantService

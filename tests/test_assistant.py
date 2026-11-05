@@ -6,9 +6,9 @@ import json
 
 import pytest
 
-from app.assistant import AssistantError, AssistantService, DEFAULT_CONFIG, _number
+from app.assistant import AssistantError, AssistantService, DEFAULT_CONFIG, _explicit_tool_command, _number
 from app.assistant_docs import PLATFORM_PARAMETER_DOC_ID
-from app.assistant_tools import TOOL_NAMES, openai_tool_schemas, validate_tool_arguments
+from app.assistant_tools import TOOL_CATALOG, TOOL_NAMES, openai_tool_schemas, validate_tool_arguments
 
 
 def test_integer_settings_reject_fractional_and_boolean_values():
@@ -701,6 +701,149 @@ def test_tool_catalog_validation_and_closed_scope_proposal(tmp_path, monkeypatch
     with pytest.raises(AssistantError, match="关闭云端工具执行"):
         service.claim_tool_proposal(cloud_proposal["id"], operator, "branch", cloud_proposal["confirmation_code"])
     assert (tmp_path / "tool_audit.jsonl").exists()
+
+
+def test_exact_catalog_titles_route_every_empty_argument_tool_deterministically():
+    from app.assistant_tools import TOOL_BY_NAME
+
+    eligible = []
+    for item in TOOL_CATALOG:
+        try:
+            validate_tool_arguments(item["name"], {})
+        except ValueError:
+            continue
+        eligible.append(item["name"])
+        assert _explicit_tool_command(item["title"]) == item["name"]
+
+    assert eligible
+    assert _explicit_tool_command("启动当前侧数据源检测，不要查询或更换录波文件") == "start_current_source"
+    assert _explicit_tool_command("请启动当前离线数据源播放") == "start_current_source"
+    assert _explicit_tool_command("为什么输入‘启动当前侧数据源检测’会查询设备画像？") is None
+    assert _explicit_tool_command("启动当前侧数据源检测，然后告诉我为什么") is None
+    assert TOOL_BY_NAME["start_current_source"]["scope"] == "engine.start"
+
+
+def test_explicit_source_start_bypasses_model_selection_but_keeps_confirmation(tmp_path, monkeypatch):
+    import threading
+
+    admin = "explicit-route-admin-token"
+    operator = "explicit-route-operator-secret"
+    monkeypatch.setenv("ELEC_TOOL_ASSISTANT_ADMIN_TOKEN", admin)
+    monkeypatch.setenv("ELEC_TOOL_ASSISTANT_OPERATOR_TOKENS", json.dumps([
+        {"id": "field-operator", "token": operator, "scopes": ["engine.start"]},
+    ]))
+    service = AssistantService(data_dir=str(tmp_path))
+    service.update_config({
+        "tools_enabled": True,
+        "enabled_tools": ["start_current_source", "list_recordings", "list_profiles"],
+    }, admin)
+    monkeypatch.setattr(service, "_open_request", lambda *args, **kwargs: pytest.fail("direct command must not call the model"))
+
+    plan = service.prepare_chat({
+        "prompt": "启动当前侧数据源检测，不要查询或更换录波文件",
+        "model_type": "local",
+        "model_name": "qwen3:8b",
+        "rag_enabled": False,
+    }, operator_token=operator, side="branch", tool_context={
+        "side": "branch",
+        "source": {"kind": "csv_file", "name": "", "has_path": True, "running": False},
+    })
+
+    proposal = plan["_tool_proposal"]
+    assert plan["_available_tools"] == ["start_current_source"]
+    assert proposal["tool"] == "start_current_source"
+    assert proposal["title"] == "启动当前侧数据源检测"
+    assert proposal["side"] == "branch"
+    assert proposal["requires_second_confirmation"] is True
+    assert proposal["confirmation_code"]
+    assert "不会执行" in service.complete(plan)
+    assert "启动当前侧数据源检测" in "".join(service.stream(plan, threading.Event()))
+
+    incorrect_code = "000001" if proposal["confirmation_code"] != "000001" else "000002"
+    with pytest.raises(AssistantError, match="二次确认码不匹配"):
+        service.claim_tool_proposal(proposal["id"], operator, "branch", incorrect_code)
+
+
+def test_explicit_source_start_does_not_fall_back_when_authorization_is_missing(tmp_path, monkeypatch):
+    admin = "explicit-denied-admin-token"
+    operator = "explicit-readonly-operator-secret"
+    monkeypatch.setenv("ELEC_TOOL_ASSISTANT_ADMIN_TOKEN", admin)
+    monkeypatch.setenv("ELEC_TOOL_ASSISTANT_OPERATOR_TOKENS", json.dumps([
+        {"id": "read-only", "token": operator, "scopes": ["recordings.read", "profiles.read"]},
+    ]))
+    service = AssistantService(data_dir=str(tmp_path))
+    service.update_config({
+        "tools_enabled": True,
+        "enabled_tools": ["start_current_source", "list_recordings", "list_profiles"],
+    }, admin)
+    available = service.operator_tools(service.authenticate_operator(operator), "local")
+    assert "start_current_source" not in available
+    assert "list_recordings" in available and "list_profiles" in available
+    ordinary_plan = service.prepare_chat({
+        "prompt": "请说明当前可用的受控查询工具",
+        "model_type": "local",
+        "model_name": "qwen3:8b",
+    }, operator_token=operator, tool_context={
+        "source": {"kind": "csv_file", "has_path": True, "running": False},
+    })
+    offered = {tool["function"]["name"] for tool in ordinary_plan["tools"]}
+    assert offered == set(available)
+    assert "start_current_source" not in offered
+
+    with pytest.raises(AssistantError) as denied:
+        service.prepare_chat({
+            "prompt": "启动当前侧数据源检测，不要查询或更换录波文件",
+            "model_type": "local",
+            "model_name": "qwen3:8b",
+        }, operator_token=operator, tool_context={
+            "source": {"kind": "csv_file", "has_path": True, "running": False},
+        })
+    assert denied.value.status_code == 403
+    assert "engine.start" in denied.value.message
+    assert "操作员令牌缺少精确 scope" in denied.value.message
+    assert "不会改用相似查询工具代替" in denied.value.message
+
+    # Now grant the operator's start scope but remove the tool from the admin allow-list.
+    start_operator = "explicit-start-allowlist-operator"
+    monkeypatch.setenv("ELEC_TOOL_ASSISTANT_OPERATOR_TOKENS", json.dumps([
+        {"id": "start-operator", "token": start_operator, "scopes": ["engine.start"]},
+    ]))
+    service.update_config({"enabled_tools": ["list_recordings", "list_profiles"]}, admin)
+    with pytest.raises(AssistantError) as allowlist_denied:
+        service.prepare_chat({
+            "prompt": "启动当前侧数据源检测，不要查询或更换录波文件",
+            "model_type": "local",
+            "model_name": "qwen3:8b",
+        }, operator_token=start_operator, tool_context={
+            "source": {"kind": "csv_file", "has_path": True, "running": False},
+        })
+    assert allowlist_denied.value.status_code == 403
+    assert "管理员 allow-list 未包含该工具" in allowlist_denied.value.message
+    assert "操作员令牌缺少精确 scope" not in allowlist_denied.value.message
+    assert not service._pending_tools
+
+
+def test_explicit_source_start_rejects_running_or_unconfigured_source(tmp_path, monkeypatch):
+    admin = "explicit-source-state-admin"
+    operator = "explicit-source-state-operator"
+    monkeypatch.setenv("ELEC_TOOL_ASSISTANT_ADMIN_TOKEN", admin)
+    monkeypatch.setenv("ELEC_TOOL_ASSISTANT_OPERATOR_TOKENS", json.dumps([
+        {"id": "field-operator", "token": operator, "scopes": ["engine.start"]},
+    ]))
+    service = AssistantService(data_dir=str(tmp_path))
+    service.update_config({"tools_enabled": True, "enabled_tools": ["start_current_source"]}, admin)
+    payload = {"prompt": "启动当前侧数据源检测", "model_type": "local", "model_name": "qwen3:8b"}
+
+    for source, expected in (({"kind": "csv_file", "has_path": True, "running": True}, "不会重复启动"),
+                             ({"kind": "csv_file", "has_path": False, "running": False}, "未配置可用文件"),
+                             ({"kind": "", "has_path": False, "running": False}, "没有可用的数据源配置")):
+        with pytest.raises(AssistantError, match=expected):
+            service.prepare_chat(payload, operator_token=operator, tool_context={"source": source})
+    offline_payload = {**payload, "prompt": "启动当前离线数据源播放"}
+    with pytest.raises(AssistantError, match="不是离线文件数据源"):
+        service.prepare_chat(offline_payload, operator_token=operator,
+                             tool_context={"source": {"kind": "simulator", "has_path": False, "running": False}})
+    assert not service._pending_tools
 
 
 def test_expanded_tool_allowlist_is_closed_and_model_context_contains_only_safe_resource_ids(tmp_path, monkeypatch):
