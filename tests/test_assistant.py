@@ -838,6 +838,9 @@ def test_exact_catalog_titles_route_every_empty_argument_tool_deterministically(
         ("启动离线数据源CSV文件", True),
         ("播放数据源与控制中的离线数据源CSV文件", True),
         ("启动数据源与控制中的离线数据源CSV文件", True),
+        ("请马上开始离线数据源", True),
+        ("马上开始离线数据源", True),
+        ("立即播放离线数据源CSV文件", True),
     )
     for prompt, is_offline in reported_phrases:
         assert _explicit_tool_command(prompt) == "start_current_source", prompt
