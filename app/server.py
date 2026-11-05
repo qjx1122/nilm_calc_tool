@@ -24,6 +24,7 @@ import re
 import threading
 import platform
 import queue
+import secrets
 import sys
 import time
 from collections import deque
@@ -1214,6 +1215,14 @@ def _start_branch_if_enabled(bus_cfg: AppConfig, pace_clock=None, br_cfg: Option
 
 @asynccontextmanager
 async def lifespan(_app: "FastAPI"):
+    assistant_file = os.path.abspath(str(getattr(sys.modules.get("app.assistant"), "__file__", "") or ""))
+    try:
+        assistant_build = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(os.path.getmtime(assistant_file)))
+    except OSError:
+        assistant_build = "unknown"
+    # Deployment troubleshooting: proves which code directory this process actually loaded.
+    log.info("服务启动 version=%s pid=%d assistant_module=%s modified=%s",
+             __version__, os.getpid(), assistant_file, assistant_build)
     await _startup()
     try:
         assistant_service.start_local_model_discovery()
@@ -2275,6 +2284,9 @@ async def assistant_chat(request: Request) -> Any:
     stream = payload.get("stream", True)
     if not isinstance(stream, bool):
         return JSONResponse(status_code=400, content={"ok": False, "error": "stream 必须是布尔值"})
+    trace_id = secrets.token_hex(8)
+    payload["_assistant_trace_id"] = trace_id
+    trace_headers = {"X-Assistant-Trace-ID": trace_id}
     client_id = request.client.host if request.client else "unknown"
     operator_token = request.headers.get("x-assistant-operator-token", "")
     operator = None
@@ -2288,7 +2300,14 @@ async def assistant_chat(request: Request) -> Any:
     try:
         assistant_service.acquire_request(operator["id"] if operator else client_id)
     except AssistantError as exc:
-        return JSONResponse(status_code=exc.status_code, content={"ok": False, "error": exc.message})
+        return JSONResponse(status_code=exc.status_code, content={"ok": False, "error": exc.message},
+                             headers=trace_headers)
+    backend_hint = str(payload.get("model_type") or "default").lower()
+    if backend_hint not in {"default", "builtin", "local", "cloud"}:
+        backend_hint = "invalid"
+    log.info("assistant_chat_received trace_id=%s backend=%s stream=%s image_count=%d",
+             trace_id, backend_hint, stream,
+             len(payload.get("images")) if isinstance(payload.get("images"), list) else 0)
     try:
         # Platform visibility rule: when branch-side data is hidden, support filenames
         # must not leak through the assistant's answer, retrieval context, or citations.
@@ -2307,11 +2326,14 @@ async def assistant_chat(request: Request) -> Any:
                                               side=current_side(), tool_context=context)
     except AssistantError as exc:
         assistant_service.release_request()
-        return JSONResponse(status_code=exc.status_code, content={"ok": False, "error": exc.message})
+        log.warning("assistant_chat_prepare_rejected trace_id=%s status=%d", trace_id, exc.status_code)
+        return JSONResponse(status_code=exc.status_code, content={"ok": False, "error": exc.message},
+                             headers=trace_headers)
     except Exception:
         assistant_service.release_request()
-        log.exception("Assistant request preparation failed")
-        return JSONResponse(status_code=500, content={"ok": False, "error": "无法准备问答请求，请检查服务端配置后重试"})
+        log.exception("Assistant request preparation failed trace_id=%s", trace_id)
+        return JSONResponse(status_code=500, content={"ok": False, "error": "无法准备问答请求，请检查服务端配置后重试"},
+                             headers=trace_headers)
 
     if stream:
         async def event_stream():
@@ -2339,7 +2361,8 @@ async def assistant_chat(request: Request) -> Any:
             finally:
                 cancel.set()
         return StreamingResponse(event_stream(), media_type="text/event-stream",
-                                 headers={"Cache-Control": "no-cache, no-transform", "X-Accel-Buffering": "no"})
+                                 headers={"Cache-Control": "no-cache, no-transform", "X-Accel-Buffering": "no",
+                                          **trace_headers})
 
     completion_started = threading.Event()
 
@@ -2354,22 +2377,31 @@ async def assistant_chat(request: Request) -> Any:
         completion = asyncio.create_task(asyncio.to_thread(complete_and_release))
     except Exception:
         assistant_service.release_request()
-        log.exception("Unable to schedule non-streaming assistant request")
-        return JSONResponse(status_code=503, content={"ok": False, "error": "当前无法启动模型请求，请稍后重试"})
+        log.exception("Unable to schedule non-streaming assistant request trace_id=%s", trace_id)
+        return JSONResponse(status_code=503, content={"ok": False, "error": "当前无法启动模型请求，请稍后重试"},
+                             headers=trace_headers)
     try:
         answer = await asyncio.shield(completion)
-        return {"ok": True, "answer": answer, "sources": plan["sources"],
-                "proposal": plan.get("_tool_proposal")}
+        return JSONResponse(
+            status_code=200,
+            content={"ok": True, "answer": answer, "sources": plan["sources"],
+                     "proposal": plan.get("_tool_proposal"),
+                     "clarification": bool(plan.get("_tool_clarification"))},
+            headers=trace_headers,
+        )
     except AssistantError as exc:
-        return JSONResponse(status_code=exc.status_code, content={"ok": False, "error": exc.message})
+        log.warning("assistant_chat_completion_rejected trace_id=%s status=%d", trace_id, exc.status_code)
+        return JSONResponse(status_code=exc.status_code, content={"ok": False, "error": exc.message},
+                             headers=trace_headers)
     except asyncio.CancelledError:
         # shield keeps the blocking urllib worker alive; it owns semaphore release on completion.
         raise
     except Exception:
         if not completion_started.is_set():
             assistant_service.release_request()
-        log.exception("Assistant completion failed unexpectedly")
-        return JSONResponse(status_code=500, content={"ok": False, "error": "模型请求发生未预期错误，请检查服务端日志"})
+        log.exception("Assistant completion failed unexpectedly trace_id=%s", trace_id)
+        return JSONResponse(status_code=500, content={"ok": False, "error": "模型请求发生未预期错误，请检查服务端日志"},
+                             headers=trace_headers)
 
 
 @app.get("/api/state")

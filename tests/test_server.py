@@ -546,6 +546,56 @@ def test_assistant_local_model_catalog_api_is_cached_and_refresh_is_admin_only(c
     assert empty_object.status_code == 200 and empty_object.json()["models"] == refreshed.json()["models"]
 
 
+def test_assistant_chat_returns_clarification_for_mismatched_model_tool_in_json_and_sse(client, tmp_path, monkeypatch):
+    from app.assistant import AssistantService
+
+    admin = "intent-api-admin-token"
+    operator = "intent-api-operator-token-secret"
+    monkeypatch.setenv("ELEC_TOOL_ASSISTANT_ADMIN_TOKEN", admin)
+    monkeypatch.setenv("ELEC_TOOL_ASSISTANT_OPERATOR_TOKENS", json.dumps([
+        {"id": "intent-api-operator", "token": operator, "scopes": ["config.wiring.write", "state.read"]},
+    ]))
+    service = AssistantService(data_dir=str(tmp_path / "assistant-intent-api"))
+    service.update_config({"tools_enabled": True,
+                           "enabled_tools": ["set_wiring_mode", "get_runtime_status"]}, admin)
+    monkeypatch.setattr(client.srv, "assistant_service", service)
+
+    class FakeCompletionResponse:
+        def __enter__(self): return self
+        def __exit__(self, *args): return False
+        def read(self, _limit):
+            return json.dumps({"choices": [{"message": {
+                "content": "操作已经完成。", "tool_calls": [{"id": "call-json", "type": "function",
+                    "function": {"name": "get_runtime_status", "arguments": "{}"}}]}}]}).encode("utf-8")
+
+    class FakeStreamResponse:
+        def __enter__(self): return self
+        def __exit__(self, *args): return False
+        def __iter__(self):
+            yield 'data: {"choices":[{"delta":{"content":"操作已经完成。"}}]}\n'.encode("utf-8")
+            yield 'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call-sse","function":{"name":"get_runtime_status","arguments":"{}"}}]}}]}\n'.encode("utf-8")
+            yield b"data: [DONE]\n"
+
+    monkeypatch.setattr(service, "_open_request", lambda _plan, stream: FakeStreamResponse() if stream else FakeCompletionResponse())
+    headers = {"X-Assistant-Operator-Token": operator}
+    plain = client.post("/api/assistant/chat", headers=headers,
+                        json={"prompt": "切换接线模式到3p4w", "model_type": "local", "stream": False})
+    assert plain.status_code == 200, plain.text
+    result = plain.json()
+    assert result["clarification"] is True and result["proposal"] is None
+    assert "暂未创建操作预览" in result["answer"] and "操作已经完成" not in result["answer"]
+
+    streamed = client.post("/api/assistant/chat", headers=headers,
+                           json={"prompt": "切换接线模式到3p4w", "model_type": "local", "stream": True})
+    assert streamed.status_code == 200, streamed.text
+    frames = [json.loads(line[6:]) for line in streamed.text.splitlines() if line.startswith("data: {")]
+    assert any(frame.get("type") == "clarification" for frame in frames)
+    assert any(frame.get("type") == "delta" and "暂未创建操作预览" in frame["text"] for frame in frames)
+    assert not any(frame.get("type") == "proposal" for frame in frames)
+    assert "操作已经完成" not in streamed.text
+    assert not service._pending_tools
+
+
 def test_assistant_chat_stream_and_nonstream_api(client, tmp_path, monkeypatch):
     from app.assistant import AssistantService
 
@@ -590,31 +640,43 @@ def test_assistant_explicit_source_start_routes_to_bound_proposal_without_model(
         "source": {"kind": "csv_file", "name": "", "has_path": True, "running": False},
     })
     headers = {"X-Assistant-Operator-Token": operator}
+    reported_phrases = (
+        "播放离线数据源CSV文件",
+        "播放离线数据源",
+        "播放数据源",
+        "启动离线数据源CSV文件",
+        "播放数据源与控制中的离线数据源CSV文件",
+        "启动数据源与控制中的离线数据源CSV文件",
+    )
     payload = {
-        "prompt": "启动当前侧数据源检测，不要查询或更换录波文件",
         "model_type": "local",
         "model_name": "qwen3:8b",
         "stream": False,
     }
 
-    plain = client.post("/api/branch/assistant/chat", headers=headers, json=payload)
-    assert plain.status_code == 200, plain.text
-    result = plain.json()
-    assert result["proposal"]["tool"] == "start_current_source"
-    assert result["proposal"]["side"] == "branch"
-    assert result["proposal"]["requires_second_confirmation"] is True
-    assert "启动当前侧数据源检测" in result["answer"]
+    for prompt in reported_phrases:
+        payload["prompt"] = prompt
+        plain = client.post("/api/branch/assistant/chat", headers=headers, json=payload)
+        assert plain.status_code == 200, plain.text
+        trace_id = plain.headers.get("X-Assistant-Trace-ID", "")
+        assert len(trace_id) == 16 and all(char in "0123456789abcdef" for char in trace_id)
+        result = plain.json()
+        assert result["proposal"]["tool"] == "start_current_source", prompt
+        assert result["proposal"]["side"] == "branch"
+        assert result["proposal"]["requires_second_confirmation"] is True
+        assert "启动当前侧数据源检测" in result["answer"]
 
     payload["prompt"] = "启动当前侧数据源检测"
     payload["stream"] = True
     streamed = client.post("/api/branch/assistant/chat", headers=headers, json=payload)
     assert streamed.status_code == 200, streamed.text
+    assert streamed.headers.get("X-Assistant-Trace-ID")
     frames = [json.loads(line[6:]) for line in streamed.text.splitlines() if line.startswith("data: {")]
     proposals = [frame["proposal"] for frame in frames if frame.get("type") == "proposal"]
     assert len(proposals) == 1
     assert proposals[0]["tool"] == "start_current_source" and proposals[0]["side"] == "branch"
     assert any(frame.get("type") == "done" for frame in frames)
-    assert len(service._pending_tools) == 2
+    assert len(service._pending_tools) == len(reported_phrases) + 1
     assert all(item["name"] == "start_current_source" for item in service._pending_tools.values())
 
 

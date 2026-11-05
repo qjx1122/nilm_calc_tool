@@ -1025,3 +1025,70 @@
 - 用户在助手界面点击“验证操作权限”，报告：`field-readonly-1`；scope 为 `profiles.read`、`recordings.read`；当前模型可用工具 2 项。
 - 判读：当前身份确定缺少 `engine.start`，故 `start_current_source` 不可能进入该身份的有效工具清单；这解释了使用同一 token / 配置时模型只能在只读工具中选。验证提示未显示管理员 allow-list 是否也缺项，且不是此前真实聊天请求的工具 schema 记录。
 - 下一步：管理员仅给需要启动功能的操作员增加 `engine.start`，同时核实工具总开关 / allow-list 含 `start_current_source`；环境 token 更新后重启服务。重验可用工具并用真实 Qwen 新会话测试启动预览；不要在对话中发送令牌或 API Key。尚无补权后或真实模型的复验结果。
+
+## [2026-11-04] 会话纪要
+- 目标：检查现有进程并恢复应用 Web 预览至 8000 端口。
+- 本会话角色：工程实现工程师；模式 A；活动分支 `arena/82e34fb8-nilm-calc-tool`。
+- 完成项：检查未发现 Python/ASGI 进程或 8000 监听；为缺失的 `.venv` 按 `requirements.txt` 恢复依赖；以 `0.0.0.0:8000` 启动服务。首页、JS、CSS 与 `/api/state` 均 HTTP 200，WebSocket 收到 `hello`。预览当前保持运行。
+- 关键决策：以 `ELEC_TOOL_AUTOLOAD_LAST=0` 启动，避免自动加载历史运行数据；不启动数据源；`tmp/` 严格未触碰。
+- 未决问题：真实浏览器视觉、键盘 / 触屏和真实模型服务未验；本次仅做 HTTP / WebSocket 冒烟，不代表现场验收。
+- 相关文件/分支：`requirements.txt`、`cli.py`、`app/server.py`；`arena/82e34fb8-nilm-calc-tool`。
+
+## [2026-11-04] 会话纪要
+- 目标：让智能问答配置面板逐工具显示所需 scope，并在助手说明文档讲清全局 allow-list 与 operator `scopes[]` 配置关系。
+- 本会话角色：工程实现工程师；模式 A；活动分支 `arena/82e34fb8-nilm-calc-tool`。
+- 完成项：工具 checkbox 从配置 API 目录读取 `scope` 并展示；面板说明工具 ID / scope 两层权限及操作员 scope 的环境配置边界；《智能问答助手说明》§6.2 增加配置例与授权组合，§6.6 的 46 项矩阵明确 scope 要原样写入 `scopes[]`；增添前端、文档与 catalog 回归。启动更新后 preview 于 `0.0.0.0:8000`。
+- 关键决策：scope 是工具目录的固定要求值，不在管理员全局 allow-list 页面编辑，也不在前端重复维护；UI 显示服务端 API 所给的 scope，避免前后端映射漂移。全局复选只保存工具 ID；操作员 `scopes` 仍经受保护的服务环境变量配置，按最小权限授予。
+- 未决问题：90 项 pytest 通过 / 1 个既有 Starlette 弃用 warning；jsdom 192 checks 通过；运行态 API 46 项 scope 映射与文档加载检查通过。真实浏览器视觉、键盘 / 触屏待用户验收；未运行全量测试。`tmp/` 严格未读、未改、未暂存或提交。
+- 相关文件/分支：`app/static/index.html`、`app/static/app.js`、`app/static/style.css`、`docs/智能问答助手说明.md`、`tests/test_assistant.py`、`tests/test_web_ui.py`、`tools/ui_assistant_check.cjs`；`arena/82e34fb8-nilm-calc-tool`。
+
+## [2026-11-05] 会话纪要
+- 目标：分析用户报告的 6 种“播放 / 启动离线数据源”误选调速工具或未识别问题，修复路由并提供可回归的边界。
+- 本会话角色：资深电力算法专家（`ROLE.md` 默认）＋工程实现工程师（任务级覆盖）；模式 A；活动分支 `arena/82e34fb8-nilm-calc-tool`。
+- 完成项：确认旧确定性路由只覆盖精确工具标题和少数固定启动别名，六条新短句会落入 local / cloud `tool_choice=auto`。在 `app/assistant.py` 增加“播放 / 启动 / 开始播放 / 运行 + 数据源”窄规则，规范化全角字符、空白和“数据源与控制中的”UI位置词；六句均直接形成当前侧 `start_current_source` 待确认提案。更新 system prompt、`start_current_source` / `set_playback_speed` 工具描述和《智能问答助手说明》§6.7；对无配置、来源不匹配、文件不可用的情况提供「数据源与控制」配置 / 核验提示。增加六句单元及 JSON API 路由回归、权限拒绝和 source-state 负向测试。`STATUS.md`、`REPORT_TEST.md` T-013 已同步。
+- 关键决策：普通“播放 / 启动数据源”不等于改速度；调速需明确速度 / 倍速请求与目标数值。CSV字样不推导路径、文件 ID 或切换请求；只启动当前侧已配置、可用且未运行的数据源。保留 operator scope、allow-list、用户确认 / 高风险二次确认、当前侧绑定、执行时复验、审计；越权不回退到查询工具。静态审查可解释代码路径风险，但本会话没有真实 Qwen 请求 / 响应，不能称为复现其输出。
+- 验证方式 / 覆盖范围 / 缺口：`.venv/bin/python -m pytest -o addopts='' tests/test_assistant.py tests/test_server.py -q` **66 passed / 1 warning**；全量 `.venv/bin/python -m pytest -o addopts='' tests -q` **635 passed / 1 skipped / 1 warning**；Python `py_compile` 通过；`tools/generate_assistant_docs.py --check` 四份均 OK。warning 为 Starlette `TestClient` / httpx 弃用提示。无前端改动，未跑 jsdom；真实 Qwen / provider、目标浏览器和现场权限配置未验。`tmp/` 未读取、修改、暂存或提交。
+- 未决问题：部署端需确认操作员有效工具清单包含 `start_current_source`（scope `engine.start` + 管理员 allow-list），再用真实 Qwen 新会话逐句确认预览工具 / 当前侧；真实 provider 输出仍待用户回报。不要粘贴 token / API Key。
+- Git 交付状态：当前 `HEAD` `27b28ea` 只跟踪 `BOOTSTRAP.md`、`ROLE.md`，项目源码 / 测试 / 说明在此 checkout 显示为 untracked；为避免将不完整源码集误作新增文件提交或推送，本轮没有暂存 / commit / push。需先核实 Git 基线；workspace 文件已保存。
+- 相关文件 / 分支：`app/assistant.py`、`app/assistant_tools.py`、`tests/test_assistant.py`、`tests/test_server.py`、`docs/智能问答助手说明.md` §6.7、`STATUS.md`、`REPORT_TEST.md` T-013、本文件；`arena/82e34fb8-nilm-calc-tool`。
+
+## [2026-11-05] 会话纪要：扩展表达意图识别方案分析归档
+- 目标：回答如何让智能问答助手面对六条已修复说法之外的表达时，提高意图识别精度；按后续用户要求先把分析归档，再开展 46 项全工具实施。
+- 本会话角色：资深电力算法专家（`ROLE.md` 默认）＋工程实现工程师（后续实施任务覆盖）；模式 A；活动分支 `arena/82e34fb8-nilm-calc-tool`。
+- 完成项：将扩展表达识别方案写入 `REPORT_TEST.md` T-014，并增加专题索引；`STATUS.md` 更新为当前 46 工具规则与服务端校验任务。方案明确有限意图分类、正反例、受限规范化、工具参数、权限 / 状态分层、模型作为候选、服务端最终校验、低置信度澄清和数据驱动回归。
+- 关键决策：不无限添加同义词正则；不把查询 / 陈述 / 否定 / 复合动作混成可执行命令；模型输出不因调用了已注册工具就默认代表用户意图吻合。无法确定或缺参数时不得创建操作提案。
+- 验证方式 / 覆盖范围 / 缺口：本轮是代码静态分析，不改运行代码、不调用真实模型；没有 Qwen 请求 / 响应日志，未计算真实模型准确率。下一阶段先建立 46 项 intent contract，再实现服务端验证 / 澄清并用 pytest 回归；真实 provider 仍待现场验收。`tmp/` 未触碰。
+- 未决问题：需结合全部 46 项 `TOOL_CATALOG` 的参数 schema 定义具体正例 / 反例及缺参规则；需设计 plain 与 SSE 一致的 clarification 返回形态，并确保不会产生/保留待确认提案。
+- 相关文件 / 分支：`STATUS.md`、`REPORT_TEST.md` T-014、`app/assistant.py`、`app/assistant_tools.py`、`tests/test_assistant.py`、`tests/test_server.py`；`arena/82e34fb8-nilm-calc-tool`。
+
+## [2026-11-05] 会话纪要：46 项工具意图合同、提案前校验与澄清
+- 目标：按用户要求先归档方案（T-014），再给全部 46 项受控工具定义有限意图 / 正反例 / 参数规则，并在模型工具调用创建提案前做服务端一致性检查；疑问、冲突、缺参或歧义必须澄清且不产生操作预览。
+- 本会话角色 / 模式：资深电力算法专家（默认角色）＋工程实现工程师（任务级覆盖）；模式 A；固定分支 `arena/82e34fb8-nilm-calc-tool`；未读取、修改、清理、暂存或提交用户数据 `tmp/`。
+- 完成项：`app/assistant_intents.py` 为 46 项工具建立意图、动作 / 目标、正反例、参数规则和缺参提示；`app/assistant.py` 在提案前验证候选工具与用户意图、参数是否可从本轮文本 / 受控资源 grounding，并继续使用严格 catalog schema。未通过时不创建提案。普通 JSON 返回 `clarification`（澄清时 `proposal=null`）；SSE 使用 `type=clarification`，有工具调用时缓冲文本，拒绝未匹配候选后丢弃模型未经核验的成功自述。前端新增澄清状态标记。更新助手 system prompt、README §3.6 / §11、《智能问答助手说明》§6.8 / §7 API bullet，并重生成四份派生手册。
+- 关键决策 / 安全边界：模型工具调用是候选，不是意图事实或授权。保留 token / scope、管理员 allow-list、opaque resource ID、当前侧绑定、用户确认、高风险二次确认、执行前服务端复验与审计；不开放任意 shell / SQL / Python / 文件路径 / API；含糊或不完整输入澄清，不回退相似工具。
+- 验证：助手 / 服务端定向 pytest **70 passed / 1 warning**；全量 `.venv/bin/python -m pytest -o addopts='' tests -q` **640 passed / 1 skipped / 1 warning**（187.92 s）；`node tools/ui_assistant_check.cjs` **192 checks**；修改的 Python 文件 `py_compile`、`node --check app/static/app.js` 通过；`tools/generate_assistant_docs.py --check` 四份手册均 `OK`。唯一 warning 是既有 Starlette `TestClient` / httpx 弃用提示。
+- 未验 / 遗留：没有连接真实 Qwen / provider；假响应测试不能证明实际模型工具选择质量。真实浏览器、原生键盘 / 触屏与部署现场未验；有 provider 的部署端需检查正负表达与澄清行为。未索取 / 输出任何令牌或 API Key。
+- Git 交付：未暂存、commit 或 push；基于既有 checkout 跟踪基线不完整的注意事项，未把源码集合误作新增文件提交。详见 `REPORT_TEST.md` T-015。`STATUS.md`、`REPORT_TEST.md`、本纪要已收尾更新。
+- 相关文件 / 分支：`app/assistant_intents.py`、`app/assistant.py`、`app/server.py`、`app/static/app.js`、`app/static/style.css`、`tests/test_assistant.py`、`tests/test_server.py`、`tests/test_web_ui.py`、`README.md`、`docs/智能问答助手说明.md`、四份生成手册、`STATUS.md`、`REPORT_TEST.md` T-015；`arena/82e34fb8-nilm-calc-tool`。
+
+## [2026-11-06] 会话纪要：复核“播放离线数据源”被识别为调速
+- 目标：解释用户回报的精确输入“播放离线数据源”仍显示「修改离线播放速度」，区分当前代码能力与用户部署实况。
+- 角色 / 模式 / 分支：工程实现工程师；模式 A（静态代码审查＋定向回归）；`arena/82e34fb8-nilm-calc-tool`。严格排除仓库 `tmp/`，未启动或重启用户服务。
+- 当前代码结论：NFKC / 空白 / 标点等受限归一化后，`_explicit_tool_command("播放离线数据源")` 返回 `start_current_source`，`_explicit_offline_source_start` 为真；local / cloud 且无图片时 `prepare_chat` 直接创建 `start_current_source` proposal 并返回，不调用模型。若这条路径未启用而进入模型工具选择，意图候选仍只有 `start_current_source`（47 分）；将候选设为 `set_playback_speed` 会得到“请求更符合启动数据源而不是改速度”的澄清，不创建 proposal。工具未授权或来源不满足前置条件分别报 403 / 409，不改走调速。
+- 可能原因 / 证据边界：当前工作区源码无法复现报告结果；与历史旧路径 `tool_choice=auto` 的词面混淆相符的最高优先排查项是实际服务仍在运行旧目录 / 旧进程、请求经代理到旧 worker，或页面显示旧 proposal。图片 / 非精确输入会让确定性捷径不生效，但当前后置校验仍拦错工具调用；若只是普通文本回答则还需与实际 `proposal` 字段区分。没有用户真实服务日志 / provider 原始请求响应，所以这些只能作为部署侧假设，不宣称已证明模型根因。
+- 验证：`.venv/bin/python -m pytest -o addopts='' tests/test_assistant.py tests/test_server.py tests/test_web_ui.py -q` → **95 passed / 1 warning**（19.27 s）；修改 Python 文件 `py_compile` 通过；四份生成手册 `--check` 均 `OK`；独立 Python 探针确认候选与错误工具澄清。唯一 warning 为既有 Starlette / httpx 弃用提示。
+- 后续定位建议：浏览器 Network 只查看 `/api/assistant/chat` 的 `model_type`、实际 `prompt`、图片数、响应 `proposal.tool` 与 `clarification`；如果真是 `set_playback_speed` proposal，核查进程源目录 / 启动时间 / 代理目标并重启实际服务。不要分享任何凭证头、token 或 API Key；sandbox preview 不是用户 Windows 服务状态。
+- 交付：仅分析，没有业务代码改动；T-016 已加入 `REPORT_TEST.md`，`STATUS.md` 更新。未暂存、commit、push；`tmp/` 未读取、修改、清理或提交。
+- 相关文件 / 分支：`app/assistant.py`、`app/assistant_intents.py`、`app/server.py`、`tests/test_assistant.py`、`tests/test_server.py`、`STATUS.md`、`REPORT_TEST.md` T-016；`arena/82e34fb8-nilm-calc-tool`。
+
+## [2026-11-06] 会话纪要：为“播放离线数据源”误识别增加后台路由诊断日志
+
+- 目标：按用户要求在后台服务增加运行日志，排查输入“播放离线数据源”仍显示“修改离线播放速度”的问题；日志必须能定位路由分支、模型候选、服务端校验结论和阻断原因，同时不泄露问题原文 / 令牌 / 敏感参数。
+- 角色 / 模式 / 分支：工程实现工程师；模式 A（实现＋沙盒回归）；`arena/82e34fb8-nilm-calc-tool`。未启动或重启用户部署服务；`tmp/` 未读取、修改、清理、暂存或提交。
+- 实现：`app/server.py::assistant_chat` 每次请求生成 16 位 `trace_id`，在 JSON / SSE / 错误响应头返回 `X-Assistant-Trace-ID`；`lifespan` 启动时记录版本、pid、实际加载的 `app/assistant.py` 路径与修改时间。`app/assistant.py` 新增 `assistant_route_decision` / `assistant_route_diagnostic`（离线数据源播放类请求，`WARNING`）、`assistant_tool_candidate`、`assistant_tool_decision`、`assistant_model_result`、`assistant_model_request`，以及 `assistant_route_blocked` 的五种阻断原因；直达路由与模型路径都带同一 `trace_id`。
+- 日志字段 / 脱敏：仅记录 trace ID、side、backend、附图数量、路由判定、工具可用性布尔值、受限来源类型 / 运行状态 / 是否有路径、模型候选工具名、意图候选及分数、固定 schema 参数**字段名**、未知字段数、校验结果与阻断原因。不记录问题原文、参数值、令牌、API Key、`Authorization`、截图、操作员 ID、模型 endpoint、文件路径；未注册工具名归并为 `unregistered`，未知来源类型归并为 `other`。`log_queries` 保持原有默认关闭与既有语义。
+- 现场用法：先看 Network 响应头 `X-Assistant-Trace-ID`，再按同一 ID 检索日志。有效请求完全没有该 ID 的日志 ⇒ 处理请求的进程未载入本版本；出现 `decision=model_fallback` + `candidate=set_playback_speed` ⇒ 需核对进程版本与直达规则；出现 `outcome=clarification reason=intent_mismatch` ⇒ 门控按设计拒绝，界面不应有调速确认卡；`outcome=plain_text` ⇒ 只是模型文字回答。默认 `--log-level warning` 即可见诊断事件，`--log-level info` 可同时看普通路由、模型请求元数据与启动信息。
+- 验证：`.venv/bin/python -m pytest -o addopts='' tests/test_assistant.py tests/test_server.py tests/test_web_ui.py -q` → **96 passed / 1 warning**（20.32 s）；新增日志断言用例验证诊断事件、trace ID 格式、`decision=deterministic_direct`、错工具候选 `intent_candidates=start_current_source:47` 与 `reason=intent_mismatch`，并断言问题原文、两类令牌、`speed=2`、`Authorization`、`api_key` 不出现在日志；两个 API 用例增加 trace 头断言；`py_compile`、`node --check`、四份生成手册 `--check` 均通过。唯一 warning 为既有 Starlette / httpx 弃用提示。
+- 证据边界：沙盒日志样例来自当前代码＋受控假响应，不代表用户现场 provider 行为；未获得用户部署日志，故仍未确认现场根因。需用户重启实际服务后回传日志行与 trace ID（不要回传任何令牌或请求头凭证）。
+- 交付：T-017 写入 `REPORT_TEST.md` 并更新索引；`STATUS.md`、`docs/智能问答助手说明.md` §6.9 / §7 已同步。未暂存、commit 或 push；沿用 checkout 跟踪基线不完整的既有约束。
+- 相关文件 / 分支：`app/assistant.py`、`app/server.py`、`tests/test_assistant.py`、`tests/test_server.py`、`docs/智能问答助手说明.md`、`STATUS.md`、`REPORT_TEST.md` T-017、本纪要；`arena/82e34fb8-nilm-calc-tool`。

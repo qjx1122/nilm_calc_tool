@@ -1,7 +1,9 @@
 # STATUS.md
 
 > 续接文件（BOOTSTRAP.md v2.2 台账）。每次收尾必更新；只改本文件，不另建同类文件。
-> 最后更新：2026-11-04（明确启动指令误路由修复；用户权限清单回报已定位 `engine.start` 缺失；活动分支 active；严格排除 `tmp/`）
+> 最后更新：2026-11-06（T-017 已在后台服务增加“播放离线数据源”路由诊断日志、`X-Assistant-Trace-ID` 与启动版本信息；定向 96 passed；现场日志待用户回传；活动分支 active；严格排除 `tmp/`）
+> 本次任务（2026-11-06）：按用户要求在后台服务增加运行日志以排查原句被识别为「修改离线播放速度」的问题。日志只记录 trace ID、路由判定、工具可用性布尔值、受限来源类型 / 状态、模型候选工具名、意图候选分数、参数**字段名**与校验结论，不记录问题原文、参数值、令牌、API Key、截图或文件路径。未连接用户 Windows 服务 / 真实 provider，日志尚未在用户现场产生。`tmp/` 未触碰，未暂存 / 提交 / 推送。
+> 前次运行任务（2026-11-04）：先核验未有 Python/8000 监听进程，修复缺失的 `.venv` 依赖并在 `0.0.0.0:8000` 恢复预览；首页、JS、CSS、`/api/state` 均 HTTP 200，WebSocket `/ws` 握手收到 `hello`。启动时用 `ELEC_TOOL_AUTOLOAD_LAST=0`，未自动加载历史运行数据；未读取 / 修改 `tmp/`。
 > （沙盒全量 634 passed / 1 skipped / 1 warning；助手 / 服务端 66 passed；jsdom 188 checks。用户实测身份 `field-readonly-1` 只有 `profiles.read`、`recordings.read`，当前模型 2 项工具；真实 Qwen 工具选择仍待补授权后复测，不声称已通过。）
 > （第 207 轮沙盒实现与验证已完成：定向 84 passed、全量 629 passed / 1 skipped；jsdom 188 checks；四份生成手册一致。真实浏览器 / 键盘 / 触屏与真实模型服务验收待用户，不声称已通过。）
 > （第 204 轮：桌面 / 窄屏会话管理栏收起功能、回归与文档已完成；46 passed / jsdom 150 checks；目标浏览器视觉待用户复验）
@@ -12,14 +14,43 @@
 
 ## 当前角色
 - 角色：**资深电力算法专家**（`ROLE.md` v1.4 指定的默认当前角色）
-- 本任务级覆盖：**工程实现工程师**（`ROLE.md` 已定义；智能问答工具误路由代码复核、确定性指令路由与安全回归）
-- 生效范围：确认有效工具清单 / 权限筛选与模型工具选择之间的边界；修复明确启动命令误选查询工具；审计全局工具 schema / dispatcher / UI 标签一致性；更新回归与专题记录
+- 本任务级覆盖：**工程实现工程师**（`ROLE.md` 已定义；智能问答 46 项受控工具意图目录、模型结果校验与澄清分支）
+- 生效范围：为每个工具维护有限意图、正反例及参数要求；服务端拒绝不匹配 / 缺参的模型提案并澄清；不改变闭集权限、确认和执行复验边界
 - 默认执行模式：**模式 A（沙盒自执行）**；真实模型、目标浏览器与部署网络未连接时只报告未实测，不臆断现场验收。保持 `tmp/` 原样且排除提交。
 - 历史任务执行模式基线（本任务单独声明为模式 A）：**混合**——沙盒侧（模式 A）写码 + 合成信号解析解自验证 + live preview 实跑，**已有实录**；用户侧（模式 B）Windows 部署 / 真实数据对账 / 生产常驻，**只出执行包，未获实录不下结论**（执行包见 `REPORT_TEST.md` T-002 的 W/R/P 三组）
   - 说明：更早任务用户显式指定过模式 B（仅对「补齐台账骨架」生效）；历史任务若用户跳过模式澄清，曾按上述混合模式执行；每个新任务仍以当前任务登记的角色与模式为准。第 5 轮（界面下拉框检查）沙盒侧＝jsdom 驱动真实页面打真实服务端 + REST 空值语义实录，**已✅实录**；用户侧＝浏览器手点 U 组 7 步，**🔶待回报**。**第 6 轮（四功能）**沙盒侧＝pytest 25 项 + jsdom 30 项 + REST/CLI 实录，**已✅实录**；用户侧＝浏览器手点 U6 组 8 步，**🔶待回报**。**第 7 轮（三功能）**沙盒侧＝pytest 18 项 + jsdom 39 项 + CLI/源层实录，**已✅实录**；用户侧＝U7 组 8 步，**🔶待回报**。**第 9 轮（间谐波/直流/事件）**沙盒侧＝pytest 13 项 + jsdom 28 项 + live preview 实跑，**已✅实录**；用户侧＝U9 组 6 步，**🔶待回报**。**第 10 轮（离线列映射开关）**沙盒侧＝pytest 8 项 + jsdom 15 项 + REST 实录，**已✅实录**；用户侧＝U10 组 6 步，**🔶待回报**。**第 11 轮（时标 UTC 开关）**沙盒侧＝pytest 6 项 + 双时区全量 + jsdom 11 项，**已✅实录**；用户侧＝U11 组 5 步，**🔶待回报**。**第 12 轮（负荷辨识）**沙盒侧＝pytest 8 项 + jsdom 16 项 + 引擎/CSV 实录，**已✅实录**；用户侧＝U12 组 5 步，**🔶待回报**
 
 ## 当前目标
-- **本任务（2026-11-04：智能问答明确启动指令误路由复核与修复）**：
+- **本任务（2026-11-06 T-017：为“播放离线数据源”误识别增加后台路由诊断日志）已完成**：
+  - **角色 / 模式**：工程实现工程师；模式 A（实现＋沙盒回归）；固定活动分支 `arena/82e34fb8-nilm-calc-tool`；严格排除 `tmp/`。
+  - **实现**：`app/server.py` 为每次问答生成 16 位 `trace_id` 并在 JSON / SSE / 错误响应头返回 `X-Assistant-Trace-ID`，启动时记录版本、pid、实际加载的 `app/assistant.py` 路径与修改时间；`app/assistant.py` 记录 `assistant_route_diagnostic`（针对离线数据源播放类请求，`WARNING` 级）、`assistant_tool_candidate`、`assistant_tool_decision`、`assistant_model_result`、`assistant_route_blocked`、`assistant_model_request`，覆盖“直达 / 转模型 → 模型候选 → 接受 / 澄清 → 阻断原因”全链路。
+  - **脱敏**：不记录问题原文、参数值、令牌、API Key、`Authorization`、截图、操作员 ID、模型 endpoint、文件路径；参数只记固定 schema 字段名，来源类型收敛为枚举值。默认 `--log-level warning` 即可见诊断事件；普通路由与模型请求元数据为 `INFO`。
+  - **验证**：助手 / 服务端 / UI 定向 pytest **96 passed / 1 warning**（20.32 s）；新增日志断言用例；两个 API 用例增加 trace 头断言；`py_compile`、`node --check`、四份生成手册 `--check` 通过。warning 为既有 Starlette / httpx 弃用提示。
+  - **未验 / Git**：未重启用户部署服务、未获得现场日志；不把沙盒日志样例当成现场根因证据。未暂存 / commit / push。
+- **前序任务（T-016：“播放离线数据源”仍识别为调速的根因复核）已完成**：
+  - **角色 / 模式**：工程实现工程师；模式 A（代码审查＋定向回归）；固定活动分支 `arena/82e34fb8-nilm-calc-tool`；严格排除 `tmp/`。
+  - **代码结论**：对字面 prompt，在 local / cloud、无图片并命中当前代码时，`_explicit_tool_command` 返回 `start_current_source`，且 `prepare_chat` 直接走 proposal 路径、不调用模型；若走模型工具路径，候选打分为 `start_current_source` 47 分，错误的 `set_playback_speed` 候选会被门控转为澄清。权限 / allow-list / 来源状态问题返回 403 / 409，不回退调速。
+  - **根因边界**：因此当前源码下报告现象最可能是部署进程仍载入旧版本、请求发往旧目录 / 端口 / worker，或页面显示旧提案；若是普通文字而非 proposal，也需区分模型自由回答。以上是待现场请求 / 响应确认的假设，不是已证实的 Qwen 根因。沙盒状态不代表用户 Windows 服务状态。
+  - **验证**：精确函数探针验证 `start_current_source`、离线判定及错工具澄清；助手 / 服务端 / UI 定向 pytest **95 passed / 1 warning**（19.27 s）；相关 Python `py_compile`、四份生成手册 `--check` 通过。warning 为既有 Starlette `TestClient` / httpx 弃用提示。
+  - **建议诊断**：在浏览器 Network 只核对 `/api/assistant/chat` 的 `model_type`、原样 `prompt`、图片数和响应 `proposal.tool` / `clarification`；若 `proposal.tool=set_playback_speed`，检查实际服务源目录、进程启动时间、代理目标和 worker 是否全重启。不得粘贴令牌 / API Key。
+  - **未验 / Git**：未连接用户部署进程或真实 provider；没有用户侧原始请求 / 响应。未改业务代码、未重启服务；`tmp/` 未触碰，未暂存 / commit / push。
+- **前序任务（T-015：46 个受控工具有限意图规格、服务端结果校验与澄清）已完成**：实现与全量回归见 `REPORT_TEST.md` T-015；方案分析见 T-014。
+- **上一任务（2026-11-05：智能问答“播放 / 启动数据源”误识别分析与修复）**：
+  - **角色 / 模式**：工程实现工程师；模式 A；固定活动分支 `arena/82e34fb8-nilm-calc-tool`（active）；严格排除 `tmp/`。
+  - **用户报告**：六种自然语言短句被误选 `set_playback_speed` 或未选到工具，见 `REPORT_TEST.md` 最新专题。目标是在 local / cloud、无图片的明确命令流程中确定性建 `start_current_source` 提案。
+  - **审查结论**：旧入口只识别精确标题及少数别名，六句未覆盖而进入 `tool_choice=auto`。该机制可能令模型将“播放 / 离线”词汇误认为速度操作；另有先前现场权限回报显示只读身份缺 `engine.start`，所以实际部署的 allow-list / scope 也必须确认。未连接 Qwen，未复现 provider 的实际输出；不把静态推断写成真实模型根因。
+  - **实现**：增加限制范围的“播放 / 启动 / 开始播放 / 运行 + 数据源”语法，归一化全角字符、空白与“数据源与控制中的”页面位置词；六个报告短句直接在模型调用前路由至 `start_current_source`。强化 system/tool 描述：普通播放不是调速，`set_playback_speed` 仅用于明确要求调速且给出目标值。CSV 字样不推导路径或 `file_id`。
+  - **安全 / 失败处理**：继续核验当前侧、来源种类、文件可用性和运行状态；无配置、来源不是离线文件、缺文件时返回去「数据源与控制」配置 / 核验的提示；不切换文件、不回退查询工具、不绕过 operator scope、allow-list、用户确认、高风险二次确认、side binding、执行时复验或审计。
+  - **验证**：`tests/test_assistant.py tests/test_server.py` → **66 passed / 1 warning**；全量 `tests` → **635 passed / 1 skipped / 1 warning**（187.83 s）；`py_compile` 通过；`tools/generate_assistant_docs.py --check` 四份均 OK。warning 为既有 Starlette `TestClient` / httpx 弃用提示。
+  - **未决 / 下一步**：如需确认真实 provider 效果，需在部署端确保 operator 有 `engine.start` 且管理员 allow-list 含 `start_current_source`，再由用户在真实 Qwen 新会话测试六句；仅核验提案，不执行。目标浏览器和实际模型服务未验；`tmp/` 未触碰。
+  - **Git 交付状态**：当前 `HEAD` `27b28ea` 仅跟踪 `BOOTSTRAP.md`、`ROLE.md`；本工作区既有应用源码 / 测试 / 说明文件均显示为 untracked。为避免将不完整源码集合误作新增文件提交或推送，本轮未暂存 / commit / push；工作区文件已自动保存。需先确认 / 修复该 checkout 的 Git 基线再做提交。
+- **上一任务（2026-11-04：全局工具 allow-list 逐项 scope 展示与说明）**：
+  - **角色 / 模式**：工程实现工程师；模式 A；活动分支 `arena/82e34fb8-nilm-calc-tool`；严格排除 `tmp/`。
+  - **用户要求**：详细说明智能问答配置界面「全局允许的工具（另受每个操作员 token scope 限制）」每项工具的 scope 如何对应配置，并写入智能问答助手说明文档。
+  - **实现**：全局工具复选项从 `/api/assistant/config` 的 `tools[].scope` 显示固定的「所需 scope」；增加说明，明确复选只设置 `enabled_tools` 的工具 ID，不授 operator 权限；operator `scopes[]` 仍由服务环境变量配置，界面不提供 scope 编辑。§6.2 加入配置示例与三种授权组合，§6.6 明确每项 scope 必须原样加入 operator `scopes[]`。
+  - **回归 / 实测**：`tests/test_assistant.py`、`tests/test_server.py`、`tests/test_web_ui.py` → **90 passed / 1 warning**；`node tools/ui_assistant_check.cjs` → **192 checks**；运行态 `/api/assistant/config` 46 项均带 scope，助手说明新文案经 `/api/assistant/documents` 加载；HTTP 静态资源通过。真实浏览器视觉未验。
+  - **交付 / 下一步**：live preview 正在 `0.0.0.0:8000`；可在目标浏览器检查长清单换行 / 滚动 / scope 可读性。`tmp/` 未触碰。
+- **上一任务（2026-11-04：智能问答明确启动指令误路由复核与修复）**：
   - **角色 / 模式**：工程实现工程师；模式 A；固定活动分支 `arena/82e34fb8-nilm-calc-tool`（active）；不读取、修改、暂存或提交 `tmp/`。
   - **用户复现**：新建会话中“启动当前侧数据源检测”曾分别被选为 `list_recordings` 和 `list_profiles`；这两次不应归因于旧会话 history。
   - **用户现场权限回报**：在助手界面点“验证操作权限”，身份为 `field-readonly-1`，scope 只有 `profiles.read` 与 `recordings.read`，当前模型可用工具 2 项。因 `start_current_source` 需要 `engine.start`，该工具当前确定不在此身份的有效工具清单中；这证明当前权限至少缺一项。该结果本身不显示管理员 allow-list 状态，也不能证明原两次问答当时的配置完全相同；若当时使用同一 token / 配置，则模型只能从可用查询工具中选择，足以解释误路由。
