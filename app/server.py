@@ -1754,7 +1754,7 @@ async def _execute_assistant_tool(pending: Dict[str, Any]) -> Dict[str, Any]:
         source = runner.cfg.source
         if source.kind in {"csv_file", "csv_tail"} and not str(source.path or "").strip():
             raise AssistantError(400, "当前侧文件数据源尚未配置路径")
-        result = await engine_start({})
+        result = await engine_start({}, side=side)
         _assistant_api_error(result)
         return {"message": "当前侧数据源检测已启动", "side": side,
                 "source_kind": result.get("config", {}).get("source", {}).get("kind", runner.cfg.source.kind)}
@@ -2690,10 +2690,11 @@ def _branch_cfg_for_start(src_over: Optional[Dict[str, Any]]) -> AppConfig:
 
 
 @app.post("/api/engine/start")
-async def engine_start(payload: Optional[Dict[str, Any]] = None) -> Any:
+async def engine_start(payload: Optional[Dict[str, Any]] = None, side: Optional[str] = None) -> Any:
     payload = payload or {}
+    effective_side = side or current_side()
     try:
-        cfg = RUNNER.cfg
+        cfg = RUNNERS[effective_side].cfg
         data = cfg.to_dict()
         src_over = {k: v for k, v in payload.items() if k in _START_SRC_KEYS}
         if src_over:
@@ -2702,10 +2703,10 @@ async def engine_start(payload: Optional[Dict[str, Any]] = None) -> Any:
         # 分路侧数据源字段——与总线侧 source 一样「按界面当前值启动、不写配置文件」。此前这些只从已保存配置读取：
         # 界面取消勾选「只播放公共时间段」但没点「保存分路侧配置」→ 启动仍按旧配置算公共时间段并报错。
         br_over_top = payload.get("branch") if isinstance(payload.get("branch"), dict) else None
-        if br_over_top and current_side() == "bus":
+        if br_over_top and effective_side == "bus":
             data.setdefault("branch", {}).update({k: v for k, v in br_over_top.items() if k in _START_BRANCH_KEYS})
         br_src_over = payload.get("branch_source") if isinstance(payload.get("branch_source"), dict) else None
-        br_src_over = {k: v for k, v in (br_src_over or {}).items() if k in _START_SRC_KEYS} if current_side() == "bus" else None
+        br_src_over = {k: v for k, v in (br_src_over or {}).items() if k in _START_SRC_KEYS} if effective_side == "bus" else None
         if payload.get("windows"):
             for k, v in payload["windows"].items():
                 if k in data["windows"]:
@@ -2719,11 +2720,11 @@ async def engine_start(payload: Optional[Dict[str, Any]] = None) -> Any:
             cand = os.path.join(ROOT, cfg.source.path)
             if os.path.exists(cand):
                 cfg.source.path = cand
-        coupled = (current_side() == "bus" and payload.get("with_branch", True) and cfg.branch.enabled)
+        coupled = (effective_side == "bus" and payload.get("with_branch", True) and cfg.branch.enabled)
         cfg.source.play_end_time = ""          # 终点只由公共时间段自动给出，用户配置里不存在这个概念
         play_user: Optional[Tuple[str, str, str]] = None
         cw_note: Optional[str] = None
-        if current_side() == "bus":
+        if effective_side == "bus":
             COMMON_WINDOW.clear(); COMMON_WINDOW["enabled"] = False
         br_cfg = _branch_cfg_for_start(br_src_over) if coupled else None
         if coupled and cfg.branch.common_window:
@@ -2740,13 +2741,13 @@ async def engine_start(payload: Optional[Dict[str, Any]] = None) -> Any:
         if play_user is None:
             play_user = _apply_play_window(cfg)                # 本侧自己的指定时间段播放（v0.17）
         clock = PaceClock(cfg.source.file_speed) if cfg.source.kind == "csv_file" else None
-        sr = RUNNER.start(cfg, duration_s=payload.get("duration_s"), pace_clock=clock, play_user=play_user)
-        out: Dict[str, Any] = {"ok": True, "side": current_side(), "config": RUNNER.cfg.to_dict(), "run_dir": sr.get("run_dir")}
+        sr = RUNNERS[effective_side].start(cfg, duration_s=payload.get("duration_s"), pace_clock=clock, play_user=play_user)
+        out: Dict[str, Any] = {"ok": True, "side": effective_side, "config": RUNNERS[effective_side].cfg.to_dict(), "run_dir": sr.get("run_dir")}
         if COMMON_WINDOW.get("enabled"):
             out["common_window"] = {k: v for k, v in COMMON_WINDOW.items() if k not in ("bus", "branch")}
         elif cw_note:
             out["common_window"] = {"enabled": False, "reason": cw_note}
-        if current_side() == "bus" and payload.get("with_branch", True):
+        if effective_side == "bus" and payload.get("with_branch", True):
             out["branch"] = _start_branch_if_enabled(cfg, pace_clock=clock, br_cfg=br_cfg)
         return out
     except ConfigError as exc:
