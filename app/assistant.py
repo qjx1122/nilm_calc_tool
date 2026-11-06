@@ -1943,6 +1943,9 @@ class AssistantService:
             source_kind = str(source.get("kind") or "none")
             source_running = bool(source.get("running"))
             side_label = {"bus": "总线侧", "branch": "分路侧"}.get(effective_side, "当前侧")
+            # 跨侧操作（prompt 明确指定侧别且与调用方 side 不同）时，tool_context 中的 source
+            # 属于调用方侧而非目标侧，source_running 校验会读取错误侧的状态，遂下放到执行阶段。
+            is_cross_side = parsed_side in {"bus", "branch"} and parsed_side != side
             if direct_tool_name == "start_current_source":
                 if source_running:
                     raise AssistantError(409, f"{side_label}数据源已在运行或暂停，不会重复启动；如需继续暂停的数据源，请使用恢复操作")
@@ -1960,13 +1963,13 @@ class AssistantService:
                         "不会查询或更换录波文件。",
                     )
             elif direct_tool_name == "pause_current_source":
-                if not source_running:
+                if not is_cross_side and not source_running:
                     raise AssistantError(409, f"{side_label}数据源未在运行，无法暂停；请先启动数据源后再暂停。")
             elif direct_tool_name == "resume_current_source":
-                if source_running:
+                if not is_cross_side and source_running:
                     raise AssistantError(409, f"{side_label}数据源正在运行，无需恢复；如需暂停请使用暂停操作。")
             elif direct_tool_name == "stop_current_source":
-                if not source_running:
+                if not is_cross_side and not source_running:
                     raise AssistantError(409, f"{side_label}数据源未在运行，无法停止；请先启动数据源后再停止。")
             direct_plan = {
                 "model_type": model_type,
@@ -2065,6 +2068,9 @@ class AssistantService:
                         pass
                     else:
                         # 四个核心工具的 source 状态校验（确定性路由已 cover 的范围）
+                        # 跨侧操作（prompt 明确指定侧别且与调用方 side 不同）时，tool_context 中的 source
+                        # 属于调用方侧而非目标侧，source_running 校验会读取错误侧的状态，遂下放到执行阶段。
+                        is_cross_side = parsed_side in {"bus", "branch"} and parsed_side != side
                         side_label = {"bus": "总线侧", "branch": "分路侧"}.get(effective_side, "当前侧")
                         if top_tool == "start_current_source":
                             source = (tool_context or {}).get("source")
@@ -2092,7 +2098,7 @@ class AssistantService:
                             source = (tool_context or {}).get("source")
                             source = source if isinstance(source, dict) else {}
                             source_running = bool(source.get("running"))
-                            if not source_running:
+                            if not is_cross_side and not source_running:
                                 raise AssistantError(
                                     409,
                                     f"{side_label}数据源未在运行，无法暂停；请先启动数据源后再暂停。",
@@ -2101,7 +2107,7 @@ class AssistantService:
                             source = (tool_context or {}).get("source")
                             source = source if isinstance(source, dict) else {}
                             source_running = bool(source.get("running"))
-                            if source_running:
+                            if not is_cross_side and source_running:
                                 raise AssistantError(
                                     409,
                                     f"{side_label}数据源正在运行，无需恢复；如需暂停请使用暂停操作。",
@@ -2110,7 +2116,7 @@ class AssistantService:
                             source = (tool_context or {}).get("source")
                             source = source if isinstance(source, dict) else {}
                             source_running = bool(source.get("running"))
-                            if not source_running:
+                            if not is_cross_side and not source_running:
                                 raise AssistantError(
                                     409,
                                     f"{side_label}数据源未在运行，无法停止；请先启动数据源后再停止。",
