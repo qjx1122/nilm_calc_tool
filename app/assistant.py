@@ -2015,8 +2015,11 @@ class AssistantService:
                 top_k=8,
                 use_cache=True,
             )
-            if intent_recognition["ok"]:
-                top_tool = intent_recognition["result"]["intent_code"]
+            top_tool = intent_recognition["result"]["intent_code"] if intent_recognition.get("result") else ""
+            # 只读查询工具（get_runtime_status / get_runtime_settings）无论意图识别 tier 如何
+            #（只要不是 low），都直接执行并返回结果，不走模型路径，避免模型向无参数工具
+            # 传递 side 字段导致"工具参数包含未注册字段"错误，也避免只读查询被当作需要确认的操作。
+            if intent_recognition["ok"] or top_tool in {"get_runtime_status", "get_runtime_settings"}:
                 # 短期修复：延时意图拒绝——recognize_intent 路径也必须拒绝延时执行
                 if _has_delay_intent(prompt):
                     raise AssistantError(

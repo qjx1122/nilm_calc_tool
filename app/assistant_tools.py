@@ -334,6 +334,11 @@ def validate_tool_arguments(name: str, raw: Any) -> Dict[str, Any]:
     if not isinstance(raw, dict):
         raise ValueError("工具参数必须是 JSON 对象")
     props = item["parameters"].get("properties", {})
+    # get_runtime_status / get_runtime_settings 不接受任何参数；
+    # 侧别通过 plan 的 _side 字段传递，模型不应通过工具参数传递 side。
+    # 为防御性起见，若模型误传 side，将其忽略而非报"未注册字段"。
+    if name in {"get_runtime_status", "get_runtime_settings"}:
+        raw = {k: v for k, v in raw.items() if k != "side"}
     if any(key not in props for key in raw):
         raise ValueError("工具参数包含未注册字段")
     missing = [key for key in item["parameters"].get("required", []) if key not in raw]
