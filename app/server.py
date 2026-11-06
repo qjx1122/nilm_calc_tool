@@ -1653,8 +1653,8 @@ async def _execute_assistant_tool(pending: Dict[str, Any]) -> Dict[str, Any]:
     """Execute exactly one registered tool via existing in-process business API handlers."""
     name, args = pending["name"], pending.get("args", {})
     side = pending["side"]
-    if side != current_side():
-        raise AssistantError(409, "当前侧与确认预览不一致，请重新发起操作")
+    # 侧别以预览时存储的 pending["side"] 为准，不再与确认时的 current_side() 比较，
+    # 避免用户在总线侧UI发起分路侧操作、确认时因 current_side() 为 bus 而被误判。
     if name == "get_runtime_status":
         state = await get_state()
         cfg = RUNNER.cfg
