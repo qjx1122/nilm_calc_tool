@@ -103,34 +103,36 @@ _STOP_SOURCE_COMMAND_ALIASES = (
     "停止当前侧离线数据源",
     "停止当前侧离线播放",
 )
+# 纯英文动词快速路由：start / stop / pause / resume 单字
+_EXACT_SOURCE_VERB_RE = re.compile(r"^(?:start|stop|pause|resume)$", re.IGNORECASE)
 _START_SOURCE_ALLOWED_SUFFIXES = frozenset({"不要查询或更换录波文件"})
 _SOURCE_UI_CONTEXT_RE = re.compile(
     r"数据源(?:与|和)控制(?:页面|界面|设置)?(?:中的|里的|内的|中|里|内)?"
 )
 _SOURCE_START_INTENT_RE = re.compile(
     r"(?:马上|立即|赶紧|现在|先|直接|就)?"
-    r"(?:启动|播放|开始(?:播放)?|运行)"
+    r"(?:启动|播放|开始(?:播放)?|运行|执行)"
     r"(?:当前(?:侧)?(?:已配置的)?|已配置的)?"
-    r"(?:离线)?数据源(?:csv(?:文件)?|文件)?$",
+    r"(?:离线)?数据源(?:csv(?:文件)?|文件)?(?:播放)?$",
     re.IGNORECASE,
 )
 _SOURCE_PAUSE_INTENT_RE = re.compile(
     r"(?:马上|立即|赶紧|现在|先|直接|就)?"
-    r"暂停"
+    r"(?:暂停|pause)"
     r"(?:当前(?:侧)?(?:已配置的)?|已配置的)?"
     r"(?:离线)?(?:播放|数据源)$",
     re.IGNORECASE,
 )
 _SOURCE_RESUME_INTENT_RE = re.compile(
     r"(?:马上|立即|赶紧|现在|先|直接|就)?"
-    r"(?:恢复|继续)"
+    r"(?:恢复|继续|resume)"
     r"(?:当前(?:侧)?(?:已配置的)?|已配置的)?"
     r"(?:离线)?(?:播放|数据源)$",
     re.IGNORECASE,
 )
 _SOURCE_STOP_INTENT_RE = re.compile(
     r"(?:马上|立即|赶紧|现在|先|直接|就)?"
-    r"(?:停止|结束|关闭)"
+    r"(?:停止|结束|关闭|stop)"
     r"(?:当前(?:侧)?(?:已配置的)?|已配置的)?"
     r"(?:离线)?(?:来源|源|播放|数据源(?:csv(?:文件)?|文件)?)$",
     re.IGNORECASE,
@@ -316,6 +318,22 @@ def _explicit_tool_command(prompt: str) -> Optional[str]:
         except ValueError:
             return None
         return stop_name
+
+    # 纯英文动词快速路由：start / stop / pause / resume 单字
+    _verb_match = _EXACT_SOURCE_VERB_RE.fullmatch(text)
+    if _verb_match:
+        _verb = _verb_match.group(0).lower()
+        _verb_tool = {
+            "start": "start_current_source",
+            "stop": "stop_current_source",
+            "pause": "pause_current_source",
+            "resume": "resume_current_source",
+        }[_verb]
+        try:
+            validate_tool_arguments(_verb_tool, {})
+        except ValueError:
+            return None
+        return _verb_tool
 
     return None
 

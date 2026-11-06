@@ -1070,6 +1070,18 @@ def test_offline_source_stop_resume_pause_regression_corpus(tmp_path, monkeypatc
                                 tool_context={"source": {"kind": "csv_file", "has_path": True, "running": False}})
     assert plan["_tool_proposal"]["tool"] == "resume_current_source"
 
+    # 新增：带“执行”动词的启动表达（问题1：请执行当前离线数据源播放）
+    assert _explicit_tool_command("请执行当前离线数据源播放") == "start_current_source"
+    assert _explicit_tool_command("执行当前离线数据源播放") == "start_current_source"
+    assert _explicit_tool_command("开始当前离线数据源播放") == "start_current_source"
+
+    # 新增：英文单字动词（问题2：stop / start / pause / resume）
+    assert _explicit_tool_command("stop") == "stop_current_source"
+    assert _explicit_tool_command("STOP") == "stop_current_source"
+    assert _explicit_tool_command("start") == "start_current_source"
+    assert _explicit_tool_command("pause") == "pause_current_source"
+    assert _explicit_tool_command("resume") == "resume_current_source"
+
     from app.assistant_tools import TOOL_BY_NAME, TOOL_CATALOG
 
     admin = "expanded-tool-admin-token"
