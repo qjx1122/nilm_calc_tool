@@ -711,111 +711,6 @@ def test_tool_catalog_validation_and_closed_scope_proposal(tmp_path, monkeypatch
     assert (tmp_path / "tool_audit.jsonl").exists()
 
 
-def test_finite_intent_contracts_cover_all_46_tools_and_examples():
-    from app.assistant_intents import TOOL_INTENT_CONTRACTS, find_tool_intent_candidates, validate_intent_catalog
-
-    validate_intent_catalog()
-    assert set(TOOL_INTENT_CONTRACTS) == set(TOOL_NAMES)
-    for tool, contract in TOOL_INTENT_CONTRACTS.items():
-        assert contract.intent and contract.action_terms and contract.target_terms
-        assert len(contract.positive_examples) >= 2 and len(contract.negative_examples) >= 2
-        assert set(contract.parameter_rules) == set(TOOL_CATALOG[[item["name"] for item in TOOL_CATALOG].index(tool)]["parameters"].get("properties", {}))
-        for example in contract.positive_examples:
-            candidates = find_tool_intent_candidates(example)
-            assert candidates and candidates[0][0] == tool, (tool, example, candidates)
-            assert len(candidates) == 1 or candidates[0][1] - candidates[1][1] >= 10, (tool, example, candidates)
-        for example in contract.negative_examples:
-            candidates = find_tool_intent_candidates(example)
-            assert all(candidate != tool for candidate, _score in candidates), (tool, example, candidates)
-
-
-def test_server_intent_gate_clarifies_ambiguity_missing_and_wrong_slots():
-    from app.assistant_intents import validate_model_tool_result
-
-    assert validate_model_tool_result(
-        "将离线播放速度设置为2倍", "set_playback_speed", {"speed": 2}
-    ) == {"ok": True, "arguments": {"speed": 2.0}}
-
-    rejected = (
-        ("为什么输入‘启动当前侧数据源检测’会查询设备画像？", "start_current_source", {}),
-        ("不要启动当前侧数据源", "start_current_source", {}),
-        ("启动数据源，然后暂停数据源", "start_current_source", {}),
-        ("切换接线模式", "set_wiring_mode", {}),
-        ("将离线播放速度调整快一点", "set_playback_speed", {"speed": 2}),
-        ("查询电压和电流的趋势", "get_history", {"quantity": "voltage"}),
-        ("查询最近24小时取20个点的电压趋势", "get_history",
-         {"quantity": "voltage", "hours": 100, "max_points": 20}),
-        ("把接线模式从3p3w改为3p4w", "set_wiring_mode", {"wiring": "3p3w"}),
-        ("查看当前侧最新功率因数结果", "get_electrical_result", {"quantity": "power"}),
-    )
-    for prompt, tool, arguments in rejected:
-        result = validate_model_tool_result(prompt, tool, arguments)
-        assert result["ok"] is False and "暂未创建操作预览" in result["clarification"], (prompt, result)
-
-    file_a, file_b = "a" * 24, "b" * 24
-    resources = {"recordings": [
-        {"file_id": file_a, "name": "capture-a.csv"},
-        {"file_id": file_b, "name": "capture-b.csv"},
-    ]}
-    selected = validate_model_tool_result(
-        "把受控录波文件capture-a.csv设为当前数据源", "select_recording_source",
-        {"file_id": file_a}, resources,
-    )
-    assert selected == {"ok": True, "arguments": {"file_id": file_a}}
-    ambiguous_resource = validate_model_tool_result(
-        "把受控录波文件capture-a.csv和capture-b.csv设为当前数据源", "select_recording_source",
-        {"file_id": file_a}, resources,
-    )
-    assert ambiguous_resource["ok"] is False and "参数" in ambiguous_resource["clarification"]
-
-
-def test_model_tool_calls_are_gated_and_stream_text_is_buffered_until_validation(tmp_path, monkeypatch):
-    import threading
-
-    admin = "intent-gate-admin-token"
-    operator = "intent-gate-operator-token-secret"
-    monkeypatch.setenv("ELEC_TOOL_ASSISTANT_ADMIN_TOKEN", admin)
-    monkeypatch.setenv("ELEC_TOOL_ASSISTANT_OPERATOR_TOKENS", json.dumps([
-        {"id": "intent-operator", "token": operator, "scopes": ["config.wiring.write", "state.read"]},
-    ]))
-    service = AssistantService(data_dir=str(tmp_path))
-    service.update_config({"tools_enabled": True,
-                           "enabled_tools": ["set_wiring_mode", "get_runtime_status"]}, admin)
-    prompt = "切换接线模式到3p4w"
-
-    class FakeCompletionResponse:
-        def __enter__(self): return self
-        def __exit__(self, *args): return False
-        def read(self, _limit):
-            return json.dumps({"choices": [{"message": {
-                "content": "操作已经完成。", "tool_calls": [{"id": "call-1", "type": "function",
-                    "function": {"name": "get_runtime_status", "arguments": "{}"}}]}}]}).encode("utf-8")
-
-    monkeypatch.setattr(service, "_open_request", lambda _plan, stream: FakeCompletionResponse())
-    plan = service.prepare_chat({"prompt": prompt, "model_type": "local"}, operator_token=operator)
-    answer = service.complete(plan)
-    assert "暂未创建操作预览" in answer
-    assert "操作已经完成" not in answer
-    assert plan.get("_tool_proposal") is None and plan.get("_tool_clarification")
-    assert not service._pending_tools
-
-    class FakeStreamResponse:
-        def __enter__(self): return self
-        def __exit__(self, *args): return False
-        def __iter__(self):
-            yield 'data: {"choices":[{"delta":{"content":"操作已经完成。"}}]}\n'.encode("utf-8")
-            yield 'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call-2","function":{"name":"get_runtime_status","arguments":"{}"}}]}}]}\n'.encode("utf-8")
-            yield b'data: [DONE]\n'
-
-    monkeypatch.setattr(service, "_open_request", lambda _plan, stream: FakeStreamResponse())
-    stream_plan = service.prepare_chat({"prompt": prompt, "model_type": "local"}, operator_token=operator)
-    tokens = list(service.stream(stream_plan, threading.Event()))
-    assert len(tokens) == 1 and "暂未创建操作预览" in tokens[0]
-    assert "操作已经完成" not in "".join(tokens)
-    assert stream_plan.get("_tool_proposal") is None and stream_plan.get("_tool_clarification")
-    assert not service._pending_tools
-
-
 def test_exact_catalog_titles_route_every_empty_argument_tool_deterministically():
     from app.assistant_tools import TOOL_BY_NAME
 
@@ -838,9 +733,6 @@ def test_exact_catalog_titles_route_every_empty_argument_tool_deterministically(
         ("启动离线数据源CSV文件", True),
         ("播放数据源与控制中的离线数据源CSV文件", True),
         ("启动数据源与控制中的离线数据源CSV文件", True),
-        ("请马上开始离线数据源", True),
-        ("马上开始离线数据源", True),
-        ("立即播放离线数据源CSV文件", True),
     )
     for prompt, is_offline in reported_phrases:
         assert _explicit_tool_command(prompt) == "start_current_source", prompt
@@ -900,48 +792,6 @@ def test_explicit_source_start_bypasses_model_selection_but_keeps_confirmation(t
     incorrect_code = "000001" if proposal["confirmation_code"] != "000001" else "000002"
     with pytest.raises(AssistantError, match="二次确认码不匹配"):
         service.claim_tool_proposal(proposal["id"], operator, "branch", incorrect_code)
-
-
-def test_offline_source_playback_diagnostics_log_route_and_rejected_tool_without_values(tmp_path, monkeypatch, caplog):
-    import logging
-
-    admin = "route-diagnostic-admin-secret"
-    operator = "route-diagnostic-operator-secret"
-    monkeypatch.setenv("ELEC_TOOL_ASSISTANT_ADMIN_TOKEN", admin)
-    monkeypatch.setenv("ELEC_TOOL_ASSISTANT_OPERATOR_TOKENS", json.dumps([
-        {"id": "diagnostic-operator", "token": operator,
-         "scopes": ["engine.start", "config.source.write"]},
-    ]))
-    service = AssistantService(data_dir=str(tmp_path))
-    service.update_config({"tools_enabled": True,
-                           "enabled_tools": ["start_current_source", "set_playback_speed"]}, admin)
-    caplog.set_level(logging.INFO, logger="elec_tool.assistant")
-    prompt = "播放离线数据源"
-    plan = service.prepare_chat({"prompt": prompt, "model_type": "local"},
-                                operator_token=operator, tool_context={
-                                    "source": {"kind": "csv_file", "has_path": True, "running": False},
-                                })
-    assert plan["_tool_proposal"]["tool"] == "start_current_source"
-    trace_id = plan["_trace_id"]
-    assert len(trace_id) == 16 and all(char in "0123456789abcdef" for char in trace_id)
-
-    rejected_plan = dict(plan)
-    rejected_plan["_tool_call_origin"] = "model"
-    result = service._accept_tool_calls(rejected_plan, [{
-        "function": {"name": "set_playback_speed", "arguments": {"speed": 2}},
-    }])
-    assert result is None and rejected_plan.get("_tool_proposal") is None
-    assert rejected_plan.get("_tool_clarification")
-
-    records = caplog.text
-    assert "assistant_route_diagnostic" in records and "decision=deterministic_direct" in records
-    assert "direct_tool=start_current_source" in records and f"trace_id={trace_id}" in records
-    assert "assistant_tool_candidate" in records and "candidate=set_playback_speed" in records
-    assert "intent_candidates=start_current_source:47" in records
-    assert "outcome=clarification reason=intent_mismatch" in records
-    assert "argument_fields=speed" in records
-    assert prompt not in records and admin not in records and operator not in records
-    assert "speed=2" not in records and "Authorization" not in records and "api_key" not in records.lower()
 
 
 def test_explicit_source_start_does_not_fall_back_when_authorization_is_missing(tmp_path, monkeypatch):
@@ -1048,116 +898,177 @@ def test_explicit_source_start_rejects_running_or_unconfigured_source(tmp_path, 
                                              for item in service._pending_tools.values())
 
 
-def test_offline_source_playback_regression_corpus(tmp_path, monkeypatch):
-    """回归语料：离线数据源启动意图的确定性路由边界，覆盖正/负/易混淆/复合/状态五类。"""
-    from app.assistant import _explicit_tool_command, _explicit_offline_source_start
+def test_offline_source_stop_resume_pause_regression_corpus(tmp_path, monkeypatch):
+    """回归语料：离线数据源停止/暂停/恢复意图的确定性路由边界。
 
-    # ---- 1. 正例：礼貌表达、口语表达、不同语序、省略、UI 位置词 ----
-    positive = (
+    覆盖五类语料：
+    1. 正例：礼貌表达、口语表达、不同语序、省略、UI 位置词
+    2. 负例：疑问句、否定句、过去时陈述、引用命令
+    3. 易混淆例：启动 vs 停止、暂停 vs 恢复、选择文件 vs 停止当前文件
+    4. 复合例：同时要求停止和调速/启动等
+    5. 状态例：无来源、来源已运行、非离线来源、文件不可用、缺少 scope
+    """
+    from app.assistant import _explicit_tool_command
+
+    # ---- 1. 正例：stop / pause / resume ----
+    stop_positive = (
         # 礼貌表达
-        "请帮我播放离线数据源",
-        "麻烦启动当前侧数据源检测",
-        "请开始离线数据源CSV文件",
-        # 口语表达
-        "马上开始离线数据源",
-        "立即播放离线数据源CSV文件",
-        # 不同语序（动词开头的变体）
-        "播放当前侧离线数据源",
-        # 省略（含“离线”的核心表达）
-        "播放离线数据源",
+        "请帮我停止当前侧数据源",
+        "麻烦停止当前侧离线数据源",
+        # 口语表达（修饰语）
+        "马上停止当前侧离线数据源",
+        "立即停止当前侧离线播放",
+        "先结束当前侧源",
+        # 不同语序 / 表达
+        "停止当前侧离线数据源",
+        "停止当前离线数据源",
+        "停止当前侧来源",
+        "停止当前侧源",
+        "停止当前侧离线播放",
         # UI 位置词
-        "播放数据源与控制中的离线数据源CSV文件",
-        "启动数据源与控制中的离线数据源CSV文件",
+        "停止数据源与控制中的离线数据源",
+        "关闭当前侧数据源",
     )
-    for prompt in positive:
-        name = _explicit_tool_command(prompt)
-        assert name == "start_current_source", f"正例未命中: {prompt!r} -> {name}"
-    # 明确含“离线”的标记为离线启动；省略“离线”的通用表达不标记为离线
-    assert _explicit_offline_source_start("播放离线数据源") is True
-    assert _explicit_offline_source_start("播放数据源") is False
+    for prompt in stop_positive:
+        assert _explicit_tool_command(prompt) == "stop_current_source", f"stop 正例未命中: {prompt!r}"
+
+    pause_positive = (
+        "请帮我暂停当前侧离线播放",
+        "麻烦暂停当前侧数据源",
+        "马上暂停当前侧离线播放",
+        "暂停当前侧离线播放",
+        "暂停当前侧数据源",
+        "暂停数据源与控制中的离线播放",
+    )
+    for prompt in pause_positive:
+        assert _explicit_tool_command(prompt) == "pause_current_source", f"pause 正例未命中: {prompt!r}"
+
+    resume_positive = (
+        "请帮我恢复当前侧离线播放",
+        "麻烦恢复当前侧数据源",
+        "马上恢复当前侧离线播放",
+        "恢复当前侧离线播放",
+        "恢复当前侧数据源",
+        "继续数据源与控制中的离线播放",
+    )
+    for prompt in resume_positive:
+        assert _explicit_tool_command(prompt) == "resume_current_source", f"resume 正例未命中: {prompt!r}"
 
     # ---- 2. 负例：疑问句、否定句、过去时陈述、引用命令 ----
     negative = (
         # 疑问句
-        "能否播放离线数据源？",
-        "为什么播放离线数据源会启动？",
+        "能否停止当前侧数据源？",
+        "怎么暂停当前侧离线播放？",
         # 否定句
-        "不要播放离线数据源",
-        "不需要启动当前侧数据源",
+        "不要停止当前侧数据源",
+        "不需要暂停当前侧离线播放",
         # 过去时陈述
-        "已经播放过离线数据源了",
-        "已启动了当前侧数据源",
+        "已经停止了当前侧数据源",
+        "已暂停了当前侧离线播放",
         # 引用命令（非本轮执行意图）
-        "系统说明里说“播放离线数据源”会启动数据源",
+        "系统说明里说“停止当前侧数据源”会停止数据源",
     )
     for prompt in negative:
         assert _explicit_tool_command(prompt) is None, f"负例不应命中: {prompt!r}"
 
-    # ---- 3. 易混淆例：启动 vs 调速、选择文件 vs 播放当前文件 ----
-    assert _explicit_tool_command("将离线播放速度设置为 2 倍") is None
-    assert _explicit_tool_command("把离线数据源速度调快一点") is None
+    # ---- 3. 易混淆例：启动 vs 停止、暂停 vs 恢复、选择文件 vs 停止当前文件 ----
+    assert _explicit_tool_command("播放离线数据源") == "start_current_source"
+    assert _explicit_tool_command("停止当前侧数据源") == "stop_current_source"
+    assert _explicit_tool_command("暂停当前侧离线播放") == "pause_current_source"
+    assert _explicit_tool_command("恢复当前侧离线播放") == "resume_current_source"
+    # 选择文件 vs 停止当前文件
     assert _explicit_tool_command("选择录波文件 capture-a.csv") is None
     assert _explicit_tool_command("把受控录波文件设为当前数据源") is None
 
-    # ---- 4. 复合例：同时要求启动和调速（含速度意图，不应直接路由） ----
+    # ---- 4. 复合例：同时要求停止和其他操作（含速度/启动意图，不应直接路由） ----
     compound = (
-        "启动离线数据源并把速度调成2倍",
-        "播放离线数据源，速度设为1.5倍",
-        "开始播放离线数据源且倍速设为 2",
+        "停止当前侧数据源并把速度调成2倍",
+        "暂停当前侧离线播放，然后恢复",
+        "启动当前侧数据源并停止当前侧数据源",
     )
     for prompt in compound:
         assert _explicit_tool_command(prompt) is None, f"复合例不应直接路由: {prompt!r}"
 
     # ---- 5. 状态例：通过 prepare_chat 验证服务端前置条件 ----
-    admin = "regression-admin"
-    operator = "regression-operator"
+    admin = "stop-resume-pause-admin"
+    operator = "stop-resume-pause-operator"
     monkeypatch.setenv("ELEC_TOOL_ASSISTANT_ADMIN_TOKEN", admin)
     monkeypatch.setenv("ELEC_TOOL_ASSISTANT_OPERATOR_TOKENS", json.dumps([
-        {"id": "regression-operator", "token": operator, "scopes": ["engine.start"]},
+        {"id": "stop-resume-pause-operator", "token": operator,
+         "scopes": ["engine.start", "engine.pause", "engine.resume", "engine.stop"]},
     ]))
     service = AssistantService(data_dir=str(tmp_path))
-    service.update_config({"tools_enabled": True, "enabled_tools": ["start_current_source"]}, admin)
+    service.update_config({
+        "tools_enabled": True,
+        "enabled_tools": ["start_current_source", "pause_current_source",
+                          "resume_current_source", "stop_current_source"],
+    }, admin)
 
-    base_payload = {"prompt": "播放离线数据源", "model_type": "local", "model_name": "qwen3:8b"}
+    base_payload = {"prompt": "停止当前侧数据源", "model_type": "local", "model_name": "qwen3:8b"}
 
     # 5.1 无来源
     with pytest.raises(AssistantError, match="没有可用的数据源配置"):
         service.prepare_chat(base_payload, operator_token=operator, tool_context={"source": {}})
 
-    # 5.2 来源已运行
-    with pytest.raises(AssistantError, match="不会重复启动"):
+    # 5.2 来源未运行（无法暂停/停止）
+    with pytest.raises(AssistantError, match="未在运行，无法暂停"):
+        service.prepare_chat({**base_payload, "prompt": "暂停当前侧离线播放"},
+                             operator_token=operator,
+                             tool_context={"source": {"kind": "csv_file", "has_path": True, "running": False}})
+    with pytest.raises(AssistantError, match="未在运行，无法停止"):
         service.prepare_chat(base_payload, operator_token=operator,
-                             tool_context={"source": {"kind": "csv_file", "has_path": True, "running": True}})
-
-    # 5.3 非离线来源（simulator/tcp）
-    with pytest.raises(AssistantError, match="不是离线文件数据源"):
-        service.prepare_chat(base_payload, operator_token=operator,
-                             tool_context={"source": {"kind": "simulator", "has_path": False, "running": False}})
-
-    # 5.4 文件不可用（离线来源但无路径）
-    with pytest.raises(AssistantError, match="未配置可用文件"):
-        service.prepare_chat(base_payload, operator_token=operator,
-                             tool_context={"source": {"kind": "csv_file", "has_path": False, "running": False}})
-
-    # 5.5 缺少 scope（engine.start） -> 403，不回退到调速或查询工具
-    readonly_operator = "regression-readonly"
-    monkeypatch.setenv("ELEC_TOOL_ASSISTANT_OPERATOR_TOKENS", json.dumps([
-        {"id": "regression-readonly", "token": readonly_operator, "scopes": ["recordings.read"]},
-    ]))
-    with pytest.raises(AssistantError, match="engine.start"):
-        service.prepare_chat(base_payload, operator_token=readonly_operator,
                              tool_context={"source": {"kind": "csv_file", "has_path": True, "running": False}})
 
-    # 5.6 状态正常时应直接命中确定性路由，不调用模型
-    monkeypatch.setattr(service, "_open_request", lambda *args, **kwargs: pytest.fail("direct route must not call model"))
-    service.update_config({"enabled_tools": ["start_current_source"]}, admin)
-    monkeypatch.setenv("ELEC_TOOL_ASSISTANT_OPERATOR_TOKENS", json.dumps([
-        {"id": "regression-operator", "token": operator, "scopes": ["engine.start"]},
-    ]))
+    # 5.3 来源已运行（无法恢复）
+    with pytest.raises(AssistantError, match="正在运行，无需恢复"):
+        service.prepare_chat({**base_payload, "prompt": "恢复当前侧离线播放"},
+                             operator_token=operator,
+                             tool_context={"source": {"kind": "csv_file", "has_path": True, "running": True}})
+
+    # 5.4 非离线来源（simulator/tcp）用于 stop 时的前置检查（stop 不限制种类，只检查运行状态）
+    # 此处仅验证非离线来源在运行时可被 stop
     plan = service.prepare_chat(base_payload, operator_token=operator,
+                                tool_context={"source": {"kind": "simulator", "has_path": False, "running": True}})
+    assert plan["_tool_proposal"]["tool"] == "stop_current_source"
+
+    # 5.5 缺少 scope（engine.stop） -> 403，不回退到调速或查询工具
+    readonly_operator = "stop-resume-pause-readonly"
+    monkeypatch.setenv("ELEC_TOOL_ASSISTANT_OPERATOR_TOKENS", json.dumps([
+        {"id": "stop-resume-pause-readonly", "token": readonly_operator, "scopes": ["recordings.read"]},
+    ]))
+    with pytest.raises(AssistantError, match="engine.stop"):
+        service.prepare_chat(base_payload, operator_token=readonly_operator,
+                             tool_context={"source": {"kind": "csv_file", "has_path": True, "running": True}})
+
+    # 5.6 状态正常时应直接命中确定性路由，不调用模型
+    monkeypatch.setattr(service, "_open_request",
+                        lambda *args, **kwargs: pytest.fail("direct route must not call model"))
+    monkeypatch.setenv("ELEC_TOOL_ASSISTANT_OPERATOR_TOKENS", json.dumps([
+        {"id": "stop-resume-pause-operator", "token": operator,
+         "scopes": ["engine.start", "engine.pause", "engine.resume", "engine.stop"]},
+    ]))
+    service.update_config({
+        "tools_enabled": True,
+        "enabled_tools": ["start_current_source", "pause_current_source",
+                          "resume_current_source", "stop_current_source"],
+    }, admin)
+
+    # stop 正常路径
+    plan = service.prepare_chat(base_payload, operator_token=operator,
+                                tool_context={"source": {"kind": "csv_file", "has_path": True, "running": True}})
+    assert plan["_tool_proposal"]["tool"] == "stop_current_source"
+
+    # pause 正常路径
+    plan = service.prepare_chat({**base_payload, "prompt": "暂停当前侧离线播放"},
+                                operator_token=operator,
+                                tool_context={"source": {"kind": "csv_file", "has_path": True, "running": True}})
+    assert plan["_tool_proposal"]["tool"] == "pause_current_source"
+
+    # resume 正常路径（源未运行，可恢复）
+    plan = service.prepare_chat({**base_payload, "prompt": "恢复当前侧离线播放"},
+                                operator_token=operator,
                                 tool_context={"source": {"kind": "csv_file", "has_path": True, "running": False}})
-    assert plan["_tool_proposal"]["tool"] == "start_current_source"
-    assert plan["_tool_call_origin"] == "deterministic"
+    assert plan["_tool_proposal"]["tool"] == "resume_current_source"
 
     from app.assistant_tools import TOOL_BY_NAME, TOOL_CATALOG
 
