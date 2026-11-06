@@ -1682,7 +1682,7 @@
               <label class="check"><input id="assistant-cloud-tools-enabled" type="checkbox"> 允许云端模型提出工具操作（单独开关，默认关闭）</label>
               <label class="check"><input id="assistant-tool-audit-enabled" type="checkbox"> 记录指令与执行审计（默认开启）</label>
             </div>
-            <div class="assistant-tool-permissions"><b>全局允许的工具（另受每个操作员 token scope 限制）</b><div id="assistant-enabled-tool-checks" class="assistant-view-checks"></div></div>
+            <div class="assistant-tool-permissions"><b>全局允许的工具（另受每个操作员 token scope 限制）</b><p id="assistant-tool-scope-help" class="assistant-tool-scope-help">勾选只控制管理员全局 allow-list，不会单独授予操作员权限。每项下方显示该工具固定要求的 scope；要授权操作员，还需在服务端环境变量 <code>ELEC_TOOL_ASSISTANT_OPERATOR_TOKENS</code> 对应记录的 <code>scopes</code> 数组中加入完全相同的值。scope 不在此处编辑；完整映射见《智能问答助手说明》§6.6。</p><div id="assistant-enabled-tool-checks" class="assistant-view-checks" aria-describedby="assistant-tool-scope-help"></div></div>
             <div class="assistant-settings-actions"><button id="assistant-audit-refresh" type="button">读取审计日志（管理员）</button><span id="assistant-audit-status" class="assistant-admin-status" role="status"></span></div>
             <div id="assistant-audit-list" class="assistant-audit-list" aria-live="polite">审计记录未加载。</div>
             <div class="assistant-page-permissions">

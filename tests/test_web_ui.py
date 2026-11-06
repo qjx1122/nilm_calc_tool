@@ -399,6 +399,21 @@ def test_assistant_model_name_picker_and_dynamic_cloud_profile_editor(page):
     assert "profile.api_key_set" in assistant_js and "input.type = type" in assistant_js
 
 
+def test_assistant_global_tool_allowlist_displays_fixed_operator_scope_per_tool():
+    css = (ROOT / "app/static/style.css").read_text(encoding="utf-8")
+    start = APPJS.index("function assistantRenderToolChecks(selected) {")
+    end = APPJS.index("function assistantRenderCloudProfiles()", start)
+    renderer = APPJS[start:end]
+
+    assert 'id="assistant-tool-scope-help"' in HTML
+    assert 'aria-describedby="assistant-tool-scope-help"' in HTML
+    assert "不会单独授予操作员权限" in HTML
+    assert "ELEC_TOOL_ASSISTANT_OPERATOR_TOKENS" in HTML
+    assert "item.scope" in renderer and "所需 scope：${scopeValue}" in renderer
+    assert "assistant-tool-scope" in renderer and "所需 scope：未从服务端目录载入" in renderer
+    assert ".assistant-tool-scope-help" in css and ".assistant-tool-check-copy" in css
+
+
 def test_assistant_scroll_containers_preserve_reader_position_during_streaming():
     css = (ROOT / "app/static/style.css").read_text(encoding="utf-8")
     for selector in (".assistant-messages", ".assistant-conversation-list"):

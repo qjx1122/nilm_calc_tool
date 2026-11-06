@@ -44,6 +44,11 @@ let config = {
   cloud_api_key_set: false, local_api_key_set: false, admin_configurable: true,
 };
 const views = [{ id: 'overview', label: '总览面板' }, { id: 'nilm', label: '负荷辨识事件' }];
+const tools = [
+  { id: 'start_current_source', title: '启动当前侧数据源检测', scope: 'engine.start' },
+  { id: 'list_recordings', title: '查询可用录波文件', scope: 'recordings.read' },
+  { id: 'list_profiles', title: '查询设备画像', scope: 'profiles.read' },
+];
 const encoder = new TextEncoder();
 const jsonResponse = (data, status = 200) => new Response(JSON.stringify(data), {
   status, headers: { 'content-type': 'application/json' },
@@ -66,7 +71,7 @@ const bundledDocuments = [
 window.fetch = async (url, options = {}) => {
   if (url === '/api/assistant/documents') return jsonResponse({ ok: true, count: bundledDocuments.length, characters: 130, documents: bundledDocuments });
   if (url === '/api/assistant/config' && (!options.method || options.method === 'GET')) {
-    return jsonResponse({ ok: true, config, views });
+    return jsonResponse({ ok: true, config, views, tools });
   }
   if (url === '/api/assistant/local-models' && (!options.method || options.method === 'GET')) {
     return jsonResponse({ ok: true, status: 'ready', models: ['qwen2.5:7b', 'llama3.2:latest'], error: '', updated_at: 1 });
@@ -165,6 +170,18 @@ check($('assistant-launcher').hidden, '配置读取前问答入口应默认隐�
   // 等待首次配置读取及启动时加载的完整内置文档库。
   for (let i = 0; i < 100 && (!window.__assistantState.config || !window.__assistantState.documents.length || !window.__assistantState.localModels.length); i++) await new Promise(resolve => setTimeout(resolve, 10));
   check(!!window.__assistantState.config, '配置未加载');
+  const toolChecks = $('assistant-enabled-tool-checks');
+  const startToolInput = Array.from(toolChecks.querySelectorAll('input[data-tool-id]'))
+    .find(input => input.dataset.toolId === 'start_current_source');
+  const recordingToolInput = Array.from(toolChecks.querySelectorAll('input[data-tool-id]'))
+    .find(input => input.dataset.toolId === 'list_recordings');
+  check(!!startToolInput && startToolInput.closest('label').querySelector('.assistant-tool-scope').textContent === '所需 scope：engine.start',
+    '全局工具清单未显示 start_current_source 的精确操作员 scope');
+  check(!!recordingToolInput && recordingToolInput.closest('label').querySelector('.assistant-tool-scope').textContent === '所需 scope：recordings.read',
+    '全局工具清单未显示 list_recordings 的精确操作员 scope');
+  check($('assistant-tool-scope-help').textContent.includes('不会单独授予操作员权限')
+    && $('assistant-tool-scope-help').textContent.includes('ELEC_TOOL_ASSISTANT_OPERATOR_TOKENS'),
+  '全局 allow-list 说明未区分操作员 token scopes');
   check(!$('assistant-launcher').hidden, '总览页应显示入口');
   const sessionHeading = $('assistant-session-pane').querySelector('.assistant-session-heading h2');
   check(sessionHeading && sessionHeading.textContent === '智能问答助手', '会话管理侧栏标题应为“智能问答助手”');
@@ -467,6 +484,10 @@ check($('assistant-launcher').hidden, '配置读取前问答入口应默认隐�
   $('assistant-cloud-key').value = 'temporary-cloud-secret';
   await window.assistantSaveConfig();
   check(!!lastConfigPayload && lastConfigPayload.cloud_api_key === 'temporary-cloud-secret', '配置保存载荷缺密钥');
+  check(lastConfigPayload.enabled_tools.includes('start_current_source')
+    && lastConfigPayload.enabled_tools.includes('list_recordings')
+    && !lastConfigPayload.enabled_tools.includes('engine.start'),
+  '全局 allow-list 保存值必须是工具 ID，不能误写成操作员 scope');
   check(!Object.prototype.hasOwnProperty.call(lastConfigPayload, 'local_model'), '模型名称错误地保存在管理员配置中');
   check(!Object.prototype.hasOwnProperty.call(lastConfigPayload, 'sensitive_terms'), '普通配置保存不应覆盖未读取的敏感词');
   check(!$('assistant-cloud-key').value, '保存后 API Key 输入框未清空');

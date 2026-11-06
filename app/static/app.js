@@ -5751,8 +5751,15 @@ function assistantRenderToolChecks(selected) {
     const id = String(item.id || item.name || ''); if (!id) return;
     const label = document.createElement('label'), input = document.createElement('input');
     input.type = 'checkbox'; input.dataset.toolId = id; input.checked = selected.includes(id);
-    const name = document.createElement('span'); name.textContent = item.title || ASSISTANT_TOOL_LABELS[id] || id;
-    label.appendChild(input); label.appendChild(name); root.appendChild(label);
+    const copy = document.createElement('span'); copy.className = 'assistant-tool-check-copy';
+    const name = document.createElement('span'); name.className = 'assistant-tool-check-title';
+    name.textContent = item.title || ASSISTANT_TOOL_LABELS[id] || id;
+    const scopeValue = String(item.scope || '').trim();
+    const scope = document.createElement('small'); scope.className = 'assistant-tool-scope';
+    scope.textContent = scopeValue ? `所需 scope：${scopeValue}` : '所需 scope：未从服务端目录载入';
+    if (!scopeValue) scope.classList.add('is-missing');
+    copy.appendChild(name); copy.appendChild(scope);
+    label.appendChild(input); label.appendChild(copy); root.appendChild(label);
   });
 }
 function assistantRenderCloudProfiles() {

@@ -584,7 +584,14 @@ input.flash{animation:ntflash 1.5s ease-out}
 .assistant-confirm-code-input input{width:130px}
 .assistant-proposal-cancelled{opacity:.75}
 .assistant-tool-permissions{margin:10px 0;padding:8px;border:1px solid var(--line);border-radius:7px;font-size:11px;color:var(--mut)}
+.assistant-tool-scope-help{margin:6px 0 2px;color:var(--mut);font-size:10px;line-height:1.5}
 .assistant-tool-permissions .assistant-view-checks{grid-template-columns:repeat(2,minmax(0,1fr))}
+.assistant-tool-permissions .assistant-view-checks label{align-items:flex-start;gap:7px;min-width:0;padding:4px 3px}
+.assistant-tool-permissions .assistant-view-checks input{flex:0 0 auto;margin-top:2px}
+.assistant-tool-check-copy{display:flex;flex:1 1 auto;min-width:0;flex-direction:column;gap:2px}
+.assistant-tool-check-title{color:var(--fg);line-height:1.35;overflow-wrap:anywhere}
+.assistant-tool-scope{color:#8798bc;font:10px/1.35 ui-monospace,SFMono-Regular,Consolas,monospace;overflow-wrap:anywhere}
+.assistant-tool-scope.is-missing{color:var(--warn)}
 .assistant-audit-list{max-height:260px;overflow:auto;display:flex;flex-direction:column;gap:6px;margin:8px 0;color:var(--mut);font-size:11px}
 .assistant-audit-item{padding:7px;border:1px solid var(--line);border-radius:6px;background:#101829;display:flex;flex-direction:column;gap:4px}
 .assistant-audit-item strong{color:#dbe6fb}
