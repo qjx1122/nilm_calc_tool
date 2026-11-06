@@ -59,7 +59,8 @@ def load_intent_data_from_csv(csv_path: str = _INTENT_CSV_PATH) -> Dict[str, Dic
     - required_any：组内逗号分隔，组间分号分隔；空表示无
     """
     data: Dict[str, Dict[str, Any]] = {}
-    with open(csv_path, encoding="utf-8", newline="") as fh:
+    # utf-8-sig 可自动去除 UTF-8 BOM（Excel 中文版打开 CSV 需 BOM 才能正确识别中文）
+    with open(csv_path, encoding="utf-8-sig", newline="") as fh:
         reader = csv.DictReader(fh)
         required_cols = {"tool", "intent", "mode", "actions", "targets", "positive", "negative", "policy"}
         missing = required_cols - set(reader.fieldnames or [])
