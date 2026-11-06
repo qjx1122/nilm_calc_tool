@@ -1275,6 +1275,157 @@ def validate_model_tool_result(prompt: str, tool: str, raw_arguments: Any,
     return {"ok": True, "arguments": arguments}
 
 
+# ---------------------------------------------------------------------------
+# 置信度标准化与三档分流（设计文档 §6.5）
+# ---------------------------------------------------------------------------
+
+# 置信度阈值（0-1 标准化后）
+CONFIDENCE_HIGH = 0.80   # 高置信：直接路由
+CONFIDENCE_MED_LOW = 0.55  # 低置信下界
+CONFIDENCE_GAP_MIN = 0.15  # top1 与 top2 最小分差
+
+
+def normalize_confidence(score: int) -> float:
+    """将 0-100 的词法得分标准化为 0-1 的置信度。
+
+    当前阶段仅基于词法得分；后续引入模型判定后，可按多源融合公式
+    c_final = 0.5 × c_model + 0.3 × c_gap_norm + 0.2 × c_sim 合成。
+    """
+    if score <= 0:
+        return 0.0
+    if score >= 100:
+        return 1.0
+    return round(score / 100.0, 4)
+
+
+def classify_confidence(confidence: float, gap: float = 0.0) -> str:
+    """三档分流判定。
+
+    返回 "high" / "medium" / "low" 三档之一：
+      - high:  >= 0.80 且 top1-top2 分差 >= 0.15 -> 直接路由
+      - medium: 0.55-0.80 或分差不足           -> 走通用检索，标注未精确匹配
+      - low:    < 0.55                            -> 进入“其他”域通用问答
+    """
+    if confidence >= CONFIDENCE_HIGH and gap >= CONFIDENCE_GAP_MIN:
+        return "high"
+    if confidence < CONFIDENCE_MED_LOW:
+        return "low"
+    return "medium"
+
+
+def confidence_diversion(
+    confidence: float, gap: float = 0.0
+) -> Dict[str, Any]:
+    """返回置信度分流决策，供路由层决定是否直接创建提案。
+
+    字段：
+      - tier: "high" / "medium" / "low"
+      - route_directly: 是否可跳过模型判定直接创建提案（仅 high 且确定性路由已命中时为 True）
+      - message: 面向用户的简要说明（medium/low 时供参考）
+    """
+    tier = classify_confidence(confidence, gap)
+    if tier == "high":
+        return {
+            "tier": "high",
+            "route_directly": True,
+            "message": "置信度高，可直接路由。",
+        }
+    if tier == "medium":
+        return {
+            "tier": "medium",
+            "route_directly": False,
+            "message": "置信度中等，建议通过模型判定或澄清后再操作。",
+        }
+    return {
+        "tier": "low",
+        "route_directly": False,
+        "message": "置信度低，未能可靠匹配受控操作，请更明确地说明意图。",
+    }
+
+
+# ---------------------------------------------------------------------------
+# IntentRecognitionResult Schema（设计文档 §8.4.1，阶段 B 预留）
+# ---------------------------------------------------------------------------
+
+INTENT_RECOGNITION_RESULT_SCHEMA: Dict[str, Any] = {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "IntentRecognitionResult",
+    "type": "object",
+    "additionalProperties": False,
+    "required": [
+        "intent_code", "intent_name", "confidence", "reason", "slots",
+        "missing_slots", "need_clarify", "clarify_question",
+        "sub_intents", "rewritten_query", "entities",
+    ],
+    "properties": {
+        "intent_code": {"type": "string"},
+        "intent_name": {"type": "string", "maxLength": 20},
+        "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+        "reason": {"type": "string", "maxLength": 120},
+        "slots": {"type": "object", "additionalProperties": False},
+        "missing_slots": {"type": "array", "uniqueItems": True, "maxItems": 5},
+        "need_clarify": {"type": "boolean"},
+        "clarify_question": {"type": ["string", "null"], "maxLength": 30},
+        "sub_intents": {"type": "array", "maxItems": 5},
+        "rewritten_query": {"type": "string", "minLength": 1, "maxLength": 200},
+        "entities": {"type": "array", "maxItems": 10},
+    },
+}
+
+
+def build_intent_recognition_result(
+    intent_code: str,
+    intent_name: str,
+    confidence: float,
+    reason: str,
+    slots: Optional[Dict[str, Any]] = None,
+    missing_slots: Optional[Sequence[str]] = None,
+    need_clarify: bool = False,
+    clarify_question: Optional[str] = None,
+    sub_intents: Optional[Sequence[str]] = None,
+    rewritten_query: Optional[str] = None,
+    entities: Optional[Sequence[str]] = None,
+) -> Dict[str, Any]:
+    """构建符合 IntentRecognitionResult Schema 的结构化意图识别输出。"""
+    return {
+        "intent_code": intent_code,
+        "intent_name": intent_name[:20],
+        "confidence": max(0.0, min(1.0, float(confidence))),
+        "reason": reason[:120],
+        "slots": slots or {},
+        "missing_slots": list(missing_slots or [])[:5],
+        "need_clarify": bool(need_clarify),
+        "clarify_question": (clarify_question or None)[:30] if clarify_question else None,
+        "sub_intents": list(sub_intents or [])[:5],
+        "rewritten_query": (rewritten_query or "")[:200],
+        "entities": list(entities or [])[:10],
+    }
+
+
+def validate_intent_recognition_result(result: Any) -> Dict[str, Any]:
+    """对 IntentRecognitionResult 做结构化校验（无 jsonschema 依赖的轻量版本）。"""
+    if not isinstance(result, dict):
+        return {"ok": False, "error": "结果必须是 JSON 对象"}
+    for key in INTENT_RECOGNITION_RESULT_SCHEMA["required"]:
+        if key not in result:
+            return {"ok": False, "error": f"缺少必填字段: {key}"}
+    if not isinstance(result["confidence"], (int, float)) or not (0 <= result["confidence"] <= 1):
+        return {"ok": False, "error": "confidence 必须是 0 到 1 之间的数字"}
+    if not isinstance(result["need_clarify"], bool):
+        return {"ok": False, "error": "need_clarify 必须是布尔值"}
+    if result["clarify_question"] is not None and not isinstance(result["clarify_question"], str):
+        return {"ok": False, "error": "clarify_question 必须是字符串或 null"}
+    if not isinstance(result["slots"], dict):
+        return {"ok": False, "error": "slots 必须是对象"}
+    if not isinstance(result["missing_slots"], list):
+        return {"ok": False, "error": "missing_slots 必须是数组"}
+    if not isinstance(result["sub_intents"], list):
+        return {"ok": False, "error": "sub_intents 必须是数组"}
+    if not isinstance(result["entities"], list):
+        return {"ok": False, "error": "entities 必须是数组"}
+    return {"ok": True, "result": result}
+
+
 def tool_intent_hint(tool: str) -> str:
     """Compact, trusted guidance appended only to this allowed tool's model schema."""
     contract = TOOL_INTENT_CONTRACTS[tool]
