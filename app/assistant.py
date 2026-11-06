@@ -1971,13 +1971,15 @@ class AssistantService:
             elif direct_tool_name == "stop_current_source":
                 if not is_cross_side and not source_running:
                     raise AssistantError(409, f"{side_label}数据源未在运行，无法停止；请先启动数据源后再停止。")
+            _tool_context = dict(tool_context or {})
+            _tool_context["side"] = effective_side
             direct_plan = {
                 "model_type": model_type,
                 "sources": [],
                 "_redact_names": [],
                 "_operator": operator,
                 "_side": effective_side,
-                "_tool_context": dict(tool_context or {}),
+                "_tool_context": _tool_context,
                 "_available_tools": available_tools,
                 # 中期修复：服务端侧别复验与排他性限定词标记，供执行层复验
                 "_parsed_side": effective_side,
@@ -2129,13 +2131,15 @@ class AssistantService:
                                     409,
                                     f"{side_label}数据源未在运行，无法停止；请先启动数据源后再停止。",
                                 )
+                        _tool_context = dict(tool_context or {})
+                        _tool_context["side"] = effective_side
                         intent_plan = {
                             "model_type": model_type,
                             "sources": [],
                             "_redact_names": [],
                             "_operator": operator,
                             "_side": effective_side,
-                            "_tool_context": dict(tool_context or {}),
+                            "_tool_context": _tool_context,
                             "_available_tools": available_tools,
                             # 中期修复：服务端侧别复验与排他性限定词标记，供执行层复验
                             "_parsed_side": effective_side,
