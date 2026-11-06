@@ -125,7 +125,7 @@ _INTENT_DATA: Dict[str, Dict[str, Any]] = {
         "intent": "停止当前侧数据源",
         "mode": "action",
         "actions": ("停止", "终止", "结束运行"),
-        "targets": ("当前数据源", "数据源运行", "当前侧来源", "采集任务", "数据源"),
+        "targets": ("当前数据源", "数据源运行", "当前侧来源", "采集任务", "数据源", "离线播放"),
         "positive": ("停止当前侧数据源", "终止当前数据源检测"),
         "negative": ("暂停当前侧离线播放", "查询数据源运行状态"),
         "policy": "无参数；须是明确停止请求。提示总线侧既有联动影响，不能与暂停或清除事件混淆。",
@@ -739,6 +739,19 @@ def tool_intent_score(prompt: str, tool: str) -> int:
     for example in contract.negative_examples:
         if normalize_intent_text(example) in normalize_intent_text(prompt):
             return 0
+    # 互斥动词：同一输入中出现停止/终止/结束运行，启动类工具不得分；
+    # 出现启动/开始/播放/运行，停止类工具不得分，避免“播放”类词汇把
+    # 停止指令误判为启动（如“停止播放离线数据源”）。
+    stop_verbs = ("停止", "终止", "结束运行")
+    # “播放”不列入启动专属动词：它可出现在“停止播放”这类停止指令中，
+    # 不应导致停止工具误判为 0。
+    start_only_verbs = ("启动", "开始", "开始播放", "运行", "跑起来")
+    has_stop = any(v in text for v in stop_verbs)
+    has_start_only = any(v in text for v in start_only_verbs)
+    if tool == "start_current_source" and has_stop:
+        return 0
+    if tool == "stop_current_source" and has_start_only:
+        return 0
     # Exact catalog-title commands remain deterministic even when politely prefixed.
     title_text = text
     for prefix in ("请帮我", "麻烦帮我", "帮我", "请", "麻烦"):
@@ -1588,7 +1601,12 @@ def recognize_intent(
 
     # 多源融合：当前阶段以词法得分作为 c_model/c_sim 的兜底值
     fused = fuse_confidence(top_score, model_confidence=None, gap=gap * 100.0, similarity=None)
-    tier = classify_confidence(fused, gap)
+    # 单候选无歧义：词法得分达到中档阈值（>=40，即动词+目标均有匹配）时，
+    # 直接判定为 high tier，避免 gap=0 拉低融合置信度导致误入 low tier。
+    if len(candidates) == 1 and top_score >= 40:
+        tier = "high"
+    else:
+        tier = classify_confidence(fused, gap)
 
     # 复合意图：检测到多个动作且有多个候选，拒绝直接路由，要求拆分
     if is_compound:
