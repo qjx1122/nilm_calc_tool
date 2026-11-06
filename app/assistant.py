@@ -344,6 +344,72 @@ def _explicit_tool_command(prompt: str) -> Optional[str]:
     return None
 
 
+# ---------------------------------------------------------------------------
+# 指令上下文解析（短期+中期修复：侧别 / 延时 / 排他性限定词）
+# ---------------------------------------------------------------------------
+
+# 侧别关键词：分路侧→branch，总线侧→bus，当前侧→None（使用上下文默认值）
+_SIDE_KEYWORDS = {
+    "branch": ("分路侧", "分侧", "branch"),
+    "bus": ("总线侧", "总侧", "bus"),
+}
+_SIDE_PARSE_RE = re.compile(
+    r"(分路侧|分侧|branch|总线侧|总侧|bus|当前侧)", re.IGNORECASE
+)
+
+# 延时意图关键词：15秒过后、5分钟后、定时、延时、等待等
+_DELAY_INTENT_RE = re.compile(
+    r"(?:(\d+)\s*(?:秒|分钟|小时|天))?\s*(?:过后|以后|之后|后|定时|延时|等待|等\s*一下|稍\s*后)",
+    re.IGNORECASE,
+)
+
+# 排他性限定词：只/仅/单独/独占
+_EXCLUSIVE_LIMIT_RE = re.compile(
+    r"(?:只|仅|单独|独占|仅限|仅|就只)", re.IGNORECASE
+)
+
+
+def _parse_side_from_prompt(prompt: str) -> Optional[str]:
+    """从用户 prompt 中解析侧别。
+
+    返回 "bus" / "branch" / None：
+      - "分路侧"/"分侧"/"branch" -> "branch"
+      - "总线侧"/"总侧"/"bus"     -> "bus"
+      - "当前侧"                -> None（使用调用方传入的 side 上下文）
+      - 未检测到                -> None
+    """
+    if not prompt:
+        return None
+    m = _SIDE_PARSE_RE.search(prompt)
+    if not m:
+        return None
+    kw = m.group(0).strip()
+    for side, aliases in _SIDE_KEYWORDS.items():
+        if kw in aliases:
+            return side
+    return None
+
+
+def _has_delay_intent(prompt: str) -> bool:
+    """检测用户是否要求延时执行（如“15秒过后”“5分钟后”“定时”）。
+
+    此类请求系统不支持立即延时执行，应拒绝直接路由并返回澄清。
+    """
+    if not prompt:
+        return False
+    return bool(_DELAY_INTENT_RE.search(prompt))
+
+
+def _has_exclusive_limit(prompt: str) -> bool:
+    """检测用户是否使用排他性限定词（如“只”“仅”“单独”）。
+
+    排他性限定意味着用户明确限定操作范围，服务端应在确认前复验。
+    """
+    if not prompt:
+        return False
+    return bool(_EXCLUSIVE_LIMIT_RE.search(prompt))
+
+
 def _explicit_offline_source_start(prompt: str) -> bool:
     """Identify explicit offline starts so the current source kind is checked server-side."""
     text = _normalize_source_start_prompt(prompt)
@@ -1818,6 +1884,18 @@ class AssistantService:
         direct_tool_name = (_explicit_tool_command(prompt)
                             if model_type in {"local", "cloud"} and not images else None)
         if direct_tool_name:
+            # 短期修复：延时意图拒绝——系统不支持延时执行，直接路由前必须拒绝
+            if _has_delay_intent(prompt):
+                raise AssistantError(
+                    400,
+                    "请求包含延时执行指令（如“15秒过后”“5分钟后”“定时”），系统不支持延时执行受控操作；"
+                    "请去掉延时表述后再提交，或分两步：先设置好数据源，再在需要时发送立即执行指令。"
+                )
+            # 短期修复：侧别从 prompt 解析，优先级高于调用方传入的 side
+            parsed_side = _parse_side_from_prompt(prompt)
+            effective_side = parsed_side if parsed_side in {"bus", "branch"} else (side if side in {"bus", "branch"} else "bus")
+            # 短期修复：排他性限定词检测
+            exclusive_limit = _has_exclusive_limit(prompt)
             item = TOOL_BY_NAME[direct_tool_name]
             if direct_tool_name not in available_tools:
                 blockers = []
@@ -1843,44 +1921,48 @@ class AssistantService:
             if not source.get("kind"):
                 raise AssistantError(
                     409,
-                    "当前侧没有可用的数据源配置。请先在「数据源与控制」页面为当前侧配置数据源后重试；"
+                    f"{effective_side if effective_side == 'branch' else '当前侧'}没有可用的数据源配置。请先在「数据源与控制」页面为当前侧配置数据源后重试；"
                     "不会改用查询工具代替该操作。",
                 )
             source_kind = str(source.get("kind") or "none")
             source_running = bool(source.get("running"))
+            side_label = {"bus": "总线侧", "branch": "分路侧"}.get(effective_side, "当前侧")
             if direct_tool_name == "start_current_source":
                 if source_running:
-                    raise AssistantError(409, "当前侧数据源已在运行或暂停，不会重复启动；如需继续暂停的数据源，请使用恢复操作")
+                    raise AssistantError(409, f"{side_label}数据源已在运行或暂停，不会重复启动；如需继续暂停的数据源，请使用恢复操作")
                 if (_explicit_offline_source_start(prompt)
                         and source_kind not in {"csv_file", "csv_tail"}):
                     raise AssistantError(
                         409,
-                        "当前侧配置不是离线文件数据源。若要播放离线 CSV，请先在「数据源与控制」页面为当前侧配置离线数据源后重试；"
+                        f"{side_label}配置不是离线文件数据源。若要播放离线 CSV，请先在「数据源与控制」页面为当前侧配置离线数据源后重试；"
                         "不会自动切换当前来源。",
                     )
                 if source_kind in {"csv_file", "csv_tail"} and not source.get("has_path"):
                     raise AssistantError(
                         409,
-                        "当前侧离线数据源未配置可用文件。请在「数据源与控制」页面配置并核验当前侧文件后重试；"
+                        f"{side_label}离线数据源未配置可用文件。请在「数据源与控制」页面配置并核验当前侧文件后重试；"
                         "不会查询或更换录波文件。",
                     )
             elif direct_tool_name == "pause_current_source":
                 if not source_running:
-                    raise AssistantError(409, "当前侧数据源未在运行，无法暂停；请先启动数据源后再暂停。")
+                    raise AssistantError(409, f"{side_label}数据源未在运行，无法暂停；请先启动数据源后再暂停。")
             elif direct_tool_name == "resume_current_source":
                 if source_running:
-                    raise AssistantError(409, "当前侧数据源正在运行，无需恢复；如需暂停请使用暂停操作。")
+                    raise AssistantError(409, f"{side_label}数据源正在运行，无需恢复；如需暂停请使用暂停操作。")
             elif direct_tool_name == "stop_current_source":
                 if not source_running:
-                    raise AssistantError(409, "当前侧数据源未在运行，无法停止；请先启动数据源后再停止。")
+                    raise AssistantError(409, f"{side_label}数据源未在运行，无法停止；请先启动数据源后再停止。")
             direct_plan = {
                 "model_type": model_type,
                 "sources": [],
                 "_redact_names": [],
                 "_operator": operator,
-                "_side": side if side in {"bus", "branch"} else "bus",
+                "_side": effective_side,
                 "_tool_context": dict(tool_context or {}),
                 "_available_tools": available_tools,
+                # 中期修复：服务端侧别复验与排他性限定词标记，供执行层复验
+                "_parsed_side": effective_side,
+                "_exclusive_limit": exclusive_limit,
             }
             proposal = self.create_tool_proposal(direct_plan, [{
                 "function": {"name": direct_tool_name, "arguments": {}}
@@ -1906,6 +1988,18 @@ class AssistantService:
             )
             if intent_recognition["ok"]:
                 top_tool = intent_recognition["result"]["intent_code"]
+                # 短期修复：延时意图拒绝——recognize_intent 路径也必须拒绝延时执行
+                if _has_delay_intent(prompt):
+                    raise AssistantError(
+                        400,
+                        "请求包含延时执行指令（如“15秒过后”“5分钟后”“定时”），系统不支持延时执行受控操作；"
+                        "请去掉延时表述后再提交，或分两步：先设置好数据源，再在需要时发送立即执行指令。"
+                    )
+                # 短期修复：侧别从 prompt 解析，优先级高于调用方传入的 side
+                parsed_side = _parse_side_from_prompt(prompt)
+                effective_side = parsed_side if parsed_side in {"bus", "branch"} else (side if side in {"bus", "branch"} else "bus")
+                # 短期修复：排他性限定词检测
+                exclusive_limit = _has_exclusive_limit(prompt)
                 # 对所有在可用工具清单中的受控工具直接路由（阶段 B，设计文档 §6.5/§8.4.1）。
                 # 确定性路由只 cover start/pause/resume/stop，recognize_intent 作为大模型路径的
                 # 补充，可对全部 46 个受控工具进行意图判定并直接路由。
@@ -1955,6 +2049,7 @@ class AssistantService:
                         pass
                     else:
                         # 四个核心工具的 source 状态校验（确定性路由已 cover 的范围）
+                        side_label = {"bus": "总线侧", "branch": "分路侧"}.get(effective_side, "当前侧")
                         if top_tool == "start_current_source":
                             source = (tool_context or {}).get("source")
                             source = source if isinstance(source, dict) else {}
@@ -1963,18 +2058,18 @@ class AssistantService:
                             if source_running:
                                 raise AssistantError(
                                     409,
-                                    "当前侧数据源已在运行或暂停，不会重复启动；如需继续暂停的数据源，请使用恢复操作",
+                                    f"{side_label}数据源已在运行或暂停，不会重复启动；如需继续暂停的数据源，请使用恢复操作",
                                 )
                             if source_kind not in {"csv_file", "csv_tail"}:
                                 raise AssistantError(
                                     409,
-                                    "当前侧配置不是离线文件数据源。若要播放离线 CSV，请先在「数据源与控制」页面为当前侧配置离线数据源后重试；"
+                                    f"{side_label}配置不是离线文件数据源。若要播放离线 CSV，请先在「数据源与控制」页面为当前侧配置离线数据源后重试；"
                                     "不会自动切换当前来源。",
                                 )
                             if not source.get("has_path"):
                                 raise AssistantError(
                                     409,
-                                    "当前侧离线数据源未配置可用文件。请在「数据源与控制」页面配置并核验当前侧文件后重试；"
+                                    f"{side_label}离线数据源未配置可用文件。请在「数据源与控制」页面配置并核验当前侧文件后重试；"
                                     "不会查询或更换录波文件。",
                                 )
                         elif top_tool == "pause_current_source":
@@ -1984,7 +2079,7 @@ class AssistantService:
                             if not source_running:
                                 raise AssistantError(
                                     409,
-                                    "当前侧数据源未在运行，无法暂停；请先启动数据源后再暂停。",
+                                    f"{side_label}数据源未在运行，无法暂停；请先启动数据源后再暂停。",
                                 )
                         elif top_tool == "resume_current_source":
                             source = (tool_context or {}).get("source")
@@ -1993,7 +2088,7 @@ class AssistantService:
                             if source_running:
                                 raise AssistantError(
                                     409,
-                                    "当前侧数据源正在运行，无需恢复；如需暂停请使用暂停操作。",
+                                    f"{side_label}数据源正在运行，无需恢复；如需暂停请使用暂停操作。",
                                 )
                         elif top_tool == "stop_current_source":
                             source = (tool_context or {}).get("source")
@@ -2002,16 +2097,19 @@ class AssistantService:
                             if not source_running:
                                 raise AssistantError(
                                     409,
-                                    "当前侧数据源未在运行，无法停止；请先启动数据源后再停止。",
+                                    f"{side_label}数据源未在运行，无法停止；请先启动数据源后再停止。",
                                 )
                         intent_plan = {
                             "model_type": model_type,
                             "sources": [],
                             "_redact_names": [],
                             "_operator": operator,
-                            "_side": side if side in {"bus", "branch"} else "bus",
+                            "_side": effective_side,
                             "_tool_context": dict(tool_context or {}),
                             "_available_tools": available_tools,
+                            # 中期修复：服务端侧别复验与排他性限定词标记，供执行层复验
+                            "_parsed_side": effective_side,
+                            "_exclusive_limit": exclusive_limit,
                         }
                         proposal = self.create_tool_proposal(intent_plan, [{
                             "function": {"name": top_tool, "arguments": {}}
