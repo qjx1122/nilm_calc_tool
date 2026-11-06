@@ -6,9 +6,12 @@ agree before a proposal can be created. Unknown or ambiguous language is clarifi
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import re
+import threading
+import time
 import unicodedata
 from dataclasses import dataclass
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
@@ -759,9 +762,17 @@ def tool_intent_score(prompt: str, tool: str) -> int:
     return 40 + min(12, max(map(len, action_hits))) + min(24, max(map(len, target_hits)))
 
 
-def find_tool_intent_candidates(prompt: str) -> List[Tuple[str, int]]:
+def find_tool_intent_candidates(prompt: str, top_k: Optional[int] = None) -> List[Tuple[str, int]]:
+    """Return lexical-scored tool candidates, optionally limited to top-k.
+
+    §6.2 候选意图召回：本阶段采用词法匹配，未来可扩展为向量召回。
+    top-k 取 8，压缩模型判定的选择范围，降低 token 消耗并提高稳定性。
+    """
     matches = [(name, score) for name in TOOL_NAMES if (score := tool_intent_score(prompt, name)) > 0]
-    return sorted(matches, key=lambda pair: (-pair[1], pair[0]))
+    matches.sort(key=lambda pair: (-pair[1], pair[0]))
+    if top_k is not None:
+        matches = matches[: max(1, int(top_k))]
+    return matches
 
 
 def _number_mentioned(value: float | int, text: str, field: str = "") -> bool:
@@ -1343,6 +1354,34 @@ def confidence_diversion(
     }
 
 
+def fuse_confidence(
+    lexical_score: int,
+    model_confidence: Optional[float] = None,
+    gap: float = 0.0,
+    similarity: Optional[float] = None,
+) -> float:
+    """多源置信度融合（设计文档 §6.5）。
+
+    融合公式：c_final = 0.5 × c_model + 0.3 × c_gap_norm + 0.2 × c_sim
+
+    参数：
+      - lexical_score: 0-100 的词法得分（当前阶段的 c_model 兜底）
+      - model_confidence: 模型自评分，0-1；未提供时用词法得分标准化值代替
+      - gap: top1 与 top2 候选原始分差，0-100；用于计算 c_gap_norm
+      - similarity: 召回相似度，0-1；未提供时用词法得分标准化值代替
+
+    返回 0-1 的融合置信度。
+    """
+    c_lex = normalize_confidence(lexical_score)
+    c_model = model_confidence if model_confidence is not None else c_lex
+    c_model = max(0.0, min(1.0, float(c_model)))
+    # c_gap_norm：gap 越大越可信，gap >= 0.5（即原始分差 >= 50）视为完全可信
+    c_gap = max(0.0, min(1.0, abs(float(gap)) / 50.0))
+    c_sim = similarity if similarity is not None else c_lex
+    c_sim = max(0.0, min(1.0, float(c_sim)))
+    return round(0.5 * c_model + 0.3 * c_gap + 0.2 * c_sim, 4)
+
+
 # ---------------------------------------------------------------------------
 # IntentRecognitionResult Schema（设计文档 §8.4.1，阶段 B 预留）
 # ---------------------------------------------------------------------------
@@ -1424,6 +1463,204 @@ def validate_intent_recognition_result(result: Any) -> Dict[str, Any]:
     if not isinstance(result["entities"], list):
         return {"ok": False, "error": "entities 必须是数组"}
     return {"ok": True, "result": result}
+
+
+# ---------------------------------------------------------------------------
+# 意图识别缓存（设计文档 §6.10）
+# ---------------------------------------------------------------------------
+
+class _IntentCache:
+    """简单的意图识别内存缓存，TTL 默认 1 小时。
+
+    键由“意图字典版本 + 归一化问句”的 SHA-256 哈希构成，命中时直接返回
+    缓存的结构化识别结果，避免重复模型调用。
+    """
+
+    def __init__(self, ttl_s: float = 3600.0, dict_version: str = "v2.0"):
+        self.ttl_s = float(ttl_s)
+        self.dict_version = str(dict_version)
+        self._cache: Dict[str, Tuple[float, Dict[str, Any]]] = {}
+        self._lock = threading.RLock()
+
+    def _key(self, prompt: str) -> str:
+        h = hashlib.sha256()
+        h.update(self.dict_version.encode("utf-8"))
+        h.update(b"\0")
+        h.update(normalize_intent_text(prompt).encode("utf-8"))
+        return h.hexdigest()
+
+    def get(self, prompt: str) -> Optional[Dict[str, Any]]:
+        key = self._key(prompt)
+        with self._lock:
+            entry = self._cache.get(key)
+            if entry is None:
+                return None
+            expiry, value = entry
+            if time.time() > expiry:
+                del self._cache[key]
+                return None
+            return dict(value)
+
+    def set(self, prompt: str, value: Dict[str, Any]) -> None:
+        key = self._key(prompt)
+        with self._lock:
+            self._cache[key] = (time.time() + self.ttl_s, dict(value))
+
+    def clear(self) -> None:
+        with self._lock:
+            self._cache.clear()
+
+    def __len__(self) -> int:
+        with self._lock:
+            return len(self._cache)
+
+
+intent_cache = _IntentCache()
+
+
+# ---------------------------------------------------------------------------
+# 阶段 B：结构化意图识别入口（设计文档 §8.4.1）
+# ---------------------------------------------------------------------------
+
+def recognize_intent(
+    prompt: str,
+    context: Optional[Mapping[str, Any]] = None,
+    top_k: int = 8,
+    use_cache: bool = True,
+) -> Dict[str, Any]:
+    """结构化意图识别入口（阶段 B）。
+
+    流程：
+      1. 查缓存（归一化问句 + 字典版本哈希）
+      2. 候选意图召回（top-k，默认 8）
+      3. 复合意图检测（_COMPOUND_ACTION_RE）
+      4. 置信度计算与多源融合（fuse_confidence）
+      5. 三档分流（classify_confidence / confidence_diversion）
+      6. 构建并返回符合 IntentRecognitionResult Schema 的结构化结果
+
+    返回字段：
+      - ok: 是否可直接路由（tier == high 且非复合）
+      - tier: "high" / "medium" / "low"
+      - result: IntentRecognitionResult 结构
+      - candidates: [(tool_name, lexical_score), ...] 召回候选
+      - cache_hit: 是否命中缓存
+    """
+    context = context if isinstance(context, Mapping) else {}
+    cache_key_prompt = normalize_intent_text(prompt)
+
+    if use_cache:
+        cached = intent_cache.get(prompt)
+        if cached is not None:
+            cached = dict(cached)
+            cached["cache_hit"] = True
+            return cached
+
+    candidates = find_tool_intent_candidates(prompt, top_k=top_k)
+    effective = _effective_text(prompt)
+    is_compound = bool(_COMPOUND_ACTION_RE.search(effective)) and len(candidates) > 1
+
+    # 无候选
+    if not candidates:
+        result = build_intent_recognition_result(
+            intent_code="",
+            intent_name="",
+            confidence=0.0,
+            reason="无候选意图匹配",
+            need_clarify=True,
+            clarify_question="我暂未创建操作预览，因为无法可靠确认请求对应的受控操作。请明确说明要查询、分析、修改或控制哪一项。",
+        )
+        outcome = {
+            "ok": False,
+            "tier": "low",
+            "result": result,
+            "candidates": [],
+            "cache_hit": False,
+        }
+        if use_cache:
+            intent_cache.set(prompt, outcome)
+        return outcome
+
+    top_tool, top_score = candidates[0]
+    confidence = normalize_confidence(top_score)
+    gap = 0.0
+    if len(candidates) >= 2:
+        gap = abs(top_score - candidates[1][1]) / 100.0
+
+    # 多源融合：当前阶段以词法得分作为 c_model/c_sim 的兜底值
+    fused = fuse_confidence(top_score, model_confidence=None, gap=gap * 100.0, similarity=None)
+    tier = classify_confidence(fused, gap)
+
+    # 复合意图：检测到多个动作且有多个候选，拒绝直接路由，要求拆分
+    if is_compound:
+        sub_intents = [name for name, _ in candidates[:5]]
+        result = build_intent_recognition_result(
+            intent_code="",
+            intent_name="复合意图",
+            confidence=fused,
+            reason="检测到多个并列动作，请拆分为单一动作",
+            need_clarify=True,
+            clarify_question="请求中包含多个动作（如“启动并调速”），请拆分为单一动作再提交。",
+            sub_intents=sub_intents,
+        )
+        outcome = {
+            "ok": False,
+            "tier": "low",
+            "result": result,
+            "candidates": candidates,
+            "cache_hit": False,
+        }
+        if use_cache:
+            intent_cache.set(prompt, outcome)
+        return outcome
+
+    # 低置信：进入“其他”域通用问答
+    if tier == "low":
+        contract = TOOL_INTENT_CONTRACTS.get(top_tool)
+        intent_name = contract.intent if contract else ""
+        result = build_intent_recognition_result(
+            intent_code=top_tool,
+            intent_name=intent_name,
+            confidence=fused,
+            reason="置信度过低，无法可靠匹配受控操作",
+            need_clarify=True,
+            clarify_question="我暂未创建操作预览，置信度不足，请更明确地说明意图。",
+        )
+        outcome = {
+            "ok": False,
+            "tier": "low",
+            "result": result,
+            "candidates": candidates,
+            "cache_hit": False,
+        }
+        if use_cache:
+            intent_cache.set(prompt, outcome)
+        return outcome
+
+    # 高/中置信：返回结构化结果
+    contract = TOOL_INTENT_CONTRACTS[top_tool]
+    need_clarify = tier == "medium"
+    result = build_intent_recognition_result(
+        intent_code=top_tool,
+        intent_name=contract.intent,
+        confidence=fused,
+        reason=f"词法匹配得分 {top_score}，置信度 {fused}",
+        need_clarify=need_clarify,
+        clarify_question=(
+            "表达可能对应多个动作，请明确选择一个。"
+            if need_clarify
+            else None
+        ),
+    )
+    outcome = {
+        "ok": tier == "high",
+        "tier": tier,
+        "result": result,
+        "candidates": candidates,
+        "cache_hit": False,
+    }
+    if use_cache:
+        intent_cache.set(prompt, outcome)
+    return outcome
 
 
 def tool_intent_hint(tool: str) -> str:
