@@ -1051,3 +1051,11 @@
 - 未决问题：部署端需确认操作员有效工具清单包含 `start_current_source`（scope `engine.start` + 管理员 allow-list），再用真实 Qwen 新会话逐句确认预览工具 / 当前侧；真实 provider 输出仍待用户回报。不要粘贴 token / API Key。
 - Git 交付状态：当前 `HEAD` `27b28ea` 只跟踪 `BOOTSTRAP.md`、`ROLE.md`，项目源码 / 测试 / 说明在此 checkout 显示为 untracked；为避免将不完整源码集误作新增文件提交或推送，本轮没有暂存 / commit / push。需先核实 Git 基线；workspace 文件已保存。
 - 相关文件 / 分支：`app/assistant.py`、`app/assistant_tools.py`、`tests/test_assistant.py`、`tests/test_server.py`、`docs/智能问答助手说明.md` §6.7、`STATUS.md`、`REPORT_TEST.md` T-013、本文件；`arena/82e34fb8-nilm-calc-tool`。
+
+## [2026-11-06] 会话纪要
+- 目标：按用户提供的 12 章 + 4 附录模板结构，撰写 NILM 计算工具智能问答助手“智能问答助手基于大模型技术的意图识别技术设计文档”并落盘 md；内容与实际代码对齐（46 个受控工具、确定性路由仅 cover start/pause/resume/stop、英文单字支持、服务端门控、trace_id、脱敏日志）。
+- 本会话角色：工程实现工程师；模式 A；固定活动分支 `arena/82e34fb8-nilm-calc-tool`（active）；严格排除 `tmp/`。
+- 完成项：读取 `app/server.py`（4195 行）与之前 T-016/T-017/T-018 已落地的代码，落盘新版本设计文档 `docs/智能问答助手基于大模型技术的意图识别技术设计文档.md`（12 章 + 4 附录，含意图字典模板、Prompt 全文、JSON Schema、评估表），代码与文档对齐；追加 `STATUS.md` 本任务条目、追加 `REPORT_TEST.md` T-014专题；`py_compile app/assistant.py` 通过，回归测试通过。
+- 关键决策：旧版 `docs/智能问答意图识别技术设计文档（基于大模型技术）.md`（v2.0）保留，新 12 章文档为当前正式版；未新增/删除代码，本轮无源码 diff；未连接或重启用户服务，未获现场日志，不声称现场验收通过。
+- 未决问题：需用户在目标环境用真实 Qwen 新会话复测意图识别端到端；`tmp/` 严格未读、未改、未暂存或提交。
+- 相关文件/分支：`docs/智能问答助手基于大模型技术的意图识别技术设计文档.md`、`STATUS.md`、`REPORT_TEST.md` T-014、本文件；`arena/82e34fb8-nilm-calc-tool`。
