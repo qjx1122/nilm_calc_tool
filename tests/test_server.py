@@ -612,7 +612,8 @@ def test_assistant_explicit_source_start_routes_to_bound_proposal_without_model(
         assert result["proposal"]["tool"] == "start_current_source", prompt
         assert result["proposal"]["side"] == "branch"
         assert result["proposal"]["requires_second_confirmation"] is True
-        assert "启动当前侧数据源检测" in result["answer"]
+        # 确认/执行结果消息须按实际侧别（此处 route 为 /api/branch/ → 分路侧）显示动态标签
+        assert "启动分路侧数据源检测" in result["answer"], result["answer"]
 
     payload["prompt"] = "启动当前侧数据源检测"
     payload["stream"] = True
@@ -724,17 +725,33 @@ def test_assistant_proposal_confirm_is_branch_scoped_and_reauthorized(client, tm
     frames = [json.loads(line[6:]) for line in streamed.text.splitlines() if line.startswith("data: {")]
     assert any(frame.get("type") == "proposal" and frame["proposal"]["side"] == "branch" for frame in frames)
 
-    wrong_side = client.post("/api/assistant/tools/confirm", headers={"X-Assistant-Operator-Token": operator},
+    # 跨侧确认（无侧前缀端点 /api/assistant/tools/confirm，current_side() 为 bus）
+    # 不应因 current_side() 与 pending["side"] 不一致而被误拒；确认以预览时 pending["side"] 为准，应成功
+    cross_side = client.post("/api/assistant/tools/confirm", headers={"X-Assistant-Operator-Token": operator},
                              json={"proposal_id": proposal["id"], "confirmation_code": proposal["confirmation_code"]})
-    assert wrong_side.status_code == 409
+    assert cross_side.status_code == 200, cross_side.text
+    assert cross_side.json()["result"]["side"] == "branch"
+
+    # 非法操作员仍被拒绝（需新建预览，因上面的预览已被确认并执行）
+    response2 = client.post("/api/branch/assistant/chat", headers={"X-Assistant-Operator-Token": operator},
+                            json={"prompt": "切换接线模式到 3p4w", "model_type": "local", "stream": False})
+    assert response2.status_code == 200, response2.text
+    proposal2 = response2.json()["proposal"]
+    assert proposal2["side"] == "branch" and proposal2["status"] == "pending"
     wrong_actor = client.post("/api/branch/assistant/tools/confirm", headers={"X-Assistant-Operator-Token": "invalid-token"},
-                              json={"proposal_id": proposal["id"], "confirmation_code": proposal["confirmation_code"]})
+                              json={"proposal_id": proposal2["id"], "confirmation_code": proposal2["confirmation_code"]})
     assert wrong_actor.status_code == 403
 
+    # 同侧确认正常（再新建预览，经 /api/branch/ 路由，写入应落在分路侧配置）
+    response3 = client.post("/api/branch/assistant/chat", headers={"X-Assistant-Operator-Token": operator},
+                            json={"prompt": "切换接线模式到 3p4w", "model_type": "local", "stream": False})
+    assert response3.status_code == 200, response3.text
+    proposal3 = response3.json()["proposal"]
+    assert proposal3["side"] == "branch" and proposal3["status"] == "pending"
     confirmed = client.post("/api/branch/assistant/tools/confirm", headers={"X-Assistant-Operator-Token": operator},
-                            json={"proposal_id": proposal["id"], "confirmation_code": proposal["confirmation_code"]})
+                            json={"proposal_id": proposal3["id"], "confirmation_code": proposal3["confirmation_code"]})
     assert confirmed.status_code == 200, confirmed.text
-    assert observed == [("branch", {"transform": {"wiring": "3p4w"}})]
+    assert observed == [("branch", {"transform": {"wiring": "3p4w"}})] * 2
     assert confirmed.json()["result"]["side"] == "branch"
     assert confirmed.json()["result"]["config_file_updated"] is True
 

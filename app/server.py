@@ -2136,17 +2136,24 @@ async def assistant_tool_confirm(payload: Dict[str, Any], request: Request) -> A
                                                         str(payload.get("confirmation_code") or ""))
     except AssistantError as exc:
         return JSONResponse(status_code=exc.status_code, content={"ok": False, "error": exc.message})
+    # 侧别以预览时存储的 pending["side"] 为准：在确认执行期间把侧别上下文绑定到预览侧别，
+    # 使 RUNNER / put_config / current_side() 操作的是预览时选定的侧别，而非确认请求路由所在的
+    # 调用方侧，避免跨侧确认把配置写入错侧。
+    _side_token = _SIDE.set(pending.get("side", "bus"))
     try:
-        result = await _execute_assistant_tool(pending)
-        assistant_service.record_tool_result(pending, "success", result)
-        return {"ok": True, "result": result}
-    except AssistantError as exc:
-        assistant_service.record_tool_result(pending, "failed", {"message": exc.message})
-        return JSONResponse(status_code=exc.status_code, content={"ok": False, "error": exc.message})
-    except Exception:
-        log.exception("Assistant tool execution failed")
-        assistant_service.record_tool_result(pending, "failed", {"message": "unexpected"})
-        return JSONResponse(status_code=500, content={"ok": False, "error": "业务操作失败，请查看服务端日志"})
+        try:
+            result = await _execute_assistant_tool(pending)
+            assistant_service.record_tool_result(pending, "success", result)
+            return {"ok": True, "result": result}
+        except AssistantError as exc:
+            assistant_service.record_tool_result(pending, "failed", {"message": exc.message})
+            return JSONResponse(status_code=exc.status_code, content={"ok": False, "error": exc.message})
+        except Exception:
+            log.exception("Assistant tool execution failed")
+            assistant_service.record_tool_result(pending, "failed", {"message": "unexpected"})
+            return JSONResponse(status_code=500, content={"ok": False, "error": "业务操作失败，请查看服务端日志"})
+    finally:
+        _SIDE.reset(_side_token)
 
 
 @app.post("/api/assistant/tools/cancel")
