@@ -2148,9 +2148,20 @@ class AssistantService:
                         proposal = self.create_tool_proposal(intent_plan, [{
                             "function": {"name": top_tool, "arguments": {}}
                         }])
+                        # 动态侧别标签：summary 已在 _tool_summary 中按 effective_side 生成，
+                        # 避免跨侧操作时提示"当前侧"而误导用户
+                        side_label = {"bus": "总线侧", "branch": "分路侧"}.get(effective_side, "当前侧")
+                        _dynamic_tool_title = {
+                            "get_runtime_status": f"查询{side_label}运行状态",
+                            "get_runtime_settings": f"查询{side_label}运行配置",
+                            "start_current_source": f"启动{side_label}数据源检测",
+                            "pause_current_source": f"暂停{side_label}离线播放",
+                            "resume_current_source": f"恢复{side_label}离线播放",
+                            "stop_current_source": f"停止{side_label}数据源",
+                        }.get(top_tool, proposal["summary"])
                         intent_plan["_tool_proposal"] = proposal
                         intent_plan["_direct_tool_response"] = (
-                            f"已按意图识别识别为「{proposal['title']}」。请核对操作摘要与影响后确认；未确认前不会执行。"
+                            f"已按意图识别识别为「{_dynamic_tool_title}」。请核对操作摘要与影响后确认；未确认前不会执行。"
                         )
                         return intent_plan
             # medium / low tier: 继续走下面的模型判定流程，

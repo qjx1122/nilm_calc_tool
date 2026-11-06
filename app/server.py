@@ -1656,8 +1656,9 @@ async def _execute_assistant_tool(pending: Dict[str, Any]) -> Dict[str, Any]:
     # 侧别以预览时存储的 pending["side"] 为准，不再与确认时的 current_side() 比较，
     # 避免用户在总线侧UI发起分路侧操作、确认时因 current_side() 为 bus 而被误判。
     if name == "get_runtime_status":
-        state = await get_state()
-        cfg = RUNNER.cfg
+        runner = RUNNERS[side]
+        state = runner.state()
+        cfg = runner.cfg
         engine = state.get("engine") if isinstance(state.get("engine"), dict) else {}
         history = state.get("history") if isinstance(state.get("history"), dict) else {}
         safe_engine = {key: engine.get(key) for key in ("samples_in", "blocks_in", "buffer_fill", "buffer_capacity",
@@ -1671,7 +1672,7 @@ async def _execute_assistant_tool(pending: Dict[str, Any]) -> Dict[str, Any]:
                 "engine": safe_engine, "history": history,
                 "error_present": bool(state.get("error") or engine.get("errors"))}
     if name == "get_runtime_settings":
-        cfg = RUNNER.cfg
+        cfg = RUNNERS[side].cfg
         from app.assistant_tools import EVENT_PARAMETER_KEYS
         events = {key: getattr(cfg.events, key) for key in EVENT_PARAMETER_KEYS}
         algorithms = {key: {"enabled": bool((cfg.nilm.algorithms.get(key) or {}).get("enabled", False))}
