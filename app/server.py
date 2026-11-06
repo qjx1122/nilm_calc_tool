@@ -1759,15 +1759,15 @@ async def _execute_assistant_tool(pending: Dict[str, Any]) -> Dict[str, Any]:
         return {"message": "当前侧数据源检测已启动", "side": side,
                 "source_kind": result.get("config", {}).get("source", {}).get("kind", runner.cfg.source.kind)}
     if name == "pause_current_source":
-        result = await engine_pause()
+        result = await engine_pause(side=side)
         _assistant_api_error(result)
         return {"message": "当前侧离线播放已暂停", "side": side, "paused": bool(result.get("paused"))}
     if name == "resume_current_source":
-        result = await engine_resume()
+        result = await engine_resume(side=side)
         _assistant_api_error(result)
         return {"message": "当前侧离线播放已恢复", "side": side, "paused": bool(result.get("paused"))}
     if name == "stop_current_source":
-        result = await engine_stop()
+        result = await engine_stop(side=side)
         _assistant_api_error(result)
         return {"message": "当前侧数据源已停止；总线侧操作可能同时停止分路侧", "side": side}
     if name == "select_recording_source":
@@ -2757,35 +2757,38 @@ async def engine_start(payload: Optional[Dict[str, Any]] = None, side: Optional[
 
 
 @app.post("/api/engine/pause")
-async def engine_pause() -> Any:
+async def engine_pause(side: Optional[str] = None) -> Any:
     """暂停离线文件播放：停止读文件与计算，数据时间原地不动；缓冲/历史/事件保留。非 csv_file 源或未运行 → 400。"""
-    r = RUNNER.pause()
+    effective_side = side or current_side()
+    r = RUNNERS[effective_side].pause()
     if not r["ok"]:
         return JSONResponse(status_code=400, content=r)
-    if current_side() == "bus":
+    if effective_side == "bus":
         r["branch"] = RUNNERS["branch"].pause()   # 联动；分路侧不可暂停（未运行/非文件源）只记结果
-    r["state"] = RUNNER.state()
+    r["state"] = RUNNERS[effective_side].state()
     return r
 
 
 @app.post("/api/engine/resume")
-async def engine_resume() -> Any:
+async def engine_resume(side: Optional[str] = None) -> Any:
     """从暂停处继续播放（接着上次读到的位置，不重读、不跳过）。"""
-    r = RUNNER.resume()
+    effective_side = side or current_side()
+    r = RUNNERS[effective_side].resume()
     if not r["ok"]:
         return JSONResponse(status_code=400, content=r)
-    if current_side() == "bus":
+    if effective_side == "bus":
         r["branch"] = RUNNERS["branch"].resume()
-    r["state"] = RUNNER.state()
+    r["state"] = RUNNERS[effective_side].state()
     return r
 
 
 @app.post("/api/engine/stop")
-async def engine_stop() -> Dict[str, Any]:
-    RUNNER.stop()
-    if current_side() == "bus":
+async def engine_stop(side: Optional[str] = None) -> Dict[str, Any]:
+    effective_side = side or current_side()
+    RUNNERS[effective_side].stop()
+    if effective_side == "bus":
         RUNNERS["branch"].stop()                  # 总线侧停止 → 分路侧一并停止（未运行时无副作用）
-    return {"ok": True, "state": RUNNER.state()}
+    return {"ok": True, "state": RUNNERS[effective_side].state()}
 
 
 @app.get("/api/events")
