@@ -1756,20 +1756,26 @@ async def _execute_assistant_tool(pending: Dict[str, Any]) -> Dict[str, Any]:
             raise AssistantError(400, "当前侧文件数据源尚未配置路径")
         result = await engine_start({}, side=side)
         _assistant_api_error(result)
-        return {"message": "当前侧数据源检测已启动", "side": side,
+        side_label = {"bus": "总线侧", "branch": "分路侧"}.get(side, "当前侧")
+        return {"message": f"{side_label}数据源检测已启动", "side": side,
                 "source_kind": result.get("config", {}).get("source", {}).get("kind", runner.cfg.source.kind)}
     if name == "pause_current_source":
         result = await engine_pause(side=side)
         _assistant_api_error(result)
-        return {"message": "当前侧离线播放已暂停", "side": side, "paused": bool(result.get("paused"))}
+        side_label = {"bus": "总线侧", "branch": "分路侧"}.get(side, "当前侧")
+        return {"message": f"{side_label}离线播放已暂停", "side": side, "paused": bool(result.get("paused"))}
     if name == "resume_current_source":
         result = await engine_resume(side=side)
         _assistant_api_error(result)
-        return {"message": "当前侧离线播放已恢复", "side": side, "paused": bool(result.get("paused"))}
+        side_label = {"bus": "总线侧", "branch": "分路侧"}.get(side, "当前侧")
+        return {"message": f"{side_label}离线播放已恢复", "side": side, "paused": bool(result.get("paused"))}
     if name == "stop_current_source":
         result = await engine_stop(side=side)
         _assistant_api_error(result)
-        return {"message": "当前侧数据源已停止；总线侧操作可能同时停止分路侧", "side": side}
+        side_label = {"bus": "总线侧", "branch": "分路侧"}.get(side, "当前侧")
+        if side == "bus":
+            return {"message": f"{side_label}数据源已停止；{side_label}操作可能同时停止分路侧", "side": side}
+        return {"message": f"{side_label}数据源已停止", "side": side}
     if name == "select_recording_source":
         runner = RUNNERS[side]
         with runner.lock:

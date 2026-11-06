@@ -785,7 +785,7 @@ def test_explicit_source_start_bypasses_model_selection_but_keeps_confirmation(t
     assert proposal["title"] == "启动当前侧数据源检测"
     assert proposal["confirmation_code"]
     assert "不会执行" in service.complete(plan)
-    assert "启动当前侧数据源检测" in "".join(service.stream(plan, threading.Event()))
+    assert "启动分路侧数据源检测" in "".join(service.stream(plan, threading.Event()))
 
     incorrect_code = "000001" if proposal["confirmation_code"] != "000001" else "000002"
     with pytest.raises(AssistantError, match="二次确认码不匹配"):

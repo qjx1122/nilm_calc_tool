@@ -1987,8 +1987,16 @@ class AssistantService:
                 "function": {"name": direct_tool_name, "arguments": {}}
             }])
             direct_plan["_tool_proposal"] = proposal
+            # 根据实际侧别生成动态标题，避免跨侧操作时提示"当前侧"而误导用户
+            side_label = {"bus": "总线侧", "branch": "分路侧"}.get(effective_side, "当前侧")
+            _dynamic_tool_title = {
+                "start_current_source": f"启动{side_label}数据源检测",
+                "pause_current_source": f"暂停{side_label}离线播放",
+                "resume_current_source": f"恢复{side_label}离线播放",
+                "stop_current_source": f"停止{side_label}数据源",
+            }.get(direct_tool_name, proposal["title"])
             direct_plan["_direct_tool_response"] = (
-                f"已按明确指令识别为「{proposal['title']}」。请核对操作摘要与影响后确认；未确认前不会执行。"
+                f"已按明确指令识别为「{_dynamic_tool_title}」。请核对操作摘要与影响后确认；未确认前不会执行。"
             )
             return direct_plan
 
