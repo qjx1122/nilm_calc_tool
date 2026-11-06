@@ -94,8 +94,7 @@ TOOL_CATALOG: List[Dict[str, Any]] = [
           {"file_id": {"type": "string", "pattern": _FILE_ID_RE.pattern}}, ["file_id"], high_risk=True),
 
     _tool("list_recordings", "查询可用录波文件", "recordings.read",
-          "仅在用户明确要求列出可用录波文件时使用；列出固定 data / output 目录中服务端登记的 CSV/TXT 文件 ID、名称与大小；"
-          "不会把文件内容交给模型，也不能代替启动当前数据源。",
+          "仅在用户明确要求列出可用录波文件时使用；只接受 folder（data/output）一个参数，不接受 side/path/source 等字段；列出固定 data / output 目录中服务端登记的 CSV/TXT 文件 ID、名称与大小；不返回绝对路径，不会把文件内容交给模型，也不能代替启动当前数据源。",
           {"folder": {"type": "string", "enum": ["data", "output"]}}, ["folder"]),
     _tool("inspect_recording", "检查录波文件信息", "recordings.inspect",
           "通过服务端签发的 file_id 检查采样率、点数、时长、通道和时间范围；不接受路径，结果不包含绝对路径。",
@@ -334,13 +333,15 @@ def validate_tool_arguments(name: str, raw: Any) -> Dict[str, Any]:
     if not isinstance(raw, dict):
         raise ValueError("工具参数必须是 JSON 对象")
     props = item["parameters"].get("properties", {})
-    # get_runtime_status / get_runtime_settings 不接受任何参数；
+    # get_runtime_status / get_runtime_settings / list_recordings 不接受 side 参数；
     # 侧别通过 plan 的 _side 字段传递，模型不应通过工具参数传递 side。
     # 为防御性起见，若模型误传 side，将其忽略而非报"未注册字段"。
-    if name in {"get_runtime_status", "get_runtime_settings"}:
+    if name in {"get_runtime_status", "get_runtime_settings", "list_recordings"}:
         raw = {k: v for k, v in raw.items() if k != "side"}
     if any(key not in props for key in raw):
-        raise ValueError("工具参数包含未注册字段")
+        unknown = [k for k in raw if k not in props]
+        allowed = sorted(props.keys())
+        raise ValueError(f"工具参数包含未注册字段：{', '.join(unknown)}；该工具仅接受：{', '.join(allowed)}")
     missing = [key for key in item["parameters"].get("required", []) if key not in raw]
     if missing:
         raise ValueError("工具参数缺少必需字段")
