@@ -12,6 +12,8 @@ data/
 # 但是 tmp 目录下csv不忽略
 !tmp/**/*.csv
 !tests/fixtures/*.csv
+# 意图契约配置CSV（需入库版本控制）
+!configs/intent_actions.csv
 output/
 configs/branch_runtime.json
 logs/

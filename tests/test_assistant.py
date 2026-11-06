@@ -1184,3 +1184,56 @@ def test_cloud_mode_blocks_local_file_references_but_allows_api_paths(tmp_path, 
             service.prepare_chat({"prompt": prompt, "model_type": "cloud"})
     allowed = service.prepare_chat({"prompt": "How does /api/assistant/chat work?", "model_type": "cloud"})
     assert allowed["model_type"] == "cloud"
+
+
+def test_intent_config_loaded_from_csv_covers_all_controlled_tools():
+    """意图配置应从 CSV 加载，并覆盖全部 46 个受控工具。"""
+    from app.assistant_intents import _INTENT_DATA, TOOL_INTENT_CONTRACTS
+    from app.assistant_tools import TOOL_NAMES
+
+    assert len(_INTENT_DATA) == len(TOOL_NAMES) == 46
+    assert len(TOOL_INTENT_CONTRACTS) == 46
+    for tool in TOOL_NAMES:
+        assert tool in _INTENT_DATA, f"缺少意图配置：{tool}"
+        contract = TOOL_INTENT_CONTRACTS[tool]
+        assert contract.action_terms, f"{tool} 缺少动作词（actions）"
+        assert contract.target_terms, f"{tool} 缺少目标词（targets）"
+        assert contract.parameter_policy, f"{tool} 缺少参数策略（policy）"
+
+
+def test_intent_config_csv_get_runtime_status_includes_获取():
+    """get_runtime_status 的 actions 应包含“获取”，以识别“获取分路侧离线数据源状态”。"""
+    from app.assistant_intents import _INTENT_DATA, recognize_intent
+
+    assert "获取" in _INTENT_DATA["get_runtime_status"]["actions"]
+
+    result = recognize_intent("获取分路侧离线数据源状态", top_k=8, use_cache=False)
+    assert result["ok"] is True
+    assert result["tier"] == "high"
+    assert result["result"]["intent_code"] == "get_runtime_status"
+
+
+def test_intent_config_csv_required_any_parsed_correctly():
+    """required_any 字段应从 CSV 中正确解析为嵌套元组。"""
+    from app.assistant_intents import _INTENT_DATA
+
+    # set_profile_parameters: required_any = (("d2_max", "min_confidence"),)
+    assert _INTENT_DATA["set_profile_parameters"]["required_any"] == (("d2_max", "min_confidence"),)
+    # 无 required_any 的工具应为空元组
+    assert _INTENT_DATA["get_runtime_status"]["required_any"] == ()
+
+
+def test_intent_config_csv_missing_required_column_raises(tmp_path, monkeypatch):
+    """CSV 缺少必要列时应抛出明确错误。"""
+    import csv
+
+    bad_csv = tmp_path / "bad_intent.csv"
+    with open(bad_csv, "w", encoding="utf-8", newline="") as fh:
+        writer = csv.writer(fh)
+        writer.writerow(["tool", "intent", "mode"])  # 缺少 actions 等列
+        writer.writerow(["get_runtime_status", "查询当前侧运行状态", "read"])
+
+    from app.assistant_intents import load_intent_data_from_csv
+
+    with pytest.raises(ValueError, match="缺少必要列"):
+        load_intent_data_from_csv(str(bad_csv))

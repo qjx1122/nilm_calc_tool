@@ -6,9 +6,11 @@ agree before a proposal can be created. Unknown or ambiguous language is clarifi
 """
 from __future__ import annotations
 
+import csv
 import hashlib
 import json
 import math
+import os
 import re
 import threading
 import time
@@ -19,433 +21,69 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 from app.assistant_tools import TOOL_BY_NAME, TOOL_NAMES, validate_tool_arguments
 
 
-# Kept finite and explicit. Examples are both reviewable policy and regression data;
-# they are not treated as instructions if they appear in untrusted tool/resource data.
-_INTENT_DATA: Dict[str, Dict[str, Any]] = {
-    "get_runtime_status": {
-        "intent": "查询当前侧运行状态",
-        "mode": "read",
-        "actions": ("查询", "获取", "查看", "看看", "现在", "当前", "在跑", "什么状态", "是否运行"),
-        "targets": ("运行状态", "运行情况", "数据源状态", "数据源在跑", "暂停状态", "结束状态", "样本数"),
-        "positive": ("查一下当前侧运行状态", "现在数据源在跑吗"),
-        "negative": ("启动当前侧数据源", "查询当前侧计算配置"),
-        "policy": "只查询当前侧状态摘要，不接受参数；状态问题不等于要求启动、暂停或停止。",
-    },
-    "get_runtime_settings": {
-        "intent": "查询当前侧计算配置摘要",
-        "mode": "read",
-        "actions": ("查询", "查看", "看看", "当前", "现在"),
-        "targets": ("计算配置", "配置摘要", "采样率和变比", "接线模式和窗口", "当前参数", "计算设置"),
-        "positive": ("查看当前侧计算配置摘要", "现在的采样率和变比是多少"),
-        "negative": ("查询当前侧运行状态", "把采样率改为12800"),
-        "policy": "只读取白名单配置摘要；用户未要求修改时不能调用任何配置写工具。",
-    },
-    "get_electrical_result": {
-        "intent": "查询指定电气量最新结果",
-        "mode": "read",
-        "actions": ("查询", "查看", "看看", "显示", "取一下", "最新", "当前值"),
-        "targets": ("最新结果", "电气量结果", "当前结果", "最新电压", "最新电流", "最新功率", "最新谐波", "最新频谱"),
-        "positive": ("查询最新电压结果", "查看当前侧最新功率因数结果"),
-        "negative": ("查询电压趋势历史", "修改电压计算窗口"),
-        "policy": "quantity 必须由用户明确指定并映射到固定枚举；不能猜测默认电气量。",
-    },
-    "get_history": {
-        "intent": "查询指定电气量趋势历史",
-        "mode": "read",
-        "actions": ("查询", "查看", "看看", "最近", "过去"),
-        "targets": ("趋势历史", "历史曲线", "变化趋势", "趋势", "历史数据", "电压历史", "电流历史", "功率历史"),
-        "positive": ("查询最近24小时电压趋势", "看看功率因数历史曲线"),
-        "negative": ("查询最新电压结果", "加载上次落盘的历史数据"),
-        "policy": "quantity 必须明确；hours / max_points 只有在用户明确给出时才采用，否则省略使用服务端默认。",
-    },
-    "get_event_list": {
-        "intent": "查询电能质量事件",
-        "mode": "read",
-        "actions": ("查询", "查看", "看看", "列出", "有哪些", "多少", "当前", "最近"),
-        "targets": ("电能质量事件", "事件列表", "电压暂升事件", "谐波事件", "频率事件", "rocof事件", "功率振荡事件"),
-        "positive": ("列出当前电能质量事件", "最近有哪些频率事件"),
-        "negative": ("修改电能质量事件阈值", "清空电能质量事件列表"),
-        "policy": "只读事件；active / event_type / limit 只能按用户明确筛选条件设置，未提及的可选项省略。",
-    },
-    "get_nilm_events": {
-        "intent": "查询负荷辨识事件",
-        "mode": "read",
-        "actions": ("查询", "查看", "看看", "列出", "有哪些", "多少", "当前", "最近"),
-        "targets": ("负荷辨识事件", "nilm事件", "负荷事件", "算法事件", "画像匹配事件"),
-        "positive": ("查询负荷辨识事件", "列出最近的画像匹配事件"),
-        "negative": ("修改负荷辨识参数", "清空负荷辨识事件"),
-        "policy": "算法 / 相别 / limit 仅采用用户明确指定值；未指定筛选项时省略。",
-    },
-    "compare_sides": {
-        "intent": "查询总线侧与分路侧电气量对比",
-        "mode": "read",
-        "actions": ("比较", "对比", "查询", "查看", "看看"),
-        "targets": ("两侧", "总线侧和分路侧", "总线与分路", "跨侧", "侧间差值", "时间对齐"),
-        "positive": ("对比总线侧和分路侧电压", "查询两侧功率的时间对齐差值"),
-        "negative": ("修改跨侧对齐参数", "只查询总线侧电压最新结果"),
-        "policy": "quantity 必须明确；hours / max_points 只有用户明确给出时才使用，不能把对比请求改成配置写入。",
-    },
-    "load_last_history": {
-        "intent": "加载上次落盘历史到当前页面",
-        "mode": "action",
-        "actions": ("加载", "载入", "恢复到页面", "显示上次保存"),
-        "targets": ("上次落盘历史", "上次播放历史", "保存的曲线", "上次保存的数据"),
-        "positive": ("加载上次落盘的历史数据", "把上次播放保存的曲线载入页面"),
-        "negative": ("查询最近24小时历史趋势", "启动当前数据源"),
-        "policy": "无必需参数；hours / curves / events / nilm 仅按用户明确要求筛选，不得默认省略某类数据。",
-    },
-    "start_current_source": {
-        "intent": "启动当前侧已配置数据源",
-        "mode": "action",
-        "actions": ("启动", "开始", "开始播放", "播放", "运行", "跑起来"),
-        "targets": ("当前数据源", "离线数据源", "数据源", "csv文件", "当前离线文件"),
-        "positive": ("启动当前侧已配置的数据源", "播放离线数据源CSV文件"),
-        "negative": ("如何播放离线数据源", "修改离线播放速度"),
-        "policy": "无参数；只使用当前侧已有配置。CSV / 文件字样不授权选择文件或推断路径；问句、否定句不启动。",
-    },
-    "pause_current_source": {
-        "intent": "暂停当前侧离线播放",
-        "mode": "action",
-        "actions": ("暂停", "暂时停止", "停一下"),
-        "targets": ("离线播放", "当前播放", "数据源播放", "csv播放", "数据源"),
-        "positive": ("暂停当前侧离线播放", "把正在播放的CSV停一下"),
-        "negative": ("停止当前侧数据源", "恢复离线播放"),
-        "policy": "无参数；只适用于当前侧可暂停的离线播放，不能把暂停改成停止或启动。",
-    },
-    "resume_current_source": {
-        "intent": "恢复当前侧已暂停的离线播放",
-        "mode": "action",
-        "actions": ("恢复", "继续", "接着", "继续播放"),
-        "targets": ("暂停播放", "离线播放", "csv播放", "当前数据源", "数据源"),
-        "positive": ("恢复当前侧离线播放", "继续刚才暂停的CSV播放"),
-        "negative": ("重新启动数据源", "把播放速度调到2倍"),
-        "policy": "无参数；仅恢复已暂停来源，不重启、不改变倍速。",
-    },
-    "stop_current_source": {
-        "intent": "停止当前侧数据源",
-        "mode": "action",
-        "actions": ("停止", "终止", "结束运行"),
-        "targets": ("当前数据源", "数据源运行", "当前侧来源", "采集任务", "数据源", "离线播放"),
-        "positive": ("停止当前侧数据源", "终止当前数据源检测"),
-        "negative": ("暂停当前侧离线播放", "查询数据源运行状态"),
-        "policy": "无参数；须是明确停止请求。提示总线侧既有联动影响，不能与暂停或清除事件混淆。",
-    },
-    "select_recording_source": {
-        "intent": "选择一个受控录波文件作为当前数据源",
-        "mode": "action",
-        "actions": ("选择", "设为", "切换到", "改用", "使用", "作为"),
-        "targets": ("录波文件", "csv文件", "文件作为数据源", "离线文件数据源"),
-        "positive": ("把指定录波文件设为当前数据源", "改用记录名称为X的CSV文件"),
-        "negative": ("列出可用录波文件", "启动当前已配置的数据源"),
-        "policy": "file_id 必须指向本轮受控目录中由用户名称 / ID / 明确序号选中的唯一文件；不接受路径或任意文件名。",
-    },
-    "list_recordings": {
-        "intent": "列出受控录波文件目录",
-        "mode": "read",
-        "actions": ("查询", "查看", "列出", "有哪些", "显示"),
-        "targets": ("可用录波文件", "录波文件列表", "录波", "csv文件目录", "data目录文件", "output目录文件"),
-        "positive": ("列出data目录里的可用录波文件", "查看output目录的CSV文件列表"),
-        "negative": ("把某个文件设为数据源", "启动当前数据源"),
-        "policy": "folder 为必需枚举；用户未明确 data / output 时澄清，不自行挑一个目录。",
-    },
-    "inspect_recording": {
-        "intent": "检查受控录波文件结构信息",
-        "mode": "analysis",
-        "actions": ("检查", "查看", "读取摘要", "分析文件信息", "查看信息"),
-        "targets": ("录波文件信息", "采样率", "通道数", "点数", "时长", "时间范围"),
-        "positive": ("检查指定CSV的采样率和通道", "查看受控录波文件的点数与时长"),
-        "negative": ("分析录波有效值RMS", "列出可用录波文件"),
-        "policy": "file_id 必须对应用户明确指出的本轮受控文件；不读取未登记路径。",
-    },
-    "analyze_recording_rms": {
-        "intent": "计算受控录波单通道逐周波RMS摘要",
-        "mode": "analysis",
-        "actions": ("分析", "计算", "统计", "求", "检查"),
-        "targets": ("录波rms", "有效值", "逐周波有效值", "周波rms"),
-        "positive": ("计算指定录波Ia通道的逐周波RMS", "分析这份文件的A相电压有效值"),
-        "negative": ("检查录波文件信息", "估算CT变比"),
-        "policy": "file_id 和单个 channel 必须明确且来自受控清单 / 固定通道；duration_s 只有明确给出时采用。",
-    },
-    "tune_recording": {
-        "intent": "分析受控录波并生成负荷辨识调参建议",
-        "mode": "analysis",
-        "actions": ("调参分析", "分析", "生成建议", "评估参数", "调优", "调参"),
-        "targets": ("录波", "负荷辨识", "nilm", "检测参数", "调参"),
-        "positive": ("分析这份录波并给负荷辨识调参建议", "评估CSV上的NILM参数"),
-        "negative": ("修改正在使用的负荷辨识参数", "提取设备画像"),
-        "policy": "file_id 必须由用户选定的受控录波解析；max_cycles 只按用户指定值采用，否则省略服务端默认。",
-    },
-    "resample_recording": {
-        "intent": "对受控录波创建重采样文件",
-        "mode": "action",
-        "actions": ("重采样", "重新采样", "转换采样率"),
-        "targets": ("录波", "csv文件", "波形文件"),
-        "positive": ("把指定录波重采样到12800Hz", "将这份CSV的采样率转换为10000"),
-        "negative": ("查询重采样任务状态", "取消重采样任务"),
-        "policy": "file_id 与 fs_new 必须由用户明确指向受控文件并给出目标采样率；method 未明确时省略。",
-    },
-    "get_resample_status": {
-        "intent": "查询当前后台重采样任务状态",
-        "mode": "read",
-        "actions": ("查询", "查看", "现在", "当前", "进度"),
-        "targets": ("重采样任务状态", "重采样进度", "重采样任务", "后台重采样"),
-        "positive": ("查看当前重采样任务状态", "重采样现在到什么进度了"),
-        "negative": ("启动录波重采样", "取消重采样任务"),
-        "policy": "无参数；仅查询当前任务，不猜测具体任务 ID。",
-    },
-    "cancel_resample": {
-        "intent": "请求取消当前重采样任务",
-        "mode": "action",
-        "actions": ("取消", "中止", "停止"),
-        "targets": ("重采样任务", "重采样", "后台重采样", "正在重采样"),
-        "positive": ("取消当前重采样任务", "中止正在进行的录波重采样"),
-        "negative": ("查询重采样任务状态", "停止当前数据源"),
-        "policy": "无参数；只取消当前后台重采样任务，不删除其他文件或清理整个缓存。",
-    },
-    "estimate_ct_ratio": {
-        "intent": "依据两侧受控录波和事件时间估算CT变比",
-        "mode": "analysis",
-        "actions": ("估算", "计算", "评估"),
-        "targets": ("ct变比", "电流变比", "总线侧和分路侧电流台阶"),
-        "positive": ("根据两侧录波的A相启动台阶估算CT变比", "用总线与分路事件时间计算CT倍率"),
-        "negative": ("修改CT变比配置", "查询两侧电流曲线"),
-        "policy": "两侧 file_id、事件类型、四个时间边界、phase 均需由用户明确提供并映射到受控资源；不得猜时间、相别或已知CT值。",
-    },
-    "extract_device_profile": {
-        "intent": "从受控录波提取设备画像",
-        "mode": "action",
-        "actions": ("提取", "生成", "建立", "创建"),
-        "targets": ("设备画像", "画像", "负荷画像", "用电设备画像", "设备特征画像"),
-        "positive": ("从指定录波提取设备画像", "为设备ID pump_1生成NILM画像"),
-        "negative": ("查询设备画像列表", "加载最新设备画像"),
-        "policy": "file_id 与 device_id 必须有明确来源；其他采样窗 / 标签 / 量 / 相别只接受用户明示值，输出目录固定由服务端管理。",
-    },
-    "derive_profile_stages": {
-        "intent": "从指定画像派生多档位假设画像",
-        "mode": "action",
-        "actions": ("派生", "生成", "扩展", "制作档位"),
-        "targets": ("设备画像", "多档位", "档位画像", "假设档位"),
-        "positive": ("为指定设备画像派生2倍和3倍档位", "从画像ID生成多档位假设画像"),
-        "negative": ("加载设备画像", "查询画像列表"),
-        "policy": "profile_id 必须对应用户明确选择的受控画像；scales 中每个倍率都须在用户文本出现；q_mode 未提及时省略。",
-    },
-    "export_csv": {
-        "intent": "导出指定类别的当前侧CSV结果",
-        "mode": "action",
-        "actions": ("导出", "下载", "保存成csv"),
-        "targets": ("csv", "电气量结果", "曲线", "负荷辨识事件", "nilm事件"),
-        "positive": ("导出当前侧电气量结果CSV", "下载已保存趋势曲线CSV"),
-        "negative": ("查询CSV文件目录", "重采样录波CSV"),
-        "policy": "dataset 必须由用户指定为固定类别之一；不能把原始录波、路径或输出文件名作为导出参数。",
-    },
-    "set_profile_parameters": {
-        "intent": "修改当前侧设备画像匹配阈值",
-        "mode": "action",
-        "actions": ("修改", "设置", "调整", "改为", "设成"),
-        "targets": ("画像匹配阈值", "d2_max", "最小置信度", "匹配置信度"),
-        "positive": ("把画像匹配的d2_max设为4", "将设备画像最小置信度调整到0.8"),
-        "negative": ("查询画像匹配阈值", "启用画像匹配算法"),
-        "policy": "至少明确给出 d2_max 或 min_confidence 之一及数值；模型不得补齐另一个阈值。",
-        "required_any": (("d2_max", "min_confidence"),),
-    },
-    "set_profile_detection_enabled": {
-        "intent": "启用或停用设备画像匹配算法",
-        "mode": "action",
-        "actions": ("启用", "停用", "打开", "关闭", "切换"),
-        "targets": ("画像匹配算法", "设备画像识别", "画像检测"),
-        "positive": ("启用设备画像匹配", "关闭画像检测算法"),
-        "negative": ("查询设备画像", "修改画像匹配阈值"),
-        "policy": "enabled 必须与用户明确的启用 / 停用语义一致；只切换开关，不修改阈值或画像文件。",
-    },
-    "list_profiles": {
-        "intent": "查询当前侧受控设备画像列表",
-        "mode": "read",
-        "actions": ("查询", "查看", "列出", "有哪些", "显示"),
-        "targets": ("设备画像列表", "画像目录", "可用画像", "画像有哪些", "画像"),
-        "positive": ("列出当前侧设备画像", "查询有哪些可用画像"),
-        "negative": ("加载最新设备画像", "从录波提取设备画像"),
-        "policy": "无参数；只查询当前侧受控画像清单，不读取任意文件。",
-    },
-    "load_latest_profile": {
-        "intent": "加载当前侧最新设备画像",
-        "mode": "action",
-        "actions": ("加载", "载入", "启用", "挂载"),
-        "targets": ("最新设备画像", "最新画像", "当前侧最新画像", "画像"),
-        "positive": ("加载当前侧最新设备画像", "启用最新画像匹配"),
-        "negative": ("列出设备画像", "从录波提取画像"),
-        "policy": "无参数；仅按服务端当前侧最新画像解析并在确认时复验，不由模型提交路径。",
-    },
-    "load_profile_by_id": {
-        "intent": "加载用户指定的受控设备画像",
-        "mode": "action",
-        "actions": ("加载", "载入", "启用", "使用"),
-        "targets": ("指定画像", "画像id", "设备画像文件"),
-        "positive": ("加载指定profile_id的设备画像", "启用画像ID abcdef0123456789"),
-        "negative": ("加载最新设备画像", "查询画像列表"),
-        "policy": "profile_id 必须匹配用户明确指定且属于本轮当前侧清单的画像；不从名称猜 ID。",
-    },
-    "set_wiring_mode": {
-        "intent": "切换当前侧接线模式",
-        "mode": "action",
-        "actions": ("切换", "设置", "修改", "改成", "改为"),
-        "targets": ("接线模式", "接线方式", "3p3w", "3p4w", "三相三线", "三相四线"),
-        "positive": ("把接线模式切换到3p4w", "设置成三相三线制"),
-        "negative": ("查询当前接线模式", "修改PT和CT变比"),
-        "policy": "wiring 必须由用户明示为 3p3w 或 3p4w；不能连带修改 PT / CT 或重构参数。",
-    },
-    "set_electrical_parameters": {
-        "intent": "修改采样与电气变换参数",
-        "mode": "action",
-        "actions": ("修改", "设置", "调整", "改为", "设成"),
-        "targets": ("采样率", "额定频率", "pt变比", "ct变比", "电压输入口径", "电流反向", "三线重构"),
-        "positive": ("把采样率设为12800Hz", "将PT变比改为1000"),
-        "negative": ("查询采样率和变比", "切换接线模式"),
-        "policy": "至少一个字段和值必须由用户明确给出；只修改提到的字段，其余可选字段不得猜测或一并重设。",
-        "required_any": (("fs", "f_nom", "f_min", "f_max", "pt_ratio", "ct_ratio", "voltage_input", "invert_current", "invert_phases", "reconstruct_3w"),),
-    },
-    "set_harmonic_parameters": {
-        "intent": "修改谐波分析范围或间谐波开关",
-        "mode": "action",
-        "actions": ("修改", "设置", "调整", "改为", "打开", "关闭"),
-        "targets": ("谐波范围", "谐波次数", "thd最高次数", "间谐波输出"),
-        "positive": ("把谐波最高次数改为50", "开启间谐波输出"),
-        "negative": ("查询谐波分析结果", "修改电气量计算窗口"),
-        "policy": "至少明确提供一个谐波字段；次数须有明确整数值，间谐波开关须有明确开 / 关语义。",
-        "required_any": (("order_min", "order_max", "thd_order_max", "include_interharmonic"),),
-    },
-    "set_power_calculation_mode": {
-        "intent": "修改功率计算口径",
-        "mode": "action",
-        "actions": ("修改", "设置", "切换", "调整", "改为", "关闭", "开启"),
-        "targets": ("视在功率口径", "无功功率口径", "基波功率输出", "功率计算模式"),
-        "positive": ("将视在功率改为向量法", "关闭基波功率输出"),
-        "negative": ("查询有功功率结果", "调整功率曲线窗口"),
-        "policy": "至少一个口径 / 开关值由用户明确指定；枚举值按白名单匹配，不修改采样、变比或接线。",
-        "required_any": (("apparent", "reactive", "fundamental_power"),),
-    },
-    "set_compare_alignment": {
-        "intent": "修改总线侧跨侧时间对齐参数",
-        "mode": "action",
-        "actions": ("修改", "设置", "调整", "改为"),
-        "targets": ("跨侧时间偏移", "对齐偏移", "对齐容差", "时间对齐参数"),
-        "positive": ("把跨侧对齐偏移设为2秒", "将时间对齐容差调整到0.5秒"),
-        "negative": ("查询两侧数据对齐结果", "改动分路侧数据源"),
-        "policy": "至少一个 offset_s / tolerance_s 及其数值须由用户明示；只允许总线侧写入，其他侧或数据源配置不在此工具范围。",
-        "required_any": (("offset_s", "tolerance_s"),),
-    },
-    "set_playback_speed": {
-        "intent": "修改当前侧CSV离线播放速度",
-        "mode": "action",
-        "actions": ("调整", "修改", "设置", "调到", "调至", "改成", "改为"),
-        "targets": ("播放速度", "离线倍速", "播放倍速", "速度"),
-        "positive": ("将离线播放速度设置为2倍", "把当前CSV倍速调整到0.5"),
-        "negative": ("播放离线数据源", "启动当前数据源", "恢复暂停播放"),
-        "policy": "speed 必须是用户明确指定的数值；单说播放 / 启动 / 快慢不提供足够值，也不启动数据源。",
-    },
-    "set_file_time_utc": {
-        "intent": "设置CSV文本时标按UTC或本机时间解释",
-        "mode": "action",
-        "actions": ("设置", "切换", "修改", "改为", "按"),
-        "targets": ("时标解释", "时间戳按utc", "按本地时间解析", "utc模式", "时间按本机"),
-        "positive": ("把当前CSV时标设为UTC", "时间戳按本机本地时间解释"),
-        "negative": ("设置系统时区", "更换离线数据源文件"),
-        "policy": "use_utc 必须由用户明确选择 UTC 或本机本地时间；不得把系统时区变更当作此设置。",
-    },
-    "set_window_parameters": {
-        "intent": "修改指定电气量的计算窗长或步长",
-        "mode": "action",
-        "actions": ("修改", "设置", "调整", "改成", "改为"),
-        "targets": ("计算窗口", "窗长", "步长", "输出间隔"),
-        "positive": ("把电压计算窗长设为1秒", "将谐波步长改成0.2秒"),
-        "negative": ("查询趋势历史", "修改谐波次数范围"),
-        "policy": "quantity 必须明确，且 length_s / step_s 至少指定一项；数值必须出现在请求中，不能猜默认电气量。",
-        "required_any": (("length_s", "step_s"),),
-    },
-    "set_event_parameter": {
-        "intent": "修改一项电能质量事件数值阈值",
-        "mode": "action",
-        "actions": ("修改", "设置", "调整", "改为", "提高", "降低"),
-        "targets": ("电能质量事件阈值", "电压暂升阈值", "谐波阈值", "rocof阈值", "事件限值"),
-        "positive": ("把电压暂升阈值设为110", "降低电能质量事件的THD电压限值到5"),
-        "negative": ("查询电能质量事件", "启用事件检测"),
-        "policy": "parameter 必须指向固定白名单中的一项，value 必须由用户明确提供；不能根据常识猜默认阈值。",
-    },
-    "set_event_detection_enabled": {
-        "intent": "启用或停用电能质量事件检测总开关",
-        "mode": "action",
-        "actions": ("启用", "停用", "打开", "关闭", "切换"),
-        "targets": ("电能质量事件检测", "事件检测总开关", "事件识别开关"),
-        "positive": ("启用电能质量事件检测", "关闭事件检测总开关"),
-        "negative": ("修改事件阈值", "查询电能质量事件"),
-        "policy": "enabled 必须按用户明确的开 / 关意图设置；不修改阈值、目录或事件数据。",
-    },
-    "set_nilm_parameter": {
-        "intent": "修改一个已注册负荷辨识算法数值参数",
-        "mode": "action",
-        "actions": ("修改", "设置", "调整", "改为", "设为"),
-        "targets": ("负荷辨识算法参数", "nilm参数", "检测参数", "周波参数"),
-        "positive": ("把threshold算法的threshold参数改为0.8", "调整CUSUM的窗口周波参数到10"),
-        "negative": ("启用负荷辨识算法", "生成录波调参建议"),
-        "policy": "algorithm、parameter 和 value 均需从用户请求明确得到；未提及的算法 / 键 / 数值不得推断。",
-    },
-    "set_nilm_algorithm_enabled": {
-        "intent": "启用或停用一个负荷辨识算法",
-        "mode": "action",
-        "actions": ("启用", "停用", "打开", "关闭", "切换"),
-        "targets": ("负荷辨识算法", "nilm算法", "threshold算法", "双窗法", "双窗口", "two_window算法",
-                    "cusum算法", "累积和算法", "glr算法", "广义似然比算法", "steady_state算法", "稳态法",
-                    "median_diff算法", "中位差算法", "profile算法"),
-        "positive": ("启用CUSUM负荷辨识算法", "停用threshold算法"),
-        "negative": ("修改负荷辨识参数", "查询负荷辨识事件"),
-        "policy": "algorithm 和 enabled 都必须由用户明示；只切换对应算法开关。",
-    },
-    "set_nilm_core_parameters": {
-        "intent": "修改负荷辨识基础检测参数",
-        "mode": "action",
-        "actions": ("修改", "设置", "调整", "开启", "关闭", "启用", "停用", "打开", "禁用", "改为"),
-        "targets": ("负荷辨识基础参数", "负荷辨识", "nilm基础设置", "自动参数", "检测量", "检测对象", "周波间隔", "变化比例"),
-        "positive": ("把负荷辨识检测对象改成A相", "将NILM最小变化比例设为5%"),
-        "negative": ("修改某个算法专属参数", "查询负荷辨识事件"),
-        "policy": "至少明确一个基础字段及值；未提及字段不改，不接收画像、输出目录或任意配置对象。",
-        "required_any": (("enabled", "auto_params", "quantity", "channel", "window_cycles", "min_gap_cycles", "rel_tol_pct", "min_delta_pct"),),
-    },
-    "set_curve_save_enabled": {
-        "intent": "切换指定趋势曲线的保存开关",
-        "mode": "action",
-        "actions": ("启用", "停用", "打开", "关闭", "设置", "切换"),
-        "targets": ("趋势曲线保存", "曲线落盘", "曲线保存开关", "电压曲线保存"),
-        "positive": ("开启电压趋势曲线保存", "关闭功率因数曲线落盘"),
-        "negative": ("导出已保存曲线CSV", "查询最新电压结果"),
-        "policy": "quantity 与 enabled 均需明确；不能修改输出目录或文件名。",
-    },
-    "clear_events": {
-        "intent": "清空当前侧内存中的电能质量事件列表",
-        "mode": "action",
-        "actions": ("清空", "清除", "移除"),
-        "targets": ("电能质量事件列表", "内存事件", "当前事件"),
-        "positive": ("清空当前侧电能质量事件", "清除内存中的事件列表"),
-        "negative": ("查询电能质量事件", "删除磁盘事件CSV"),
-        "policy": "无参数；需明确清空事件列表。该工具不删除磁盘CSV，也不清除整体缓存。",
-    },
-    "clear_nilm_events": {
-        "intent": "清空当前侧内存中的负荷辨识事件列表",
-        "mode": "action",
-        "actions": ("清空", "清除", "移除"),
-        "targets": ("负荷辨识事件列表", "nilm事件", "负荷事件"),
-        "positive": ("清空当前侧负荷辨识事件", "清除内存中的NILM事件列表"),
-        "negative": ("查询负荷辨识事件", "清理缓存"),
-        "policy": "无参数；只清当前侧内存事件，不删除磁盘CSV，也不等于清除缓存。",
-    },
-    "run_algorithm_selftest": {
-        "intent": "运行内置算法自检",
-        "mode": "action",
-        "actions": ("运行", "执行", "做一下", "启动", "自检"),
-        "targets": ("算法自检", "解析解自检", "自检测试", "自检"),
-        "positive": ("运行算法自检", "执行内置解析解自检测试"),
-        "negative": ("查询算法参数", "启动当前数据源"),
-        "policy": "无参数；只运行内置自检并返回摘要，不修改配置。",
-    },
-}
+# 意图契约配置从外部 CSV 文件加载（configs/intent_actions.csv）。
+# 用户可通过修改 CSV 文件中的 actions 列扩展动词同义词，无需改动 Python 代码。
+# 模块导入时自动加载；CSV 解析或校验失败会抛出明确错误，避免服务器以不完整配置启动。
+
+_INTENT_CSV_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "configs", "intent_actions.csv")
+
+
+def _split_csv_list(value: Optional[str]) -> Tuple[str, ...]:
+    """把 CSV 单元格中分号分隔的列表还原为元组，忽略空项。"""
+    if not value:
+        return ()
+    return tuple(item.strip() for item in str(value).split(";") if item.strip())
+
+
+def _split_required_any(value: Optional[str]) -> Tuple[Tuple[str, ...], ...]:
+    """把 CSV 单元格中 required_any 还原为元组的元组。
+
+    格式：组内用逗号分隔字段，组间用分号分隔。例如 "d2_max,min_confidence;fs,f_nom"。
+    空字符串表示无必需分组。
+    """
+    if not value:
+        return ()
+    groups = []
+    for group in str(value).split(";"):
+        group = group.strip()
+        if group:
+            groups.append(tuple(item.strip() for item in group.split(",") if item.strip()))
+    return tuple(groups)
+
+
+def load_intent_data_from_csv(csv_path: str = _INTENT_CSV_PATH) -> Dict[str, Dict[str, Any]]:
+    """从 CSV 文件加载意图契约数据，返回与原 _INTENT_DATA 相同结构的字典。
+
+    CSV 列：tool, intent, mode, actions, targets, positive, negative, policy, required_any
+    - actions / targets / positive / negative：分号分隔的列表
+    - required_any：组内逗号分隔，组间分号分隔；空表示无
+    """
+    data: Dict[str, Dict[str, Any]] = {}
+    with open(csv_path, encoding="utf-8", newline="") as fh:
+        reader = csv.DictReader(fh)
+        required_cols = {"tool", "intent", "mode", "actions", "targets", "positive", "negative", "policy"}
+        missing = required_cols - set(reader.fieldnames or [])
+        if missing:
+            raise ValueError(f"意图配置 CSV 缺少必要列：{sorted(missing)}")
+        for row in reader:
+            tool = str(row["tool"]).strip()
+            if not tool:
+                continue
+            data[tool] = {
+                "intent": str(row["intent"]).strip(),
+                "mode": str(row["mode"]).strip(),
+                "actions": _split_csv_list(row.get("actions", "")),
+                "targets": _split_csv_list(row.get("targets", "")),
+                "positive": _split_csv_list(row.get("positive", "")),
+                "negative": _split_csv_list(row.get("negative", "")),
+                "policy": str(row.get("policy", "")).strip(),
+                "required_any": _split_required_any(row.get("required_any", "")),
+            }
+    return data
+
+
+# 在模块导入时从 CSV 加载意图数据；若 CSV 缺失或损坏，抛出错误阻止服务器以不完整配置启动。
+_INTENT_DATA: Dict[str, Dict[str, Any]] = load_intent_data_from_csv()
 
 
 _FIELD_GUIDANCE: Dict[str, str] = {
