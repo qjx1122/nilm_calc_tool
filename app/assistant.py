@@ -2145,6 +2145,82 @@ class AssistantService:
                             "_parsed_side": effective_side,
                             "_exclusive_limit": exclusive_limit,
                         }
+                        # 只读查询工具直接执行并返回结果，不需要二次确认；
+                        # 避免 get_runtime_status / get_runtime_settings 只返回确认提示而不输出实际状态。
+                        if top_tool in {"get_runtime_status", "get_runtime_settings"}:
+                            from app.server import RUNNERS
+                            from app.assistant_tools import EVENT_PARAMETER_KEYS, CURVE_KEYS
+                            runner = RUNNERS[effective_side]
+                            if top_tool == "get_runtime_status":
+                                state = runner.state()
+                                cfg = runner.cfg
+                                engine = state.get("engine") if isinstance(state.get("engine"), dict) else {}
+                                history = state.get("history") if isinstance(state.get("history"), dict) else {}
+                                safe_engine = {key: engine.get(key) for key in (
+                                    "samples_in", "blocks_in", "buffer_fill", "buffer_capacity",
+                                    "data_duration_s", "ticks", "events_total", "events_active",
+                                    "nilm_events_total", "nilm_cycles", "rate_samples_per_s") if key in engine}
+                                result = {"side": effective_side,
+                                          "running": bool(state.get("running")),
+                                          "paused": bool(state.get("paused")),
+                                          "finished": bool(state.get("finished")),
+                                          "source_kind": cfg.source.kind,
+                                          "source_configured": (
+                                              cfg.source.kind not in {"csv_file", "csv_tail"}
+                                              or bool(str(cfg.source.path or "").strip())),
+                                          "elapsed_s": state.get("elapsed_s"),
+                                          "latest_quantities": state.get("latest_keys", []),
+                                          "latest_t_ref": state.get("latest_t_ref"),
+                                          "stored_results": state.get("stored_results", 0),
+                                          "engine": safe_engine, "history": history,
+                                          "error_present": bool(state.get("error") or engine.get("errors"))}
+                            else:
+                                cfg = runner.cfg
+                                events = {key: getattr(cfg.events, key) for key in EVENT_PARAMETER_KEYS}
+                                algorithms = {key: {"enabled": bool(
+                                    (cfg.nilm.algorithms.get(key) or {}).get("enabled", False))}
+                                              for key in cfg.nilm.algorithms}
+                                result = {"side": effective_side,
+                                          "sampling": {"fs": cfg.sampling.fs, "f_nom": cfg.sampling.f_nom,
+                                                       "f_min": cfg.sampling.f_min, "f_max": cfg.sampling.f_max},
+                                          "transform": {"wiring": cfg.transform.wiring,
+                                                        "pt_ratio": cfg.transform.pt_ratio,
+                                                        "ct_ratio": cfg.transform.ct_ratio,
+                                                        "reconstruct_3w": cfg.transform.reconstruct_3w,
+                                                        "invert_current": cfg.transform.invert_current,
+                                                        "invert_phases": cfg.transform.invert_phases},
+                                          "source": {"kind": cfg.source.kind,
+                                                     "has_path": bool(str(cfg.source.path or "").strip()),
+                                                     "file_speed": cfg.source.file_speed,
+                                                     "play_start_mode": cfg.source.play_start_mode},
+                                          "windows": {key: {"length_s": spec.length_s, "step_s": spec.step_s,
+                                                            "policy": spec.policy, "window_fn": spec.window_fn,
+                                                            "remove_dc": spec.remove_dc}
+                                                      for key, spec in cfg.windows.items()},
+                                          "events": {"enabled": cfg.events.enabled,
+                                                     "hysteresis": cfg.events.hysteresis,
+                                                     "thresholds": events},
+                                          "nilm": {"enabled": cfg.nilm.enabled,
+                                                   "auto_params": cfg.nilm.auto_params,
+                                                   "quantity": cfg.nilm.quantity,
+                                                   "channels": list(cfg.nilm.channels),
+                                                   "window_cycles": cfg.nilm.window_cycles,
+                                                   "min_gap_cycles": cfg.nilm.min_gap_cycles,
+                                                   "rel_tol_pct": cfg.nilm.rel_tol_pct,
+                                                   "min_delta_pct": cfg.nilm.min_delta_pct,
+                                                   "algorithms": algorithms},
+                                          "output": {"history_hours": cfg.output.history_hours,
+                                                     "curve_save": {key: bool(
+                                                         cfg.output.curve_save.get(key, True))
+                                                                    for key in CURVE_KEYS}}}
+                            side_label = {"bus": "总线侧", "branch": "分路侧"}.get(
+                                effective_side, "当前侧")
+                            label = "运行状态" if top_tool == "get_runtime_status" else "计算配置摘要"
+                            intent_plan["_direct_tool_response"] = (
+                                f"已按意图识别识别为「查询{side_label}{label}」。\n"
+                                f"{json.dumps(result, ensure_ascii=False)}"
+                            )
+                            return intent_plan
                         proposal = self.create_tool_proposal(intent_plan, [{
                             "function": {"name": top_tool, "arguments": {}}
                         }])
