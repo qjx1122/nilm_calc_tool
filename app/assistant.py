@@ -1446,8 +1446,13 @@ class AssistantService:
                                  "status": "pending_confirmation", "arguments": args, "proposal_id": proposal_id})
         return public
 
-    def claim_tool_proposal(self, proposal_id: str, operator_token: str, side: str,
+    def claim_tool_proposal(self, proposal_id: str, operator_token: str,
                             confirmation_code: str = "") -> Dict[str, Any]:
+        """确认并认领待执行的工具操作。
+
+        侧别以预览时存储的 pending["side"] 为准，不再与确认时的 current_side() 比较，
+        避免用户在总线侧UI发起分路侧操作、确认时因 current_side() 为 bus 而被误判为侧别不一致。
+        """
         operator = self.authenticate_operator(operator_token)
         expired = False
         with self._lock:
@@ -1459,8 +1464,6 @@ class AssistantService:
                 expired = True
             elif pending.get("actor_id") != operator["id"]:
                 raise AssistantError(403, "此操作预览绑定到另一位操作员")
-            elif pending.get("side") != side:
-                raise AssistantError(409, "当前总线 / 分路侧与预览时不同，请回到原侧重新发起")
             elif pending.get("scope") not in operator.get("scopes", []):
                 raise AssistantError(403, "当前操作员已无该工具权限")
             elif pending.get("model_type") == "cloud" and not self._config.get("cloud_tools_enabled"):
@@ -1475,12 +1478,17 @@ class AssistantService:
                 self._pending_tools.pop(pending["id"], None)
                 claimed = dict(pending)
         if expired:
-            self._append_tool_audit({"operator_id": operator["id"], "side": side, "tool": "unknown",
+            self._append_tool_audit({"operator_id": operator["id"], "side": pending.get("side", "bus"), "tool": "unknown",
                                      "status": "expired", "proposal_id": str(proposal_id or "")[:100]})
             raise AssistantError(410, "操作预览已过期，请重新发起")
         return claimed
 
-    def cancel_tool_proposal(self, proposal_id: str, operator_token: str, side: str) -> Dict[str, Any]:
+    def cancel_tool_proposal(self, proposal_id: str, operator_token: str,
+                             confirmation_code: str = "") -> Dict[str, Any]:
+        """取消待执行的工具操作。
+
+        同样以预览时存储的 pending["side"] 为准，不再与确认时的 current_side() 比较。
+        """
         operator = self.authenticate_operator(operator_token)
         with self._lock:
             pending = self._pending_tools.get(str(proposal_id or ""))
@@ -1488,11 +1496,9 @@ class AssistantService:
                 raise AssistantError(404, "待确认操作不存在、已取消或已执行")
             if pending.get("actor_id") != operator["id"]:
                 raise AssistantError(403, "此操作预览绑定到另一位操作员")
-            if pending.get("side") != side:
-                raise AssistantError(409, "当前侧与预览时不同")
             self._pending_tools.pop(pending["id"], None)
-        self._append_tool_audit({"operator_id": operator["id"], "side": side, "tool": pending["name"],
-                                 "status": "cancelled", "arguments": pending["args"], "proposal_id": pending["id"]})
+        self._append_tool_audit({"operator_id": operator["id"], "side": pending.get("side", "bus"), "tool": pending["name"],
+                                 "status": "cancelled", "arguments": pending.get("args", {}), "proposal_id": pending["id"]})
         return {"ok": True, "status": "cancelled"}
 
     def record_tool_result(self, pending: Dict[str, Any], status: str, result: Dict[str, Any]) -> None:

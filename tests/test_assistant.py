@@ -661,30 +661,28 @@ def test_tool_catalog_validation_and_closed_scope_proposal(tmp_path, monkeypatch
     assert proposal["status"] == "pending" and proposal["side"] == "branch"
     assert proposal["requires_second_confirmation"] and proposal["confirmation_code"]
     with pytest.raises(AssistantError, match="另一位操作员"):
-        service.claim_tool_proposal(proposal["id"], "other-operator-secret-123", "branch", proposal["confirmation_code"])
-    with pytest.raises(AssistantError, match="预览时不同"):
-        service.claim_tool_proposal(proposal["id"], operator, "bus", proposal["confirmation_code"])
+        service.claim_tool_proposal(proposal["id"], "other-operator-secret-123", proposal["confirmation_code"])
     saved_tokens = json.dumps([
         {"id": "field-operator", "token": operator, "scopes": []},
         {"id": "other-operator", "token": "other-operator-secret-123", "scopes": ["data.export"]},
     ])
     monkeypatch.setenv("ELEC_TOOL_ASSISTANT_OPERATOR_TOKENS", saved_tokens)
     with pytest.raises(AssistantError, match="已无该工具权限"):
-        service.claim_tool_proposal(proposal["id"], operator, "branch", proposal["confirmation_code"])
+        service.claim_tool_proposal(proposal["id"], operator, proposal["confirmation_code"])
     monkeypatch.setenv("ELEC_TOOL_ASSISTANT_OPERATOR_TOKENS", json.dumps([
         {"id": "field-operator", "token": operator, "scopes": ["config.wiring.write"]},
         {"id": "other-operator", "token": "other-operator-secret-123", "scopes": ["data.export"]},
     ]))
     service.update_config({"tools_enabled": False}, admin)
     with pytest.raises(AssistantError, match="关闭该工具"):
-        service.claim_tool_proposal(proposal["id"], operator, "branch", proposal["confirmation_code"])
+        service.claim_tool_proposal(proposal["id"], operator, proposal["confirmation_code"])
     service.update_config({"tools_enabled": True}, admin)
     with pytest.raises(AssistantError, match="不匹配"):
-        service.claim_tool_proposal(proposal["id"], operator, "branch", "000000" if proposal["confirmation_code"] != "000000" else "000001")
-    claimed = service.claim_tool_proposal(proposal["id"], operator, "branch", proposal["confirmation_code"])
+        service.claim_tool_proposal(proposal["id"], operator, "000000" if proposal["confirmation_code"] != "000000" else "000001")
+    claimed = service.claim_tool_proposal(proposal["id"], operator, proposal["confirmation_code"])
     assert claimed["name"] == "set_wiring_mode" and claimed["side"] == "branch"
     with pytest.raises(AssistantError, match="不存在"):
-        service.claim_tool_proposal(proposal["id"], operator, "branch", proposal["confirmation_code"])
+        service.claim_tool_proposal(proposal["id"], operator, proposal["confirmation_code"])
     service.record_tool_result(claimed, "success", {"message": "updated"})
 
     from app import assistant as assistant_module
@@ -694,7 +692,7 @@ def test_tool_catalog_validation_and_closed_scope_proposal(tmp_path, monkeypatch
         "name": "set_wiring_mode", "arguments": {"wiring": "3p3w"}
     }}])
     with pytest.raises(AssistantError) as expired_error:
-        service.claim_tool_proposal(expired["id"], operator, "branch", expired["confirmation_code"])
+        service.claim_tool_proposal(expired["id"], operator, expired["confirmation_code"])
     assert expired_error.value.status_code == 410
     monkeypatch.setattr(assistant_module, "PENDING_TOOL_TTL_S", old_ttl)
 
@@ -707,7 +705,7 @@ def test_tool_catalog_validation_and_closed_scope_proposal(tmp_path, monkeypatch
     }}])
     service.update_config({"cloud_tools_enabled": False}, admin)
     with pytest.raises(AssistantError, match="关闭云端工具执行"):
-        service.claim_tool_proposal(cloud_proposal["id"], operator, "branch", cloud_proposal["confirmation_code"])
+        service.claim_tool_proposal(cloud_proposal["id"], operator, cloud_proposal["confirmation_code"])
     assert (tmp_path / "tool_audit.jsonl").exists()
 
 
@@ -791,7 +789,7 @@ def test_explicit_source_start_bypasses_model_selection_but_keeps_confirmation(t
 
     incorrect_code = "000001" if proposal["confirmation_code"] != "000001" else "000002"
     with pytest.raises(AssistantError, match="二次确认码不匹配"):
-        service.claim_tool_proposal(proposal["id"], operator, "branch", incorrect_code)
+        service.claim_tool_proposal(proposal["id"], operator, incorrect_code)
 
 
 def test_explicit_source_start_does_not_fall_back_when_authorization_is_missing(tmp_path, monkeypatch):

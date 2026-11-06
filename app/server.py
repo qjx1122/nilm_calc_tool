@@ -2126,7 +2126,7 @@ async def assistant_tool_confirm(payload: Dict[str, Any], request: Request) -> A
     token = request.headers.get("x-assistant-operator-token", "")
     try:
         pending = assistant_service.claim_tool_proposal(str(payload.get("proposal_id") or ""), token,
-                                                        current_side(), str(payload.get("confirmation_code") or ""))
+                                                        str(payload.get("confirmation_code") or ""))
     except AssistantError as exc:
         return JSONResponse(status_code=exc.status_code, content={"ok": False, "error": exc.message})
     try:
@@ -2146,8 +2146,7 @@ async def assistant_tool_confirm(payload: Dict[str, Any], request: Request) -> A
 async def assistant_tool_cancel(payload: Dict[str, Any], request: Request) -> Any:
     try:
         return assistant_service.cancel_tool_proposal(str(payload.get("proposal_id") or ""),
-                                                      request.headers.get("x-assistant-operator-token", ""),
-                                                      current_side())
+                                                      request.headers.get("x-assistant-operator-token", ""))
     except AssistantError as exc:
         return JSONResponse(status_code=exc.status_code, content={"ok": False, "error": exc.message})
 
