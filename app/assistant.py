@@ -1906,20 +1906,16 @@ class AssistantService:
             )
             if intent_recognition["ok"]:
                 top_tool = intent_recognition["result"]["intent_code"]
-                # 仅对确定性路由覆盖的四个核心工具直接路由，其余工具
-                # 继续走现有模型判定流程，避免影响非核心工具的模型调用。
-                CORE_SOURCE_TOOLS = {
-                    "start_current_source", "pause_current_source",
-                    "resume_current_source", "stop_current_source",
-                }
+                # 对所有在可用工具清单中的受控工具直接路由（阶段 B，设计文档 §6.5/§8.4.1）。
+                # 确定性路由只 cover start/pause/resume/stop，recognize_intent 作为大模型路径的
+                # 补充，可对全部 46 个受控工具进行意图判定并直接路由。
                 if (
                     top_tool
-                    and top_tool in CORE_SOURCE_TOOLS
                     and top_tool in available_tools
                     and top_tool in TOOL_BY_NAME
                 ):
                     item = TOOL_BY_NAME[top_tool]
-                    # 权限与状态校验（与确定性路由保持一致）
+                    # 权限校验（与确定性路由保持一致）
                     if operator and item["scope"] not in operator.get("scopes", []):
                         raise AssistantError(
                             403,
@@ -1950,65 +1946,82 @@ class AssistantService:
                             f"识别的工具「{item['title']}」当前不可用：管理员 allow-list 未包含该工具；"
                             f"不会改用相似查询工具代替。",
                         )
-                    source = (tool_context or {}).get("source")
-                    source = source if isinstance(source, dict) else {}
-                    source_kind = str(source.get("kind") or "none")
-                    source_running = bool(source.get("running"))
-                    if top_tool == "start_current_source":
-                        if source_running:
-                            raise AssistantError(
-                                409,
-                                "当前侧数据源已在运行或暂停，不会重复启动；如需继续暂停的数据源，请使用恢复操作",
-                            )
-                        if source_kind not in {"csv_file", "csv_tail"}:
-                            raise AssistantError(
-                                409,
-                                "当前侧配置不是离线文件数据源。若要播放离线 CSV，请先在「数据源与控制」页面为当前侧配置离线数据源后重试；"
-                                "不会自动切换当前来源。",
-                            )
-                        if not source.get("has_path"):
-                            raise AssistantError(
-                                409,
-                                "当前侧离线数据源未配置可用文件。请在「数据源与控制」页面配置并核验当前侧文件后重试；"
-                                "不会查询或更换录波文件。",
-                            )
-                    elif top_tool == "pause_current_source":
-                        if not source_running:
-                            raise AssistantError(
-                                409,
-                                "当前侧数据源未在运行，无法暂停；请先启动数据源后再暂停。",
-                            )
-                    elif top_tool == "resume_current_source":
-                        if source_running:
-                            raise AssistantError(
-                                409,
-                                "当前侧数据源正在运行，无需恢复；如需暂停请使用暂停操作。",
-                            )
-                    elif top_tool == "stop_current_source":
-                        if not source_running:
-                            raise AssistantError(
-                                409,
-                                "当前侧数据源未在运行，无法停止；请先启动数据源后再停止。",
-                            )
-                    intent_plan = {
-                        "model_type": model_type,
-                        "sources": [],
-                        "_redact_names": [],
-                        "_operator": operator,
-                        "_side": side if side in {"bus", "branch"} else "bus",
-                        "_tool_context": dict(tool_context or {}),
-                        "_available_tools": available_tools,
-                    }
-                    proposal = self.create_tool_proposal(intent_plan, [{
-                        "function": {"name": top_tool, "arguments": {}}
-                    }])
-                    intent_plan["_tool_proposal"] = proposal
-                    intent_plan["_direct_tool_response"] = (
-                        f"已按意图识别识别为「{proposal['title']}」。请核对操作摘要与影响后确认；未确认前不会执行。"
-                    )
-                    return intent_plan
+                    # 直接路由只适用于接受空参数的工具；需要参数的工具继续走模型流程，
+                    # 由模型提取槽位并通过 create_tool_proposal 校验。
+                    try:
+                        validate_tool_arguments(top_tool, {})
+                    except ValueError:
+                        # 需要必需参数，跳过直接路由，继续走下面的模型判定流程
+                        pass
+                    else:
+                        # 四个核心工具的 source 状态校验（确定性路由已 cover 的范围）
+                        if top_tool == "start_current_source":
+                            source = (tool_context or {}).get("source")
+                            source = source if isinstance(source, dict) else {}
+                            source_kind = str(source.get("kind") or "none")
+                            source_running = bool(source.get("running"))
+                            if source_running:
+                                raise AssistantError(
+                                    409,
+                                    "当前侧数据源已在运行或暂停，不会重复启动；如需继续暂停的数据源，请使用恢复操作",
+                                )
+                            if source_kind not in {"csv_file", "csv_tail"}:
+                                raise AssistantError(
+                                    409,
+                                    "当前侧配置不是离线文件数据源。若要播放离线 CSV，请先在「数据源与控制」页面为当前侧配置离线数据源后重试；"
+                                    "不会自动切换当前来源。",
+                                )
+                            if not source.get("has_path"):
+                                raise AssistantError(
+                                    409,
+                                    "当前侧离线数据源未配置可用文件。请在「数据源与控制」页面配置并核验当前侧文件后重试；"
+                                    "不会查询或更换录波文件。",
+                                )
+                        elif top_tool == "pause_current_source":
+                            source = (tool_context or {}).get("source")
+                            source = source if isinstance(source, dict) else {}
+                            source_running = bool(source.get("running"))
+                            if not source_running:
+                                raise AssistantError(
+                                    409,
+                                    "当前侧数据源未在运行，无法暂停；请先启动数据源后再暂停。",
+                                )
+                        elif top_tool == "resume_current_source":
+                            source = (tool_context or {}).get("source")
+                            source = source if isinstance(source, dict) else {}
+                            source_running = bool(source.get("running"))
+                            if source_running:
+                                raise AssistantError(
+                                    409,
+                                    "当前侧数据源正在运行，无需恢复；如需暂停请使用暂停操作。",
+                                )
+                        elif top_tool == "stop_current_source":
+                            source = (tool_context or {}).get("source")
+                            source = source if isinstance(source, dict) else {}
+                            source_running = bool(source.get("running"))
+                            if not source_running:
+                                raise AssistantError(
+                                    409,
+                                    "当前侧数据源未在运行，无法停止；请先启动数据源后再停止。",
+                                )
+                        intent_plan = {
+                            "model_type": model_type,
+                            "sources": [],
+                            "_redact_names": [],
+                            "_operator": operator,
+                            "_side": side if side in {"bus", "branch"} else "bus",
+                            "_tool_context": dict(tool_context or {}),
+                            "_available_tools": available_tools,
+                        }
+                        proposal = self.create_tool_proposal(intent_plan, [{
+                            "function": {"name": top_tool, "arguments": {}}
+                        }])
+                        intent_plan["_tool_proposal"] = proposal
+                        intent_plan["_direct_tool_response"] = (
+                            f"已按意图识别识别为「{proposal['title']}」。请核对操作摘要与影响后确认；未确认前不会执行。"
+                        )
+                        return intent_plan
             # medium / low tier: 继续走下面的模型判定流程，
-            # 由模型或兜底逻辑决定是否创建提案或返回澄清。
             # 由模型或兜底逻辑决定是否创建提案或返回澄清。
 
         temperature = _number(payload.get("temperature", cfg["temperature"]), "temperature", 0, 2)
