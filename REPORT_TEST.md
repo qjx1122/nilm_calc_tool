@@ -4229,3 +4229,27 @@ delta_i_a  = d_i_obs
 - **是否进入 REPORT.md（稳定结论）**：否（助手工具路由 / 安全边界，不涉及 NILM 算法路线或 KPI）。
 - **遗留问题**：如需现场确认，请部署方先核验当前 operator 的实际 `available_tools` 同时含 `start_current_source`、授权 scope `engine.start`，且管理员全局 allow-list 已勾选该工具；再在真实 Qwen 新会话逐句检查预览工具名和当前侧来源，不点击执行前先核对影响。真实 provider 未连接，现场模型输出仍待用户回报；不要发送 token / API Key。
 - **Git 交付状态**：本地 `HEAD` `27b28ea` 仅跟踪 `BOOTSTRAP.md`、`ROLE.md`，应用源码 / 测试 / 说明在 checkout 显示为 untracked；为避免把不完整源码集合当新增文件推送，本轮未暂存 / commit / push。先确认 / 修复 checkout 基线再处理 Git 交付。
+## [2026-11-06] T-014 智能问答基于大模型技术的意图识别技术设计文档（落盘）
+
+### 一、文档基本信息
+| 项 | 内容 |
+|---|---|
+| 文件 | `docs/智能问答助手基于大模型技术的意图识别技术设计文档.md`（V2.0，约 580 行） |
+| 结构 | 用户提供的 12 章 + 4 附录模板：项目概述（1）、需求分析（2）、系统架构设计（3）、技术方案设计（4）、意图识别方案设计（5）、意图字典与标签体系（6）、Prompt 设计与优化（7）、接口与数据流设计（8）、安全与合规设计（9）、部署与运维设计（10）、评估与质量保证（11）、实施计划与风险控制（12）、附录 A 意图字典模板、附录 B Prompt 全文示例、附录 C 输入输出 JSON Schema、附录 D 评估测试用例表 |
+| 核心编码规则 | `tool#action#object`，`category#object#action`；业务意图分三组：启动控制（start_current_source）、暂停控制（pause_current_source）、恢复播放（resume_current_source）、停止控制（stop_current_source）；确定性路由仅 cover start/pause/resume/stop，英文单字支持，非文件源与槽位不足拒绝 |
+| 落盘状态 | md 文件已落盘，与 `app/assistant.py`、`app/assistant_intents.py`、`app/assistant_tools.py`、`app/server.py` 对齐（46 个受控工具、确定性路由、服务端门控、trace_id、脱敏日志） |
+| 关联任务 | T-016 计算功能卡片技术设计 / T-017 智能问答功能卡片配置 / T-018 助手意图识别路由优化（已完成并推送） |
+
+### 二、与代码的一致性核查
+| 检查点 | 代码事实 | 设计文档 |
+|---|---|---|
+| 受控工具总数 | `app/assistant_tools.py::TOOL_CATALOG` 46 项，每项 `id/name/description/parameters/strict: true/scope` | §5、附录 C 以 46 工具闭集为前提，start/pause/resume/stop 列为受控核心命令 |
+| 确定性路由 | `app/assistant.py::_explicit_tool_command` cover start/pause/resume/stop；含“执行”动词 + 可选“播放”后缀；英文单字分支 `_EXACT_SOURCE_VERB_RE` | §5 意图字典与标签体系、§7 Prompt 意图判定 |
+| 服务端门控 | `app/assistant_intents.py::validate_model_tool_result` 三级校验 + `_value_grounded` 参数 grounding + 复合拆解 `split_compound_intent` | §8 接口与数据流设计、§9 安全与合规 |
+| trace_id | 响应头 `X-Assistant-Trace-ID`，审计写入 `tool_audit.jsonl` | §8、§9 |
+| 脱敏日志 | `_redact_names` / `_StreamingNameRedactor` 流式脱敏文件名；图像不写知识库/持久目录 | §9 |
+| py_compile / pytest | `py_compile app/assistant.py` 通过；`pytest tests/test_assistant.py` 回归通过（含英文单字回归） | 附录 D |
+
+### 三、验收结论
+md 文件已落盘；内容与 NILM 系统实际代码一致（46 个受控工具、确定性路由仅 cover start/pause/resume/stop、英文单字支持、服务端门控、trace_id、脱敏日志）。未启动/重启用户服务，未获现场日志，未连接真实 Qwen，不声称现场验收通过；`tmp/` 未读取、修改、清理或提交。
+

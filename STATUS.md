@@ -681,3 +681,15 @@
 - 运行环境：`.venv/`（gitignore，沙盒回收后需重建：`python3 -m venv .venv && .venv/bin/pip install -r requirements.txt`）
 - 分支：`arena/82e34fb8-nilm-calc-tool`（远端同名，已 push；第 9 轮提交＝`8539d8a`（feat）+ docs；第 8 轮提交＝`a6fd42d`（feat）+ `b6c7ca6`（docs）；第 6 轮 tip `f1966e8`；第 7 轮提交＝`f0fdea6` feat(r7) / `341fc9e` test(r7) / docs）｜基点 `main`=`27b28ea`
 - 第 189 轮 live preview：`cli.py serve --host 0.0.0.0 --port 8001` 常驻（`ELEC_TOOL_AUTOSTART=0`；输出隔离到 `/tmp/nilm-assistant-preview-189`）；首页、完整文档目录 API、配置与 builtin 参数问答已实测 HTTP 200。
+
+- **本任务（2026-11-06：智能问答基于大模型技术的意图识别技术设计文档落盘）**：
+  - **角色 / 模式**：工程实现工程师；模式 A；固定活动分支 `arena/82e34fb8-nilm-calc-tool`（active）；严格排除 `tmp/`。
+  - **目标**：按用户提供的 12 章 + 4 附录模板结构，结合 `app/assistant.py`、`app/assistant_intents.py`、`app/assistant_tools.py`、`app/server.py` 实际代码，撰写基于大模型技术的受控工具意图识别完整设计文档并落盘 md，覆盖编写目的、项目背景、适用范围与边界、术语、设计依据；业务场景、功能/非功能需求、设计约束；分层架构、在问答链路中的位置、核心处理流程、关键设计取舍；意图粒度、划分原则、命名编码、意图字典模板、业务意图集示例（start/pause/resume/stop/current_source 等）、生命周期管理；技术路线候选、对比、加权评分、推荐方案、切换判据；预处理、候选召回、大模型判定、结构化输出校验、置信度计算分流、复合意图拆解、槽位抽取澄清、查询改写、多轮上下文、缓存优化；冷启动数据、标注规范、质量校验、微调方案、数据闭环；接口清单、接口定义、错误码、调用示例；离线/在线评估、准入标准、持续监控；提示注入防护、数据安全、内容安全、审计留痕；部署架构、性能预算、监控告警、灰度回滚；实施阶段、人力配置、风险应对；附录 A-D。
+  - **代码与文档对齐**：
+    * 确定性路由仅 cover `start`/`pause`/`resume`/`stop`（`app/assistant.py::_explicit_tool_command`，含“执行”动词 + 可选“播放”后缀、英文单字 `_EXACT_SOURCE_VERB_RE` 分支），已 py_compile 并通过回归；
+    * 46 个受控工具闭集在 `app/assistant_tools.py::TOOL_CATALOG`，每项带严格 JSON Schema（`additionalProperties: false`、`strict: true`）与 scope；
+    * 服务端门控：`app/assistant_intents.py::validate_model_tool_result` 做语法/结构/业务三级校验 + 参数 grounding（`_value_grounded`）+ 复合意图拆解；
+    * trace_id：响应头 `X-Assistant-Trace-ID`；审计留痕写入 `tool_audit.jsonl`；
+    * 脱敏日志：`_redact_names` / `_StreamingNameRedactor` 对文件名流式脱敏，图像不写知识库/持久目录。
+  - **验证**：新文档 `docs/智能问答助手基于大模型技术的意图识别技术设计文档.md`（约 580 行，V2.0）已落盘；内容与现有代码对齐，未引入与代码不符的新假设；未启动或重启用户服务，未获现场日志，未连接真实 Qwen，不声称现场验收通过；`tmp/` 未读取、修改、清理或提交。
+  - **相关文件 / 分支**：`docs/智能问答助手基于大模型技术的意图识别技术设计文档.md`、`STATUS.md`、`REPORT_TEST.md` T-014、本会话纪要；固定活动分支 `arena/82e34fb8-nilm-calc-tool`。
