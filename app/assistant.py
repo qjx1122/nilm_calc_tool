@@ -29,7 +29,7 @@ from typing import Any, Deque, Dict, Iterable, Iterator, List, Optional, Sequenc
 from urllib.parse import urlsplit
 
 from app.assistant_docs import PLATFORM_PARAMETER_DOC_ID, load_bundled_documents
-from app.assistant_intents import recognize_intent
+from app.assistant_intents import recognize_intent, validate_model_tool_result
 from app.assistant_tools import TOOL_BY_NAME, TOOL_CATALOG, TOOL_NAMES, openai_tool_schemas, validate_tool_arguments
 
 log = logging.getLogger("elec_tool.assistant")
@@ -2415,9 +2415,30 @@ class AssistantService:
             if not calls and isinstance(message.get("function_call"), dict):
                 calls = [{"function": message["function_call"]}]
             if calls:
-                proposal = self._accept_tool_calls(plan, calls)
-                if not content.strip():
-                    content = f"已识别为「{proposal['title']}」。请核对操作摘要与影响，再确认执行。"
+                # 意图语义核验：模型提出的工具必须与用户意图匹配，防止模型
+                # 将“获取录波文件路径”等请求误路由到 list_profiles 等相似工具。
+                call = calls[0] if isinstance(calls[0], dict) else {}
+                function = call.get("function") if isinstance(call.get("function"), dict) else {}
+                name = str(function.get("name") or call.get("name") or "")
+                arguments = function.get("arguments", call.get("arguments", {}))
+                if name:
+                    user_prompt = ""
+                    for msg in plan.get("messages", []):
+                        if msg.get("role") == "user":
+                            user_prompt = str(msg.get("content", "") or "")
+                            break
+                    validation = validate_model_tool_result(
+                        user_prompt, name, arguments, plan.get("_tool_context") or {}
+                    )
+                    if not validation.get("ok"):
+                        plan["_clarification_response"] = validation.get(
+                            "clarification", "意图不匹配，无法创建操作预览。"
+                        )
+                    else:
+                        proposal = self._accept_tool_calls(plan, calls)
+                        plan["_tool_proposal"] = proposal
+                        if not content.strip():
+                            content = f"已识别为「{proposal['title']}」。请核对操作摘要与影响，再确认执行。"
             if not content.strip():
                 raise AssistantError(502, "模型返回了空回答，请重试")
             return _redact_names(content, names)
@@ -2501,13 +2522,33 @@ class AssistantService:
             if tool_calls:
                 calls = [{"id": item["id"], "function": {"name": item["name"], "arguments": item["arguments"]}}
                          for _, item in sorted(tool_calls.items())]
-                proposal = self._accept_tool_calls(plan, calls)
-                if not saw_text:
-                    fallback = f"已识别为「{proposal['title']}」。请核对操作摘要与影响，再确认执行。"
-                    safe_text = redactor.feed(fallback, final=True) if redactor else fallback
-                    if safe_text:
-                        yield safe_text
-                    redactor = None
+                # 意图语义核验：模型提出的工具必须与用户意图匹配，防止模型
+                # 将“获取录波文件路径”等请求误路由到 list_profiles 等相似工具。
+                call = calls[0] if isinstance(calls[0], dict) else {}
+                function = call.get("function") if isinstance(call.get("function"), dict) else {}
+                name = str(function.get("name") or call.get("name") or "")
+                arguments = function.get("arguments", call.get("arguments", {}))
+                if name:
+                    user_prompt = ""
+                    for msg in plan.get("messages", []):
+                        if msg.get("role") == "user":
+                            user_prompt = str(msg.get("content", "") or "")
+                            break
+                    validation = validate_model_tool_result(
+                        user_prompt, name, arguments, plan.get("_tool_context") or {}
+                    )
+                    if not validation.get("ok"):
+                        plan["_clarification_response"] = validation.get(
+                            "clarification", "意图不匹配，无法创建操作预览。"
+                        )
+                    else:
+                        proposal = self._accept_tool_calls(plan, calls)
+                        if not saw_text:
+                            fallback = f"已识别为「{proposal['title']}」。请核对操作摘要与影响，再确认执行。"
+                            safe_text = redactor.feed(fallback, final=True) if redactor else fallback
+                            if safe_text:
+                                yield safe_text
+                            redactor = None
             if redactor:
                 tail = redactor.feed(final=True)
                 if tail:
