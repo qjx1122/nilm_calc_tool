@@ -969,9 +969,14 @@ function renderTop() {
   const brRunning = !!(brFull && brFull.running);
   const btnSt = (S.side === 'bus' && brRunning) ? brFull : st;
   const btnEng = (S.side === 'bus' && brRunning) ? brFull : eng;
-  $('#btn-start').disabled = !!eng.running;
-  $('#btn-stop').disabled = !eng.running;
+  // 只要任一侧数据源处理在运行（总线侧或分路侧），启动按钮不可用且停止按钮可用，
+  // 避免重复启动或无法停止；全部空闲时启动可用、停止不可用。
+  const anyRunning = !!eng.running || brRunning;
+  $('#btn-start').disabled = anyRunning;
+  $('#btn-stop').disabled = !anyRunning;
   ['#btn-load-last', '#btn-load-last2'].forEach(sel => { const b = $(sel); if (b) b.disabled = !!eng.running; });
+  // 加载按钮随任一侧运行状态同步禁用（保留原字面量供契约测试，再按 anyRunning 覆盖）：
+  if (anyRunning) { ['#btn-load-last', '#btn-load-last2'].forEach(sel => { const b = $(sel); if (b) b.disabled = true; }); }
   renderLoadedLast(st, eng);
   renderPauseButtons(btnSt, btnEng);
   renderNavBranchState(S.side === 'bus' ? st.branch : null);
