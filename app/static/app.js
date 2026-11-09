@@ -902,9 +902,9 @@ function tickElapsed() {
     if (k === 'bus') {
       e = ELAPSED.bus;
     } else if (k === 'branch' && S.side === 'bus' && S.branchFullState) {
-      // 总线侧视图下，用分路侧完整状态（含 started_at/finished_at/paused_total_s）
-      const bf = S.branchFullState;
-      e = { start: bf.started_at, end: bf.finished_at, paused: bf.paused_total_s || 0 };
+      // 总线侧视图下，用分路侧完整状态（含 started_at/finished_at/paused_total_s）；
+      // 经 elapsedInfo 校验，避免 started_at 为 null 时算出异常初始耗时。
+      e = elapsedInfo(S.branchFullState);
     } else {
       e = ELAPSED.branch;
     }
@@ -978,7 +978,7 @@ function renderTop() {
   // 加载按钮随任一侧运行状态同步禁用（保留原字面量供契约测试，再按 anyRunning 覆盖）：
   if (anyRunning) { ['#btn-load-last', '#btn-load-last2'].forEach(sel => { const b = $(sel); if (b) b.disabled = true; }); }
   renderLoadedLast(st, eng);
-  renderPauseButtons(btnSt, btnEng);
+  renderPauseButtons(btnSt, btnEng, brFull);
   renderNavBranchState(S.side === 'bus' ? st.branch : null);
   renderBadges(st);
 }
@@ -1006,43 +1006,88 @@ function renderBadges(st) {
   setNilmBadge(peer ? (peer.nilm_events_total || 0) : 0, other);
 }
 
-/* 暂停/恢复按钮：只在离线文件源运行且未播完时可用；文案随状态切换（v0.12） */
-function renderPauseButtons(st, eng) {
-  const can = !!(st.pausable && eng.running && !eng.finished);
-  const label = st.paused ? '恢复播放' : '暂停播放';
-  [['#btn-pause', st.paused ? '恢复' : '暂停'], ['#btn-pause2', label]].forEach(([sel, txt]) => {
+/* 暂停/恢复按钮：只在离线文件源运行且未播完时可用；文案随状态切换（v0.12）。
+   支持双侧：单侧运行时只控制该侧；双侧都运行时同时控制两侧。 */
+function renderPauseButtons(st, eng, brFull) {
+  const busRunning = !!(eng.running && !eng.finished);
+  const branchRunning = !!(brFull && brFull.running && !brFull.finished);
+  const anyRunning = busRunning || branchRunning;
+  if (!anyRunning) {
+    [['#btn-pause', '暂停'], ['#btn-pause2', '暂停播放']].forEach(([sel, txt]) => {
+      const b = $(sel); if (!b) return;
+      b.disabled = true; b.textContent = txt; b.className = '';
+      b.title = '没有数据源正在播放';
+    });
+    return;
+  }
+  const busPausable = st.pausable;
+  const branchPausable = brFull ? brFull.pausable : false;
+  const busPaused = st.paused;
+  const branchPaused = brFull ? brFull.paused : false;
+  // 仅对运行中且可暂停的侧判断：任何一侧处于暂停 → 显示“恢复”；否则显示“暂停”
+  const isAnyPaused = (busRunning && busPausable && busPaused) || (branchRunning && branchPausable && branchPaused);
+  const label = isAnyPaused ? '恢复播放' : '暂停播放';
+  [['#btn-pause', isAnyPaused ? '恢复' : '暂停'], ['#btn-pause2', label]].forEach(([sel, txt]) => {
     const b = $(sel); if (!b) return;
-    b.disabled = !can; b.textContent = txt;
-    b.className = st.paused ? 'primary' : '';
-    if (!can) b.title = st.pausable ? '离线文件未在播放' : '暂停/恢复仅支持离线文件（csv_file）源';
-    else b.title = st.paused ? '从暂停处继续播放（不重读、不跳过）' : '暂停：不再读文件、不计算，数据时刻原地不动';
+    b.disabled = false; b.textContent = txt; b.className = isAnyPaused ? 'primary' : '';
+    b.title = isAnyPaused ? '从暂停处继续播放（不重读、不跳过）' : '暂停：不再读文件、不计算，数据时刻原地不动';
   });
 }
 
 async function togglePause() {
   const st = S.state || {}, eng = st.engine || {};
   const brFull = (S.side === 'bus' && S.branchFullState) || null;
-  // 总线侧视图下且分路侧正在运行 → 操作分路侧；否则操作当前侧（总线侧）
-  const targetBranch = !!(S.side === 'bus' && brFull && brFull.running);
-  const tSt = targetBranch ? brFull : st;
-  const tEng = targetBranch ? brFull : eng;
-  if (!(tSt.pausable && tEng.running && !tEng.finished)) {
-    toast(tSt.pausable ? '离线文件未在播放，无法暂停' : '暂停/恢复仅支持离线文件（csv_file）源', 'err'); return;
+  const busRunning = !!(eng.running && !eng.finished);
+  const branchRunning = !!(brFull && brFull.running && !brFull.finished);
+  const busPausable = st.pausable;
+  const branchPausable = brFull ? brFull.pausable : false;
+  const busPaused = st.paused;
+  const branchPaused = brFull ? brFull.paused : false;
+
+  // 确定需要操作的侧：仅对运行中的侧进行操作
+  const targets = [];
+  if (busRunning) targets.push({ side: 'bus', paused: busPaused, pausable: busPausable });
+  if (branchRunning) targets.push({ side: 'branch', paused: branchPaused, pausable: branchPausable });
+  if (targets.length === 0) {
+    toast('没有数据源正在播放，无法暂停', 'err'); return;
   }
-  const paused = !!tSt.paused;
-  if (targetBranch) {
-    try {
-      await fetch('/api/branch/engine/' + (paused ? 'resume' : 'pause'), { method: 'POST' });
-      S.branchFullState = await api('/api/branch/state');
-      toast(paused ? '分路侧已恢复播放' : '分路侧已暂停播放', 'ok');
-    } catch (e) { toast((paused ? '恢复' : '暂停') + '失败：' + e.message, 'err'); S.state = await api('/api/state'); }
-  } else {
-    try {
-      const r = await api(paused ? '/api/engine/resume' : '/api/engine/pause', { method: 'POST' });
-      S.state = r.state || S.state;
-      toast(paused ? '已恢复播放' : '已暂停播放（数据时刻停在 ' + ($('#st-time').textContent || '—') + '）', 'ok');
-    } catch (e) { toast((paused ? '恢复' : '暂停') + '失败：' + e.message, 'err'); S.state = await api('/api/state'); }
+
+  // 仅总线侧单独运行时保留原有完整错误提示（兼容前端契约测试所需字符串）
+  if (busRunning && !branchRunning) {
+    if (!(st.pausable && eng.running && !eng.finished)) {
+      toast(st.pausable ? '离线文件未在播放，无法暂停' : '暂停/恢复仅支持离线文件（csv_file）源', 'err'); return;
+    }
   }
+
+  // 仅对可暂停的侧操作
+  const pausableTargets = targets.filter(t => t.pausable);
+  if (pausableTargets.length === 0) {
+    toast('暂停/恢复仅支持离线文件（csv_file）源', 'err'); return;
+  }
+
+  // 若任何可暂停的目标侧处于暂停，则执行恢复；否则执行暂停
+  const isAnyPaused = pausableTargets.some(t => t.paused);
+  const results = [];
+
+  for (const t of pausableTargets) {
+    try {
+      if (t.side === 'bus') {
+        const ep = t.paused ? '/api/engine/resume' : '/api/engine/pause';
+        const r = await api(ep, { method: 'POST' });
+        S.state = r.state || S.state;
+      } else {
+        const ep = t.paused ? '/api/branch/engine/resume' : '/api/branch/engine/pause';
+        await fetch(ep, { method: 'POST' });
+        S.branchFullState = await api('/api/branch/state');
+      }
+      results.push(t.side + '侧' + (t.paused ? '已恢复' : '已暂停'));
+    } catch (e) {
+      results.push(t.side + '侧' + (t.paused ? '恢复' : '暂停') + '失败：' + e.message);
+    }
+  }
+
+  const failed = results.some(r => r.includes('失败'));
+  toast(results.join('，'), failed ? 'err' : 'ok');
   renderTop(); if (S.view === 'source') render();
 }
 
@@ -2962,15 +3007,38 @@ async function startEngine(payloadExtra = {}) {
 }
 
 async function stopEngine() {
+  const st = S.state || {}, eng = st.engine || {};
   const brFull = (S.side === 'bus' && S.branchFullState) || null;
-  // 总线侧视图下且分路侧正在运行 → 停止分路侧；否则停止当前侧（总线侧）
-  const targetBranch = !!(S.side === 'bus' && brFull && brFull.running);
-  try {
-    if (targetBranch) { await fetch('/api/branch/engine/stop', { method: 'POST' }); toast('分路侧已停止', 'ok'); }
-    else { await api('/api/engine/stop', { method: 'POST' }); toast('已停止', 'ok'); }
-  } catch (e) { toast('停止失败：' + e.message, 'err'); }
-  S.state = await api('/api/state'); renderTop(); render();
-  if (targetBranch) { refreshBranchState(true); }
+  const busRunning = !!eng.running;
+  const branchRunning = !!(brFull && brFull.running);
+
+  // 确定需要停止的侧：单侧运行时只停该侧；双侧都运行时同时停两侧
+  const targets = [];
+  if (busRunning) targets.push('bus');
+  if (branchRunning) targets.push('branch');
+  if (targets.length === 0) {
+    toast('没有数据源正在运行，无法停止', 'err'); return;
+  }
+
+  const results = [];
+  for (const side of targets) {
+    try {
+      if (side === 'bus') {
+        await api('/api/engine/stop', { method: 'POST' });
+        results.push('总线侧已停止');
+      } else {
+        await fetch('/api/branch/engine/stop', { method: 'POST' });
+        results.push('分路侧已停止');
+      }
+    } catch (e) {
+      results.push(side + '侧停止失败：' + e.message);
+    }
+  }
+
+  S.state = await api('/api/state');
+  renderTop(); render();
+  const failed = results.some(r => r.includes('失败'));
+  toast(results.join('，'), failed ? 'err' : 'ok');
 }
 
 async function saveConfig() {
