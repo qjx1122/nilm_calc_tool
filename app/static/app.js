@@ -3954,13 +3954,94 @@ function renderProcess() {
   if (!PROCESS_SUBVIEW_LOADED.has(PROCESS_SUBVIEW)) {
     PROCESS_SUBVIEW_LOADED.add(PROCESS_SUBVIEW);
     switch (PROCESS_SUBVIEW) {
-      case 'rsample': rsListFiles(); rsPoll(); rsPreview(); break;
-      case 'nilm-tune': ntListFiles(); ntInitBase(); break;
-      case 'profile-extract': ntListFiles('np'); ntInitBase('np'); break;
-      case 'wave-preview': wpLoadDefaults(); wpListFiles(); renderWavePreview(); break;
-      case 'ct-estimate': break; // initCtEstimate() 已在 bindProcess() 绑定
+      case 'rsample': rsListFiles(); rsPoll(); rsPreview(); bindRSampleUI(); break;
+      case 'nilm-tune': ntListFiles(); ntInitBase(); bindNilmTuneUI(); break;
+      case 'profile-extract': ntListFiles('np'); ntInitBase('np'); bindProfileExtractUI(); break;
+      case 'wave-preview': wpLoadDefaults(); wpListFiles(); renderWavePreview(); bindWavePreview(); break;
+      case 'ct-estimate': ctListFiles(); ctFillDefaults(); initCtEstimate(); break;
       default: break;
     }
+  }
+}
+
+/* 各子界面事件绑定（仅在对应 subview 首次激活时调用） */
+function bindRSampleUI() {
+  $('#rs-files').addEventListener('change', () => { if ($('#rs-files').value) { $('#rs-path').value = $('#rs-files').value; rsPreview(); } });
+  ['rs-path', 'rs-fs'].forEach(id => $('#' + id).addEventListener('input', rsPreview));
+  $('#btn-rs-probe').addEventListener('click', rsProbe);
+  $('#btn-rs-run').addEventListener('click', rsRun);
+  $('#btn-rs-cancel').addEventListener('click', rsCancel);
+  $('#btn-rs-refresh').addEventListener('click', rsListFiles);
+  $('#btn-rs-use').addEventListener('click', rsUseAsSource);
+  $('#rs-errwin').addEventListener('change', rsSaveErrCfg);
+  $('#rs-err').addEventListener('change', rsSaveErrCfg);
+  cmBind('rs-cm');                                   // v0.86：离线文件列映射（重采样）
+}
+
+function bindNilmTuneUI() {
+  if ($('#nt-form')) {
+    $('#nt-files').addEventListener('change', () => { if ($('#nt-files').value) $('#nt-path').value = $('#nt-files').value; ntStep2Hint(); });
+    $('#nt-path').addEventListener('change', ntStep2Hint);
+    // v0.99.11：第 ① 步（设备侧估计最小关心负荷）
+    $('#nt-dev-files').addEventListener('change', () => { if ($('#nt-dev-files').value) $('#nt-dev-path').value = $('#nt-dev-files').value; ntStep2Hint(); });
+    $('#btn-nt-est-dev').addEventListener('click', ntEstimateFromDevice);
+    $('#btn-nt-run').addEventListener('click', ntRun);
+    // v0.72：独立基准配置
+    if ($('#nt-side')) $('#nt-side').addEventListener('change', () => ntSyncBaseUI('nt'));
+    if ($('#nt-custom')) { $('#nt-custom').addEventListener('change', () => ntSyncCustomTime('nt')); ntSyncCustomTime('nt'); }
+    cmBind('nt-cm', () => ntSaveBase('nt'));                     // v0.86：离线文件列映射（调参，随基准配置存浏览器本地）
+    ['nt-base-fs', 'nt-base-fnom', 'nt-base-pt', 'nt-base-ct', 'nt-base-ptct', 'nt-base-utc',
+     'nt-base-wiring', 'nt-base-recon3w', 'nt-base-inv', 'nt-base-inv-a', 'nt-base-inv-b', 'nt-base-inv-c'].forEach(id => { const el = $('#' + id); if (el) el.addEventListener('change', () => ntSaveBase('nt')); });
+    if ($('#btn-nt-base-default')) $('#btn-nt-base-default').addEventListener('click', async () => { try { await ntLoadBase('default'); toast('基准配置已恢复为出厂值', 'ok'); } catch (e) { toast(e.message, 'err'); } });
+    if ($('#btn-nt-base-bus')) $('#btn-nt-base-bus').addEventListener('click', async () => { try { await ntLoadBase('running', 'bus'); toast('已填入总线侧运行配置的值（可再修改，不影响总线侧）', 'ok'); } catch (e) { toast(e.message, 'err'); } });
+    if ($('#btn-nt-base-branch')) $('#btn-nt-base-branch').addEventListener('click', async () => { try { await ntLoadBase('running', 'branch'); toast('已填入分路侧运行配置的值（可再修改，不影响分路侧）', 'ok'); } catch (e) { toast(e.message, 'err'); } });
+    ntInitBase();
+    $('#btn-nt-refresh').addEventListener('click', () => ntListFiles('nt'));
+    $('#btn-nt-apply').addEventListener('click', ntApply);
+    $('#btn-nt-est-fill').addEventListener('click', () => {
+      if (!NT.est || NT.est.value === null) return;
+      const pk = $('#nt-est-pick') ? $('#nt-est-pick').value : 'min';
+      if (pk === 'manual') { (NT.est.unit === 'A' ? $('#nt-mina') : $('#nt-minw')).focus(); toast('请在「最小关心负荷」输入框手填', 'ok'); return; }
+      const raw = pk === 'primary' && NT.est.primary != null ? NT.est.primary : NT.est.value;
+      const v = +(+raw).toPrecision(4);
+      if (NT.est.unit === 'A') { $('#nt-mina').value = v; $('#nt-minw').value = ''; } else { $('#nt-minw').value = v; $('#nt-mina').value = ''; }
+      $('#nt-minauto').checked = false;
+      toast(`已填入最小关心负荷 ${v} ${NT.est.unit}，再点「量噪声并给出参数」按此值计算`, 'ok');
+    });
+    $('#btn-nt-copy').addEventListener('click', async () => {
+      if (!NT.command) return;
+      try { await navigator.clipboard.writeText(NT.command); toast('命令已复制', 'ok'); }
+      catch (e) { toast('复制失败：' + e.message, 'err'); }
+    });
+    ntListFiles();
+  }
+}
+
+function bindProfileExtractUI() {
+  if ($('#np-form')) {                                            // v0.90：设备画像提取
+    $('#btn-np-run').addEventListener('click', npRun);
+    // v0.99.5：画像提取独立公共配置（与调参 nt-* 同构，前缀 np-）
+    $('#np-files').addEventListener('change', () => { if ($('#np-files').value) $('#np-path').value = $('#np-files').value; });
+    if ($('#np-side')) $('#np-side').addEventListener('change', () => ntSyncBaseUI('np'));
+    if ($('#np-custom')) { $('#np-custom').addEventListener('change', () => ntSyncCustomTime('np')); ntSyncCustomTime('np'); }
+    cmBind('np-cm', () => ntSaveBase('np'));
+    ['np-base-fs', 'np-base-fnom', 'np-base-pt', 'np-base-ct', 'np-base-ptct', 'np-base-utc', 'np-base-wiring', 'np-base-recon3w', 'np-base-inv', 'np-base-inv-a', 'np-base-inv-b', 'np-base-inv-c'].forEach(id => { const el = document.getElementById(id); if (el) el.addEventListener('change', () => ntSaveBase('np')); });
+    if ($('#btn-np-base-default')) $('#btn-np-base-default').addEventListener('click', async () => { try { await ntLoadBase('default', 'bus', 'np'); toast('画像提取基准配置已恢复为出厂值', 'ok'); } catch (e) { toast(e.message, 'err'); } });
+    if ($('#btn-np-base-bus')) $('#btn-np-base-bus').addEventListener('click', async () => { try { await ntLoadBase('running', 'bus', 'np'); toast('已填入总线侧运行配置的值（可再修改，不影响总线侧）', 'ok'); } catch (e) { toast(e.message, 'err'); } });
+    if ($('#btn-np-base-branch')) $('#btn-np-base-branch').addEventListener('click', async () => { try { await ntLoadBase('running', 'branch', 'np'); toast('已填入分路侧运行配置的值（可再修改，不影响分路侧）', 'ok'); } catch (e) { toast(e.message, 'err'); } });
+    ntInitBase('np'); ntListFiles('np');
+    if ($('#btn-np-refresh')) $('#btn-np-refresh').addEventListener('click', () => ntListFiles('np'));
+    $('#btn-np-fill-bus').addEventListener('click', () => npFill('bus'));
+    $('#btn-np-fill-branch').addEventListener('click', () => npFill('branch'));
+    $('#btn-np-copy').addEventListener('click', () => { navigator.clipboard && navigator.clipboard.writeText($('#np-cmd').textContent || ''); toast('已复制', 'ok'); });
+    // v0.99.29：派生档位画像
+    if ($('#btn-np-stage')) $('#btn-np-stage').addEventListener('click', npStageRun);
+    if ($('#btn-np-stage-copy')) $('#btn-np-stage-copy').addEventListener('click', () => {
+      const t = $('#np-stage-pathstr').textContent || '';
+      if (!t) { toast('还没有派生画像', 'err'); return; }
+      if (navigator.clipboard) navigator.clipboard.writeText(t);
+      toast('已复制 ' + t.split(';').length + ' 个画像路径（到负荷辨识页「画像文件路径」粘贴）', 'ok');
+    });
   }
 }
 
