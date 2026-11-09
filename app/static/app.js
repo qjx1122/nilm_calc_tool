@@ -2702,11 +2702,7 @@ function render() {
       case 'windows': renderDual(renderWindows); break;
       case 'source': renderSource(); break;
       case 'export': renderDual(renderExport); break;
-      case 'process': renderProcess(); break;          // 仅保留估计 CT
-      case 'rsample': renderRSample(); break;          // 离线波形重采样
-      case 'nilm-tune': renderNilmTune(); break;       // 负荷辨识调参
-      case 'profile-extract': renderProfileExtract(); break;  // 设备画像提取
-      case 'wave-preview': renderWavePreviewView(); break; // 波形预览
+      case 'process': renderProcess(); break;          // 子界面：重采样/负荷辨识调参/设备画像提取/波形预览/估计 CT
       default: break;
     }
   } catch (e) {
@@ -3943,8 +3939,29 @@ function bindNilm(side) {
 
 const RS = { files: [], status: null, timer: null, loaded: false };
 
+// 数据处理页子界面状态：当前激活的子界面 + 懒加载标记集合
+let PROCESS_SUBVIEW = 'rsample';
+const PROCESS_SUBVIEW_LOADED = new Set();
+
 function renderProcess() {
-  // view-process 仅保留估计 CT；initCtEstimate() 已在 bindProcess() → initCtEstimate() 绑定
+  const vp = $('#view-process');
+  if (!vp) return;
+  const subviews = vp.querySelectorAll('.subview');
+  subviews.forEach(sv => {
+    sv.classList.toggle('active', sv.id === `view-process-${PROCESS_SUBVIEW}`);
+  });
+  // 懒加载：首次激活时初始化对应子界面
+  if (!PROCESS_SUBVIEW_LOADED.has(PROCESS_SUBVIEW)) {
+    PROCESS_SUBVIEW_LOADED.add(PROCESS_SUBVIEW);
+    switch (PROCESS_SUBVIEW) {
+      case 'rsample': rsListFiles(); rsPoll(); rsPreview(); break;
+      case 'nilm-tune': ntListFiles(); ntInitBase(); break;
+      case 'profile-extract': ntListFiles('np'); ntInitBase('np'); break;
+      case 'wave-preview': wpLoadDefaults(); wpListFiles(); renderWavePreview(); break;
+      case 'ct-estimate': break; // initCtEstimate() 已在 bindProcess() 绑定
+      default: break;
+    }
+  }
 }
 
 /* 离线波形重采样子界面渲染（仅在切换到 rsample 视图时调用） */
@@ -4967,8 +4984,22 @@ function npStageRender(d) {
 }
 
 function bindProcess() {
-  if (!$('#view-process')) return;
-  // 估计 CT 绑定（view-process 仅保留此功能）
+  const vp = $('#view-process');
+  if (!vp) return;
+  // 子导航条点击切换子界面
+  vp.querySelectorAll('.sub-navitem').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const sub = btn.dataset.subview;
+      if (!sub) return;
+      PROCESS_SUBVIEW = sub;
+      // 更新导航条 active 状态
+      vp.querySelectorAll('.sub-navitem').forEach(b => {
+        b.classList.toggle('active', b.dataset.subview === sub);
+      });
+      renderProcess();
+    });
+  });
+  // 估计 CT 绑定
   initCtEstimate();
 }
 
