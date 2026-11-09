@@ -654,3 +654,38 @@ input.flash{animation:ntflash 1.5s ease-out}
   .assistant-operator-label{min-width:0;flex-basis:100%}
   .assistant-operator-status{min-width:0;flex-basis:100%}
 }
+
+/* 数据处理页子界面导航条 */
+.sub-nav {
+  display: flex;
+  gap: 8px;
+  margin: 12px 0;
+  padding: 8px 0;
+  border-bottom: 1px solid #ddd;
+  overflow-x: auto;
+}
+.sub-navitem {
+  padding: 6px 14px;
+  font-size: 13px;
+  background: #f5f5f5;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.sub-navitem.active {
+  background: #0066cc;
+  color: #fff;
+  border-color: #0066cc;
+}
+.sub-navitem:hover:not(.active) {
+  background: #e8e8e8;
+}
+
+/* 子界面显示/隐藏 */
+.subview {
+  display: none;
+}
+.subview.active {
+  display: block;
+}
