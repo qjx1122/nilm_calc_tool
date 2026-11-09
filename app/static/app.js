@@ -4707,7 +4707,7 @@ function wpDrawRms(d) {
   const chans = Object.keys(d.channels || {});
   const hasU = chans.some(c => c[0] === 'U'), hasI = chans.some(c => c[0] === 'I');
   const span = d.t[d.t.length - 1] - t0;
-  drawLine(cv, chans.map(ch => ({ name: `${ch} RMS`, color: WP_COLORS[ch] || '#4ea1ff', data: d.t.map((x, i) => [x - t0, d.channels[ch][i]]) })),
+  drawLine(cv, chans.map(ch => ({ name: `${ch}`, color: WP_COLORS[ch] || '#4ea1ff', data: d.t.map((x, i) => [x - t0, d.channels[ch][i]]) })),
     { ylabel: hasU && hasI ? 'V / A' : hasU ? 'V' : 'A', fmtX: x => tsX(x + t0, span), fmtTip: x => fmtLocalInput(x + t0), tbase: t0, height: 260 });
   if (sub) sub.textContent = `（${d.n} 点 · ${d.agg_cycles > 1 ? '每 ' + d.agg_cycles + ' 个周波一点' : '逐周波'} · 共 ${d.cycles_total} 周波 · ${wpFmtT(t0)} → ${wpFmtT(d.t[d.t.length - 1])}，${fmtDur(span)}；右键曲线可「显示周波窗」）`;
   bindCtxMenu(cv, (xEpoch) => {
@@ -4788,7 +4788,7 @@ function wpDrawCycRms(d) {
   const t0 = d.t[0]; const chans = Object.keys(d.channels || {});
   const hasU = chans.some(c => c[0] === 'U'), hasI = chans.some(c => c[0] === 'I');
   const span = d.t[d.t.length - 1] - t0;
-  drawLine(cv, chans.map(ch => ({ name: `${ch} RMS`, color: WP_COLORS[ch] || '#4ea1ff', data: d.t.map((x, i) => [x - t0, d.channels[ch][i]]) })),
+  drawLine(cv, chans.map(ch => ({ name: `${ch}`, color: WP_COLORS[ch] || '#4ea1ff', data: d.t.map((x, i) => [x - t0, d.channels[ch][i]]) })),
     { ylabel: hasU && hasI ? 'V / A' : hasU ? 'V' : 'A', fmtX: x => ts(x + t0), fmtTip: x => fmtLocalInput(x + t0), tbase: t0, height: 240 });
   if (sub) sub.textContent = `（${d.n} 个周波的有效值 × ${chans.length} 通道 · 逐周波 · ${wpFmtT(t0)} → ${wpFmtT(d.t[d.t.length - 1])}，${span.toFixed(3)} s${d.cyc_center ? '，中心 ' + wpFmtT(d.cyc_center) + '，' + d.cyc_n + ' 个周波' : ''}）`;
   bindCtxMenu(cv, () => canvasNativeItems(cv).concat([{ key: 'sep', sep: true }, { key: 'zoom-reset', label: '复位缩放', onClick: () => zoomReset(cv) },
