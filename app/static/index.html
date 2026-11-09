@@ -79,11 +79,6 @@
     <button class="navitem" data-view="export" data-side="bus">💾 导出与日志</button>
     <button class="navitem" data-view="selftest">✅ 算法自检</button>
     <button class="navitem" data-view="process">🧮 数据处理</button>
-    <div class="navgroup navgroup-tools">数据处理子功能</div>
-    <button class="navitem" data-view="rsample">📊 离线波形重采样</button>
-    <button class="navitem" data-view="nilm-tune">🎛 负荷辨识调参</button>
-    <button class="navitem" data-view="profile-extract">🖼 设备画像提取</button>
-    <button class="navitem" data-view="wave-preview">📈 波形预览</button>
     <div class="navfoot" id="nav-foot">—</div>
   </nav>
 
@@ -951,7 +946,18 @@
       </div>
     </section>
 
-    <section id="view-rsample" class="view">
+    <section id="view-process" class="view">
+        <div class="sub-nav" id="sub-nav-process">
+      <button class="sub-navitem active" data-subview="rsample">📊 重采样</button>
+      <button class="sub-navitem" data-subview="nilm-tune">🎛 负荷辨识调参</button>
+      <button class="sub-navitem" data-subview="profile-extract">🖼 设备画像提取</button>
+      <button class="sub-navitem" data-subview="wave-preview">📈 波形预览</button>
+      <button class="sub-navitem" data-subview="ct-estimate">🔧 估计 CT</button>
+    </div>
+
+    <section id="view-process-rsample" class="subview">
+      <h2>数据处理 · 离线波形 CSV 重采样</h2>
+
       <h2>数据处理 · 离线波形 CSV 重采样</h2>
       <div class="grid2">
         <div class="panel">
@@ -1014,9 +1020,12 @@
           <details><summary>原始结果 JSON</summary><pre id="rs-json" class="pre"></pre></details>
         </div>
       </div>
+
     </section>
 
-    <section id="view-nilm-tune" class="view">
+    <section id="view-process-nilm-tune" class="subview">
+      <h2 style="margin-top:18px">数据处理 · 负荷辨识调参（量背景噪声 → 6 种算法参数）</h2>
+
       <div class="grid2">
         <div class="panel">
           <h3>调参参数（与 <code>tools/nilm_tune.py</code> 同一实现）</h3>
@@ -1147,9 +1156,12 @@
         </div>
       </div>
       <!-- v0.90：设备画像提取 -->
+
     </section>
 
-    <section id="view-profile-extract" class="view">
+    <section id="view-process-profile-extract" class="subview">
+      <h2 style="margin-top:18px">数据处理 · 设备画像提取（设备侧启停录波 → 设备画像 JSON → 总线侧「设备画像匹配」）</h2>
+
       <div class="grid2">
         <div class="panel">
           <h3>画像参数（与 <code>tools/nilm_profile.py</code> 同一实现）<span class="navhint">文件 / 时间段 / 自定义时间 / 基准配置 / 列映射均为本区独立配置（v0.99.5，与负荷辨识调参剥离）</span></h3>
@@ -1292,9 +1304,12 @@
         </div>
       </div>
       <!-- v0.61：波形预览 -->
+
     </section>
 
-    <section id="view-wave-preview" class="view">
+    <section id="view-process-wave-preview" class="subview">
+      <h2 style="margin-top:18px">数据处理 · 波形预览（离线波形 CSV：文件信息 / 原始波形 / 逐周波有效值）</h2>
+
       <div class="grid2">
         <div class="panel">
           <h3>波形文件与公共配置 <span class="navhint">下方：波形曲线配置 ‖ 波形曲线；有效值曲线配置 ‖ 逐周波 RMS 曲线；周波窗（有效值）‖ 周波窗 2（瞬时值）</span></h3>
@@ -1442,9 +1457,12 @@
         </div>
       </div>
       <!-- v0.96 / v0.97：估计 CT -->
+
     </section>
 
-    <section id="view-process" class="view">
+    <section id="view-process-ct-estimate" class="subview">
+      <h2 style="margin-top:18px">数据处理 · 估计 CT（同一次设备启停在两侧的电流台阶之比 → 估计未知一侧 CT 变比）</h2>
+
       <h2 style="margin-top:18px">数据处理 · 估计 CT（同一次设备启停在两侧的电流台阶之比 → 估计未知一侧 CT 变比）</h2>
       <div class="notes p">原理：同一台设备的一次启停在总线侧与分路侧造成的<b>一次侧</b>电流台阶相同：ΔI<sub>总线·二次</sub> × CT<sub>总线</sub> = ΔI<sub>分路·二次</sub> × CT<sub>分路</sub>。两侧分别指定文件、同一次动作的<b>事件类型</b>（启动 / 停机）与<b>事件时间段</b>（开始 / 结束时刻）、所用单相电流、接线方式与 CT 极性；事件前稳态＝开始时刻前 N 个周波有效值中位数、事件后稳态＝结束时刻后 N 个周波中位数（N＝计算周波数，默认 50）。PT/CT 变换在此强制关闭（直接量二次侧安培）；两侧各自可「启用离线文件列映射」（不勾选＝默认列序：时间, A相电压, A相电流, B相电压, B相电流, C相电压, C相电流）。粗估：其它负荷同时动作、两侧相别对应错、总线背景负荷与设备功率因数差异大时有偏差。</div>
       <div class="grid2">
@@ -1558,7 +1576,12 @@
           <div id="ct-result" class="tablewrap"></div>
         </div>
       </div>
+
     </section>
+    </section>
+
+
+
   </main>
 </div>
 
