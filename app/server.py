@@ -24,7 +24,6 @@ import re
 import threading
 import platform
 import queue
-import secrets
 import sys
 import time
 from collections import deque
@@ -856,6 +855,7 @@ def _side_summary(side: str) -> Dict[str, Any]:
         "data_duration_s": (float(getattr(st, "data_duration_s", 0) or 0) if st else 0.0),
         "side": side, "enabled": enabled, "hide_ui": hide_ui, "label": SIDE_LABELS[side], "config_path": br.cfg_path,
         "running": running, "paused": bool(running and br.pause_event.is_set()),
+        "pausable": bool(eng is not None and eng.cfg.source.kind == "csv_file"),
         "started_at": br.started_at, "finished_at": br.finished_at,
         "elapsed_s": (round((br.finished_at or time.time()) - br.started_at, 3) if br.started_at else None),
         "paused_total_s": round(br.paused_total_s + ((time.time() - br.paused_at) if br.paused_at else 0.0), 3),
@@ -1215,14 +1215,6 @@ def _start_branch_if_enabled(bus_cfg: AppConfig, pace_clock=None, br_cfg: Option
 
 @asynccontextmanager
 async def lifespan(_app: "FastAPI"):
-    assistant_file = os.path.abspath(str(getattr(sys.modules.get("app.assistant"), "__file__", "") or ""))
-    try:
-        assistant_build = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(os.path.getmtime(assistant_file)))
-    except OSError:
-        assistant_build = "unknown"
-    # Deployment troubleshooting: proves which code directory this process actually loaded.
-    log.info("服务启动 version=%s pid=%d assistant_module=%s modified=%s",
-             __version__, os.getpid(), assistant_file, assistant_build)
     await _startup()
     try:
         assistant_service.start_local_model_discovery()
@@ -1653,12 +1645,11 @@ async def _execute_assistant_tool(pending: Dict[str, Any]) -> Dict[str, Any]:
     """Execute exactly one registered tool via existing in-process business API handlers."""
     name, args = pending["name"], pending.get("args", {})
     side = pending["side"]
-    # 侧别以预览时存储的 pending["side"] 为准，不再与确认时的 current_side() 比较，
-    # 避免用户在总线侧UI发起分路侧操作、确认时因 current_side() 为 bus 而被误判。
+    if side != current_side():
+        raise AssistantError(409, "当前侧与确认预览不一致，请重新发起操作")
     if name == "get_runtime_status":
-        runner = RUNNERS[side]
-        state = runner.state()
-        cfg = runner.cfg
+        state = await get_state()
+        cfg = RUNNER.cfg
         engine = state.get("engine") if isinstance(state.get("engine"), dict) else {}
         history = state.get("history") if isinstance(state.get("history"), dict) else {}
         safe_engine = {key: engine.get(key) for key in ("samples_in", "blocks_in", "buffer_fill", "buffer_capacity",
@@ -1672,7 +1663,7 @@ async def _execute_assistant_tool(pending: Dict[str, Any]) -> Dict[str, Any]:
                 "engine": safe_engine, "history": history,
                 "error_present": bool(state.get("error") or engine.get("errors"))}
     if name == "get_runtime_settings":
-        cfg = RUNNERS[side].cfg
+        cfg = RUNNER.cfg
         from app.assistant_tools import EVENT_PARAMETER_KEYS
         events = {key: getattr(cfg.events, key) for key in EVENT_PARAMETER_KEYS}
         algorithms = {key: {"enabled": bool((cfg.nilm.algorithms.get(key) or {}).get("enabled", False))}
@@ -1755,28 +1746,22 @@ async def _execute_assistant_tool(pending: Dict[str, Any]) -> Dict[str, Any]:
         source = runner.cfg.source
         if source.kind in {"csv_file", "csv_tail"} and not str(source.path or "").strip():
             raise AssistantError(400, "当前侧文件数据源尚未配置路径")
-        result = await engine_start({}, side=side)
+        result = await engine_start({})
         _assistant_api_error(result)
-        side_label = {"bus": "总线侧", "branch": "分路侧"}.get(side, "当前侧")
-        return {"message": f"{side_label}数据源检测已启动", "side": side,
+        return {"message": "当前侧数据源检测已启动", "side": side,
                 "source_kind": result.get("config", {}).get("source", {}).get("kind", runner.cfg.source.kind)}
     if name == "pause_current_source":
-        result = await engine_pause(side=side)
+        result = await engine_pause()
         _assistant_api_error(result)
-        side_label = {"bus": "总线侧", "branch": "分路侧"}.get(side, "当前侧")
-        return {"message": f"{side_label}离线播放已暂停", "side": side, "paused": bool(result.get("paused"))}
+        return {"message": "当前侧离线播放已暂停", "side": side, "paused": bool(result.get("paused"))}
     if name == "resume_current_source":
-        result = await engine_resume(side=side)
+        result = await engine_resume()
         _assistant_api_error(result)
-        side_label = {"bus": "总线侧", "branch": "分路侧"}.get(side, "当前侧")
-        return {"message": f"{side_label}离线播放已恢复", "side": side, "paused": bool(result.get("paused"))}
+        return {"message": "当前侧离线播放已恢复", "side": side, "paused": bool(result.get("paused"))}
     if name == "stop_current_source":
-        result = await engine_stop(side=side)
+        result = await engine_stop()
         _assistant_api_error(result)
-        side_label = {"bus": "总线侧", "branch": "分路侧"}.get(side, "当前侧")
-        if side == "bus":
-            return {"message": f"{side_label}数据源已停止；{side_label}操作可能同时停止分路侧", "side": side}
-        return {"message": f"{side_label}数据源已停止", "side": side}
+        return {"message": "当前侧数据源已停止；总线侧操作可能同时停止分路侧", "side": side}
     if name == "select_recording_source":
         runner = RUNNERS[side]
         with runner.lock:
@@ -2133,34 +2118,28 @@ async def assistant_tool_confirm(payload: Dict[str, Any], request: Request) -> A
     token = request.headers.get("x-assistant-operator-token", "")
     try:
         pending = assistant_service.claim_tool_proposal(str(payload.get("proposal_id") or ""), token,
-                                                        str(payload.get("confirmation_code") or ""))
+                                                        current_side(), str(payload.get("confirmation_code") or ""))
     except AssistantError as exc:
         return JSONResponse(status_code=exc.status_code, content={"ok": False, "error": exc.message})
-    # 侧别以预览时存储的 pending["side"] 为准：在确认执行期间把侧别上下文绑定到预览侧别，
-    # 使 RUNNER / put_config / current_side() 操作的是预览时选定的侧别，而非确认请求路由所在的
-    # 调用方侧，避免跨侧确认把配置写入错侧。
-    _side_token = _SIDE.set(pending.get("side", "bus"))
     try:
-        try:
-            result = await _execute_assistant_tool(pending)
-            assistant_service.record_tool_result(pending, "success", result)
-            return {"ok": True, "result": result}
-        except AssistantError as exc:
-            assistant_service.record_tool_result(pending, "failed", {"message": exc.message})
-            return JSONResponse(status_code=exc.status_code, content={"ok": False, "error": exc.message})
-        except Exception:
-            log.exception("Assistant tool execution failed")
-            assistant_service.record_tool_result(pending, "failed", {"message": "unexpected"})
-            return JSONResponse(status_code=500, content={"ok": False, "error": "业务操作失败，请查看服务端日志"})
-    finally:
-        _SIDE.reset(_side_token)
+        result = await _execute_assistant_tool(pending)
+        assistant_service.record_tool_result(pending, "success", result)
+        return {"ok": True, "result": result}
+    except AssistantError as exc:
+        assistant_service.record_tool_result(pending, "failed", {"message": exc.message})
+        return JSONResponse(status_code=exc.status_code, content={"ok": False, "error": exc.message})
+    except Exception:
+        log.exception("Assistant tool execution failed")
+        assistant_service.record_tool_result(pending, "failed", {"message": "unexpected"})
+        return JSONResponse(status_code=500, content={"ok": False, "error": "业务操作失败，请查看服务端日志"})
 
 
 @app.post("/api/assistant/tools/cancel")
 async def assistant_tool_cancel(payload: Dict[str, Any], request: Request) -> Any:
     try:
         return assistant_service.cancel_tool_proposal(str(payload.get("proposal_id") or ""),
-                                                      request.headers.get("x-assistant-operator-token", ""))
+                                                      request.headers.get("x-assistant-operator-token", ""),
+                                                      current_side())
     except AssistantError as exc:
         return JSONResponse(status_code=exc.status_code, content={"ok": False, "error": exc.message})
 
@@ -2297,9 +2276,6 @@ async def assistant_chat(request: Request) -> Any:
     stream = payload.get("stream", True)
     if not isinstance(stream, bool):
         return JSONResponse(status_code=400, content={"ok": False, "error": "stream 必须是布尔值"})
-    trace_id = secrets.token_hex(8)
-    payload["_assistant_trace_id"] = trace_id
-    trace_headers = {"X-Assistant-Trace-ID": trace_id}
     client_id = request.client.host if request.client else "unknown"
     operator_token = request.headers.get("x-assistant-operator-token", "")
     operator = None
@@ -2313,14 +2289,7 @@ async def assistant_chat(request: Request) -> Any:
     try:
         assistant_service.acquire_request(operator["id"] if operator else client_id)
     except AssistantError as exc:
-        return JSONResponse(status_code=exc.status_code, content={"ok": False, "error": exc.message},
-                             headers=trace_headers)
-    backend_hint = str(payload.get("model_type") or "default").lower()
-    if backend_hint not in {"default", "builtin", "local", "cloud"}:
-        backend_hint = "invalid"
-    log.info("assistant_chat_received trace_id=%s backend=%s stream=%s image_count=%d",
-             trace_id, backend_hint, stream,
-             len(payload.get("images")) if isinstance(payload.get("images"), list) else 0)
+        return JSONResponse(status_code=exc.status_code, content={"ok": False, "error": exc.message})
     try:
         # Platform visibility rule: when branch-side data is hidden, support filenames
         # must not leak through the assistant's answer, retrieval context, or citations.
@@ -2339,14 +2308,11 @@ async def assistant_chat(request: Request) -> Any:
                                               side=current_side(), tool_context=context)
     except AssistantError as exc:
         assistant_service.release_request()
-        log.warning("assistant_chat_prepare_rejected trace_id=%s status=%d", trace_id, exc.status_code)
-        return JSONResponse(status_code=exc.status_code, content={"ok": False, "error": exc.message},
-                             headers=trace_headers)
+        return JSONResponse(status_code=exc.status_code, content={"ok": False, "error": exc.message})
     except Exception:
         assistant_service.release_request()
-        log.exception("Assistant request preparation failed trace_id=%s", trace_id)
-        return JSONResponse(status_code=500, content={"ok": False, "error": "无法准备问答请求，请检查服务端配置后重试"},
-                             headers=trace_headers)
+        log.exception("Assistant request preparation failed")
+        return JSONResponse(status_code=500, content={"ok": False, "error": "无法准备问答请求，请检查服务端配置后重试"})
 
     if stream:
         async def event_stream():
@@ -2374,8 +2340,7 @@ async def assistant_chat(request: Request) -> Any:
             finally:
                 cancel.set()
         return StreamingResponse(event_stream(), media_type="text/event-stream",
-                                 headers={"Cache-Control": "no-cache, no-transform", "X-Accel-Buffering": "no",
-                                          **trace_headers})
+                                 headers={"Cache-Control": "no-cache, no-transform", "X-Accel-Buffering": "no"})
 
     completion_started = threading.Event()
 
@@ -2390,31 +2355,22 @@ async def assistant_chat(request: Request) -> Any:
         completion = asyncio.create_task(asyncio.to_thread(complete_and_release))
     except Exception:
         assistant_service.release_request()
-        log.exception("Unable to schedule non-streaming assistant request trace_id=%s", trace_id)
-        return JSONResponse(status_code=503, content={"ok": False, "error": "当前无法启动模型请求，请稍后重试"},
-                             headers=trace_headers)
+        log.exception("Unable to schedule non-streaming assistant request")
+        return JSONResponse(status_code=503, content={"ok": False, "error": "当前无法启动模型请求，请稍后重试"})
     try:
         answer = await asyncio.shield(completion)
-        return JSONResponse(
-            status_code=200,
-            content={"ok": True, "answer": answer, "sources": plan["sources"],
-                     "proposal": plan.get("_tool_proposal"),
-                     "clarification": bool(plan.get("_tool_clarification"))},
-            headers=trace_headers,
-        )
+        return {"ok": True, "answer": answer, "sources": plan["sources"],
+                "proposal": plan.get("_tool_proposal")}
     except AssistantError as exc:
-        log.warning("assistant_chat_completion_rejected trace_id=%s status=%d", trace_id, exc.status_code)
-        return JSONResponse(status_code=exc.status_code, content={"ok": False, "error": exc.message},
-                             headers=trace_headers)
+        return JSONResponse(status_code=exc.status_code, content={"ok": False, "error": exc.message})
     except asyncio.CancelledError:
         # shield keeps the blocking urllib worker alive; it owns semaphore release on completion.
         raise
     except Exception:
         if not completion_started.is_set():
             assistant_service.release_request()
-        log.exception("Assistant completion failed unexpectedly trace_id=%s", trace_id)
-        return JSONResponse(status_code=500, content={"ok": False, "error": "模型请求发生未预期错误，请检查服务端日志"},
-                             headers=trace_headers)
+        log.exception("Assistant completion failed unexpectedly")
+        return JSONResponse(status_code=500, content={"ok": False, "error": "模型请求发生未预期错误，请检查服务端日志"})
 
 
 @app.get("/api/state")
@@ -2704,11 +2660,10 @@ def _branch_cfg_for_start(src_over: Optional[Dict[str, Any]]) -> AppConfig:
 
 
 @app.post("/api/engine/start")
-async def engine_start(payload: Optional[Dict[str, Any]] = None, side: Optional[str] = None) -> Any:
+async def engine_start(payload: Optional[Dict[str, Any]] = None) -> Any:
     payload = payload or {}
-    effective_side = side or current_side()
     try:
-        cfg = RUNNERS[effective_side].cfg
+        cfg = RUNNER.cfg
         data = cfg.to_dict()
         src_over = {k: v for k, v in payload.items() if k in _START_SRC_KEYS}
         if src_over:
@@ -2717,10 +2672,10 @@ async def engine_start(payload: Optional[Dict[str, Any]] = None, side: Optional[
         # 分路侧数据源字段——与总线侧 source 一样「按界面当前值启动、不写配置文件」。此前这些只从已保存配置读取：
         # 界面取消勾选「只播放公共时间段」但没点「保存分路侧配置」→ 启动仍按旧配置算公共时间段并报错。
         br_over_top = payload.get("branch") if isinstance(payload.get("branch"), dict) else None
-        if br_over_top and effective_side == "bus":
+        if br_over_top and current_side() == "bus":
             data.setdefault("branch", {}).update({k: v for k, v in br_over_top.items() if k in _START_BRANCH_KEYS})
         br_src_over = payload.get("branch_source") if isinstance(payload.get("branch_source"), dict) else None
-        br_src_over = {k: v for k, v in (br_src_over or {}).items() if k in _START_SRC_KEYS} if effective_side == "bus" else None
+        br_src_over = {k: v for k, v in (br_src_over or {}).items() if k in _START_SRC_KEYS} if current_side() == "bus" else None
         if payload.get("windows"):
             for k, v in payload["windows"].items():
                 if k in data["windows"]:
@@ -2734,11 +2689,11 @@ async def engine_start(payload: Optional[Dict[str, Any]] = None, side: Optional[
             cand = os.path.join(ROOT, cfg.source.path)
             if os.path.exists(cand):
                 cfg.source.path = cand
-        coupled = (effective_side == "bus" and payload.get("with_branch", True) and cfg.branch.enabled)
+        coupled = (current_side() == "bus" and payload.get("with_branch", True) and cfg.branch.enabled)
         cfg.source.play_end_time = ""          # 终点只由公共时间段自动给出，用户配置里不存在这个概念
         play_user: Optional[Tuple[str, str, str]] = None
         cw_note: Optional[str] = None
-        if effective_side == "bus":
+        if current_side() == "bus":
             COMMON_WINDOW.clear(); COMMON_WINDOW["enabled"] = False
         br_cfg = _branch_cfg_for_start(br_src_over) if coupled else None
         if coupled and cfg.branch.common_window:
@@ -2755,13 +2710,13 @@ async def engine_start(payload: Optional[Dict[str, Any]] = None, side: Optional[
         if play_user is None:
             play_user = _apply_play_window(cfg)                # 本侧自己的指定时间段播放（v0.17）
         clock = PaceClock(cfg.source.file_speed) if cfg.source.kind == "csv_file" else None
-        sr = RUNNERS[effective_side].start(cfg, duration_s=payload.get("duration_s"), pace_clock=clock, play_user=play_user)
-        out: Dict[str, Any] = {"ok": True, "side": effective_side, "config": RUNNERS[effective_side].cfg.to_dict(), "run_dir": sr.get("run_dir")}
+        sr = RUNNER.start(cfg, duration_s=payload.get("duration_s"), pace_clock=clock, play_user=play_user)
+        out: Dict[str, Any] = {"ok": True, "side": current_side(), "config": RUNNER.cfg.to_dict(), "run_dir": sr.get("run_dir")}
         if COMMON_WINDOW.get("enabled"):
             out["common_window"] = {k: v for k, v in COMMON_WINDOW.items() if k not in ("bus", "branch")}
         elif cw_note:
             out["common_window"] = {"enabled": False, "reason": cw_note}
-        if effective_side == "bus" and payload.get("with_branch", True):
+        if current_side() == "bus" and payload.get("with_branch", True):
             out["branch"] = _start_branch_if_enabled(cfg, pace_clock=clock, br_cfg=br_cfg)
         return out
     except ConfigError as exc:
@@ -2771,38 +2726,35 @@ async def engine_start(payload: Optional[Dict[str, Any]] = None, side: Optional[
 
 
 @app.post("/api/engine/pause")
-async def engine_pause(side: Optional[str] = None) -> Any:
+async def engine_pause() -> Any:
     """暂停离线文件播放：停止读文件与计算，数据时间原地不动；缓冲/历史/事件保留。非 csv_file 源或未运行 → 400。"""
-    effective_side = side or current_side()
-    r = RUNNERS[effective_side].pause()
+    r = RUNNER.pause()
     if not r["ok"]:
         return JSONResponse(status_code=400, content=r)
-    if effective_side == "bus":
+    if current_side() == "bus":
         r["branch"] = RUNNERS["branch"].pause()   # 联动；分路侧不可暂停（未运行/非文件源）只记结果
-    r["state"] = RUNNERS[effective_side].state()
+    r["state"] = RUNNER.state()
     return r
 
 
 @app.post("/api/engine/resume")
-async def engine_resume(side: Optional[str] = None) -> Any:
+async def engine_resume() -> Any:
     """从暂停处继续播放（接着上次读到的位置，不重读、不跳过）。"""
-    effective_side = side or current_side()
-    r = RUNNERS[effective_side].resume()
+    r = RUNNER.resume()
     if not r["ok"]:
         return JSONResponse(status_code=400, content=r)
-    if effective_side == "bus":
+    if current_side() == "bus":
         r["branch"] = RUNNERS["branch"].resume()
-    r["state"] = RUNNERS[effective_side].state()
+    r["state"] = RUNNER.state()
     return r
 
 
 @app.post("/api/engine/stop")
-async def engine_stop(side: Optional[str] = None) -> Dict[str, Any]:
-    effective_side = side or current_side()
-    RUNNERS[effective_side].stop()
-    if effective_side == "bus":
+async def engine_stop() -> Dict[str, Any]:
+    RUNNER.stop()
+    if current_side() == "bus":
         RUNNERS["branch"].stop()                  # 总线侧停止 → 分路侧一并停止（未运行时无副作用）
-    return {"ok": True, "state": RUNNERS[effective_side].state()}
+    return {"ok": True, "state": RUNNER.state()}
 
 
 @app.get("/api/events")

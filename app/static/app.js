@@ -55,6 +55,8 @@ const S = {
   formDirty: false, srcDirty: false, cfgDirty: false,
   // 趋势曲线元数据（/api/history 返回的 count_total/span_s/hours 等）与「保存曲线」勾选的本地镜像
   histMeta: {}, curveLocal: null, curvePending: false,
+  // 分路侧完整状态（由 /api/branch/state 获取，供总线侧视图下顶栏显示分路侧完整状态）
+  branchFullState: null,
   // 实时落盘 / 事件 / 负荷辨识的列表与脏标记按侧别放在 SD.bus / SD.branch（v0.24）
 };
 window.S = S;   // 自检脚本可读（tools/ui_r12_check.cjs 等）
@@ -805,6 +807,7 @@ function connectWS() {
       if (S.view === 'compare' && Date.now() - CMP.at > 3000) refreshCompare();
       if (S.view === 'overview') refreshOverviewBranch(false);
       if (DUAL_VIEWS.includes(S.view)) { const a = branchDualActive(); if (a !== BRD.lastActive) { BRD.lastActive = a; render(); refreshBranchDual(true); } }
+      if (m.type === 'state' && S.side === 'bus') fetchBranchFullState();   // 总线侧视图下同步获取分路侧完整状态
     }
     else if (m.type === 'result' || m.type === 'snapshot') { S.result = mergeResult(S.result, m.data); renderTop(); render(); }
     else if (m.type === 'error') { toast('服务端错误：' + m.message, 'err'); }
@@ -895,7 +898,16 @@ function tickElapsed() {
   const now = Date.now() / 1000 + ELAPSED.offset;
   [['bus', '#st-elapsed'], ['branch', '#st-br-elapsed']].forEach(([k, sel]) => {
     const el = $(sel); if (!el) return;
-    const e = ELAPSED[k];
+    let e;
+    if (k === 'bus') {
+      e = ELAPSED.bus;
+    } else if (k === 'branch' && S.side === 'bus' && S.branchFullState) {
+      // 总线侧视图下，用分路侧完整状态（含 started_at/finished_at/paused_total_s）
+      const bf = S.branchFullState;
+      e = { start: bf.started_at, end: bf.finished_at, paused: bf.paused_total_s || 0 };
+    } else {
+      e = ELAPSED.branch;
+    }
     if (!e) { el.textContent = '—'; el.title = ''; return; }
     const total = (e.end !== null ? e.end : now) - e.start;
     el.textContent = fmtElapsed(total) + (e.end !== null ? '（已结束）' : '');
@@ -913,13 +925,23 @@ function renderTop() {
     fs: cfg.sampling ? cfg.sampling.fs + ' Hz' : '—', ptct: cfg.transform ? `${cfg.transform.pt_ratio} / ${cfg.transform.ct_ratio}` : '—',
     samples: eng.samples_in !== undefined ? `${eng.samples_in} (${num(eng.data_duration_s, 1)}s)` : '—', error: st.error,
   };
+  // 分路侧优先用完整状态（/api/branch/state），仅在总线侧视图且未获取到完整状态时退回对侧轻量摘要
+  const brFull = (S.side === 'bus' && S.branchFullState) || null;
+  const brEng = (brFull && brFull.engine) || {};
+  const brCfg = (brFull && brFull.config) || {};
   const ps = peerSummary(st) || {};
   const peer = {
-    status: ps.error ? ['错误', 'pill err'] : (ps.side === 'branch' && !ps.enabled && !ps.running && !ps.finished) ? ['未启用', 'pill']
-          : ps.paused ? ['已暂停', 'pill warn'] : ps.running ? ['运行中', 'pill on'] : ps.finished ? ['已完成', 'pill off'] : ['未启动', 'pill'],
-    source: ps.source_kind || '—', time: ps.t_ref ? ts(ps.t_ref) : '—', freq: isNum(ps.f_used) ? num(ps.f_used, 3) + ' Hz' : '—',
-    fs: isNum(ps.fs) ? ps.fs + ' Hz' : '—', ptct: isNum(ps.pt_ratio) ? `${ps.pt_ratio} / ${ps.ct_ratio}` : '—',
-    samples: ps.samples_in !== undefined ? `${ps.samples_in} (${num(ps.data_duration_s, 1)}s)` : '—', error: ps.error,
+    status: brFull ? (brFull.error ? ['错误', 'pill err'] : brFull.paused ? ['已暂停', 'pill warn'] : brFull.running ? ['运行中', 'pill on'] : brFull.finished ? ['已完成', 'pill off'] : ['未启动', 'pill'])
+             : (ps.error ? ['错误', 'pill err'] : (ps.side === 'branch' && !ps.enabled && !ps.running && !ps.finished) ? ['未启用', 'pill']
+               : ps.paused ? ['已暂停', 'pill warn'] : ps.running ? ['运行中', 'pill on'] : ps.finished ? ['已完成', 'pill off'] : ['未启动', 'pill']),
+    source: brFull ? ((brCfg.source && brCfg.source.kind) || '—') : (ps.source_kind || '—'),
+    time: brFull ? (isNum(brFull.latest_t_ref) ? ts(brFull.latest_t_ref) : '—') : (ps.t_ref ? ts(ps.t_ref) : '—'),
+    freq: '—',
+    fs: brFull ? (brCfg.sampling ? brCfg.sampling.fs + ' Hz' : '—') : (isNum(ps.fs) ? ps.fs + ' Hz' : '—'),
+    ptct: brFull ? (brCfg.transform ? `${brCfg.transform.pt_ratio} / ${brCfg.transform.ct_ratio}` : '—') : (isNum(ps.pt_ratio) ? `${ps.pt_ratio} / ${ps.ct_ratio}` : '—'),
+    samples: brFull ? (brEng.samples_in !== undefined ? `${brEng.samples_in} (${num(brEng.data_duration_s, 1)}s)` : '—') : (ps.samples_in !== undefined ? `${ps.samples_in} (${num(ps.data_duration_s, 1)}s)` : '—'),
+    error: brFull ? brFull.error : ps.error,
+    pausable: brFull ? brFull.pausable : false,
   };
   const bus = S.side === 'bus' ? cur : peer, br = S.side === 'bus' ? peer : cur;
   const fill = (pre, d) => {
@@ -953,6 +975,17 @@ function renderTop() {
 
 /* 对侧摘要：总线侧 state 带 branch，分路侧 state 带 bus */
 function peerSummary(st) { return S.side === 'bus' ? (st && st.branch) : (st && st.bus); }
+
+/* 获取分路侧完整状态（/api/branch/state），供总线侧视图下顶栏显示分路侧完整状态。
+   分路侧视图下不需要（S.state 本身就是分路侧完整状态）。 */
+async function fetchBranchFullState() {
+  if (S.side !== 'bus') return;
+  try {
+    S.branchFullState = await api('/api/branch/state');
+  } catch (e) {
+    S.branchFullState = null;
+  }
+}
 
 /* 两侧徽标都实时刷新：当前侧用 engine 计数，对侧用摘要里的计数（随每秒 state 推送更新） */
 function renderBadges(st) {
@@ -1002,6 +1035,7 @@ function startStateWatch() {
       const fresh = await api('/api/state');
       const was = !!(st.running || eng.running), now = !!(fresh.running || (fresh.engine || {}).running);
       S.state = fresh;
+      if (S.side === 'bus') await fetchBranchFullState();
       if (was !== now || !!st.paused !== !!fresh.paused || !!st.finished !== !!fresh.finished || !!st.pausable !== !!fresh.pausable) {
         renderTop(); if (S.view === 'source' || S.view === 'export') render();
         if (was && !now && fresh.finished) toast('离线文件播放完毕', 'ok');
