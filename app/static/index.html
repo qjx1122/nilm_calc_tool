@@ -956,9 +956,7 @@
     </div>
 
     <section id="view-process-rsample" class="subview active">
-      <h2>数据处理 · 离线波形 CSV 重采样</h2>
-
-      <h2>数据处理 · 离线波形 CSV 重采样</h2>
+      <h2>离线波形 CSV 重采样</h2>
       <div class="grid2">
         <div class="panel">
           <h3>重采样参数</h3>
@@ -1024,7 +1022,7 @@
     </section>
 
     <section id="view-process-nilm-tune" class="subview">
-      <h2 style="margin-top:18px">数据处理 · 负荷辨识调参（量背景噪声 → 6 种算法参数）</h2>
+      <h2 style="margin-top:18px">负荷辨识调参</h2>
 
       <div class="grid2">
         <div class="panel">
@@ -1160,7 +1158,7 @@
     </section>
 
     <section id="view-process-profile-extract" class="subview">
-      <h2 style="margin-top:18px">数据处理 · 设备画像提取（设备侧启停录波 → 设备画像 JSON → 总线侧「设备画像匹配」）</h2>
+      <h2 style="margin-top:18px">设备画像提取</h2>
 
       <div class="grid2">
         <div class="panel">
@@ -1308,7 +1306,7 @@
     </section>
 
     <section id="view-process-wave-preview" class="subview">
-      <h2 style="margin-top:18px">数据处理 · 波形预览（离线波形 CSV：文件信息 / 原始波形 / 逐周波有效值）</h2>
+      <h2 style="margin-top:18px">波形预览</h2>
 
       <div class="grid2">
         <div class="panel">
@@ -1461,9 +1459,7 @@
     </section>
 
     <section id="view-process-ct-estimate" class="subview">
-      <h2 style="margin-top:18px">数据处理 · 估计 CT（同一次设备启停在两侧的电流台阶之比 → 估计未知一侧 CT 变比）</h2>
-
-      <h2 style="margin-top:18px">数据处理 · 估计 CT（同一次设备启停在两侧的电流台阶之比 → 估计未知一侧 CT 变比）</h2>
+      <h2 style="margin-top:18px">估计 CT</h2>
       <div class="notes p">原理：同一台设备的一次启停在总线侧与分路侧造成的<b>一次侧</b>电流台阶相同：ΔI<sub>总线·二次</sub> × CT<sub>总线</sub> = ΔI<sub>分路·二次</sub> × CT<sub>分路</sub>。两侧分别指定文件、同一次动作的<b>事件类型</b>（启动 / 停机）与<b>事件时间段</b>（开始 / 结束时刻）、所用单相电流、接线方式与 CT 极性；事件前稳态＝开始时刻前 N 个周波有效值中位数、事件后稳态＝结束时刻后 N 个周波中位数（N＝计算周波数，默认 50）。PT/CT 变换在此强制关闭（直接量二次侧安培）；两侧各自可「启用离线文件列映射」（不勾选＝默认列序：时间, A相电压, A相电流, B相电压, B相电流, C相电压, C相电流）。粗估：其它负荷同时动作、两侧相别对应错、总线背景负荷与设备功率因数差异大时有偏差。</div>
       <div class="grid2">
         <div class="panel col-bus">
