@@ -40,6 +40,7 @@
 | T-017 | 2026-11-06 | 为“播放离线数据源”误识别增加后台路由诊断日志 | 用户专题（实现＋验证） | A（沙盒自验证） | ✅日志、trace 头、脱敏约束与回归完成；现场日志待用户提供 | 否（产品可观测性 / 部署诊断，不是算法结论） |
 | T-018 | 2026-11-06 | 离线数据源启动意图回归语料（正/负/易混淆/复合/状态） | 用户专题（实现＋验证） | A（沙盒自验证） | ✅回归语料建立并通过完整回归；未连接真实 provider | 否（产品工具路由回归，不是算法结论） |
 | T-014b | 2026-11-06 | 智能问答基于大模型技术的意图识别技术设计文档（落盘） | 用户专题（设计文档） | A（代码对照） | ✅文档已落盘；现场未验。该条目标题自编为「T-014」，与 2026-11-05 的 T-014 重号，本索引记作 T-014b | 否（产品设计文档，不是算法结论） |
+| T-019 | 2026-11-10 | 旧文件覆盖新提交的事故复盘、`app/server.py` 恢复与台账补录 | 验证专题（事故复盘＋恢复） | A（沙盒自验证） | ✅`app/server.py`、`tests/test_server.py` 已恢复，台账已补录；🔶`app/assistant.py` 的澄清返回与路由诊断日志未恢复（待办） | 是（第 5 节教训，v0.12） |
 
 > **2026-11-10 补录说明**：T-013～T-018 六行原已入库（最后完整版本见提交 `ca5dc28`），在提交 `c5cf96f`（2026-11-06）中被旧文件覆盖而丢失，现按原文补回；T-014～T-017 的正文同样丢失，已原文补录在文末「[2026-11-10] 补录」一节，T-018 当时只有索引行与会话纪要、没有专题正文。T-014b 是为现存「[2026-11-06] T-014 …设计文档（落盘）」条目加的区分编号。经过见 T-019。
 
@@ -4352,3 +4353,80 @@ md 文件已落盘；内容与 NILM 系统实际代码一致（46 个受控工�
 - **安全边界 / 未验**：未新增任何可执行入口、任意日志读取接口或远程诊断端点；日志只写服务端标准输出。没有重启用户服务、没有读取或输出令牌；`tmp/` 未读取、修改、清理、暂存或提交。真实部署日志与真实 provider 工具选择仍待用户现场回传（只回传日志行与 trace ID，不要回传令牌）。
 - **Git 交付状态**：未暂存、commit 或 push；沿用当前 checkout 跟踪基线不完整的既有约束，避免全量暂存。
 - **相关文件 / 分支**：`app/assistant.py`、`app/server.py`、`tests/test_assistant.py`、`tests/test_server.py`、`docs/智能问答助手说明.md`、`STATUS.md`、本报告；`arena/82e34fb8-nilm-calc-tool`。
+
+## [2026-11-10] 专题 T-019：旧文件覆盖新提交的事故复盘、`app/server.py` 恢复与台账补录
+
+- **类型 / 模式**：验证专题（事故复盘＋恢复）；模式 A（沙盒自执行），角色为工程实现工程师。分支 `arena/51b63974-nilm-calc-tool`，基线 `e05542a`（远端 `restore2remote`）。没有连接真实模型、真实浏览器和用户部署环境。
+- **目标与假设**：开局基线全量 pytest 有 1 个失败。最初假设是某次改动只做了一半；查 git 历史后否定——出错的代码在 2026-11-06 是完整的，11-09 被一份旧文件盖掉了。目标因此改为：查清覆盖范围；恢复用户 2026-11-10 批准的部分（`app/server.py`、`tests/test_server.py` 丢失的断言、丢失的台账条目）；其余只登记待办。
+- **方法 / 数据 / 参数**：
+  - **历史来源**：本地检出是浅克隆，用 `git fetch --no-tags --depth=60 origin restore_branch_full_history` 取回 60 个提交（`75cac52` 2026-11-04 15:33 ～ `22d8d9c` 2026-11-10 09:05）。更早的历史没有取回，也没有检查。本节时间均为 UTC。
+  - **覆盖扫描**：对这 60 个提交里每个被修改的文件（排除 `node_modules/`、`tmp/`），计算提交后内容与父提交版本的差异行数，以及与更早各版本的差异行数；后者更小就列为疑似「写回旧内容」，再逐个看 diff 判断。
+  - **恢复手法**：`git merge-file` 三方合并，ours 取覆盖前最后一个好版本，base 取被写回的旧版本，theirs 取当前版本。这样既还原丢失的修改，又保住覆盖提交里夹带的新改动。
+  - **验证**：全量与定向 pytest；真实 `cli.py serve` 进程上的 HTTP 冒烟（旧文件与恢复后各一次）；负对照（新测试文件配旧 `app/server.py`）；按提交回放两份助手 / 服务端测试；jsdom 界面检查；四份生成手册一致性检查。
+- **用户执行命令（含实录路径）**：本节无用户命令。全部命令在沙盒执行，输出摘录见下文，没有单独的实录文件。
+- **结果 / 结论**：
+  1. **失败现象**。`e05542a` 上全量 pytest 为 1 failed / 638 passed / 1 skipped。失败用例是 `tests/test_server.py::test_assistant_proposal_confirm_is_branch_scoped_and_reauthorized`：`app/server.py:2120` 调用 `AssistantService.claim_tool_proposal()` 时多传了一个侧别参数（`current_side()`），抛 `TypeError: … takes from 3 to 4 positional arguments but 5 were given`。这次调用是「确认执行」处理函数取出令牌头之后的第一步，`TypeError` 又不在它捕获的异常之内，所以在 `e05542a` 上，助手操作提案的两个确认接口（`POST /api/assistant/tools/confirm`、`POST /api/branch/assistant/tools/confirm`）每次调用都返回 HTTP 500，助手提出的操作无法确认执行。
+  2. **根因**。提交 `2c51d2f`（11-09 08:49，标题「前端：分路侧顶栏显示完整状态」）里的 `app/server.py` 与 `7a88bd3`（11-05 01:40）时点的版本只差 1 行：`git diff --numstat 7a88bd3 2c51d2f -- app/server.py` 输出 `1 0`，多出的是 `_side_summary` 里的 `"pausable"` 字段。相对它的父提交 `05b7ba8` 则是 +60 / −108。也就是说，11-05 16:49 ～ 11-06 08:50 之间 8 个提交对该文件的修改被整体退回：`b3d1cc5`（T-015～T-017 的服务端部分：`clarification` 返回字段、`X-Assistant-Trace-ID` 响应头、启动日志），以及 `bc4e329`、`5be8837`、`5b490c6`、`568083f`、`c01a5d6`、`6aff7c0`、`24f2d09`（跨侧操作的侧别绑定修复）。`app/assistant.py` 没有被这个提交改动，仍是新签名，两边对不上。
+  3. **覆盖范围**。扫描加人工确认，共 3 个提交、8 个文件。三个提交的 `Co-authored-by` 都是 `arena-agent`，即都出自 Agent 会话。按差异行数，被写回的内容最接近 11-05 凌晨的版本（`b6accec` 01:33 ～ `7a88bd3` 01:40），再加上各会话自己的改动；`app/server.py` 一项只差 1 行。
+
+     | 提交 | 时间 | 提交标题 | 被覆盖的文件（相对父提交的增 / 删行数） | 丢失的内容 |
+     | --- | --- | --- | --- | --- |
+     | `c5cf96f` | 11-06 02:30 | T-018: 修复停止/暂停/恢复离线数据源的确定性路由 | `REPORT_TEST.md`（+1 / −90）、会话纪要（+0 / −59）、`STATUS.md`（+5 / −25）、`app/assistant.py`（+176 / −224）、`tests/test_assistant.py`（+124 / −213）、`docs/智能问答助手说明.md`（+11 / −17） | 专题 T-014～T-017 正文与 6 行索引；5 条会话纪要；`STATUS.md` 的 T-015～T-018 条目；`app/assistant.py` 的澄清返回与路由诊断日志；5 个测试用例；说明书 §6.8、§6.9 |
+     | `e31e0d9` | 11-06 03:50 | feat: 上传 app/static cli.py configs elec_tool package.json requirements.txt tests tools 最新版本 | `tests/test_server.py`（+0 / −53） | 澄清用例 1 个；另一个用例里 JSON / SSE 两处 `X-Assistant-Trace-ID` 断言 |
+     | `2c51d2f` | 11-09 08:49 | 前端：分路侧顶栏显示完整状态 | `app/server.py`（+60 / −108） | 见第 2 点 |
+
+     扫描还列出 `cd2c1f5`、`e7a39fd`、`88b9a08` 三个提交，看 diff 后判断是有意改写，不属于覆盖。
+  4. **测试为什么没拦住**。把相关提交的 `app/`、`tests/` 等目录导出到临时目录，各跑一次 `pytest tests/test_server.py tests/test_assistant.py`：
+
+     | 提交 | 结果 | 说明 |
+     | --- | --- | --- |
+     | `ca5dc28`（第一次覆盖之前） | 71 passed | — |
+     | `c5cf96f`（第一次覆盖） | 1 failed / 66 passed | 失败的是 `tests/test_server.py` 的澄清用例：`app/assistant.py` 已退回，澄清行为没有了 |
+     | `e31e0d9`（第二次覆盖） | 66 passed | 上面那个失败用例被旧版 `tests/test_server.py` 盖掉，测试恢复全绿，回归从此不可见 |
+     | `05b7ba8`（第三次覆盖之前） | 70 passed | — |
+     | `2c51d2f`（第三次覆盖） | 1 failed / 69 passed | 失败的是第 1 点的确认用例 |
+
+     第三次覆盖造成的失败一直留到 `e05542a`（其后又有 13 个提交；中间提交没有逐个回放，两端都失败），到本次开局跑全量测试才发现。
+  5. **成因只能推断**。T-013 的记录写明当时的检出 `HEAD` 是 `27b28ea`（只跟踪 `BOOTSTRAP.md`、`ROLE.md`），源码全部是未跟踪文件；`e31e0d9` 的标题是整目录「上传最新版本」。推断：这几次会话的工作目录里有一批文件停留在旧状态，提交时整份盖到了更新的远端历史上。`REPORT.md` 第 5 节 2026-10-10 一条给出的恢复手法（`git fetch` + `git reset --mixed <远端tip>` 后重新提交）在工作树比远端旧的时候恰好会产生这种结果。git 历史只能证明「提交的内容等于旧版本加该会话自己的改动」，证明不了旧文件的来历。
+  6. **本次恢复的内容**（立项登记另有提交 `5f815cb`，只改 `STATUS.md`）。
+     - `0af3a01`：`app/server.py`。`git merge-file -p`（ours＝`05b7ba8` 版，base＝`7a88bd3` 版，theirs＝`e05542a` 版）退出码 0、无冲突；结果等于 `05b7ba8` 版加 `pausable` 一行。这一行是 `2c51d2f` 的有效新增（前端读取 `brFull.pausable`），予以保留。
+     - `5f91b5d`：`tests/test_server.py` 放回被删的 53 行，即 `test_assistant_explicit_source_start_routes_to_bound_proposal_without_model` 里的两处 `X-Assistant-Trace-ID` 断言，和用例 `test_assistant_chat_returns_clarification_for_mismatched_model_tool_in_json_and_sse`。后者在当前代码上不通过（见第 8 点），按用户决定本任务不修，所以加 `xfail(strict=True)` 放回：它不计为失败；修复后它会因「意外通过」而报错，提醒删掉标记。
+     - `164b852`：台账补录。`REPORT_TEST.md` 的 6 行索引与 T-014～T-017 正文、5 条会话纪要、`STATUS.md` 的 T-015～T-018 条目，均按 `ca5dc28` 版本逐字追加，没有改动现存行。逐行比对结果：现存行 0 删除，`ca5dc28` 的非空行 0 缺失。
+     - 本专题所在的收尾提交：`REPORT.md` v0.12（第 5 节新增 1 条教训），以及随之重新生成的 `docs/软件设计文档.md`（该手册内嵌整份 `REPORT.md`）。
+  7. **验证（命令 / 输出 / 判读）**。
+
+     | 步骤 | 命令 | 输出 | 判读 |
+     | --- | --- | --- | --- |
+     | 基线 | `.venv/bin/python -m pytest -o addopts='' tests -q -p no:cacheprovider`（`e05542a`） | 1 failed / 638 passed / 1 skipped（188 s） | 失败即第 1 点的确认用例 |
+     | 旧文件冒烟 | 用旧 `app/server.py` 起 `cli.py serve --host 127.0.0.1`，再 `curl -X POST http://127.0.0.1:<端口>/api/assistant/tools/confirm -H 'Content-Type: application/json' -H 'X-Assistant-Operator-Token: not-a-real-token' -d '{"proposal_id":"does-not-exist","confirmation_code":""}'`，分路侧路径同样一次 | 两个确认接口均 HTTP 500 `Internal Server Error`，服务日志 2 行 `TypeError`；`POST /api/assistant/chat`（内置模型）200，但没有 `X-Assistant-Trace-ID` 头 | 故障在真实进程上复现，而且发生在令牌校验之前 |
+     | 恢复后冒烟 | 同上，在仓库当前代码上 | 两个确认接口均 HTTP 403 `{"ok":false,"error":"操作员令牌无效或已撤销"}`，服务日志 0 行 `TypeError`；问答接口 200，带 `x-assistant-trace-id: e3e0455fae4e15e6`，返回字段多出 `clarification` | 接口回到正常的鉴权拒绝。本步只走到令牌校验；有效令牌下的确认执行由 pytest 用例覆盖，没有在真实进程上做 |
+     | 负对照 | 新 `tests/test_server.py` 配旧 `app/server.py`：`pytest tests/test_server.py` | 2 failed / 36 passed / 1 xfailed | 放回的 trace 断言（`assert 0 == 16`）和确认用例都在旧文件上失败，说明放回的断言确实在检查被恢复的行为 |
+     | 定向 | `pytest tests/test_server.py` | 38 passed / 1 xfailed | — |
+     | 全量 | `.venv/bin/python -m pytest -o addopts='' tests -q -p no:cacheprovider -rxXs` | 639 passed / 1 skipped / 1 xfailed / 1 warning（190.90 s） | 无失败。skipped 是既有的 60 Hz 用例，xfailed 是上面的澄清用例，warning 是既有的 Starlette / httpx 弃用提示。运行时的代码即提交 `5f91b5d`，其后的提交只改 Markdown 文件；收尾提交前重跑一次，结果相同（192.13 s） |
+     | 界面 | `node tools/ui_assistant_check.cjs` | `PASS 192 checks` | 需要先补齐 `node_modules/` 缺的 10 个文件，见遗留问题 |
+     | 手册 | `.venv/bin/python tools/generate_assistant_docs.py --check` | 四份均 `OK` | — |
+     | 自检 | `.venv/bin/python cli.py selftest` | 44 项通过 44 | 计算核心不受影响 |
+     | `tmp/` | 对 `tmp/` 全部文件的 sha256 再求 sha256，开局与结束比对 | 一致 | 没有改动 `tmp/` |
+
+  8. **没有恢复、现在仍然存在的问题**（均出自 `c5cf96f` 对 `app/assistant.py` 的覆盖；按用户决定本任务不修）。
+     - **模型选错工具时不返回澄清**。按上面 xfail 用例的场景实测（在用例副本里加打印，`--runxfail` 运行）：用户输入「切换接线模式到3p4w」，模型却调用 `get_runtime_status` 并回答「操作已经完成。」。当前代码拦下了这次工具调用，没有生成操作提案（`proposal` 为 `null`，待确认队列为空），但 JSON 返回 `{"ok": true, "answer": "操作已经完成。", "sources": [], "proposal": null, "clarification": false}`，SSE 只有 `sources`、`delta`（文本同上）、`done` 三帧。用户看到的是模型未经核实的「操作已经完成」，而实际什么都没执行。`ca5dc28` 版本此时返回 `clarification: true` 和「我暂未创建操作预览。…」。非流式下若模型没有附带文字，则返回 HTTP 502「模型返回了空回答，请重试」。
+     - **代码位置**：`app/assistant.py` 的 `complete()` 在校验不通过时把澄清文字写进 `plan["_clarification_response"]`，但没有改本次的返回值，函数接着返回模型原文；`stream()` 同样，并且文字在校验前已经逐段发出。`app/server.py:2403` 读取的是 `plan["_tool_clarification"]`，`app/assistant.py` 里已经没有任何地方给它赋值。
+     - **T-017 路由诊断日志只剩服务端一半**。`app/server.py` 恢复后，`X-Assistant-Trace-ID` 响应头、`assistant_chat_received` 等请求日志和启动日志都在；`app/assistant.py` 里 T-017 列出的 7 种事件（`assistant_route_decision`、`assistant_route_diagnostic`、`assistant_tool_candidate`、`assistant_tool_decision`、`assistant_model_result`、`assistant_route_blocked`、`assistant_model_request`）出现次数为 0，服务端传入的 `payload["_assistant_trace_id"]` 没有代码读取。
+     - **`tests/test_assistant.py` 少 5 个用例**。把 `ca5dc28` 版的这份测试放到当前代码上跑，27 passed / 5 failed。丢失的 5 个里，`test_finite_intent_contracts_cover_all_46_tools_and_examples`、`test_server_intent_gate_clarifies_ambiguity_missing_and_wrong_slots` 现在能通过；`test_model_tool_calls_are_gated_and_stream_text_is_buffered_until_validation` 失败在 `assert '暂未创建操作预览' in '操作已经完成。'`；`test_offline_source_playback_diagnostics_log_route_and_rejected_tool_without_values` 失败在 `KeyError: '_trace_id'`；`test_offline_source_playback_regression_corpus` 的全部语句断言都通过，只在最后一行 `plan["_tool_call_origin"]`（`KeyError`）失败，即 T-018 的启动语料行为还在，只是这个内部字段没有了。另外 2 个失败来自两边都有的用例（`test_tool_catalog_validation_and_closed_scope_proposal`、`test_explicit_source_start_bypasses_model_selection_but_keeps_confirmation`），从报错看是 11-06 后续提交有意改了 `claim_tool_proposal` 签名和侧别文案，不属于丢失。
+     - **不能直接从旧版本合并**。对 `app/assistant.py` 做同样的三方合并会产生 13 个冲突块（486 行），`tests/test_assistant.py` 5 个冲突块（285 行），因为 11-06 的意图识别改造重写了同一片代码。澄清行为需要在当前代码上重新实现。
+     - **文档与前端**。`docs/智能问答助手说明.md` 的 §6.8、§6.9 描述的正是上面缺失的澄清与诊断行为，所以没有放回，等代码修复后一起恢复。T-015 提到的前端澄清标记（`app/static/app.js`、`style.css`）和 README §3.6 / §11 的相应文字在取回的历史里从未提交过，无法从 git 恢复。
+  9. **台账缺口**。`afd21dd`（11-06 03:53）之后到 `e05542a` 共 37 个提交没有任何台账记录。下面的索引依据提交标题和改动文件整理，功能没有逐项复核，也没有对应的专题报告；完整列表见 `git log --reverse afd21dd..e05542a`。
+     - **11-06，23 个（`c74f6c1` ～ `05b7ba8`），智能问答助手**。意图识别按设计文档 V2.0 改造：`c74f6c1`、`af802fb`、`8ad80fc`、`cd2c1f5`、`7d93fc2`、`9ef75bd`（`recognize_intent` 接入 `prepare_chat` 并对全部 46 个受控工具生效）。跨侧操作的侧别绑定：`928899d`、`bc4e329`、`5be8837`、`5b490c6`、`568083f`、`226ab56`、`c01a5d6`、`06b2baa`、`6aff7c0`、`24f2d09`。`get_runtime_status` 无输出：`03b97ea`、`e592aef`。意图契约外置到 `configs/intent_actions.csv`：`3d81987`、`8de1e35`。录波文件查询与模型路径语义核验：`8f50318`、`e7a39fd`、`05b7ba8`。改动文件：`app/assistant.py`、`app/assistant_intents.py`、`app/assistant_tools.py`、`app/server.py`、`configs/intent_actions.csv`、`.gitignore`、两份助手测试。
+     - **11-09，13 个（`2c51d2f` ～ `e9bf4e7`），前端**。顶栏双侧状态与暂停 / 停止按钮：`2c51d2f`、`511b93c`、`2d82768`、`4e2c84c`。数据处理页 5 个功能模块改为内部子界面：`2681e6e`、`88b9a08`、`678f6c8`、`1810165`、`b02e35c`、`a43edf0`、`97954b5`。波形预览曲线标题：`f7f9806`、`e9bf4e7`。改动文件：`app/static/app.js`、`index.html`、`style.css`，以及 `2c51d2f` 里的 `app/server.py`。
+     - **11-10，1 个**：`e05542a`，只改了 `tmp/` 下 22 个文件。
+- **是否进入 REPORT.md（稳定结论）**：是。第 5 节新增 1 条工程教训（v0.12）。
+- **遗留问题**：
+  1. 第 8 点各项：修复澄清返回、恢复 T-017 诊断日志、补回 5 个用例、恢复说明书 §6.8 / §6.9、补前端澄清标记。修复后删除 `tests/test_server.py` 里的 `xfail` 标记。
+  2. 远端 `restore_branch_full_history`（`22d8d9c`）比本分支基线多 3 个提交（`bbf7fca`、`63a2378`、`22d8d9c`，波形分析子界面，只改 `app/static/`）。按用户决定本任务没有合入。
+  3. `README.md` 第 15、72 行让用户克隆 `arena/82e34fb8-nilm-calc-tool`，该分支现在指向 `27b28ea`，只有 `BOOTSTRAP.md` 和 `ROLE.md`，没有代码。哪条分支是正式分支需要用户确定，README 本任务未改。
+  4. `README.md` 仍标 v0.99.48（2026-11-04）。11-06 新增的 `configs/intent_actions.csv` 在 README、助手说明书、意图识别设计文档里都没有提到；11-09 的界面改动是否已写入文档没有核对。
+  5. 入库的 `node_modules/` 缺 10 个文件：`.gitignore` 第 10 行的 `data/` 没有限定在根目录，把 `node_modules/**/data/` 也忽略了。干净克隆下 `node tools/ui_assistant_check.cjs` 报 `Cannot find module '../data/patch.json'`。本次的做法是在仓库外执行 `npm ci`，再把这 10 个文件拷进来（它们被忽略，不会入库）。
+  6. 全量 pytest 会在当前目录留下 `data/`、`output/` 两个目录（都被 `.gitignore` 忽略）。本次每次运行后已删除。
+  7. `elec_tool.__version__` 是 `0.1.0`，README 写 v0.99.48，两处版本号不一致。
+  8. 用户 2026-10-31 报告的「设备画像提取提示 HTTP 500」（`POST /api/process/nilm_profile`）仍未结，`STATUS.md` 记录的状态是等服务端 traceback；本次未处理。
+  9. 真实模型（Qwen / 云端）、真实浏览器、Windows 部署环境均未验证。

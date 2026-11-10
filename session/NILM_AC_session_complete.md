@@ -1122,3 +1122,29 @@
 - 证据边界：沙盒验证来自当前代码＋pytest，不代表用户现场 provider 行为；未获得用户部署日志，故仍未确认现场根因。需用户重启实际服务后回传日志行与 trace ID（不要回传任何令牌或请求头凭证）。
 - 交付：T-018 写入 `REPORT_TEST.md` 并更新索引；`STATUS.md`、`docs/智能问答助手说明.md` §6.7 已同步。未暂存、commit 或 push；沿用 checkout 跟踪基线不完整的既有约束。
 - 相关文件 / 分支：`app/assistant.py`、`tests/test_assistant.py`、`docs/智能问答助手说明.md`、`STATUS.md`、`REPORT_TEST.md` T-018、本纪要；`arena/82e34fb8-nilm-calc-tool`。
+
+## [2026-11-10] 会话纪要：恢复被旧文件覆盖的 `app/server.py` 并补录丢失台账
+
+- 目标：按 `BOOTSTRAP.md` 开局并按规则工作。开局基线全量 pytest 有 1 个失败，查明是旧文件覆盖新提交所致；用户确认范围后，恢复 `app/server.py`、放回 `tests/test_server.py` 丢失的断言、补录丢失的台账条目。
+- 本会话角色：资深电力算法专家（`ROLE.md` 默认）；任务级覆盖为工程实现工程师；模式 A（沙盒自执行）。
+- 完成项：
+  1. 开局仪式：读 `BOOTSTRAP.md`、`ROLE.md`、`STATUS.md`、本文件与 `REPORT_TEST.md` 末尾；重建 `.venv`；基线 `cli.py selftest` 44/44，全量 pytest 1 failed / 638 passed / 1 skipped。
+  2. 根因与范围：`c5cf96f`、`e31e0d9`、`2c51d2f` 三个提交用旧文件覆盖了 8 个文件；其中 `2c51d2f` 把 `app/server.py` 退回旧版本，导致助手两个「确认执行」接口每次调用都返回 HTTP 500。明细见 `REPORT_TEST.md` T-019。
+  3. 恢复代码：`app/server.py`（`0af3a01`，三方合并，保留 `pausable` 一行）；`tests/test_server.py`（`5f91b5d`，放回 trace 断言与澄清用例，后者标 strict xfail）。
+  4. 补录台账（`164b852`）：`REPORT_TEST.md` T-014～T-017 正文与 6 行索引、本文件 5 条纪要、`STATUS.md` 的 T-015～T-018 条目，均按 `ca5dc28` 原文追加。
+  5. `REPORT.md` v0.12：第 5 节新增 1 条教训；重新生成 `docs/软件设计文档.md`。
+  6. 验证：全量 pytest 639 passed / 1 skipped / 1 xfailed；真实服务进程冒烟，确认接口由 500 变为 403（无效令牌的正常拒绝）；负对照 2 failed；jsdom 192 checks；四份手册 `--check` 均 OK；`tmp/` 校验和不变。
+- 关键决策：
+  - 用户决定：只恢复 `app/server.py` 与台账，`app/assistant.py` 的澄清回归只登记待办；留在 `e05542a` 基线，不合入 `restore_branch_full_history` 多出的 3 个提交。
+  - 恢复用三方合并而不是整份回退，保住覆盖提交里有效的 `pausable` 一行。
+  - 丢失的澄清用例以 `xfail(strict=True)` 放回：缺陷留在测试报告里可见，修复后会提醒删标记。
+  - 补录内容逐字追加，不改现存条目；重号的现存「T-014 …设计文档（落盘）」在索引里记作 T-014b。
+  - 说明书 §6.8 / §6.9 暂不放回，因为它们描述的行为当前代码没有。
+  - `README.md` 不改：本次没有触发项；克隆命令指向无代码分支的问题留给用户定。
+- 未决问题：
+  1. `app/assistant.py`：模型选错工具时不返回澄清，界面会显示模型原话（例如「操作已经完成。」，实际未执行）；T-017 路由诊断日志缺失；`tests/test_assistant.py` 少 5 个用例；说明书 §6.8 / §6.9；前端澄清标记。
+  2. 哪条分支是正式分支：README 的克隆命令现在指向没有代码的 `arena/82e34fb8-nilm-calc-tool`。
+  3. `restore_branch_full_history` 多出的 3 个提交是否合入。
+  4. `afd21dd` 之后的 37 个提交没有台账记录，T-019 里只有按提交标题整理的索引；README 仍标 v0.99.48，`configs/intent_actions.csv` 没有文档。
+  5. 入库的 `node_modules/` 缺 10 个被忽略的文件；真实模型、真实浏览器、Windows 环境未验证。
+- 相关文件/分支：`app/server.py`、`tests/test_server.py`、`REPORT_TEST.md`（T-019 与补录）、`REPORT.md`、`docs/软件设计文档.md`、`STATUS.md`、本文件；分支 `arena/51b63974-nilm-calc-tool`（基线 `e05542a`）。

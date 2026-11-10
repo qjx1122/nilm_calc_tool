@@ -1,8 +1,8 @@
 # STATUS.md
 
 > 续接文件（BOOTSTRAP.md v2.2 台账）。每次收尾必更新；只改本文件，不另建同类文件。
-> 最后更新：2026-11-10（任务立项：恢复被旧工作副本覆盖的 `app/server.py`、放回 `tests/test_server.py` 丢失的断言、补录 2026-11-05～11-06 丢失的台账条目；活动分支 `arena/51b63974-nilm-calc-tool`，基线 `e05542a`；`tmp/` 保持原样）
-> 本次任务（2026-11-10）：开局基线全量 pytest 为 1 failed / 638 passed / 1 skipped；失败根因是提交 `2c51d2f` 把 `app/server.py` 写回了 2026-11-05 的内容，助手「确认执行」接口每次调用都抛 `TypeError`。经用户批准，本任务恢复该文件、放回丢失的测试断言并补录丢失台账；`app/assistant.py` 的澄清回归只登记待办。
+> 最后更新：2026-11-10（旧文件覆盖事故已处理：`app/server.py` 已恢复、`tests/test_server.py` 丢失的断言已放回、2026-11-05～11-06 丢失的台账已补录；全量 pytest 639 passed / 1 skipped / 1 xfailed；`app/assistant.py` 的澄清回归没有修，登记在「下一步」；活动分支 `arena/51b63974-nilm-calc-tool`，基线 `e05542a`；`tmp/` 保持原样）
+> 本次任务（2026-11-10）：开局基线全量 pytest 为 1 failed / 638 passed / 1 skipped；失败根因是提交 `2c51d2f` 把 `app/server.py` 写回了 2026-11-05 的内容，助手「确认执行」接口每次调用都抛 `TypeError`。经用户批准，本任务恢复该文件、放回丢失的测试断言并补录丢失台账；`app/assistant.py` 的澄清回归只登记待办。经过与验证见 `REPORT_TEST.md` T-019。
 > 前次更新：2026-11-05（智能问答“播放/启动数据源”六种说法确定性路由到当前数据源启动提案；全量 pytest 635 passed / 1 skipped / 1 warning；真实模型调用未做；活动分支 active；严格排除 `tmp/`）
 > 前次任务（2026-11-05）：审查六条用户报告后，确认原确定性入口只覆盖精确工具标题和少数固定别名，其余自然语言落入模型 `tool_choice=auto`；增加局部规范化的启动短句 grammar、强化速度工具提示、当前侧配置错误的操作指引，以及 6 条短语的单元/API 回归。未调用真实 Qwen，不能声称复现 provider 实际输出。`tmp/` 未触碰。
 > 前次运行任务（2026-11-04）：先核验未有 Python/8000 监听进程，修复缺失的 `.venv` 依赖并在 `0.0.0.0:8000` 恢复预览；首页、JS、CSS、`/api/state` 均 HTTP 200，WebSocket `/ws` 握手收到 `hello`。启动时用 `ELEC_TOOL_AUTOLOAD_LAST=0`，未自动加载历史运行数据；未读取 / 修改 `tmp/`。
@@ -23,13 +23,17 @@
   - 说明：更早任务用户显式指定过模式 B（仅对「补齐台账骨架」生效）；历史任务若用户跳过模式澄清，曾按上述混合模式执行；每个新任务仍以当前任务登记的角色与模式为准。第 5 轮（界面下拉框检查）沙盒侧＝jsdom 驱动真实页面打真实服务端 + REST 空值语义实录，**已✅实录**；用户侧＝浏览器手点 U 组 7 步，**🔶待回报**。**第 6 轮（四功能）**沙盒侧＝pytest 25 项 + jsdom 30 项 + REST/CLI 实录，**已✅实录**；用户侧＝浏览器手点 U6 组 8 步，**🔶待回报**。**第 7 轮（三功能）**沙盒侧＝pytest 18 项 + jsdom 39 项 + CLI/源层实录，**已✅实录**；用户侧＝U7 组 8 步，**🔶待回报**。**第 9 轮（间谐波/直流/事件）**沙盒侧＝pytest 13 项 + jsdom 28 项 + live preview 实跑，**已✅实录**；用户侧＝U9 组 6 步，**🔶待回报**。**第 10 轮（离线列映射开关）**沙盒侧＝pytest 8 项 + jsdom 15 项 + REST 实录，**已✅实录**；用户侧＝U10 组 6 步，**🔶待回报**。**第 11 轮（时标 UTC 开关）**沙盒侧＝pytest 6 项 + 双时区全量 + jsdom 11 项，**已✅实录**；用户侧＝U11 组 5 步，**🔶待回报**。**第 12 轮（负荷辨识）**沙盒侧＝pytest 8 项 + jsdom 16 项 + 引擎/CSV 实录，**已✅实录**；用户侧＝U12 组 5 步，**🔶待回报**
 
 ## 当前目标
-- **本任务（2026-11-10：恢复被旧工作副本覆盖的 `app/server.py` 并补录丢失台账）**：
+- **本任务（2026-11-10：恢复被旧工作副本覆盖的 `app/server.py` 并补录丢失台账）已完成**：
   - **角色 / 模式**：工程实现工程师；模式 A；固定活动分支 `arena/51b63974-nilm-calc-tool`（取自 `restore2remote` 的 `e05542a`；用户确认留在该基线，不合入 `restore_branch_full_history` 多出的 3 个提交）；`tmp/` 保持原样。
   - **起因（开局基线）**：`cli.py selftest` 44/44；全量 pytest **1 failed / 638 passed / 1 skipped**。失败用例 `tests/test_server.py::test_assistant_proposal_confirm_is_branch_scoped_and_reauthorized`：`app/server.py:2120` 以 5 个位置参数调用 `AssistantService.claim_tool_proposal()`（现签名最多 4 个）→ `TypeError`，`POST /api/assistant/tools/confirm` 每次调用都会抛出该异常。
   - **根因**：提交 `2c51d2f`（2026-11-09 08:49 UTC）把 `app/server.py` 写回了 `7a88bd3`（2026-11-05 01:40 UTC）时点的内容，只多一行 `pausable`；2026-11-06 八个提交（`b3d1cc5`、`bc4e329`、`5be8837`、`5b490c6`、`568083f`、`c01a5d6`、`6aff7c0`、`24f2d09`）对该文件的修改全部丢失。同类覆盖还有 `c5cf96f`（6 个文件）与 `e31e0d9`（`tests/test_server.py`），明细见 `REPORT_TEST.md` T-019。
   - **用户批准范围（2026-11-10）**：① `app/server.py` 恢复为 `05b7ba8` 版本并保留 `pausable` 一行；② 放回 `tests/test_server.py` 丢失的断言；③ 把丢失的专题与会话纪要按「补录」追加回台账；④ `app/assistant.py`「模型选错工具时不返回澄清」的回归只登记待办。
   - **不在范围**：不改 `app/assistant.py`、`tests/test_assistant.py`、`docs/智能问答助手说明.md`、`README.md` 的功能说明、`node_modules/`、`.gitignore`；不合并其他分支。
   - **验收**：全量 pytest 无失败；`tools/generate_assistant_docs.py --check` 与 `node tools/ui_assistant_check.cjs` 通过；改动已提交并推送，`git status` 干净。
+  - **实施**：`app/server.py` 用三方合并恢复（`0af3a01`；结果＝`05b7ba8` 版加 `pausable` 一行）；`tests/test_server.py` 放回被删的 53 行（`5f91b5d`；其中澄清用例标 `xfail(strict=True)`）；`REPORT_TEST.md` T-014～T-017 正文与 6 行索引、5 条会话纪要、本文件 T-015～T-018 条目按 `ca5dc28` 原文补录（`164b852`）；`REPORT.md` v0.12 第 5 节新增 1 条教训，并重新生成 `docs/软件设计文档.md`。
+  - **验证**：全量 pytest **639 passed / 1 skipped / 1 xfailed / 1 warning**（190.90 s）；真实 `cli.py serve` 进程冒烟，两个确认接口由 HTTP 500 变为 403（无效令牌的正常拒绝），问答接口重新带 `X-Assistant-Trace-ID` 头；负对照（新测试配旧 `app/server.py`）2 failed；`node tools/ui_assistant_check.cjs` **192 checks**；四份生成手册 `--check` 均 `OK`；`cli.py selftest` 44/44；`tmp/` 校验和前后一致。命令与输出见 `REPORT_TEST.md` T-019 第 7 点。
+  - **未验 / 缺口**：冒烟只走到令牌校验，有效令牌下的确认执行由 pytest 用例覆盖，没有在真实进程上做；真实模型、真实浏览器、Windows 部署环境未验证。`app/assistant.py` 的丢失内容没有恢复：模型选错工具时不返回澄清（界面会显示模型原话）、T-017 路由诊断日志缺失、`tests/test_assistant.py` 少 5 个用例、说明书 §6.8 / §6.9 未放回，见「下一步」第一条。
+  - **交付**：5 个提交（`5f815cb`、`0af3a01`、`5f91b5d`、`164b852` 与收尾提交）已推送到 `origin/arena/51b63974-nilm-calc-tool`；`README.md` 无触发项，未改。
 - **上一任务（2026-11-06：智能问答基于大模型技术的意图识别技术设计文档落盘）**：
   - **位置说明**：本条原被追加在文件末尾（「关键文件路径」之后），2026-11-10 移入本节，以下内容未改。
   - **角色 / 模式**：工程实现工程师；模式 A；固定活动分支 `arena/82e34fb8-nilm-calc-tool`（active）；严格排除 `tmp/`。
@@ -413,6 +417,7 @@
 - 范围边界：~~本 session 不写业务代码~~ ❌**已失效**（该边界属上一任务；本任务即为写代码）；仍然遵守：不新建台账外散文件、不把数据/产物入库
 
 ## 已完成
+- **2026-11-10（旧文件覆盖事故：恢复 `app/server.py`、放回丢失断言、补录台账；`REPORT_TEST.md` T-019）**：开局全量 pytest 1 failed，查明 `c5cf96f`、`e31e0d9`、`2c51d2f` 三个提交用旧文件覆盖了 8 个文件。按用户批准的范围恢复 `app/server.py`（助手确认接口不再 HTTP 500）、放回 `tests/test_server.py` 的 trace 断言与澄清用例（后者 strict xfail）、按原文补录 4 篇专题 / 6 行索引 / 5 条会话纪要 / 本文件 4 条任务条目；`REPORT.md` v0.12 新增教训。全量 pytest 639 passed / 1 skipped / 1 xfailed；jsdom 192 checks；四份手册一致。`app/assistant.py` 的澄清回归按用户决定未修。
 - **第 207 轮（2026-11-04，智能问答逐会话后端 / 模型选择、本地模型配置精简与 46 项受控工具矩阵）**：保留 composer 底部 local / cloud / builtin 后端选择并按会话隔离；local 候选由服务端发现缓存提供，cloud 仅列管理员配置，builtin 隐藏模型选择；管理员设置不再保存 local 模型名称，模型刷新只接受空请求或 `{}` 并使用已保存服务地址。登记 46 项业务工具，逐项比对目录 / dispatcher / UI 标签 / scope，文档列全矩阵与未开放操作边界；26 项高风险保留二次确认。新增目录 / dispatcher / UI 契约测试及隐藏来源模式下录波 / 画像列表和加载结果脱敏回归；单通道 RMS 分析要求明确通道。定向助手 / UI / 服务端 **84 passed / 1 warning**（12.43 s）；全量 **629 passed / 1 skipped / 1 warning**（167.63 s）；`node tools/ui_assistant_check.cjs` **188 checks**；四份生成手册 `--check` 通过。真实浏览器 / 键盘 / 触屏和真实模型 provider 未验；`tmp/` 未读未改、未纳入。
 - **第 204 轮（2026-11-04，智能问答助手会话管理栏收起 v0.99.45）**：桌面标题栏新增“收起会话 / 显示会话”，隐藏左栏时 CSS 切为单列并让问答区占满，恢复后回到双栏；同一按钮用于窄屏覆盖式会话抽屉，窄屏打开助手时默认折叠。文本、title、aria-label 与 aria-expanded 动态同步；不持久化折叠偏好。`tests/test_assistant.py tests/test_web_ui.py` **46 passed**；`node tools/ui_assistant_check.cjs` **150 checks**，覆盖桌面默认展开、收起、恢复与窄屏默认折叠、展开、再折叠；四份生成手册 `--check`、JS / Python 语法及 `git diff --check` 通过。目标浏览器视觉 / 键盘验收仍待用户；`tmp/` 未读未改。
 - **第 203 轮（2026-11-04，智能问答多界面滚动问题代码复审）**：检查 `.assistant-shell`、`.assistant-conversation-list`、`.assistant-messages`、设置 wrapper、文档目录 / 正文、图片预览、审计列表与 Markdown / proposal / audit 代码块的 overflow、尺寸约束和 wheel 路由。未发现代码层明确无法滚动 / 父子滚动断链；发现部分内层列表 / 消息 / 文档区仅用 `scrollbar-width:thin` + 透明轨道，其他小区域依赖浏览器默认 scrollbar，所以 OS overlay 策略下闲置时视觉指示可能消失，但并非内容不可滚。`tests/test_web_ui.py` **23 passed**；`node tools/ui_assistant_check.cjs` **142 checks**；JS / harness 语法通过。未安装 / 找到 Chromium、Firefox、Playwright 或 Puppeteer；真实 scrollbar 视觉、窄屏和原生 wheel 未验，待用户目标浏览器复验。源码未改；`tmp/` 未读未改。
@@ -609,6 +614,11 @@
 - 等用户执行 T-002 的 W/R/P 组（Windows 部署 / 真实数据对账 / 生产常驻）并回报实录
 
 ## 下一步（TODO）
+- **修复 `app/assistant.py` 的澄清回归（2026-11-10 登记，用户决定另行安排；详情见 `REPORT_TEST.md` T-019 第 8 点）**：现象——模型选的工具与用户意图不符时，工具调用被拦下、不生成提案，但接口把模型原话当作回答返回（例：用户说「切换接线模式到3p4w」，模型调 `get_runtime_status` 并回答「操作已经完成。」，界面显示「操作已经完成。」而实际未执行），`clarification` 恒为 `false`，SSE 没有 `clarification` 帧。位置——`complete()` / `stream()` 把澄清文字写进 `plan["_clarification_response"]` 后没有返回它；`app/server.py:2403` 读取的 `plan["_tool_clarification"]` 无人赋值；流式文字在校验前已发出。不能从 `ca5dc28` 直接合并（`app/assistant.py` 13 个冲突块），需在当前代码上重新实现。完成标准——① 删除 `tests/test_server.py` 中 `test_assistant_chat_returns_clarification_for_mismatched_model_tool_in_json_and_sse` 的 `xfail` 标记后该用例通过；② 从 `ca5dc28:tests/test_assistant.py` 补回 5 个用例（其中 2 个现在即可通过，3 个需随修复调整）；③ 恢复 T-017 的 7 种路由诊断日志并接上 `payload["_assistant_trace_id"]`；④ 从 `ca5dc28:docs/智能问答助手说明.md` 放回 §6.8 / §6.9 并重新生成手册；⑤ 前端澄清状态标记（从未入库，需重做）。
+- **待用户决定：哪条分支是正式分支（2026-11-10）**：`README.md` 第 15、72 行让用户克隆 `arena/82e34fb8-nilm-calc-tool`，该分支与 `main` 现在都指向 `27b28ea`，只有 `BOOTSTRAP.md`、`ROLE.md`，没有代码。有代码的分支是 `restore2remote`（`e05542a`）、`restore_branch_full_history`（`22d8d9c`）和本任务分支。用户定下后改 README 的克隆命令并重新生成手册。
+- **待用户决定：是否合入 `restore_branch_full_history` 多出的 3 个提交（2026-11-10）**：`bbf7fca`、`63a2378`、`22d8d9c`（波形分析子界面，只改 `app/static/`）。本任务按用户决定没有合入，也没有测试过它们。
+- **给 2026-11-06～11-09 的 37 个无台账提交补记录与文档（2026-11-10 登记）**：`REPORT_TEST.md` T-019 第 9 点只有按提交标题整理的索引，功能没有复核。`README.md` 仍标 v0.99.48（2026-11-04）；`configs/intent_actions.csv`（11-06 新增的意图契约配置）在 README、助手说明书、意图识别设计文档里都没有提到；11-09 的界面改动是否已写入文档没有核对。
+- **环境与仓库卫生（2026-11-10 登记，均未处理）**：① 入库的 `node_modules/` 缺 10 个文件——`.gitignore` 第 10 行 `data/` 没有限定在根目录，把 `node_modules/**/data/` 也忽略了；干净克隆下 `node tools/ui_assistant_check.cjs` 报 `Cannot find module '../data/patch.json'`，临时做法是在仓库外 `npm ci` 后把这 10 个文件拷进来；② 全量 pytest 会在当前目录留下 `data/`、`output/`；③ `elec_tool.__version__` 是 `0.1.0`，README 写 v0.99.48。
 - **第 207 轮现场验收（待用户）**：在目标浏览器检查 composer 后端 / 具体模型下拉、切换后独立会话、保留旧会话路由、desktop / narrow-screen 排版与原生键盘 / 触屏行为；有真实本地服务时检查候选发现及管理员刷新后实际聊天，有云端 provider 时按部署方策略单独验收。请仅回报不含令牌 / API Key 的浏览器、OS、视口、步骤与现象。pytest / jsdom 不替代现场验收。
 - **第 204 轮目标浏览器复验（待用户）**：在桌面点击标题栏“收起会话”，确认左栏消失且问答区铺满，再点击“显示会话”确认双栏恢复；用键盘 Tab / Enter 检查开关与屏幕阅读器状态；窄屏确认默认折叠、抽屉可以打开 / 关闭且不遮住操作。若宽度或状态有问题，回报浏览器 / OS / 视口尺寸及步骤后继续修正。
 - **第 203 轮目标浏览器复验（待用户）**：在目标浏览器分别检查会话列表 / 长对话 / 长文档与参数 / 审计记录 / 短视口及窄屏；确认 overflow 时 scrollbar 外观、鼠标 / 触控滚动、嵌套区到边界后父区接管、设置后续内容可达与关闭入口保持可见。若 scrollbar 闲置自动隐藏，先滚动 / 聚焦确认内容仍可达；记录浏览器、OS、视口尺寸和复现步骤后再决定是否需针对性修复。静态契约 / jsdom 不能代替现场验收。
@@ -640,6 +650,14 @@
 10. **T-004 遗留**：自定义播放时间目前只对 `csv_file` 生效（`csv_tail` 若现场文件也是 0/00/00 写法需扩展）；趋势历史随「重新启动数据源」清空，跨运行/跨进程的 24 h 需落盘（SQLite/滚动 CSV）；`history_hours`/`history_max_points` 未上界面；曲线横轴跨午夜不显示日期；自定义起始时间按本地时区（若现场要 UTC 需加 `tz` 字段）
 
 ## 决策记录 / 踩坑
+- 2026-11-10｜**踩坑（旧文件覆盖新提交，测试两次都没拦住）**：`c5cf96f`、`e31e0d9`、`2c51d2f` 把停留在 2026-11-05 时点的旧文件整份提交，盖掉了 8 个文件里更新的内容；第一次覆盖造成的失败用例被第二次覆盖删掉，第三次覆盖造成的失败带着走了 13 个提交。对策写在 `REPORT.md` 第 5 节 2026-11-10 一条：提交前逐文件看 `git diff --stat`；台账或测试出现成片删除先查清；开局和提交前都跑全量测试。经过见 `REPORT_TEST.md` T-019。
+- 2026-11-10｜**决策（恢复用三方合并，不整份回退）**：`git merge-file`，ours＝覆盖前最后一个好版本、base＝被写回的旧版本、theirs＝当前版本。`app/server.py` 这样恢复后无冲突，并保住了覆盖提交 `2c51d2f` 里有效的 `pausable` 一行。同一手法对 `app/assistant.py` 不适用（13 个冲突块），因为之后的提交重写了同一片代码。
+- 2026-11-10｜**决策（已知缺陷用 strict xfail 留在测试里）**：丢失的澄清用例在当前代码上不通过，用户决定本任务不修。用 `xfail(strict=True)` 放回而不是不放或跳过：缺陷在测试报告里可见，修复后用例「意外通过」会报错，提醒删标记。
+- 2026-11-10｜**决策（补录只追加、不改写）**：丢失的专题、纪要、任务条目按 `ca5dc28` 原文追加，各加一段补录说明；现存条目一行不动。现存「[2026-11-06] T-014 …设计文档（落盘）」与补回的 T-014 重号，索引里记作 T-014b，本次专题编号 T-019。说明书 §6.8 / §6.9 没有放回，因为它们描述的澄清与诊断行为当前代码没有。
+- 2026-11-10｜**角色**：默认角色不变（资深电力算法专家）；本任务级覆盖为工程实现工程师，模式 A。范围由用户在两个选项里确定：只恢复 `app/server.py` 与台账；留在 `e05542a` 基线。
+- 2026-11-10｜**踩坑（浅克隆）**：本次检出是浅克隆，`git rev-list --count HEAD` 得 1，看不到历史。用 `git fetch --no-tags --depth=60 origin restore_branch_full_history` 取回后按提交哈希访问。`git log` 默认按各提交自己的时区显示时间，比较先后要统一成 UTC。
+- 2026-11-10｜**踩坑（改 `REPORT.md` 后要重新生成手册）**：`docs/软件设计文档.md` 内嵌整份 `REPORT.md`。改完 `REPORT.md` 必须运行 `.venv/bin/python tools/generate_assistant_docs.py`，否则 `--check` 报 `OUT OF DATE`。
+- 2026-11-10｜**踩坑（结束后台服务）**：在一条 bash 命令里用 `pkill -f "cli.py serve"` 会把执行这条命令的 shell 一起结束（命令行本身匹配该模式）。应按启动时保存的 PID 结束进程。
 - 2026-11-04｜**第 207 轮（composer 后端下拉保留 / 46 项工具范围）**：撤销第 206 轮移除 composer 后端选择的决定，恢复逐会话 local / cloud / builtin 下拉；管理员 default 仅用于默认 / 新会话，既有会话路由独立。local 具体模型来自共享、已保存 endpoint 的服务发现，管理员设置不保存模型名；刷新端点不接受 body 覆盖 URL，只接受空请求 / `{}`。工具覆盖只扩展到固定业务 schema，矩阵列出精确 scope 与 26 项二次确认；通用 shell / Python / SQL / 文件路径 / 任意 API 不开放。真实浏览器 / native input 未验收，jsdom 结果不得写成现场通过。
 - 2026-11-04｜**第 204 轮（会话栏收起交互）**：桌面保持会话管理栏默认展开，并通过问答标题栏按钮显式切换；收起时让聊天区占满双栏工作区，不改变会话状态或持久化用户偏好。窄屏继续用覆盖式会话抽屉并初始折叠；同一按钮动态更新 `aria-expanded` 与可操作名称。
 - 2026-11-04｜**第 203 轮（滚动可用性与滚动条可见性分开判定）**：所有主要助手面板均有 overflow / 尺寸约束或明确父级滚动兜底；未见“无 scrollbar 所以内容不可滚”的代码断点。内层透明轨道 / overlay scrollbar 可能降低 affordance，但不等价于无法用 wheel/touch/键盘滚动。没有真实浏览器时不得把 CSS / jsdom 的结果写成视觉验收通过；需用户提供浏览器、OS、视口和实录。
@@ -697,6 +715,8 @@
 - 2026-10-10｜历史决策（更早任务，仍有效）：分支策略用平台固定 session 分支；不编造项目事实（`ROLE.md` 背景只作推断引用）；KPI 通用数学定义属数学事实可写死；✅ 必须同行带来源、经验阈值必须显式标「经验推测」
 
 ## 关键文件路径
+- 2026-11-10 事故恢复：`app/server.py`（恢复后 `claim_tool_proposal` 调用在确认处理函数内，`trace_headers` 与 `X-Assistant-Trace-ID` 在 `assistant_chat` 内）、`tests/test_server.py`（xfail 用例与 trace 断言）；待修位置 `app/assistant.py` 的 `complete()` / `stream()`；记录 `REPORT_TEST.md` T-019、`REPORT.md` 第 5 节末行；丢失内容的原文在提交 `ca5dc28`（`git show ca5dc28:<文件>`）。
+- 分支（2026-11-10 现状）：本任务分支 `arena/51b63974-nilm-calc-tool`，取自 `restore2remote` 的 `e05542a`，已推送。远端其他分支：`main` 与 `arena/82e34fb8-nilm-calc-tool` 指向 `27b28ea`（只有 `BOOTSTRAP.md`、`ROLE.md`）；`restore2remote`＝`e05542a`；`restore_branch_full_history`＝`22d8d9c`。本节下方那条「分支：`arena/82e34fb8-nilm-calc-tool`」是 2026-10 的历史记录。
 - 本轮明确启动指令误路由：`app/assistant.py`（有效工具过滤、精确标题确定性提案、缺权因由与当前数据源前置校验）、`app/assistant_tools.py`（动作边界描述）、`tests/test_assistant.py` / `tests/test_server.py`（路由 / 授权 / SSE / 确认回归）；`docs/智能问答助手说明.md` §6.7；`REPORT_TEST.md` T-012、`session/NILM_AC_session_complete.md` 与本文件。
 - 第 207 轮后端 / 模型选择与工具覆盖：`app/assistant_tools.py`、`app/assistant.py`、`app/server.py`、`app/static/index.html` / `app.js` / `style.css`；回归 `tests/test_assistant.py`、`tests/test_server.py`、`tests/test_web_ui.py`、`tools/ui_assistant_check.cjs`；矩阵与未开放边界 `docs/智能问答助手说明.md` §6.6；同步 `README.md` §3.6 / §11、生成手册、`REPORT_TEST.md` T-011、`session/NILM_AC_session_complete.md` 与本文件。
 - 第 204 轮会话侧栏收起：`app/static/index.html`、`app/static/style.css`、`app/static/app.js`；回归 `tests/test_web_ui.py`、`tools/ui_assistant_check.cjs`；用户说明 `README.md`、`docs/智能问答助手说明.md` 与生成手册；台账 `REPORT_TEST.md`、`session/NILM_AC_session_complete.md`、本文件。
