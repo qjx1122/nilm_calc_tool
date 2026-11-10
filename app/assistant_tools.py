@@ -258,6 +258,11 @@ TOOL_CATALOG: List[Dict[str, Any]] = [
 TOOL_BY_NAME = {item["name"]: item for item in TOOL_CATALOG}
 TOOL_NAMES = tuple(TOOL_BY_NAME)
 
+# 这些工具的 schema 不含 side：侧别由提案的 _side 字段决定。模型有时仍会多传 side，
+# validate_tool_arguments 对它们忽略该字段而不是报“未注册字段”。模型路径的意图门控
+# （AssistantService._accept_tool_calls）复用本集合，两处保持同一约定。
+SIDE_ARGUMENT_IGNORED_TOOLS = frozenset({"get_runtime_status", "get_runtime_settings", "list_recordings"})
+
 
 def openai_tool_schemas(enabled_names: Iterable[str]) -> List[Dict[str, Any]]:
     """Build OpenAI-compatible function declarations for only globally/operator-allowed tools."""
@@ -336,7 +341,7 @@ def validate_tool_arguments(name: str, raw: Any) -> Dict[str, Any]:
     # get_runtime_status / get_runtime_settings / list_recordings 不接受 side 参数；
     # 侧别通过 plan 的 _side 字段传递，模型不应通过工具参数传递 side。
     # 为防御性起见，若模型误传 side，将其忽略而非报"未注册字段"。
-    if name in {"get_runtime_status", "get_runtime_settings", "list_recordings"}:
+    if name in SIDE_ARGUMENT_IGNORED_TOOLS:
         raw = {k: v for k, v in raw.items() if k != "side"}
     if any(key not in props for key in raw):
         unknown = [k for k in raw if k not in props]

@@ -546,11 +546,8 @@ def test_assistant_local_model_catalog_api_is_cached_and_refresh_is_admin_only(c
     assert empty_object.status_code == 200 and empty_object.json()["models"] == refreshed.json()["models"]
 
 
-# 2026-11-10 补回：本用例随 T-015 提交（b3d1cc5）加入，在 e31e0d9 被旧工作副本覆盖时丢失。
-# 当前 app/assistant.py 在模型候选工具与用户意图不符时只拦截工具、不返回澄清
-# （JSON 返回模型原话，SSE 不发 clarification 帧）；该回归登记在 STATUS.md「下一步」与 REPORT_TEST.md T-019。
-# 修复后本用例应通过，届时删除下面的 xfail 标记（strict=True 会在它意外通过时报错提醒）。
-@pytest.mark.xfail(strict=True, reason="T-015 澄清行为回归：模型选错工具时未返回澄清（见 REPORT_TEST.md T-019）")
+# 模型选错工具时：JSON 返回澄清（clarification=true、proposal=null）；SSE 发澄清文字和 clarification 标记帧。
+# 模型自己的话（“操作已经完成”）两条路径都不外发，也不留下待确认提案。
 def test_assistant_chat_returns_clarification_for_mismatched_model_tool_in_json_and_sse(client, tmp_path, monkeypatch):
     from app.assistant import AssistantService
 
@@ -599,6 +596,57 @@ def test_assistant_chat_returns_clarification_for_mismatched_model_tool_in_json_
     assert not any(frame.get("type") == "proposal" for frame in frames)
     assert "操作已经完成" not in streamed.text
     assert not service._pending_tools
+
+
+def test_assistant_chat_trace_id_header_matches_the_assistant_route_and_gate_logs(client, tmp_path, monkeypatch, caplog):
+    import logging
+
+    from app.assistant import AssistantService
+
+    admin = "trace-log-admin-token"
+    operator = "trace-log-operator-token-secret"
+    monkeypatch.setenv("ELEC_TOOL_ASSISTANT_ADMIN_TOKEN", admin)
+    monkeypatch.setenv("ELEC_TOOL_ASSISTANT_OPERATOR_TOKENS", json.dumps([
+        {"id": "trace-log-operator", "token": operator, "scopes": ["config.wiring.write", "state.read"]},
+    ]))
+    service = AssistantService(data_dir=str(tmp_path / "assistant-trace-log"))
+    service.update_config({"tools_enabled": True,
+                           "enabled_tools": ["set_wiring_mode", "get_runtime_status"]}, admin)
+    monkeypatch.setattr(client.srv, "assistant_service", service)
+
+    class FakeCompletionResponse:
+        def __enter__(self): return self
+        def __exit__(self, *args): return False
+        def read(self, _limit):
+            return json.dumps({"choices": [{"message": {
+                "content": "", "tool_calls": [{"id": "call-json", "type": "function",
+                    "function": {"name": "get_runtime_status", "arguments": "{}"}}]}}]}).encode("utf-8")
+
+    class FakeStreamResponse:
+        def __enter__(self): return self
+        def __exit__(self, *args): return False
+        def __iter__(self):
+            yield 'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call-sse","function":{"name":"get_runtime_status","arguments":"{}"}}]}}]}\n'.encode("utf-8")
+            yield b"data: [DONE]\n"
+
+    monkeypatch.setattr(service, "_open_request", lambda _plan, stream: FakeStreamResponse() if stream else FakeCompletionResponse())
+    caplog.set_level(logging.INFO, logger="elec_tool.assistant")
+    headers = {"X-Assistant-Operator-Token": operator}
+    prompt = "切换接线模式到3p4w"
+    for stream in (False, True):
+        caplog.clear()
+        # 请求体里自带的 _assistant_trace_id 不被采用：请求号只由服务端生成。
+        response = client.post("/api/assistant/chat", headers=headers, json={
+            "prompt": prompt, "model_type": "local", "stream": stream, "_assistant_trace_id": "ffffffffffffffff"})
+        assert response.status_code == 200, response.text
+        trace_id = response.headers["X-Assistant-Trace-ID"]
+        assert len(trace_id) == 16 and trace_id != "ffffffffffffffff"
+        records = "\n".join(record.getMessage() for record in caplog.records if record.name == "elec_tool.assistant")
+        assert f"assistant_route_decision trace_id={trace_id} " in records and "decision=model_fallback" in records
+        assert (f"assistant_tool_decision trace_id={trace_id} origin=model outcome=clarification "
+                "reason=intent_mismatch candidate=get_runtime_status") in records
+        assert "ffffffffffffffff" not in records
+        assert prompt not in records and operator not in records and admin not in records
 
 
 def test_assistant_chat_stream_and_nonstream_api(client, tmp_path, monkeypatch):

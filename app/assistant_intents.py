@@ -854,17 +854,20 @@ def validate_model_tool_result(prompt: str, tool: str, raw_arguments: Any,
     Returns ``{"ok": True, "arguments": ...}`` only when the proposal is a unique
     intent match and every retained argument is grounded. Otherwise returns a safe,
     user-facing clarification; it never creates a proposal itself.
+
+    A rejection also carries ``reason``: a fixed code for server logs (which check
+    failed). It never contains user text or argument values.
     """
     context = context if isinstance(context, Mapping) else {}
     candidates = find_tool_intent_candidates(prompt)
     if not candidates:
-        return {"ok": False, "clarification": (
+        return {"ok": False, "reason": "no_intent_match", "clarification": (
             "我暂未创建操作预览，因为无法可靠确认请求对应的受控操作。请明确说明要查询、分析、修改或控制哪一项；"
             "涉及参数时请给出目标值。"
         )}
     if len(candidates) > 1 and _COMPOUND_ACTION_RE.search(_effective_text(prompt)):
         labels = [TOOL_INTENT_CONTRACTS[name].intent for name, _ in candidates[:3]]
-        return {"ok": False, "clarification": (
+        return {"ok": False, "reason": "compound_request", "clarification": (
             "我暂未创建操作预览。请求中包含多个动作或步骤（" + "、".join(labels) +
             "）；请拆分请求，每次确认一个操作。"
         )}
@@ -873,13 +876,13 @@ def validate_model_tool_result(prompt: str, tool: str, raw_arguments: Any,
     # Similar-strength candidates remain ambiguous and fail closed.
     if len(candidates) > 1 and candidates[0][1] - candidates[1][1] < 10:
         labels = [TOOL_INTENT_CONTRACTS[name].intent for name, _ in candidates[:3]]
-        return {"ok": False, "clarification": (
+        return {"ok": False, "reason": "ambiguous_intent", "clarification": (
             "我暂未创建操作预览。你的表达可能对应多个动作（" + "、".join(labels) +
             "）；请明确选择一个动作，复合操作请分步提出。"
         )}
     matched_tool, _score = candidates[0]
     if matched_tool != tool:
-        return {"ok": False, "clarification": (
+        return {"ok": False, "reason": "intent_mismatch", "clarification": (
             f"我暂未创建操作预览。你的请求更符合「{TOOL_INTENT_CONTRACTS[matched_tool].intent}」，"
             f"而不是「{TOOL_INTENT_CONTRACTS.get(tool, TOOL_INTENT_CONTRACTS[matched_tool]).intent}」。"
             "请确认希望执行的单一动作。"
@@ -887,17 +890,20 @@ def validate_model_tool_result(prompt: str, tool: str, raw_arguments: Any,
     try:
         raw = json.loads(raw_arguments) if isinstance(raw_arguments, str) else raw_arguments
     except (ValueError, TypeError):
-        return {"ok": False, "clarification": "我暂未创建操作预览，因为模型返回的参数格式无法核验。请重新明确操作对象和参数。"}
+        return {"ok": False, "reason": "arguments_not_json",
+                "clarification": "我暂未创建操作预览，因为模型返回的参数格式无法核验。请重新明确操作对象和参数。"}
     if not isinstance(raw, dict):
-        return {"ok": False, "clarification": "我暂未创建操作预览，因为工具参数不是对象。请明确操作对象与所需参数。"}
+        return {"ok": False, "reason": "arguments_not_object",
+                "clarification": "我暂未创建操作预览，因为工具参数不是对象。请明确操作对象与所需参数。"}
     contract = TOOL_INTENT_CONTRACTS[tool]
     schema = TOOL_BY_NAME[tool]["parameters"]
     properties = schema.get("properties", {})
     if any(key not in properties for key in raw):
-        return {"ok": False, "clarification": "我暂未创建操作预览，因为模型给出的参数超出该操作允许范围。请重新明确需要的固定参数。"}
+        return {"ok": False, "reason": "unknown_argument_field",
+                "clarification": "我暂未创建操作预览，因为模型给出的参数超出该操作允许范围。请重新明确需要的固定参数。"}
     for field in raw:
         if _field_value_ambiguity(tool, field, prompt):
-            return {"ok": False, "clarification": (
+            return {"ok": False, "reason": "ambiguous_parameter_value", "clarification": (
                 f"我暂未创建操作预览。「{contract.intent}」中的「{field}」可能对应多个用户提到的值；"
                 "请明确选择一个对象或拆分操作。"
             )}
@@ -918,7 +924,7 @@ def validate_model_tool_result(prompt: str, tool: str, raw_arguments: Any,
         # adapter may apply its own documented default, but the model cannot widen scope.
     if missing_grounding:
         ask = _missing_parameter_prompt(tool, missing_grounding)
-        return {"ok": False, "clarification": (
+        return {"ok": False, "reason": "parameter_not_grounded", "clarification": (
             f"我暂未创建操作预览。「{contract.intent}」需要明确参数：{ask}"
         )}
 
@@ -926,13 +932,13 @@ def validate_model_tool_result(prompt: str, tool: str, raw_arguments: Any,
     missing_groups = [group for group in contract.required_any if not set(group).intersection(cleaned)]
     if missing_required or missing_groups:
         ask = _missing_parameter_prompt(tool, [*missing_required, *["|".join(group) for group in missing_groups]])
-        return {"ok": False, "clarification": (
+        return {"ok": False, "reason": "missing_required_parameter", "clarification": (
             f"我暂未创建操作预览。「{contract.intent}」还缺少必要信息：{ask}"
         )}
     try:
         arguments = validate_tool_arguments(tool, cleaned)
     except ValueError as exc:
-        return {"ok": False, "clarification": (
+        return {"ok": False, "reason": "schema_validation", "clarification": (
             f"我暂未创建操作预览，因为参数未通过该工具的固定校验（{str(exc)}）。请补充或更正参数后重试。"
         )}
     return {"ok": True, "arguments": arguments}

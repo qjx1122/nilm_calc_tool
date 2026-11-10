@@ -29,8 +29,9 @@ from typing import Any, Deque, Dict, Iterable, Iterator, List, Optional, Sequenc
 from urllib.parse import urlsplit
 
 from app.assistant_docs import PLATFORM_PARAMETER_DOC_ID, load_bundled_documents
-from app.assistant_intents import recognize_intent, validate_model_tool_result
-from app.assistant_tools import TOOL_BY_NAME, TOOL_CATALOG, TOOL_NAMES, openai_tool_schemas, validate_tool_arguments
+from app.assistant_intents import find_tool_intent_candidates, recognize_intent, validate_model_tool_result
+from app.assistant_tools import (SIDE_ARGUMENT_IGNORED_TOOLS, TOOL_BY_NAME, TOOL_CATALOG, TOOL_NAMES,
+                                 openai_tool_schemas, validate_tool_arguments)
 
 log = logging.getLogger("elec_tool.assistant")
 
@@ -156,6 +157,24 @@ _SOURCE_STOP_INTENT_RE = re.compile(
     re.IGNORECASE,
 )
 _SOURCE_SPEED_INTENT_RE = re.compile(r"(?:速度|倍速|加速|减速|快慢|快一点|慢一点|快些|慢些)")
+
+# 模型的工具调用被服务端拒绝、又没有更具体的说明时使用的澄清文字。
+_DEFAULT_TOOL_CLARIFICATION = "我暂未创建操作预览，请明确操作意图与参数。"
+
+
+def _is_offline_source_playback_diagnostic_prompt(prompt: str) -> bool:
+    """Flag only safe metadata for logs; never return or log the raw user text."""
+    text = unicodedata.normalize("NFKC", str(prompt or "")).casefold()
+    return ("数据源" in text and "离线" in text
+            and any(verb in text for verb in ("播放", "启动", "开始", "运行")))
+
+
+def _safe_source_kind(source: Any) -> str:
+    """Reduce a source descriptor to a fixed vocabulary for logs; never a path or file name."""
+    kind = source.get("kind") if isinstance(source, dict) else None
+    if kind in {"csv_file", "csv_tail", "tcp", "simulator"}:
+        return str(kind)
+    return "other" if kind else "none"
 
 
 def _normalize_source_start_prompt(prompt: str) -> str:
@@ -398,6 +417,17 @@ def _parse_side_from_prompt(prompt: str) -> Optional[str]:
     kw = m.group(0).strip()
     for side, aliases in _SIDE_KEYWORDS.items():
         if kw in aliases:
+            return side
+    return None
+
+
+def _side_from_keyword(value: Any) -> Optional[str]:
+    """Map one side word ("branch" / "分路侧" / "bus" / "总线侧" …) to "bus" / "branch"; else None."""
+    if not isinstance(value, str):
+        return None
+    text = value.strip().casefold()
+    for side, aliases in _SIDE_KEYWORDS.items():
+        if text in aliases:
             return side
     return None
 
@@ -1883,6 +1913,11 @@ class AssistantService:
         if not isinstance(prompt, str) or not prompt.strip():
             raise AssistantError(400, "请输入问题")
         prompt = prompt.strip()
+        # 排查用请求号：app/server.py::assistant_chat 生成后放进 payload，并写入响应头
+        # X-Assistant-Trace-ID；本方法被直接调用时自己生成。只接受 16 位十六进制。
+        trace_id = str(payload.get("_assistant_trace_id") or "")
+        if not re.fullmatch(r"[0-9a-f]{16}", trace_id):
+            trace_id = secrets.token_hex(8)
         if len(prompt) > MAX_PROMPT_CHARS:
             raise AssistantError(413, f"问题长度不能超过 {MAX_PROMPT_CHARS:,} 字符")
         history = self._validated_history(payload.get("history"))
@@ -1896,15 +1931,54 @@ class AssistantService:
         available_tools = self.operator_tools(operator, model_type)
         tools = openai_tool_schemas(available_tools)
 
+        # ---- 路由排查日志（REPORT_TEST.md T-017）----
+        # 只写固定词表、布尔值和已注册的工具名；不写问题原文、参数值、令牌、API Key、文件路径
+        # 或操作员 ID。含“离线 + 数据源 + 播放 / 启动 / 开始 / 运行”的请求用 WARNING 级事件名
+        # assistant_route_diagnostic，其余请求用 INFO 级 assistant_route_decision。
+        # source_* 三项取自 tool_context，是调用方所在侧（side）的数据源，不一定是 target_side 的。
+        diagnostic_source_playback = _is_offline_source_playback_diagnostic_prompt(prompt)
+        caller_side = side if side in {"bus", "branch"} else "bus"
+        prompt_side = _parse_side_from_prompt(prompt)
+        route_target_side = prompt_side if prompt_side in {"bus", "branch"} else caller_side
+        route_source = (tool_context or {}).get("source")
+        route_source = route_source if isinstance(route_source, dict) else {}
+        route_state = {"route": "", "tool": ""}  # 当前所在的直达路由及其针对的工具，供 route_blocked 写日志
+
+        def log_route(decision: str, direct_tool: str = "", intent_tier: str = "") -> None:
+            (log.warning if diagnostic_source_playback else log.info)(
+                "%s trace_id=%s side=%s target_side=%s backend=%s image_count=%d decision=%s direct_tool=%s "
+                "intent_tier=%s start_tool_available=%s speed_tool_available=%s available_tool_count=%d "
+                "source_kind=%s source_running=%s source_has_path=%s operator_authenticated=%s",
+                "assistant_route_diagnostic" if diagnostic_source_playback else "assistant_route_decision",
+                trace_id, caller_side, route_target_side, model_type, len(images), decision,
+                direct_tool or "none", intent_tier or "none",
+                "start_current_source" in available_tools, "set_playback_speed" in available_tools,
+                len(available_tools), _safe_source_kind(route_source),
+                bool(route_source.get("running")), bool(route_source.get("has_path")), bool(operator),
+            )
+
+        def route_blocked(reason: str, status_code: int, message: str, **flags: bool) -> AssistantError:
+            """Log why a direct route refused the request, then build the user-facing error."""
+            detail = "".join(f" {key}={bool(value)}" for key, value in flags.items())
+            log.warning(
+                "assistant_route_blocked trace_id=%s route=%s reason=%s tool=%s target_side=%s source_kind=%s%s",
+                trace_id, route_state["route"] or "none", reason, route_state["tool"] or "none",
+                route_target_side, _safe_source_kind(route_source), detail,
+            )
+            return AssistantError(status_code, message)
+
         # Exact empty-argument catalog titles and the narrow source-start grammar do
         # not depend on probabilistic model tool selection. No screenshots or general
         # free-form matching; every routed tool must validate with empty arguments.
         direct_tool_name = (_explicit_tool_command(prompt)
                             if model_type in {"local", "cloud"} and not images else None)
         if direct_tool_name:
+            route_state.update(route="deterministic", tool=direct_tool_name)
+            log_route("deterministic_direct", direct_tool_name)
             # 短期修复：延时意图拒绝——系统不支持延时执行，直接路由前必须拒绝
             if _has_delay_intent(prompt):
-                raise AssistantError(
+                raise route_blocked(
+                    "delayed_execution_unsupported",
                     400,
                     "请求包含延时执行指令（如“15秒过后”“5分钟后”“定时”），系统不支持延时执行受控操作；"
                     "请去掉延时表述后再提交，或分两步：先设置好数据源，再在需要时发送立即执行指令。"
@@ -1929,15 +2003,21 @@ class AssistantService:
                     blockers.append(f"操作员令牌缺少精确 scope {item['scope']}")
                 if not blockers:
                     blockers.append("该工具未进入本轮有效授权清单")
-                raise AssistantError(
+                raise route_blocked(
+                    "tool_unavailable",
                     403,
                     f"明确请求的工具「{item['title']}」当前不可用（需要 {item['scope']}；"
                     f"阻止原因：{'；'.join(blockers)}）。不会改用相似查询工具代替。",
+                    operator_authenticated=bool(operator), tools_enabled=bool(cfg.get("tools_enabled")),
+                    allowlisted=direct_tool_name in (cfg.get("enabled_tools") or []),
+                    cloud_tools_enabled=bool(cfg.get("cloud_tools_enabled")),
+                    scope_granted=bool(operator and item["scope"] in operator.get("scopes", [])),
                 )
             source = (tool_context or {}).get("source")
             source = source if isinstance(source, dict) else {}
             if not source.get("kind"):
-                raise AssistantError(
+                raise route_blocked(
+                    "source_not_configured",
                     409,
                     f"{effective_side if effective_side == 'branch' else '当前侧'}没有可用的数据源配置。请先在「数据源与控制」页面为当前侧配置数据源后重试；"
                     "不会改用查询工具代替该操作。",
@@ -1950,29 +2030,31 @@ class AssistantService:
             is_cross_side = parsed_side in {"bus", "branch"} and parsed_side != side
             if direct_tool_name == "start_current_source":
                 if source_running:
-                    raise AssistantError(409, f"{side_label}数据源已在运行或暂停，不会重复启动；如需继续暂停的数据源，请使用恢复操作")
+                    raise route_blocked("source_already_running", 409, f"{side_label}数据源已在运行或暂停，不会重复启动；如需继续暂停的数据源，请使用恢复操作")
                 if (_explicit_offline_source_start(prompt)
                         and source_kind not in {"csv_file", "csv_tail"}):
-                    raise AssistantError(
+                    raise route_blocked(
+                        "offline_source_kind_mismatch",
                         409,
                         f"{side_label}配置不是离线文件数据源。若要播放离线 CSV，请先在「数据源与控制」页面为当前侧配置离线数据源后重试；"
                         "不会自动切换当前来源。",
                     )
                 if source_kind in {"csv_file", "csv_tail"} and not source.get("has_path"):
-                    raise AssistantError(
+                    raise route_blocked(
+                        "offline_file_unavailable",
                         409,
                         f"{side_label}离线数据源未配置可用文件。请在「数据源与控制」页面配置并核验当前侧文件后重试；"
                         "不会查询或更换录波文件。",
                     )
             elif direct_tool_name == "pause_current_source":
                 if not is_cross_side and not source_running:
-                    raise AssistantError(409, f"{side_label}数据源未在运行，无法暂停；请先启动数据源后再暂停。")
+                    raise route_blocked("source_not_running", 409, f"{side_label}数据源未在运行，无法暂停；请先启动数据源后再暂停。")
             elif direct_tool_name == "resume_current_source":
                 if not is_cross_side and source_running:
-                    raise AssistantError(409, f"{side_label}数据源正在运行，无需恢复；如需暂停请使用暂停操作。")
+                    raise route_blocked("source_not_paused", 409, f"{side_label}数据源正在运行，无需恢复；如需暂停请使用暂停操作。")
             elif direct_tool_name == "stop_current_source":
                 if not is_cross_side and not source_running:
-                    raise AssistantError(409, f"{side_label}数据源未在运行，无法停止；请先启动数据源后再停止。")
+                    raise route_blocked("source_not_running", 409, f"{side_label}数据源未在运行，无法停止；请先启动数据源后再停止。")
             _tool_context = dict(tool_context or {})
             _tool_context["side"] = effective_side
             direct_plan = {
@@ -1986,11 +2068,18 @@ class AssistantService:
                 # 中期修复：服务端侧别复验与排他性限定词标记，供执行层复验
                 "_parsed_side": effective_side,
                 "_exclusive_limit": exclusive_limit,
+                # 排查日志与意图门控用的元数据（不发给模型）
+                "_user_prompt": prompt,
+                "_trace_id": trace_id,
+                "_tool_call_origin": "deterministic",
+                "_diagnostic_source_playback": diagnostic_source_playback,
             }
             proposal = self.create_tool_proposal(direct_plan, [{
                 "function": {"name": direct_tool_name, "arguments": {}}
             }])
             direct_plan["_tool_proposal"] = proposal
+            log.info("assistant_tool_decision trace_id=%s origin=deterministic outcome=proposal_created tool=%s",
+                     trace_id, direct_tool_name)
             # 根据实际侧别生成动态标题，避免跨侧操作时提示"当前侧"而误导用户
             side_label = {"bus": "总线侧", "branch": "分路侧"}.get(effective_side, "当前侧")
             _dynamic_tool_title = {
@@ -2006,10 +2095,12 @@ class AssistantService:
 
         # --- 阶段 B：结构化意图识别（设计文档 §8.4.1） ---
         # 确定性路由未命中时，通过 recognize_intent 进行结构化意图判定：
-        #   high tier (ok=True)：直接路由，不调用模型；
-        #   low tier：返回澄清，不调用模型；
-        #   medium tier：继续走现有模型判定流程。
+        #   high tier（ok=True）且工具接受空参数：直接路由，不调用模型
+        #   （两个只读状态工具在 medium tier 也直接路由，见下方注释）；
+        #   其余情况（low tier、其余 medium tier，或工具需要参数）：继续走下面的模型判定流程，
+        #   模型提出的工具调用再由 _accept_tool_calls 做意图门控，未通过则返回澄清。
         intent_recognition = None
+        intent_tier = ""
         if model_type in {"local", "cloud"} and not images:
             intent_recognition = recognize_intent(
                 prompt,
@@ -2018,13 +2109,16 @@ class AssistantService:
                 use_cache=True,
             )
             top_tool = intent_recognition["result"]["intent_code"] if intent_recognition.get("result") else ""
+            intent_tier = str(intent_recognition.get("tier") or "")
+            route_state.update(route="intent", tool=top_tool if top_tool in TOOL_BY_NAME else "")
             # 只读查询工具（get_runtime_status / get_runtime_settings）无论意图识别 tier 如何
             #（只要不是 low），都直接执行并返回结果，不走模型路径，避免模型向无参数工具
             # 传递 side 字段导致"工具参数包含未注册字段"错误，也避免只读查询被当作需要确认的操作。
             if intent_recognition["ok"] or top_tool in {"get_runtime_status", "get_runtime_settings"}:
                 # 短期修复：延时意图拒绝——recognize_intent 路径也必须拒绝延时执行
                 if _has_delay_intent(prompt):
-                    raise AssistantError(
+                    raise route_blocked(
+                        "delayed_execution_unsupported",
                         400,
                         "请求包含延时执行指令（如“15秒过后”“5分钟后”“定时”），系统不支持延时执行受控操作；"
                         "请去掉延时表述后再提交，或分两步：先设置好数据源，再在需要时发送立即执行指令。"
@@ -2045,31 +2139,36 @@ class AssistantService:
                     item = TOOL_BY_NAME[top_tool]
                     # 权限校验（与确定性路由保持一致）
                     if operator and item["scope"] not in operator.get("scopes", []):
-                        raise AssistantError(
+                        raise route_blocked(
+                            "tool_unavailable",
                             403,
                             f"识别的工具「{item['title']}」当前不可用：操作员令牌缺少精确 scope {item['scope']}；"
                             f"不会改用相似查询工具代替。",
                         )
                     if not operator:
-                        raise AssistantError(
+                        raise route_blocked(
+                            "tool_unavailable",
                             403,
                             f"识别的工具「{item['title']}」需要操作员令牌，当前未提供有效令牌；"
                             f"不会改用相似查询工具代替。",
                         )
                     if not cfg.get("tools_enabled"):
-                        raise AssistantError(
+                        raise route_blocked(
+                            "tool_unavailable",
                             403,
                             f"识别的工具「{item['title']}」当前不可用：管理员工具总开关已关闭；"
                             f"不会改用相似查询工具代替。",
                         )
                     if model_type == "cloud" and not cfg.get("cloud_tools_enabled"):
-                        raise AssistantError(
+                        raise route_blocked(
+                            "tool_unavailable",
                             403,
                             f"识别的工具「{item['title']}」当前不可用：云端工具开关已关闭；"
                             f"不会改用相似查询工具代替。",
                         )
                     if top_tool not in (cfg.get("enabled_tools") or []):
-                        raise AssistantError(
+                        raise route_blocked(
+                            "tool_unavailable",
                             403,
                             f"识别的工具「{item['title']}」当前不可用：管理员 allow-list 未包含该工具；"
                             f"不会改用相似查询工具代替。",
@@ -2082,6 +2181,7 @@ class AssistantService:
                         # 需要必需参数，跳过直接路由，继续走下面的模型判定流程
                         pass
                     else:
+                        log_route("intent_direct", top_tool, intent_tier)
                         # 四个核心工具的 source 状态校验（确定性路由已 cover 的范围）
                         # 跨侧操作（prompt 明确指定侧别且与调用方 side 不同）时，tool_context 中的 source
                         # 属于调用方侧而非目标侧，source_running 校验会读取错误侧的状态，遂下放到执行阶段。
@@ -2093,18 +2193,21 @@ class AssistantService:
                             source_kind = str(source.get("kind") or "none")
                             source_running = bool(source.get("running"))
                             if source_running:
-                                raise AssistantError(
+                                raise route_blocked(
+                                    "source_already_running",
                                     409,
                                     f"{side_label}数据源已在运行或暂停，不会重复启动；如需继续暂停的数据源，请使用恢复操作",
                                 )
                             if source_kind not in {"csv_file", "csv_tail"}:
-                                raise AssistantError(
+                                raise route_blocked(
+                                    "offline_source_kind_mismatch",
                                     409,
                                     f"{side_label}配置不是离线文件数据源。若要播放离线 CSV，请先在「数据源与控制」页面为当前侧配置离线数据源后重试；"
                                     "不会自动切换当前来源。",
                                 )
                             if not source.get("has_path"):
-                                raise AssistantError(
+                                raise route_blocked(
+                                    "offline_file_unavailable",
                                     409,
                                     f"{side_label}离线数据源未配置可用文件。请在「数据源与控制」页面配置并核验当前侧文件后重试；"
                                     "不会查询或更换录波文件。",
@@ -2114,7 +2217,8 @@ class AssistantService:
                             source = source if isinstance(source, dict) else {}
                             source_running = bool(source.get("running"))
                             if not is_cross_side and not source_running:
-                                raise AssistantError(
+                                raise route_blocked(
+                                    "source_not_running",
                                     409,
                                     f"{side_label}数据源未在运行，无法暂停；请先启动数据源后再暂停。",
                                 )
@@ -2123,7 +2227,8 @@ class AssistantService:
                             source = source if isinstance(source, dict) else {}
                             source_running = bool(source.get("running"))
                             if not is_cross_side and source_running:
-                                raise AssistantError(
+                                raise route_blocked(
+                                    "source_not_paused",
                                     409,
                                     f"{side_label}数据源正在运行，无需恢复；如需暂停请使用暂停操作。",
                                 )
@@ -2132,7 +2237,8 @@ class AssistantService:
                             source = source if isinstance(source, dict) else {}
                             source_running = bool(source.get("running"))
                             if not is_cross_side and not source_running:
-                                raise AssistantError(
+                                raise route_blocked(
+                                    "source_not_running",
                                     409,
                                     f"{side_label}数据源未在运行，无法停止；请先启动数据源后再停止。",
                                 )
@@ -2149,6 +2255,11 @@ class AssistantService:
                             # 中期修复：服务端侧别复验与排他性限定词标记，供执行层复验
                             "_parsed_side": effective_side,
                             "_exclusive_limit": exclusive_limit,
+                            # 排查日志与意图门控用的元数据（不发给模型）
+                            "_user_prompt": prompt,
+                            "_trace_id": trace_id,
+                            "_tool_call_origin": "intent",
+                            "_diagnostic_source_playback": diagnostic_source_playback,
                         }
                         # 只读查询工具直接执行并返回结果，不需要二次确认；
                         # 避免 get_runtime_status / get_runtime_settings 只返回确认提示而不输出实际状态。
@@ -2225,6 +2336,8 @@ class AssistantService:
                                 f"已按意图识别识别为「查询{side_label}{label}」。\n"
                                 f"{json.dumps(result, ensure_ascii=False)}"
                             )
+                            log.info("assistant_tool_decision trace_id=%s origin=intent outcome=read_executed tool=%s",
+                                     trace_id, top_tool)
                             return intent_plan
                         proposal = self.create_tool_proposal(intent_plan, [{
                             "function": {"name": top_tool, "arguments": {}}
@@ -2241,12 +2354,22 @@ class AssistantService:
                             "stop_current_source": f"停止{side_label}数据源",
                         }.get(top_tool, proposal["summary"])
                         intent_plan["_tool_proposal"] = proposal
+                        log.info("assistant_tool_decision trace_id=%s origin=intent outcome=proposal_created tool=%s",
+                                 trace_id, top_tool)
                         intent_plan["_direct_tool_response"] = (
                             f"已按意图识别识别为「{_dynamic_tool_title}」。请核对操作摘要与影响后确认；未确认前不会执行。"
                         )
                         return intent_plan
             # medium / low tier: 继续走下面的模型判定流程，
             # 由模型或兜底逻辑决定是否创建提案或返回澄清。
+
+        # 走到这里说明两条直达路由都没有命中。
+        if model_type not in {"local", "cloud"}:
+            log_route("backend_not_tool_capable")
+        elif images:
+            log_route("images_attached")
+        else:
+            log_route("model_fallback", intent_tier=intent_tier)
 
         temperature = _number(payload.get("temperature", cfg["temperature"]), "temperature", 0, 2)
         max_tokens = _number(payload.get("max_tokens", cfg["max_tokens"]), "max_tokens", 1, 8192, integer=True)
@@ -2355,7 +2478,10 @@ class AssistantService:
                 "timeout_s": int(cfg["timeout_s"]), "temperature": temperature, "max_tokens": max_tokens,
                 "messages": messages, "sources": sources, "_redact_names": private_names,
                 "_operator": operator, "_side": side if side in {"bus", "branch"} else "bus",
-                "_tool_context": dict(tool_context or {}), "_available_tools": available_tools}
+                "_tool_context": dict(tool_context or {}), "_available_tools": available_tools,
+                # 意图门控按“本轮用户原话”核验模型提出的工具；这些键不发给模型。
+                "_user_prompt": prompt, "_trace_id": trace_id, "_tool_call_origin": "model",
+                "_diagnostic_source_playback": diagnostic_source_playback}
         if tools:
             plan["tools"] = tools
         return plan
@@ -2373,6 +2499,12 @@ class AssistantService:
         return AssistantError(502, "模型服务请求失败")
 
     def _open_request(self, plan: Dict[str, Any], stream: bool):
+        # 只记元数据：不记 base_url、模型名、API Key 或消息内容。
+        (log.warning if plan.get("_diagnostic_source_playback") else log.info)(
+            "assistant_model_request trace_id=%s backend=%s stream=%s tool_count=%d tool_choice=%s",
+            plan.get("_trace_id") or "-", plan.get("model_type") or "unknown", bool(stream),
+            len(plan.get("tools") or []), "auto" if plan.get("tools") else "none",
+        )
         url = plan["base_url"].rstrip("/")
         if not url.endswith("/chat/completions"):
             url += "/chat/completions"
@@ -2392,17 +2524,125 @@ class AssistantService:
                   if plan["model_type"] == "local" else urllib.request.build_opener())
         return opener.open(request, timeout=plan["timeout_s"])
 
-    def _accept_tool_calls(self, plan: Dict[str, Any], calls: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
-        proposal = self.create_tool_proposal(plan, calls)
+    def _accept_tool_calls(self, plan: Dict[str, Any], calls: Any) -> Optional[Dict[str, Any]]:
+        """Gate the model's tool calls: return a pending proposal, or ``None`` with a clarification.
+
+        A tool call from a model is only a candidate. It is not the user's authorization and
+        it does not show that anything ran. A proposal is created only when the model made
+        exactly one call, the tool is authorized for this turn, the tool is the single intent
+        of this turn's user message, and every argument is grounded in that message. In every
+        other case ``plan["_tool_clarification"]`` holds the text to show the user in place of
+        the model's own words, and no proposal exists.
+
+        Authorization and resource failures stay errors, not clarifications: an unauthorized
+        tool raises ``AssistantError`` here, and ``create_tool_proposal`` keeps its own checks.
+
+        Logs carry tool names, field names and fixed codes only; never the user's text or
+        argument values.
+        """
+        trace_id = str(plan.get("_trace_id") or "-")
+        origin = str(plan.get("_tool_call_origin") or "")
+        if origin not in {"deterministic", "intent", "model"}:
+            origin = "unknown"
+        note = log.warning if plan.get("_diagnostic_source_playback") else log.info
+        plan.pop("_tool_proposal", None)
+        plan.pop("_tool_clarification", None)
+
+        def clarify(reason: str, message: str, detail: str = "") -> None:
+            plan["_tool_clarification"] = message or _DEFAULT_TOOL_CLARIFICATION
+            log.warning("assistant_tool_decision trace_id=%s origin=%s outcome=clarification reason=%s%s",
+                        trace_id, origin, reason, detail)
+
+        if not isinstance(calls, (list, tuple)) or len(calls) != 1:
+            count = len(calls) if isinstance(calls, (list, tuple)) else -1
+            clarify("tool_call_count",
+                    "我暂未创建操作预览。一次只能处理一个受控动作；请拆分复合请求，并明确每一步所需参数。",
+                    f" count={count}")
+            return None
+
+        call = calls[0] if isinstance(calls[0], dict) else {}
+        function = call.get("function") if isinstance(call.get("function"), dict) else {}
+        name = str(function.get("name") or call.get("name") or "")
+        if name not in TOOL_BY_NAME or name not in set(plan.get("_available_tools") or []):
+            log.warning(
+                "assistant_tool_decision trace_id=%s origin=%s outcome=blocked reason=tool_unavailable candidate=%s",
+                trace_id, origin, name if name in TOOL_BY_NAME else "unregistered",
+            )
+            raise AssistantError(403, "模型请求的工具未在本轮授权清单中")
+
+        raw_arguments = function.get("arguments", call.get("arguments", {}))
+        try:
+            arguments = json.loads(raw_arguments) if isinstance(raw_arguments, str) else raw_arguments
+        except (ValueError, TypeError):
+            arguments = None
+        side_argument = "none"
+        if isinstance(arguments, dict):
+            if name in SIDE_ARGUMENT_IGNORED_TOOLS and "side" in arguments:
+                # 与 validate_tool_arguments 同一约定：这几个工具的 schema 没有 side，侧别由提案的
+                # _side 决定；模型多传的 side 在门控前去掉，否则会被当成“未注册字段”而澄清。
+                # 日志留下它指的是哪一侧（固定词表），便于发现它与 bound_side 不一致的情况。
+                side_argument = _side_from_keyword(arguments["side"]) or "other"
+                arguments = {key: value for key, value in arguments.items() if key != "side"}
+            allowed_fields = set(TOOL_BY_NAME[name]["parameters"].get("properties", {}))
+            supplied_fields = {str(key) for key in arguments}
+            argument_fields = ",".join(sorted(supplied_fields & allowed_fields)) or "none"
+            unknown_field_count = len(supplied_fields - allowed_fields)
+        else:
+            argument_fields, unknown_field_count = "invalid", 0
+
+        prompt = str(plan.get("_user_prompt") or "")
+        candidates = find_tool_intent_candidates(prompt)
+        intent_summary = ",".join(f"{tool}:{score}" for tool, score in candidates[:3]) or "none"
+        detail = (f" candidate={name} intent_candidates={intent_summary} argument_fields={argument_fields}"
+                  f" unknown_argument_field_count={unknown_field_count} side_argument={side_argument}"
+                  f" bound_side={plan.get('_side') if plan.get('_side') in {'bus', 'branch'} else 'bus'}")
+        note("assistant_tool_candidate trace_id=%s origin=%s%s", trace_id, origin, detail)
+
+        context = plan.get("_tool_context") if isinstance(plan.get("_tool_context"), dict) else {}
+        validation = validate_model_tool_result(
+            prompt, name, arguments if isinstance(arguments, dict) else raw_arguments, context)
+        if not validation.get("ok"):
+            clarify(str(validation.get("reason") or "unspecified"), str(validation.get("clarification") or ""), detail)
+            return None
+
+        try:
+            proposal = self.create_tool_proposal(plan, [{"function": {"name": name,
+                                                                      "arguments": validation["arguments"]}}])
+        except AssistantError as exc:
+            log.warning(
+                "assistant_tool_decision trace_id=%s origin=%s outcome=blocked reason=proposal_rejected "
+                "status=%d candidate=%s", trace_id, origin, exc.status_code, name,
+            )
+            raise
         plan["_tool_proposal"] = proposal
+        log.info("assistant_tool_decision trace_id=%s origin=%s outcome=proposal_created tool=%s",
+                 trace_id, origin, name)
         return proposal
+
+    def _tool_call_answer(self, plan: Dict[str, Any], calls: Any) -> str:
+        """Answer text for a turn in which the model called tools; the server writes all of it.
+
+        The model's own text is dropped whenever it calls a tool. It may claim that an
+        operation "is done", but nothing runs before the operator confirms, and a rejected
+        call must never follow such a claim.
+        """
+        proposal = self._accept_tool_calls(plan, calls)
+        if proposal:
+            return f"已识别为「{proposal['title']}」。请核对操作摘要与影响，再确认执行。"
+        return str(plan.get("_tool_clarification") or _DEFAULT_TOOL_CLARIFICATION)
+
+    @staticmethod
+    def _log_model_result(plan: Dict[str, Any], has_text: bool) -> None:
+        """Log that the model made no tool call: it answered in plain text, or returned nothing."""
+        (log.warning if plan.get("_diagnostic_source_playback") else log.info)(
+            "assistant_model_result trace_id=%s outcome=%s tool_call_count=0",
+            plan.get("_trace_id") or "-", "plain_text" if has_text else "empty",
+        )
 
     def complete(self, plan: Dict[str, Any]) -> str:
         names = plan.get("_redact_names") or []
         if plan.get("_direct_tool_response"):
             return _redact_names(str(plan["_direct_tool_response"]), names)
-        if plan.get("_clarification_response"):
-            return _redact_names(str(plan["_clarification_response"]), names)
         if plan.get("model_type") == "builtin":
             return _redact_names(str(plan.get("answer") or ""), names)
         try:
@@ -2415,30 +2655,11 @@ class AssistantService:
             if not calls and isinstance(message.get("function_call"), dict):
                 calls = [{"function": message["function_call"]}]
             if calls:
-                # 意图语义核验：模型提出的工具必须与用户意图匹配，防止模型
-                # 将“获取录波文件路径”等请求误路由到 list_profiles 等相似工具。
-                call = calls[0] if isinstance(calls[0], dict) else {}
-                function = call.get("function") if isinstance(call.get("function"), dict) else {}
-                name = str(function.get("name") or call.get("name") or "")
-                arguments = function.get("arguments", call.get("arguments", {}))
-                if name:
-                    user_prompt = ""
-                    for msg in plan.get("messages", []):
-                        if msg.get("role") == "user":
-                            user_prompt = str(msg.get("content", "") or "")
-                            break
-                    validation = validate_model_tool_result(
-                        user_prompt, name, arguments, plan.get("_tool_context") or {}
-                    )
-                    if not validation.get("ok"):
-                        plan["_clarification_response"] = validation.get(
-                            "clarification", "意图不匹配，无法创建操作预览。"
-                        )
-                    else:
-                        proposal = self._accept_tool_calls(plan, calls)
-                        plan["_tool_proposal"] = proposal
-                        if not content.strip():
-                            content = f"已识别为「{proposal['title']}」。请核对操作摘要与影响，再确认执行。"
+                # 意图门控：模型提出的工具必须与本轮用户原话的意图一致、参数有出处，才创建操作预览；
+                # 否则返回澄清。两种情况都只返回服务端写的文字，模型自己的话不显示。
+                content = self._tool_call_answer(plan, calls)
+            else:
+                self._log_model_result(plan, bool(content.strip()))
             if not content.strip():
                 raise AssistantError(502, "模型返回了空回答，请重试")
             return _redact_names(content, names)
@@ -2465,13 +2686,6 @@ class AssistantService:
                     return
                 yield answer[start:start + 96]
             return
-        if plan.get("_clarification_response"):
-            answer = _redact_names(str(plan["_clarification_response"]), names)
-            for start in range(0, len(answer), 96):
-                if cancel.is_set():
-                    return
-                yield answer[start:start + 96]
-            return
         if plan.get("model_type") == "builtin":
             answer = self.complete(plan)
             for start in range(0, len(answer), 96):
@@ -2481,6 +2695,12 @@ class AssistantService:
             return
         redactor = _StreamingNameRedactor(names) if names else None
         tool_calls: Dict[int, Dict[str, str]] = {}
+        # 本轮向模型提供了工具时，模型的文字先攒在服务端、不外发：模型可能先说“操作已经完成”，
+        # 随后才给出一个会被拒绝的工具调用。等模型的输出全部到达：没有工具调用才放出这些文字；
+        # 有工具调用则整段丢弃，只发服务端写的预览提示或澄清。代价是这类请求的回答要等模型
+        # 全部生成完才一次显示。
+        hold_text = bool(plan.get("tools"))
+        held_text: List[str] = []
         saw_text = False
         try:
             with self._open_request(plan, stream=True) as response:
@@ -2516,39 +2736,29 @@ class AssistantService:
                         continue
                     if text:
                         saw_text = True
+                        if hold_text:
+                            held_text.append(text)
+                            continue
                         safe_text = redactor.feed(text) if redactor else text
                         if safe_text:
                             yield safe_text
             if tool_calls:
                 calls = [{"id": item["id"], "function": {"name": item["name"], "arguments": item["arguments"]}}
                          for _, item in sorted(tool_calls.items())]
-                # 意图语义核验：模型提出的工具必须与用户意图匹配，防止模型
-                # 将“获取录波文件路径”等请求误路由到 list_profiles 等相似工具。
-                call = calls[0] if isinstance(calls[0], dict) else {}
-                function = call.get("function") if isinstance(call.get("function"), dict) else {}
-                name = str(function.get("name") or call.get("name") or "")
-                arguments = function.get("arguments", call.get("arguments", {}))
-                if name:
-                    user_prompt = ""
-                    for msg in plan.get("messages", []):
-                        if msg.get("role") == "user":
-                            user_prompt = str(msg.get("content", "") or "")
-                            break
-                    validation = validate_model_tool_result(
-                        user_prompt, name, arguments, plan.get("_tool_context") or {}
-                    )
-                    if not validation.get("ok"):
-                        plan["_clarification_response"] = validation.get(
-                            "clarification", "意图不匹配，无法创建操作预览。"
-                        )
-                    else:
-                        proposal = self._accept_tool_calls(plan, calls)
-                        if not saw_text:
-                            fallback = f"已识别为「{proposal['title']}」。请核对操作摘要与影响，再确认执行。"
-                            safe_text = redactor.feed(fallback, final=True) if redactor else fallback
-                            if safe_text:
-                                yield safe_text
-                            redactor = None
+                # 意图门控（同 complete）：只发服务端写的预览提示或澄清，攒下的模型文字不发。
+                answer = self._tool_call_answer(plan, calls)
+                safe_text = redactor.feed(answer, final=True) if redactor else answer
+                redactor = None
+                if safe_text:
+                    yield safe_text
+            else:
+                self._log_model_result(plan, saw_text)
+                for part in held_text:
+                    if cancel.is_set():
+                        return
+                    safe_text = redactor.feed(part) if redactor else part
+                    if safe_text:
+                        yield safe_text
             if redactor:
                 tail = redactor.feed(final=True)
                 if tail:
@@ -2592,6 +2802,10 @@ def run_stream_to_queue(service: AssistantService, plan: Dict[str, Any], out: "q
             if cancel.is_set():
                 return
             put({"type": "delta", "text": token})
+        if not cancel.is_set() and plan.get("_tool_clarification"):
+            # 标记帧：澄清文字已作为 delta 发出，这一帧告诉前端“本轮是澄清，没有操作预览”。
+            put({"type": "clarification",
+                 "message": _redact_names(str(plan["_tool_clarification"]), plan.get("_redact_names") or [])})
         if not cancel.is_set() and plan.get("_tool_proposal"):
             put({"type": "proposal", "proposal": plan["_tool_proposal"]})
         if not cancel.is_set():
