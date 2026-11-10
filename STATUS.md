@@ -1,8 +1,8 @@
 # STATUS.md
 
 > 续接文件（BOOTSTRAP.md v2.2 台账）。每次收尾必更新；只改本文件，不另建同类文件。
-> 最后更新：2026-11-10（第二项任务已立项、进行中：按用户 5 条指令确认正式分支、不合入 3 个波形分析提交、修复澄清回归、为 37 个提交补台账、更新 README 并补 `configs/intent_actions.csv` 文档；开局基线全量 pytest 639 passed / 1 skipped / 1 xfailed；活动分支 `arena/51b63974-nilm-calc-tool`，开局远端 tip `161bd00`；`tmp/` 保持原样）
-> 本次任务（2026-11-10 第二项）：用户对上一项任务留下的三个待定项作了答复并追加两条指令。范围、验收与开局基线见「当前目标」第一条；本行在收尾时改写为结果。
+> 最后更新：2026-11-10（第二项任务已完成，第 208 轮 / v0.99.49：模型选错工具时返回澄清并在界面标出；为 2026-11-06～11-10 的 37 个无台账提交补记，核对出 15 处问题只登记未修；README 与助手说明补上三条路由、路由日志、`configs/intent_actions.csv` 的修改方法，克隆分支改为本分支；全量 pytest 654 passed / 1 skipped / 1 warning，jsdom 205 checks；真实模型、真实浏览器、Windows 未验；活动分支 `arena/51b63974-nilm-calc-tool`（用户确定的正式分支）；`tmp/` 保持原样）
+> 本次任务（2026-11-10 第二项）：按用户 5 条指令执行——本分支为正式分支；不合入 `restore_branch_full_history` 的 3 个提交；修复澄清回归（`1cabfb6`、`03a2854`）；为 37 个提交补台账（`REPORT_TEST.md` T-021、T-022）；更新 README 并补意图配置文档（`c912674`、`48a16de`）。经过与验证见 `REPORT_TEST.md` T-020；待用户决定的事项见「下一步」前四条。
 > 前次更新：2026-11-10（旧文件覆盖事故已处理：`app/server.py` 已恢复、`tests/test_server.py` 丢失的断言已放回、2026-11-05～11-06 丢失的台账已补录；全量 pytest 639 passed / 1 skipped / 1 xfailed；`app/assistant.py` 的澄清回归没有修，登记在「下一步」；活动分支 `arena/51b63974-nilm-calc-tool`，基线 `e05542a`；`tmp/` 保持原样）
 > 前次任务（2026-11-10 第一项）：开局基线全量 pytest 为 1 failed / 638 passed / 1 skipped；失败根因是提交 `2c51d2f` 把 `app/server.py` 写回了 2026-11-05 的内容，助手「确认执行」接口每次调用都抛 `TypeError`。经用户批准，本任务恢复该文件、放回丢失的测试断言并补录丢失台账；`app/assistant.py` 的澄清回归只登记待办。经过与验证见 `REPORT_TEST.md` T-019。
 > 前次更新：2026-11-05（智能问答“播放/启动数据源”六种说法确定性路由到当前数据源启动提案；全量 pytest 635 passed / 1 skipped / 1 warning；真实模型调用未做；活动分支 active；严格排除 `tmp/`）
@@ -18,14 +18,14 @@
 
 ## 当前角色
 - 角色：**资深电力算法专家**（`ROLE.md` v1.4 指定的默认当前角色）
-- 本任务级覆盖：**工程实现工程师**（`ROLE.md` 已定义；2026-11-10 第二项任务：澄清回归修复、37 个提交的台账补记、README 与 `configs/intent_actions.csv` 文档）
+- 本任务级覆盖：**工程实现工程师**（`ROLE.md` 已定义；2026-11-10 第二项任务：澄清回归修复、37 个提交的台账补记、README 与 `configs/intent_actions.csv` 文档；**该任务已完成**，新任务未指定角色时按上一行的默认角色）
 - 生效范围：用户 2026-11-10 的 5 条指令——正式分支为 `arena/51b63974-nilm-calc-tool`；不合入 `restore_branch_full_history` 的 3 个波形分析提交；立即修澄清回归；为 2026-11-06～11-09 的 37 个提交补台账；更新 README 并补 `configs/intent_actions.csv` 文档。逐条范围见「当前目标」第一条。
 - 默认执行模式：**模式 A（沙盒自执行）**；真实模型、目标浏览器与部署网络未连接时只报告未实测，不臆断现场验收。保持 `tmp/` 原样且排除提交。
 - 历史任务执行模式基线（本任务单独声明为模式 A）：**混合**——沙盒侧（模式 A）写码 + 合成信号解析解自验证 + live preview 实跑，**已有实录**；用户侧（模式 B）Windows 部署 / 真实数据对账 / 生产常驻，**只出执行包，未获实录不下结论**（执行包见 `REPORT_TEST.md` T-002 的 W/R/P 三组）
   - 说明：更早任务用户显式指定过模式 B（仅对「补齐台账骨架」生效）；历史任务若用户跳过模式澄清，曾按上述混合模式执行；每个新任务仍以当前任务登记的角色与模式为准。第 5 轮（界面下拉框检查）沙盒侧＝jsdom 驱动真实页面打真实服务端 + REST 空值语义实录，**已✅实录**；用户侧＝浏览器手点 U 组 7 步，**🔶待回报**。**第 6 轮（四功能）**沙盒侧＝pytest 25 项 + jsdom 30 项 + REST/CLI 实录，**已✅实录**；用户侧＝浏览器手点 U6 组 8 步，**🔶待回报**。**第 7 轮（三功能）**沙盒侧＝pytest 18 项 + jsdom 39 项 + CLI/源层实录，**已✅实录**；用户侧＝U7 组 8 步，**🔶待回报**。**第 9 轮（间谐波/直流/事件）**沙盒侧＝pytest 13 项 + jsdom 28 项 + live preview 实跑，**已✅实录**；用户侧＝U9 组 6 步，**🔶待回报**。**第 10 轮（离线列映射开关）**沙盒侧＝pytest 8 项 + jsdom 15 项 + REST 实录，**已✅实录**；用户侧＝U10 组 6 步，**🔶待回报**。**第 11 轮（时标 UTC 开关）**沙盒侧＝pytest 6 项 + 双时区全量 + jsdom 11 项，**已✅实录**；用户侧＝U11 组 5 步，**🔶待回报**。**第 12 轮（负荷辨识）**沙盒侧＝pytest 8 项 + jsdom 16 项 + 引擎/CSV 实录，**已✅实录**；用户侧＝U12 组 5 步，**🔶待回报**
 
 ## 当前目标
-- **本任务（2026-11-10 第二项：修复澄清回归、为 37 个提交补台账、更新 README 并补 `configs/intent_actions.csv` 文档）进行中**：
+- **本任务（2026-11-10 第二项：修复澄清回归、为 37 个提交补台账、更新 README 并补 `configs/intent_actions.csv` 文档）已完成**：
   - **角色 / 模式**：工程实现工程师；模式 A；固定活动分支 `arena/51b63974-nilm-calc-tool`，开局远端 tip `161bd00`；`tmp/` 保持原样。
   - **用户指令（2026-11-10 原话）**：① 「arena/51b63974-nilm-calc-tool是正式分支。」② 「`restore_branch_full_history` 上那 3 个「波形分析子界面」提交不合进来」③ 「澄清回归立即修」④ 「11-06 到 11-09 有 37 个提交补充台账记录。」⑤ 「README更新，并补充`configs/intent_actions.csv` 文档。」
   - **范围（按指令逐条）**：
@@ -37,6 +37,14 @@
   - **不在范围**：不合并其他分支；不处理 `node_modules/` 缺 10 个文件、pytest 残留目录、`elec_tool.__version__` 与 README 版本号不一致、2026-10-31 的 HTTP 500；不动 `tmp/`。
   - **验收**：删除 `xfail` 标记后澄清用例通过；全量 pytest 无失败、无 xfail；`tools/generate_assistant_docs.py --check` 四份 `OK`；`node tools/ui_assistant_check.cjs` 通过；改动全部提交并推送，`git status` 干净；交付说明列出验证方式 / 覆盖范围 / 仍存在的缺口。
   - **开局基线**：沙盒被重置，本地 HEAD 停在 `e05542a`，工作区却是 `161bd00` 的内容；先 `git fetch`，确认工作区与远端 tip 无差异，再 `git reset --mixed 161bd00`，没有在旧 HEAD 上提交。全量 pytest **639 passed / 1 skipped / 1 xfailed / 1 warning**（149.17 s）；`cli.py selftest` 44/44；四份手册 `--check` 均 `OK`；jsdom **192 checks**（先按「下一步·环境与仓库卫生」① 的临时做法补齐 10 个文件）；`tmp/` 校验和与上一项任务结束时一致。
+  - **实施**：
+    - 指令 ③：`1cabfb6` 重写模型工具调用的服务端门控（恰好一个调用、工具已注册且已授权、与本轮用户原话的意图一致、参数有依据），不通过时返回澄清；模型调用工具时回答只用服务端文字，流式响应先缓冲；SSE 发 `clarification` 帧；放回 7 种路由日志并接上请求追踪号。`03a2854` 前端标记「待澄清：未创建操作预览」。`0f37e54` 更正一段注释。`tests/test_assistant.py` 32 → 45 个用例，`tests/test_server.py` 39 → 40，`tools/ui_assistant_check.cjs` 192 → 205 项。
+    - 指令 ④：逐个读 37 个提交的 diff 并对可疑路径实测，写成 `REPORT_TEST.md` T-021（11-06 的 23 个）、T-022（11-09 的 13 个与 11-10 的 1 个）和两条补记纪要；核对出 15 处问题（补-A1～A10、补-B1～B5），只登记、没有修，见「下一步」第一条。
+    - 指令 ⑤：`c912674`——`docs/智能问答助手说明.md` 新增 §6.8～§6.10（三条路由与澄清、路由日志与追踪号、修改 `configs/intent_actions.csv`）；README 升到 v0.99.49（第 208 轮），补 §3.1 的 2026-11-09 界面变化、§3.6 的处理流程与已知限制、§2.6 / §6 的意图配置文件；重新生成三份手册。收尾复核后 `48a16de` 再改说明书的已知限制（第 5、7 条改写，新增第 8 条）和 README 相应三处，并去掉两份文档里残留的假模型原话。
+    - 指令 ①：README 两处克隆命令改为本分支，并写明 `main` 上没有程序代码；本文件「关键文件路径」的分支行已更新。指令 ②：没有合入，决策已记录。
+  - **验证**：全量 pytest **654 passed / 1 skipped / 1 warning**（168.68 s，在 `48a16de` 即最终的代码与文档内容上运行）；`tests/test_assistant.py` + `tests/test_server.py` + `tests/test_web_ui.py` 109 passed；`node tools/ui_assistant_check.cjs` **PASS 205 checks**；服务端负对照（三个 `app/assistant*.py` 换回修复前）11 failed / 74 passed；前端负对照（`app.js` 换回）在「SSE clarification 帧没有显示澄清标记」处失败；在真实 `cli.py serve` 进程上核对了日志可见性和 INFO 行的启动方式；四份手册 `--check` 均 `OK`；`cli.py selftest` 44/44；`tmp/` 校验和前后一致。三篇专题入库前，把其中标「实测」的结论逐条重跑、把凭印象写的细节逐条对提交记录核对。命令与输出见 `REPORT_TEST.md` T-020 第 4 点。
+  - **未验 / 缺口**：真实模型未测（全部是假模型响应）；真实浏览器未测（澄清标记与 2026-11-09 的界面改动都没有看过）；Windows 未测（含说明书 §6.9 的启动命令）；用 Excel 打开 / 保存意图配置文件未测。INFO 级路由日志在 `python cli.py serve` 下不可见。流式响应里模型的工具调用不带 `arguments` 时按 `arguments_not_json` 澄清，与非流式不一致。15 处已登记问题未修。意图识别设计文档没有补 `configs/intent_actions.csv`（立项时登记的范围只含 README 与助手说明）。`main` 上仍没有程序代码。
+  - **交付**：提交 `eda5357`（立项）、`1cabfb6`、`03a2854`、`0f37e54`、`c912674`、`48a16de` 与收尾提交，均推送到 `origin/arena/51b63974-nilm-calc-tool`。
 - **上一任务（2026-11-10 第一项：恢复被旧工作副本覆盖的 `app/server.py` 并补录丢失台账）已完成**：
   - **角色 / 模式**：工程实现工程师；模式 A；固定活动分支 `arena/51b63974-nilm-calc-tool`（取自 `restore2remote` 的 `e05542a`；用户确认留在该基线，不合入 `restore_branch_full_history` 多出的 3 个提交）；`tmp/` 保持原样。
   - **起因（开局基线）**：`cli.py selftest` 44/44；全量 pytest **1 failed / 638 passed / 1 skipped**。失败用例 `tests/test_server.py::test_assistant_proposal_confirm_is_branch_scoped_and_reauthorized`：`app/server.py:2120` 以 5 个位置参数调用 `AssistantService.claim_tool_proposal()`（现签名最多 4 个）→ `TypeError`，`POST /api/assistant/tools/confirm` 每次调用都会抛出该异常。
@@ -431,6 +439,9 @@
 - 范围边界：~~本 session 不写业务代码~~ ❌**已失效**（该边界属上一任务；本任务即为写代码）；仍然遵守：不新建台账外散文件、不把数据/产物入库
 
 ## 已完成
+- **2026-11-10（第 208 轮，v0.99.49：澄清回归修复、澄清标记、37 个提交补记、README 与意图配置文档；`REPORT_TEST.md` T-020～T-022）**：按用户 5 条指令执行。① 模型选错工具时返回澄清：重写服务端门控，模型调用工具时回答只用服务端文字，SSE 发 `clarification` 帧，放回路由日志；前端新增「待澄清：未创建操作预览」标记。② 为 2026-11-06～11-10 的 37 个无台账提交补记（T-021、T-022、两条补记纪要），核对出 15 处问题，只登记未修。③ 助手说明新增 §6.8～§6.10；README 升到 v0.99.49，克隆分支改为 `arena/51b63974-nilm-calc-tool`。④ 不合入 `restore_branch_full_history` 的 3 个提交。全量 pytest 654 passed / 1 skipped / 1 warning；jsdom 205 checks；四份手册一致；selftest 44/44。真实模型、真实浏览器、Windows 未验；`tmp/` 未改动（只计算过整个目录的校验和，没有查看内容）。
+- **2026-11-09（补记，写于 2026-11-10；前端 13 个提交 `2c51d2f`～`e9bf4e7`；`REPORT_TEST.md` T-022）**：顶栏在总线侧视图显示分路侧完整状态，「暂停」「停止」可作用于分路侧或同时作用于两侧，任一侧运行时禁用「启动」「加载上次数据」；数据处理页改为 5 个页内子界面（重采样 / 负荷辨识调参 / 设备画像提取 / 波形预览 / 估计 CT）；波形预览序列名去掉单位和「RMS」。没有新增测试，没有浏览器验收。当时没有记台账，本条依据提交记录补写；核对出补-B1～B5。
+- **2026-11-06（补记，写于 2026-11-10；智能问答 23 个提交 `c74f6c1`～`05b7ba8`；`REPORT_TEST.md` T-021）**：意图识别 V2.0（置信度分流、候选召回、缓存，识别结果直接生成提案）；跨侧操作（从话里解析侧别，提案按目标侧确认与执行，引擎接口加 `side` 参数）；`get_runtime_status` / `get_runtime_settings` 直接返回结果；46 条意图契约外置到 `configs/intent_actions.csv`；区分录波列表与画像列表。只有 `3d81987` 新增了测试。当时没有记台账，本条依据提交记录补写；核对出补-A1～A10。
 - **2026-11-10（旧文件覆盖事故：恢复 `app/server.py`、放回丢失断言、补录台账；`REPORT_TEST.md` T-019）**：开局全量 pytest 1 failed，查明 `c5cf96f`、`e31e0d9`、`2c51d2f` 三个提交用旧文件覆盖了 8 个文件。按用户批准的范围恢复 `app/server.py`（助手确认接口不再 HTTP 500）、放回 `tests/test_server.py` 的 trace 断言与澄清用例（后者 strict xfail）、按原文补录 4 篇专题 / 6 行索引 / 5 条会话纪要 / 本文件 4 条任务条目；`REPORT.md` v0.12 新增教训。全量 pytest 639 passed / 1 skipped / 1 xfailed；jsdom 192 checks；四份手册一致。`app/assistant.py` 的澄清回归按用户决定未修。
 - **第 207 轮（2026-11-04，智能问答逐会话后端 / 模型选择、本地模型配置精简与 46 项受控工具矩阵）**：保留 composer 底部 local / cloud / builtin 后端选择并按会话隔离；local 候选由服务端发现缓存提供，cloud 仅列管理员配置，builtin 隐藏模型选择；管理员设置不再保存 local 模型名称，模型刷新只接受空请求或 `{}` 并使用已保存服务地址。登记 46 项业务工具，逐项比对目录 / dispatcher / UI 标签 / scope，文档列全矩阵与未开放操作边界；26 项高风险保留二次确认。新增目录 / dispatcher / UI 契约测试及隐藏来源模式下录波 / 画像列表和加载结果脱敏回归；单通道 RMS 分析要求明确通道。定向助手 / UI / 服务端 **84 passed / 1 warning**（12.43 s）；全量 **629 passed / 1 skipped / 1 warning**（167.63 s）；`node tools/ui_assistant_check.cjs` **188 checks**；四份生成手册 `--check` 通过。真实浏览器 / 键盘 / 触屏和真实模型 provider 未验；`tmp/` 未读未改、未纳入。
 - **第 204 轮（2026-11-04，智能问答助手会话管理栏收起 v0.99.45）**：桌面标题栏新增“收起会话 / 显示会话”，隐藏左栏时 CSS 切为单列并让问答区占满，恢复后回到双栏；同一按钮用于窄屏覆盖式会话抽屉，窄屏打开助手时默认折叠。文本、title、aria-label 与 aria-expanded 动态同步；不持久化折叠偏好。`tests/test_assistant.py tests/test_web_ui.py` **46 passed**；`node tools/ui_assistant_check.cjs` **150 checks**，覆盖桌面默认展开、收起、恢复与窄屏默认折叠、展开、再折叠；四份生成手册 `--check`、JS / Python 语法及 `git diff --check` 通过。目标浏览器视觉 / 键盘验收仍待用户；`tmp/` 未读未改。
@@ -611,6 +622,7 @@
 - [x] 2026-10-12 **第 7 轮三功能**：曲线实时落盘 `output/realtime/<曲线>_<日期>.csv` / 离线播放起点（5 模式）/ 曲线悬停取值；`tests/test_r7_features.py` 18 项 + `tools/ui_r7_check.cjs` PASS 39 + 旧 harness 30/74 + 全量 **204 passed, 1 skipped**；README v0.6 / REPORT_TEST T-005 / REPORT C-16、C-17
 
 ## 进行中
+- **第 208 轮外部验收（沙盒交付已完成，真实环境待用户）**：① 接上真实模型，用一句会让模型选错工具或缺参数的话，确认界面显示澄清和「待澄清：未创建操作预览」标记，没有待确认卡片；② 在浏览器里看澄清标记，以及 2026-11-09 的顶栏与数据处理页子界面（桌面与窄屏）；③ 在 Windows 上试 `docs/智能问答助手说明.md` §6.9 的启动命令，确认能看到 INFO 级路由日志；④ 用 Excel 打开并保存 `configs/intent_actions.csv` 后重启服务，确认能启动、中文不乱码。pytest / jsdom 的结果不替代这些验收。
 - **第 207 轮外部验收（沙盒交付已完成，真实环境待用户）**：在目标浏览器切换 local / cloud / builtin 与具体模型，确认已有消息切换会新建独立会话、旧会话路由不变，并检查桌面 / 窄屏视觉和键盘 / 触屏；若部署了模型服务，核验本地候选发现 / 管理员刷新及真实 provider 响应。不得在报告中将 jsdom / pytest 结果写成真实浏览器或模型验收。
 - **第 204 轮侧栏收起功能（代码 / 测试 / 文档完成，目标浏览器验收待用户）**：桌面标题栏按钮收起 / 恢复左栏，收起时问答区单列铺满；窄屏初始折叠且仍为覆盖式抽屉；切换时同步文本、title、aria-label、aria-expanded。定向 pytest **46 passed**、jsdom **150 checks**、四份手册 `--check` 通过；未做真实浏览器视觉验收。
 - **第 203 轮目标浏览器复验（代码审查完成，用户现场视觉待验）**：逐项核对外层 shell、消息 / 会话、设置 / 本地文档、审计 / 附图和 Markdown 内层滚动；未发现 overflow 声明缺失或代码层明确断链。部分内层 scrollbar 使用 `thin` + 透明轨道或浏览器默认样式，OS overlay scrollbar 可能闲置隐藏；这属于视觉可发现性限制，不证明内容无法滚动。`tests/test_web_ui.py` 23 passed、jsdom 142 checks、JS 语法通过；无可用真实浏览器，需用户目标环境复验。
@@ -628,11 +640,26 @@
 - 等用户执行 T-002 的 W/R/P 组（Windows 部署 / 真实数据对账 / 生产常驻）并回报实录
 
 ## 下一步（TODO）
-- **修复 `app/assistant.py` 的澄清回归（2026-11-10 登记，用户决定另行安排；详情见 `REPORT_TEST.md` T-019 第 8 点）**：现象——模型选的工具与用户意图不符时，工具调用被拦下、不生成提案，但接口把模型原话当作回答返回（例：用户说「切换接线模式到3p4w」，模型调 `get_runtime_status` 并回答「操作已经完成。」，界面显示「操作已经完成。」而实际未执行），`clarification` 恒为 `false`，SSE 没有 `clarification` 帧。位置——`complete()` / `stream()` 把澄清文字写进 `plan["_clarification_response"]` 后没有返回它；`app/server.py:2403` 读取的 `plan["_tool_clarification"]` 无人赋值；流式文字在校验前已发出。不能从 `ca5dc28` 直接合并（`app/assistant.py` 13 个冲突块），需在当前代码上重新实现。完成标准——① 删除 `tests/test_server.py` 中 `test_assistant_chat_returns_clarification_for_mismatched_model_tool_in_json_and_sse` 的 `xfail` 标记后该用例通过；② 从 `ca5dc28:tests/test_assistant.py` 补回 5 个用例（其中 2 个现在即可通过，3 个需随修复调整）；③ 恢复 T-017 的 7 种路由诊断日志并接上 `payload["_assistant_trace_id"]`；④ 从 `ca5dc28:docs/智能问答助手说明.md` 放回 §6.8 / §6.9 并重新生成手册；⑤ 前端澄清状态标记（从未入库，需重做）。
-- **待用户决定：哪条分支是正式分支（2026-11-10）**：`README.md` 第 15、72 行让用户克隆 `arena/82e34fb8-nilm-calc-tool`，该分支与 `main` 现在都指向 `27b28ea`，只有 `BOOTSTRAP.md`、`ROLE.md`，没有代码。有代码的分支是 `restore2remote`（`e05542a`）、`restore_branch_full_history`（`22d8d9c`）和本任务分支。用户定下后改 README 的克隆命令并重新生成手册。
-- **待用户决定：是否合入 `restore_branch_full_history` 多出的 3 个提交（2026-11-10）**：`bbf7fca`、`63a2378`、`22d8d9c`（波形分析子界面，只改 `app/static/`）。本任务按用户决定没有合入，也没有测试过它们。
-- **给 2026-11-06～11-09 的 37 个无台账提交补记录与文档（2026-11-10 登记）**：`REPORT_TEST.md` T-019 第 9 点只有按提交标题整理的索引，功能没有复核。`README.md` 仍标 v0.99.48（2026-11-04）；`configs/intent_actions.csv`（11-06 新增的意图契约配置）在 README、助手说明书、意图识别设计文档里都没有提到；11-09 的界面改动是否已写入文档没有核对。
-- **环境与仓库卫生（2026-11-10 登记，均未处理）**：① 入库的 `node_modules/` 缺 10 个文件——`.gitignore` 第 10 行 `data/` 没有限定在根目录，把 `node_modules/**/data/` 也忽略了；干净克隆下 `node tools/ui_assistant_check.cjs` 报 `Cannot find module '../data/patch.json'`，临时做法是在仓库外 `npm ci` 后把这 10 个文件拷进来；② 全量 pytest 会在当前目录留下 `data/`、`output/`；③ `elec_tool.__version__` 是 `0.1.0`，README 写 v0.99.48。
+- **待用户决定：是否修 2026-11-06～11-09 提交里核对出的 15 处问题（2026-11-10 登记，均未修）**：证据见 `REPORT_TEST.md` T-021 第 4 点（补-A）与 T-022 第 4 点（补-B）。我的判断：补-A5、补-A10、补-A1、补-B2 最影响使用，补-A7 涉及审计完整性。
+  - **补-A1**：延时指令检查把单个「后」字当成延时；「查看后台重采样任务状态」「取消后台重采样」「查询最后10条电能质量事件」被 HTTP 400 拒绝（`app/assistant.py` 的 `_has_delay_intent`）。
+  - **补-A2**：侧别词按子串匹配、先出现的优先；在分路侧页面说「查看 Modbus 运行状态」返回的是总线侧状态（`_parse_side_from_prompt`）。
+  - **补-A3**：`_exclusive_limit`、`_parsed_side` 写入计划后无人读取，「排他性限定词」「服务端侧别复验」没有实现完。
+  - **补-A4**：意图识别直达对 `start_current_source` 一律要求文件数据源，确定性路由只在话里明确提到离线播放时才要求；数据源是模拟器时「启动分路侧数据源检测」返回 409，而「启动分路侧数据源」可以生成提案。
+  - **补-A5**：模型路径生成的提案绑定在提问页面所在的一侧；在总线侧页面说「把分路侧接线模式切换到3p4w」得到 `side=bus` 的提案。
+  - **补-A6**：意图识别直达只在工具已授权时介入，未授权时不报错而转入模型路径；直达分支里 5 处 403 检查走不到。
+  - **补-A7**：`get_runtime_status` / `get_runtime_settings` 直接执行，不写 `tool_audit.jsonl`；并且任何置信度档位都直接执行（`e592aef` 的注释写「只要不是 low」，代码没有这个条件）。low 档位是否保留直接执行、是否补审计记录，待定。
+  - **补-A8**：`configs/intent_actions.csv` 的 UTF-8 BOM 由 `8de1e35` 加上、当天被 `e7a39fd` 去掉，是否有意不明；现在没有 BOM，中文 Excel 打开可能乱码（没有条件验证）。另：文件存成 GBK 时服务无法启动。
+  - **补-A9**：跨侧的暂停 / 恢复 / 停止在生成提案时不检查目标侧是否在运行；目标侧未运行时，暂停 / 恢复到确认才报 400，停止则返回成功。
+  - **补-A10**：跨侧「启动」的前置检查读的是提问页面所在一侧的状态。总线侧在运行、分路侧未运行时，在总线侧页面说「启动分路侧数据源」被 409「分路侧数据源已在运行或暂停…」误拒（要切到分路侧页面说「启动数据源」）；反过来，目标侧已在运行时提案照样生成，到确认才被 409 拒绝。`226ab56` 只给暂停 / 恢复 / 停止加了跨侧豁免，没有处理启动（`app/assistant.py` 两条直达路由里 `start_current_source` 的检查；上下文来自 `app/server.py` 的 `_assistant_tool_context(current_side())`）。
+  - **补-B1**：顶栏对侧一行的频率恒为「—」（`renderTop` 里写死；改动前显示对侧摘要的 `f_used`）。
+  - **补-B2**：顶栏「暂停」「停止」的提示不可靠——分路侧视图下把侧别说成总线侧；总线侧视图下操作分路侧时不检查返回状态，服务端报错也提示成功；提示里的侧别是英文标识（`togglePause`、`stopEngine`）。
+  - **补-B3**：`initCtEstimate()` 被调用两次且没有防重，「加载逐周波 RMS 曲线」等用匿名函数绑定的控件点一次触发两次。
+  - **补-B4**：数据处理页内导航条用写死的浅色，没有用主题变量；深色主题下的观感没有看过。
+  - **补-B5**：`tools/ui_r61_check.cjs` 没有随数据处理页改版更新，原样运行失败；该脚本在改版前就已过期（20 项通过 / 15 项失败后崩溃）。同样操作数据处理页的 `ui_r72` / `ui_r80` / `ui_r86` / `ui_r90` / `ui_r8` 没有运行。更新还是停用这些脚本，待定。
+- **待用户决定：是否让 INFO 级路由日志默认可见（2026-11-10）**：仓库没有给 `elec_tool.*` 记录器配置输出，`python cli.py serve` 下只有 WARNING 及以上的行可见，`--log-level` 只影响 uvicorn。正常生成提案或普通回答的请求只写 INFO 行，默认看不到。办法是在 `cli.py` 的 `cmd_serve` 里配置日志输出（约 8 行代码加 1 个用例）；这会改变服务的默认输出，本任务没有做。不改代码的启动方式见 `docs/智能问答助手说明.md` §6.9（只在 Linux 上试过）。
+- **`main` 上没有程序代码（2026-11-10）**：用户已确定 `arena/51b63974-nilm-calc-tool` 是正式分支，README 的克隆命令已改。`main` 与 `arena/82e34fb8-nilm-calc-tool` 仍指向 `27b28ea`（只有 `BOOTSTRAP.md`、`ROLE.md`），GitHub 默认分支仍是 `main`。是否把本分支合并到 `main` 或更改默认分支，由用户在 GitHub 上操作；本任务没有动其他分支。`restore_branch_full_history` 多出的 3 个提交按用户决定不合入。
+- **澄清修复的未覆盖项（2026-11-10；`REPORT_TEST.md` T-020）**：① 流式响应里模型的工具调用完全不带 `arguments` 时按 `arguments_not_json` 澄清，非流式的同样情况按空参数处理，两条路径不一致，没有用例；② `tool_intent_hint()` 无人调用，契约规则没有写进发给模型的工具描述（旧说明书写有）；③ README 的验证记录和变更记录整段在知识库里，会被当作资料检索出来，是否排除没有评估（T-020 第 8 点）；④ `docs/智能问答助手基于大模型技术的意图识别技术设计文档.md`（V2.0）第 54、101、151 行仍只把意图字典写作 `app/assistant_intents.py` 的 `_INTENT_DATA`，没有提数据自 `3d81987` 起来自 `configs/intent_actions.csv`；该文档有版本号和修订记录，改它需要用户确定版本与修订人，本任务没有改。
+- **环境与仓库卫生（2026-11-10 登记，均未处理）**：① 入库的 `node_modules/` 缺 10 个文件——`.gitignore` 第 10 行 `data/` 没有限定在根目录，把 `node_modules/**/data/` 也忽略了；干净克隆下 `node tools/ui_assistant_check.cjs` 报 `Cannot find module '../data/patch.json'`，临时做法是在仓库外 `npm ci` 后把这 10 个文件拷进来；② 全量 pytest 会在当前目录留下 `data/`、`output/`；③ `elec_tool.__version__` 是 `0.1.0`，README 写 v0.99.49。
 - **第 207 轮现场验收（待用户）**：在目标浏览器检查 composer 后端 / 具体模型下拉、切换后独立会话、保留旧会话路由、desktop / narrow-screen 排版与原生键盘 / 触屏行为；有真实本地服务时检查候选发现及管理员刷新后实际聊天，有云端 provider 时按部署方策略单独验收。请仅回报不含令牌 / API Key 的浏览器、OS、视口、步骤与现象。pytest / jsdom 不替代现场验收。
 - **第 204 轮目标浏览器复验（待用户）**：在桌面点击标题栏“收起会话”，确认左栏消失且问答区铺满，再点击“显示会话”确认双栏恢复；用键盘 Tab / Enter 检查开关与屏幕阅读器状态；窄屏确认默认折叠、抽屉可以打开 / 关闭且不遮住操作。若宽度或状态有问题，回报浏览器 / OS / 视口尺寸及步骤后继续修正。
 - **第 203 轮目标浏览器复验（待用户）**：在目标浏览器分别检查会话列表 / 长对话 / 长文档与参数 / 审计记录 / 短视口及窄屏；确认 overflow 时 scrollbar 外观、鼠标 / 触控滚动、嵌套区到边界后父区接管、设置后续内容可达与关闭入口保持可见。若 scrollbar 闲置自动隐藏，先滚动 / 聚焦确认内容仍可达；记录浏览器、OS、视口尺寸和复现步骤后再决定是否需针对性修复。静态契约 / jsdom 不能代替现场验收。
@@ -664,9 +691,20 @@
 10. **T-004 遗留**：自定义播放时间目前只对 `csv_file` 生效（`csv_tail` 若现场文件也是 0/00/00 写法需扩展）；趋势历史随「重新启动数据源」清空，跨运行/跨进程的 24 h 需落盘（SQLite/滚动 CSV）；`history_hours`/`history_max_points` 未上界面；曲线横轴跨午夜不显示日期；自定义起始时间按本地时区（若现场要 UTC 需加 `tz` 字段）
 
 ## 决策记录 / 踩坑
+- 2026-11-10｜**决策（用户）**：`arena/51b63974-nilm-calc-tool` 是正式分支；`restore_branch_full_history` 多出的 3 个波形分析提交（`bbf7fca`、`63a2378`、`22d8d9c`）不合入。
+- 2026-11-10｜**决策（「澄清回归立即修」的范围）**：按此前登记的 5 点完成标准整体执行（门控、用例、日志、说明书、前端标记）。门控在当前代码上重写，不从 `ca5dc28` 合并。模型一旦调用工具，回答只用服务端文字；流式响应在向模型提供了工具时先缓冲，代价是这类请求的首字延迟变长。
+- 2026-11-10｜**决策（说明书按实测写，不照搬旧文）**：旧 §6.8 说契约规则写进模型的工具描述，旧 §6.9 说 `--log-level info` 能看到路由日志，两处都与实际不符。新 §6.8～§6.10 只写实测过的行为，已知限制逐条列出。
+- 2026-11-10｜**决策（不加日志输出配置）**：给 `cli.py serve` 配日志输出会改变服务的默认输出，不在用户指令内。说明书给出不改代码的启动方式，是否改代码留给用户。
+- 2026-11-10｜**决策（补记的写法）**：标题带「补记」和写作日期；正文区分「实测」与「读代码」；不推测当时的讨论和验证。核对出的问题编号为 补-A1～A10（2026-11-06）、补-B1～B5（2026-11-09），只登记不修，因为用户的指令是补台账。
+- 2026-11-10｜**踩坑（文档措辞会进知识库）**：README 整份进入 `docs/软件使用文档.md`，后者是知识库文档。在 README 里照抄验收用例的提问和假模型自述后，这一段成了该提问唯一命中的检索片段，进入 SSE 的 `sources` 帧和发给模型的上下文，验收用例失败。对策：验收原话只写在 `REPORT_TEST.md`（不在知识库里）；改完文档要跑助手的三个测试文件。见 T-020 第 8 点。收尾时又发现 README §3.6 和说明书 §6.8 还各留着一句假模型的原话，已改写（`48a16de`）：知识库按字符位置顺序分块，文档一改后面的分块边界都会移动，不能靠「这一段现在没被检索到」。
+- 2026-11-10｜**踩坑（跨侧功能要在两侧状态不同时测）**：第一轮跨侧探查时两侧都没在运行，四个提问都得到了正确侧的提案，说明书据此写了跨侧说明。收尾复核时让总线侧运行、分路侧停止再试，才发现跨侧启动读的是提问页面一侧的状态（补-A10）。两侧状态相同时，读错侧和读对侧的结果一样，测不出来。
+- 2026-11-10｜**做法（台账入库前逐条复核）**：三篇专题写完后，把标「实测」的结论逐条重跑，把凭印象写的细节（函数名、行号、断言条数、帧顺序、提交改了哪个用例）逐条对 `git show` 和日志核对，改正了十余处写错或写得不准的细节，并发现 1 个新问题。
+- 2026-11-10｜**踩坑（日志没有输出配置）**：`elec_tool.*` 记录器没有配置任何处理器，INFO 行在 `cli.py serve` 下全部丢弃。以前的说明书写「`--log-level info` 可见」，没有实测过。写「能看到某条日志」之前，要在真实进程上看一眼。
+- 2026-11-10｜**踩坑（字符串契约测试不证明行为）**：2026-11-09 的顶栏改动为了让旧的字符串断言继续通过，保留了旧字面量（`app.js` 注释「保留原字面量供契约测试」）。测试全绿，但提示把侧别说反、错误被当成成功（补-B2）。界面行为要用能运行函数的检查（jsdom / node）或浏览器验证。
+- 2026-11-10｜**踩坑（沙盒重置后本地 HEAD 落后远端）**：本任务中 3 次出现本地 HEAD 回到 `e05542a`、工作区却是最新内容。处理：`git fetch` 后用 `git diff --stat FETCH_HEAD` 确认工作区只多出进行中的文件，再 `git reset --mixed <远端 tip>` 并设置 upstream；确认之前不提交。另：在 bash 里执行 `pkill -f "cli.py serve"` 会把执行命令的 shell 一起杀掉，停服务要按 PID。
 - 2026-11-10｜**踩坑（旧文件覆盖新提交，测试两次都没拦住）**：`c5cf96f`、`e31e0d9`、`2c51d2f` 把停留在 2026-11-05 时点的旧文件整份提交，盖掉了 8 个文件里更新的内容；第一次覆盖造成的失败用例被第二次覆盖删掉，第三次覆盖造成的失败带着走了 13 个提交。对策写在 `REPORT.md` 第 5 节 2026-11-10 一条：提交前逐文件看 `git diff --stat`；台账或测试出现成片删除先查清；开局和提交前都跑全量测试。经过见 `REPORT_TEST.md` T-019。
 - 2026-11-10｜**决策（恢复用三方合并，不整份回退）**：`git merge-file`，ours＝覆盖前最后一个好版本、base＝被写回的旧版本、theirs＝当前版本。`app/server.py` 这样恢复后无冲突，并保住了覆盖提交 `2c51d2f` 里有效的 `pausable` 一行。同一手法对 `app/assistant.py` 不适用（13 个冲突块），因为之后的提交重写了同一片代码。
-- 2026-11-10｜**决策（已知缺陷用 strict xfail 留在测试里）**：丢失的澄清用例在当前代码上不通过，用户决定本任务不修。用 `xfail(strict=True)` 放回而不是不放或跳过：缺陷在测试报告里可见，修复后用例「意外通过」会报错，提醒删标记。
+- 2026-11-10｜**决策（已知缺陷用 strict xfail 留在测试里）**：丢失的澄清用例在当前代码上不通过，用户决定本任务不修。用 `xfail(strict=True)` 放回而不是不放或跳过：缺陷在测试报告里可见，修复后用例「意外通过」会报错，提醒删标记。（后续：第 208 轮修复后已删除该标记，用例通过。）
 - 2026-11-10｜**决策（补录只追加、不改写）**：丢失的专题、纪要、任务条目按 `ca5dc28` 原文追加，各加一段补录说明；现存条目一行不动。现存「[2026-11-06] T-014 …设计文档（落盘）」与补回的 T-014 重号，索引里记作 T-014b，本次专题编号 T-019。说明书 §6.8 / §6.9 没有放回，因为它们描述的澄清与诊断行为当前代码没有。
 - 2026-11-10｜**角色**：默认角色不变（资深电力算法专家）；本任务级覆盖为工程实现工程师，模式 A。范围由用户在两个选项里确定：只恢复 `app/server.py` 与台账；留在 `e05542a` 基线。
 - 2026-11-10｜**踩坑（浅克隆）**：本次检出是浅克隆，`git rev-list --count HEAD` 得 1，看不到历史。用 `git fetch --no-tags --depth=60 origin restore_branch_full_history` 取回后按提交哈希访问。`git log` 默认按各提交自己的时区显示时间，比较先后要统一成 UTC。
@@ -729,8 +767,9 @@
 - 2026-10-10｜历史决策（更早任务，仍有效）：分支策略用平台固定 session 分支；不编造项目事实（`ROLE.md` 背景只作推断引用）；KPI 通用数学定义属数学事实可写死；✅ 必须同行带来源、经验阈值必须显式标「经验推测」
 
 ## 关键文件路径
-- 2026-11-10 事故恢复：`app/server.py`（恢复后 `claim_tool_proposal` 调用在确认处理函数内，`trace_headers` 与 `X-Assistant-Trace-ID` 在 `assistant_chat` 内）、`tests/test_server.py`（xfail 用例与 trace 断言）；待修位置 `app/assistant.py` 的 `complete()` / `stream()`；记录 `REPORT_TEST.md` T-019、`REPORT.md` 第 5 节末行；丢失内容的原文在提交 `ca5dc28`（`git show ca5dc28:<文件>`）。
-- 分支（2026-11-10 现状）：本任务分支 `arena/51b63974-nilm-calc-tool`，取自 `restore2remote` 的 `e05542a`，已推送。远端其他分支：`main` 与 `arena/82e34fb8-nilm-calc-tool` 指向 `27b28ea`（只有 `BOOTSTRAP.md`、`ROLE.md`）；`restore2remote`＝`e05542a`；`restore_branch_full_history`＝`22d8d9c`。本节下方那条「分支：`arena/82e34fb8-nilm-calc-tool`」是 2026-10 的历史记录。
+- 2026-11-10 第 208 轮（澄清修复与补记）：`app/assistant.py`（`_accept_tool_calls` 门控；`prepare_chat` 的三条路由与路由日志；`complete()` / `stream()`）、`app/assistant_intents.py`（`validate_model_tool_result` 的原因码、意图配置读取）、`app/assistant_tools.py`（`SIDE_ARGUMENT_IGNORED_TOOLS`）、`configs/intent_actions.csv`；前端 `app/static/app.js`（`assistantBuildClarificationNote`）、`app/static/style.css`；回归 `tests/test_assistant.py`、`tests/test_server.py`、`tests/test_web_ui.py`、`tools/ui_assistant_check.cjs`（不在 pytest 里，要单独运行）；说明 `docs/智能问答助手说明.md` §6.8～§6.10、`README.md` §3.1 / §3.6 / §11；记录 `REPORT_TEST.md` T-020～T-022
+- 2026-11-10 事故恢复：`app/server.py`（恢复后 `claim_tool_proposal` 调用在确认处理函数内，`trace_headers` 与 `X-Assistant-Trace-ID` 在 `assistant_chat` 内）、`tests/test_server.py`（澄清用例与 trace 断言；澄清用例当时标 xfail，第 208 轮修复后已去掉标记，见上一行）；记录 `REPORT_TEST.md` T-019、`REPORT.md` 第 5 节末行；丢失内容的原文在提交 `ca5dc28`（`git show ca5dc28:<文件>`）。
+- 分支（2026-11-10 现状）：**正式分支 `arena/51b63974-nilm-calc-tool`**（用户 2026-11-10 确定；取自 `restore2remote` 的 `e05542a`，已推送）。远端其他分支：`main` 与 `arena/82e34fb8-nilm-calc-tool` 指向 `27b28ea`（只有 `BOOTSTRAP.md`、`ROLE.md`；GitHub 默认分支仍是 `main`）；`restore2remote`＝`e05542a`；`restore_branch_full_history`＝`22d8d9c`（多出的 3 个提交按用户决定不合入）
 - 本轮明确启动指令误路由：`app/assistant.py`（有效工具过滤、精确标题确定性提案、缺权因由与当前数据源前置校验）、`app/assistant_tools.py`（动作边界描述）、`tests/test_assistant.py` / `tests/test_server.py`（路由 / 授权 / SSE / 确认回归）；`docs/智能问答助手说明.md` §6.7；`REPORT_TEST.md` T-012、`session/NILM_AC_session_complete.md` 与本文件。
 - 第 207 轮后端 / 模型选择与工具覆盖：`app/assistant_tools.py`、`app/assistant.py`、`app/server.py`、`app/static/index.html` / `app.js` / `style.css`；回归 `tests/test_assistant.py`、`tests/test_server.py`、`tests/test_web_ui.py`、`tools/ui_assistant_check.cjs`；矩阵与未开放边界 `docs/智能问答助手说明.md` §6.6；同步 `README.md` §3.6 / §11、生成手册、`REPORT_TEST.md` T-011、`session/NILM_AC_session_complete.md` 与本文件。
 - 第 204 轮会话侧栏收起：`app/static/index.html`、`app/static/style.css`、`app/static/app.js`；回归 `tests/test_web_ui.py`、`tools/ui_assistant_check.cjs`；用户说明 `README.md`、`docs/智能问答助手说明.md` 与生成手册；台账 `REPORT_TEST.md`、`session/NILM_AC_session_complete.md`、本文件。
@@ -745,7 +784,7 @@
 - 第 191 轮智能问答 v0.99.38：`app/assistant_tools.py`（8 项闭集工具 / 参数 schema）、`app/assistant.py` / `app/server.py`（令牌 + scope、提案与服务端复核、受控业务 API、审计）、`app/static/index.html` / `app.js` / `style.css`（操作员验证、提案有效期 / 状态 / 二次确认）；回归 `tests/test_assistant.py`、`tests/test_server.py`、`tests/test_web_ui.py`、`tools/ui_assistant_check.cjs`；说明文档与报告见 `README.md` §3.6 / §11、`docs/智能问答助手说明.md`、`REPORT_TEST.md`、本文件与 `session/NILM_AC_session_complete.md`。
 - 第 189 轮智能问答 v0.99.37：`app/assistant_docs.py`（白名单完整文档与代码 / 两侧模板参数表）、`docs/智能问答助手说明.md`、`app/assistant.py` / `app/server.py`（builtin/local/cloud RAG、参数优先排序、`GET /api/assistant/documents`）、`app/static/index.html` / `app.js` / `style.css`（固定复合侧栏与移动标签）；测试 `tests/test_assistant.py`、`tests/test_server.py`、`tests/test_web_ui.py`、`tools/ui_assistant_check.cjs`；专题记录 `REPORT_TEST.md` 与 `session/NILM_AC_session_complete.md`。
 - 第 188 轮智能问答 v0.99.36：`app/assistant.py`（builtin / local-cloud 适配 / RAG / 脱敏 / 限流）、`app/server.py`（`/api/assistant/*` 与服务端脱敏判据）、`app/static/index.html` / `app.js` / `style.css`（右侧抽屉）；运行数据 `output/assistant/`（gitignore）
-- `README.md` — 当前 **v0.99.48**；第 207 轮后端 / 模型选择、46 项受控业务工具覆盖与最新验证见 §3.6 / §11；保留管理员与操作员令牌、scope 判读、固定复合侧栏及参数文档说明
+- `README.md` — 当前 **v0.99.49**；第 208 轮的澄清处理流程、已知限制与验证见 §3.6 / §11，2026-11-09 的界面变化见 §3.1；第 207 轮后端 / 模型选择、46 项受控业务工具覆盖仍在 §3.6；保留管理员与操作员令牌、scope 判读、固定复合侧栏及参数文档说明
 - 历史 README 索引 — **v0.8**（§3.1 增「间谐波 / 直流偏置 / 事件 子界面」小节含假设与可配置项表、§3.4 `/api/events*` 与 WS `event`、§11 第 9 轮；v0.7：§3.1 增「数据处理子界面：离线波形 CSV 重采样」小节、§3.2 8 子命令、§3.4 4 个 `/api/process/resample*` 接口；v0.6：§3.1 增「实时落盘＋播放起点＋悬停取值」小节、§3.4 `/api/realtime`、§4.2 播放起点字段与 CLI、§8 七层验证）：§0 快速开始、§1 验收对照、**§2 本地部署（详细）**、**§3 运行说明（Web/CLI/库/REST 四种；§3.1 含数据源面板逐源可编辑/置灰字段表、两个保存入口语义对照、空值语义与 6 步手工点检清单）**、**§4 四种数据源详解（配置·三入口·实测·注意事项·验证，含 §4.6 四源对账表与 §4.8 一键复现）**、§5 数据目录、§6 配置结构、§7 输出产物、§8 五层验证、§9 生产推荐流程、§10 台账索引、§11 交付说明
 - `REPORT.md` — **v0.8**（新增 C-19 间谐波分组分辨率前提、C-20 事件状态机四规则；v0.7：新增 C-18 重采样时间轴/时标规则；v0.6：新增 C-16 三出口共用提取规则与按日期分文件、C-17 播放起点定位代价与可诊断）：稳定结论 C-01~C-08（电气量计算）+ C-09~C-12（四源等价性 / 切换前 drain / float32 禁存 epoch 秒与可诊断降级 / 无硬件验证路径）+ **C-13（界面层验证方法 + 深合并接口空值语义 + 推送覆盖用户输入）**；§3.3 十五类量口径；§5 六条实录教训
 - `REPORT_TEST.md` — **v0.8**（新增 **T-007** 第 9 轮间谐波/直流/事件：S1~S7 / F-29~F-31 / U9 组；v0.7：新增 **T-006** 第 8 轮数据处理子界面：S1~S7 / F-24~F-28 / U8 组；v0.6：新增 **T-005** 第 7 轮三功能：S1~S4 / F-17~F-21 / U7 组）：T-001（待回报）+ T-002（沙盒 A1~A10、B1/B2、用户侧 W/R/P）+ **T-003（沙盒 S1~S18 实录、四源对账表、F-01~F-10 修复、用户侧 S/U/D 三组执行包 + J-\* 判读 + 回收格式）**
@@ -754,5 +793,5 @@
 - 代码：`cli.py`（8 子命令入口，含 `resample`）、`elec_tool/`（算法核心 + `sources/` + `analysis/` + `resample.py` 离线重采样 + **`events.py` 事件检测**）、`tools/ui_r9_check.cjs`（间谐波/直流/事件 28 项端到端）、`tests/test_r9_events.py`、`tools/ui_r8_check.cjs`（数据处理子界面 29 项端到端）、`tests/test_r8_resample.py`、`app/server.py` + `app/static/`（Web）、`configs/default.json`（出厂模板）、**`tools/`（tcp_feeder / csv_appender / verify_sources / ui_dropdown_check.cjs / ui_r6_check.cjs / ui_r7_check.cjs）**、`tests/`（**574 passed / 1 skipped，56 个文件**；第 184 轮＝`test_r184_single_phase_profile.py`）、**`elec_tool/realtime_writer.py`**
 - 数据与产物（均 gitignore）：`data/`（输入 CSV，`cli.py gen-sample` 可重建样例）、`output/`（导出结果）、`configs/runtime.json`（界面保存的配置）
 - 运行环境：`.venv/`（gitignore，沙盒回收后需重建：`python3 -m venv .venv && .venv/bin/pip install -r requirements.txt`）
-- 分支：`arena/82e34fb8-nilm-calc-tool`（远端同名，已 push；第 9 轮提交＝`8539d8a`（feat）+ docs；第 8 轮提交＝`a6fd42d`（feat）+ `b6c7ca6`（docs）；第 6 轮 tip `f1966e8`；第 7 轮提交＝`f0fdea6` feat(r7) / `341fc9e` test(r7) / docs）｜基点 `main`=`27b28ea`
+- 分支（历史，第 6～9 轮；该分支现在只剩 `BOOTSTRAP.md`、`ROLE.md`，正式分支见本节第 3 行）：`arena/82e34fb8-nilm-calc-tool`（远端同名，已 push；第 9 轮提交＝`8539d8a`（feat）+ docs；第 8 轮提交＝`a6fd42d`（feat）+ `b6c7ca6`（docs）；第 6 轮 tip `f1966e8`；第 7 轮提交＝`f0fdea6` feat(r7) / `341fc9e` test(r7) / docs）｜基点 `main`=`27b28ea`
 - 第 189 轮 live preview：`cli.py serve --host 0.0.0.0 --port 8001` 常驻（`ELEC_TOOL_AUTOSTART=0`；输出隔离到 `/tmp/nilm-assistant-preview-189`）；首页、完整文档目录 API、配置与 builtin 参数问答已实测 HTTP 200。
