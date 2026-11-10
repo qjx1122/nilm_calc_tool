@@ -951,7 +951,8 @@
       <button class="sub-navitem active" data-subview="rsample">📊 重采样</button>
       <button class="sub-navitem" data-subview="nilm-tune">🎛 负荷辨识调参</button>
       <button class="sub-navitem" data-subview="profile-extract">🖼 设备画像提取</button>
-      <button class="sub-navitem" data-subview="wave-preview">📈 波形分析</button>
+      <button class="sub-navitem" data-subview="wave-analyze">📊 波形分析</button>
+      <button class="sub-navitem" data-subview="wave-preview">📈 波形预览</button>
       <button class="sub-navitem" data-subview="ct-estimate">🔧 估计 CT</button>
     </div>
 
@@ -1301,51 +1302,102 @@
           <details><summary>原始画像 JSON</summary><pre id="np-json" class="pre"></pre></details>
         </div>
       </div>
-      <!-- v0.61：波形预览 -->
-
-    </section>
-
-    <section id="view-process-wave-preview" class="subview">
+    <!-- v0.61：波形分析（原波形预览，仅标题改为波形分析） -->
+    <section id="view-process-wave-analyze" class="subview">
       <h2 style="margin-top:18px">波形分析</h2>
 
       <div class="grid2">
         <!-- 左侧：文件管理与加载配置 -->
         <div class="panel">
           <h3>① 波形文件管理</h3>
-          <div class="form" id="wpd-form">
-            <label class="f"><span class="lbl">波形文件路径（离线 CSV 或 实时监测输出文件）</span><input id="wpd-path" placeholder="data/bus_bg.csv 或 实时监测文件的完整路径"></label>
+          <div class="form" id="wpa-form">
+            <input id="wp-base-ptct" type="checkbox" checked hidden>
+            <label class="f"><span class="lbl">波形文件路径（离线 CSV 或 实时监测输出文件）</span><input id="wpa-path" placeholder="data/bus_bg.csv 或 实时监测文件的完整路径"></label>
             <div class="row2">
-              <label class="f"><span class="lbl">加载周波数（曲线点数＝周波数×每周波点数，空＝整段）</span><input id="wpd-ncyc" type="number" min="1" step="1" value="300"></label>
-              <label class="f"><span class="lbl">数据来源</span><select id="wpd-source"><option value="file">离线波形 CSV 文件</option><option value="realtime">实时监测输出文件</option></select></label>
+              <label class="f"><span class="lbl">PT 变比</span><input id="wp-base-pt" type="number" min="0.000001" step="any" value="1"></label>
+              <label class="f"><span class="lbl">CT 变比</span><input id="wp-base-ct" type="number" min="0.000001" step="any" value="1"></label>
             </div>
             <div class="row2">
-              <label>通道（默认全部）<span class="toggle" id="wpd-chans">
-                <label class="chk"><input type="checkbox" class="wpd-ch" value="Ua" checked> Ua</label>
-                <label class="chk"><input type="checkbox" class="wpd-ch" value="Ub" checked> Ub</label>
-                <label class="chk"><input type="checkbox" class="wpd-ch" value="Uc" checked> Uc</label>
-                <label class="chk"><input type="checkbox" class="wpd-ch" value="Ia" checked> Ia</label>
-                <label class="chk"><input type="checkbox" class="wpd-ch" value="Ib" checked> Ib</label>
-                <label class="chk"><input type="checkbox" class="wpd-ch" value="Ic" checked> Ic</label>
+              <label class="f"><span class="lbl">加载周波数（曲线点数＝周波数×每周波点数，空＝整段）</span><input id="wpa-ncyc" type="number" min="1" step="1" value="300"></label>
+              <label class="f"><span class="lbl">数据来源</span><select id="wpa-source"><option value="file">离线波形 CSV 文件</option><option value="realtime">实时监测输出文件</option></select></label>
+            </div>
+            <div class="row2">
+              <label>通道（默认全部）<span class="toggle" id="wpa-chans">
+                <label class="chk"><input type="checkbox" class="wpa-ch" value="Ua" checked> Ua</label>
+                <label class="chk"><input type="checkbox" class="wpa-ch" value="Ub" checked> Ub</label>
+                <label class="chk"><input type="checkbox" class="wpa-ch" value="Uc" checked> Uc</label>
+                <label class="chk"><input type="checkbox" class="wpa-ch" value="Ia" checked> Ia</label>
+                <label class="chk"><input type="checkbox" class="wpa-ch" value="Ib" checked> Ib</label>
+                <label class="chk"><input type="checkbox" class="wpa-ch" value="Ic" checked> Ic</label>
               </span></label>
             </div>
             <div class="btnrow">
-              <button id="btn-wpd-add" class="primary">添加文件并加载曲线</button>
-              <button id="btn-wpd-clear">清除全部曲线</button>
-              <button id="btn-wpd-refresh">刷新 data/ 文件列表</button>
+              <button id="btn-wpa-add" class="primary">添加文件并加载曲线</button>
+              <button id="btn-wpa-clear">清除全部曲线</button>
+              <button id="btn-wpa-refresh">刷新 data/ 文件列表</button>
             </div>
             <div class="row2">
-              <label class="f"><span class="lbl">快速选择 data/ 下的文件</span><select id="wpd-files"><option value="">— 选择 data/ 下的 CSV —</option></select></label>
+              <label class="f"><span class="lbl">快速选择 data/ 下的文件</span><select id="wpa-files"><option value="">— 选择 data/ 下的 CSV —</option></select></label>
             </div>
           </div>
-          <div id="wpd-filelist" class="filelist"></div>
-          <div id="wpd-status" class="notes"></div>
+          <div id="wpa-filelist" class="filelist"></div>
+          <div id="wpa-status" class="notes"></div>
         </div>
 
         <!-- 右侧：动态曲线展示（1个文件=1个独立曲线图） -->
         <div class="panel">
           <h3>② 曲线展示（每个文件对应一个独立曲线图）</h3>
-          <div id="wpd-canvas-container" class="canvas-container">
+          <div id="wpa-canvas-container" class="canvas-container">
             <div class="empty-hint">暂无曲线，左侧添加文件后自动生成独立曲线图</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- v0.61：波形预览（新版，支持动态新增多个独立预览） -->
+    <section id="view-process-wave-preview" class="subview">
+      <h2 style="margin-top:18px">波形预览</h2>
+
+      <div class="grid2">
+        <!-- 左侧：预览管理与配置 -->
+        <div class="panel">
+          <h3>① 波形预览管理</h3>
+          <div class="form" id="wpv-form">
+            <div class="row2">
+              <label class="f"><span class="lbl">波形文件路径（离线 CSV 或 实时监测输出文件）</span><input id="wpv-path" placeholder="data/bus_bg.csv 或 实时监测文件的完整路径"></label>
+            </div>
+            <div class="row2">
+              <label class="f"><span class="lbl">加载周波数（曲线点数＝周波数×每周波点数，空＝整段）</span><input id="wpv-ncyc" type="number" min="1" step="1" value="300"></label>
+              <label class="f"><span class="lbl">数据来源</span><select id="wpv-source"><option value="file">离线波形 CSV 文件</option><option value="realtime">实时监测输出文件</option></select></label>
+            </div>
+            <div class="row2">
+              <label>通道（默认全部）<span class="toggle" id="wpv-chans">
+                <label class="chk"><input type="checkbox" class="wpv-ch" value="Ua" checked> Ua</label>
+                <label class="chk"><input type="checkbox" class="wpv-ch" value="Ub" checked> Ub</label>
+                <label class="chk"><input type="checkbox" class="wpv-ch" value="Uc" checked> Uc</label>
+                <label class="chk"><input type="checkbox" class="wpv-ch" value="Ia" checked> Ia</label>
+                <label class="chk"><input type="checkbox" class="wpv-ch" value="Ib" checked> Ib</label>
+                <label class="chk"><input type="checkbox" class="wpv-ch" value="Ic" checked> Ic</label>
+              </span></label>
+            </div>
+            <div class="btnrow">
+              <button id="btn-wpv-add" class="primary">新增预览</button>
+              <button id="btn-wpv-clear">清除全部预览</button>
+              <button id="btn-wpv-refresh">刷新 data/ 文件列表</button>
+            </div>
+            <div class="row2">
+              <label class="f"><span class="lbl">快速选择 data/ 下的文件</span><select id="wpv-files"><option value="">— 选择 data/ 下的 CSV —</option></select></label>
+            </div>
+          </div>
+          <div id="wpv-filelist" class="filelist"></div>
+          <div id="wpv-status" class="notes"></div>
+        </div>
+
+        <!-- 右侧：动态曲线展示（每个预览对应一个独立曲线图） -->
+        <div class="panel">
+          <h3>② 曲线展示（每个预览对应一个独立曲线图）</h3>
+          <div id="wpv-canvas-container" class="canvas-container">
+            <div class="empty-hint">暂无预览，点击「新增预览」添加第一个波形预览</div>
           </div>
         </div>
       </div>

@@ -3957,6 +3957,7 @@ function renderProcess() {
       case 'rsample': rsListFiles(); rsPoll(); rsPreview(); bindRSampleUI(); break;
       case 'nilm-tune': ntListFiles(); ntInitBase(); bindNilmTuneUI(); break;
       case 'profile-extract': ntListFiles('np'); ntInitBase('np'); bindProfileExtractUI(); break;
+      case 'wave-analyze': bindWaveAnalyzeUI(); break;
       case 'wave-preview': bindWavePreview(); break;
       case 'ct-estimate': ctListFiles(); ctFillDefaults(); initCtEstimate(); break;
       default: break;
@@ -4064,9 +4065,128 @@ function renderProfileExtract() {
   if (!_npRendered) { _npRendered = true; ntListFiles('np'); ntInitBase('np'); }
 }
 
-/* 波形分析子界面渲染（仅在切换到 wave-preview 视图时调用） */
-function renderWavePreviewView() {
-  renderWavePreview();
+/* 波形分析子界面渲染（多文件 + 实时监测文件，1个文件=1个独立曲线图；仅在切换到 wave-analyze 视图时调用） */
+const WPA = { items: [], files: [] };
+window.WPA = WPA;
+const WPA_COLORS = { Ua: '#4ea1ff', Ub: '#3ddc97', Uc: '#ffb648', Ia: '#ff7ac6', Ib: '#9d7bff', Ic: '#5ee0d0' };
+function wpaVal(id) { const el = $('#' + id); return el ? String(el.value || '').trim() : ''; }
+
+async function wpaListFiles() {
+  const sel = $('#wpa-files'); if (!sel) return;
+  try {
+    const r = await api('/api/files?sub=data', undefined, 'bus');
+    WPA.files = (r.files || []).filter(f => !f.dir && f.name.toLowerCase().endsWith('.csv'));
+    const cur = sel.value;
+    sel.innerHTML = '<option value="">— 选择 data/ 下的 CSV —</option>' + WPA.files.map(f => `<option value="${esc(f.name)}">${esc(f.name)} (${f.size_mb} MB)</option>`).join('');
+    if (cur && WPA.files.some(f => f.name === cur)) sel.value = cur;
+  } catch (e) { toast('读取文件列表失败：' + e.message, 'err'); }
+}
+
+function wpaChans() { return Array.from(document.querySelectorAll('#wpa-chans .wpa-ch')).filter(c => c.checked).map(c => c.value); }
+
+function wpaSafeId(path) { return 'wpa-' + path.replace(/[^a-zA-Z0-9]/g, '_'); }
+function wpaCanvasId(path) { return wpaSafeId(path) + '-canvas'; }
+
+function wpaAddItem(path, source) {
+  if (!path) { toast('请先填写波形文件路径', 'err'); return; }
+  if (WPA.items.some(it => it.path === path)) { toast('文件已添加：' + esc(path), 'err'); return; }
+  const item = { id: wpaSafeId(path), path, source, data: null, loaded: false, error: null };
+  WPA.items.push(item);
+  wpaRenderFileList();
+  wpaRenderCanvasArea();
+  wpaLoadItem(item);
+}
+
+async function wpaLoadItem(item) {
+  const path = item.path;
+  const nCycles = wpaVal('wpa-ncyc');
+  const chans = wpaChans().join(',');
+  const q = new URLSearchParams();
+  q.set('path', path);
+  if (nCycles) q.set('n_cycles', nCycles);
+  if (chans) q.set('channels', chans);
+  item.error = null; item.loaded = false;
+  wpaRenderFileList();
+  try {
+    const d = await api('/api/process/wave/load?' + q.toString(), undefined, 'bus');
+    item.data = d; item.loaded = true;
+    wpaDrawWave(item);
+    wpaStatus(`已加载：${esc(path)} · ${d.n} 点 × ${d.channels_loaded.length} 通道`, 'ok');
+  } catch (e) {
+    item.error = e.message;
+    wpaStatus(`加载失败 ${esc(path)}：${esc(e.message)}`, 'bad');
+    wpaRenderFileList(); wpaRenderCanvasArea();
+  }
+}
+
+function wpaDrawWave(item) {
+  const cv = $('#' + wpaCanvasId(item.path));
+  if (!cv) return;
+  const d = item.data;
+  if (!d || !d.t || !d.t.length) { drawLine(cv, [], { empty: '加载中…', height: 260 }); return; }
+  const t0 = d.t[0];
+  const chans = Object.keys(d.channels || {});
+  const hasU = chans.some(c => c[0] === 'U'), hasI = chans.some(c => c[0] === 'I');
+  drawLine(cv, chans.map(ch => ({ name: `${ch}`, color: WPA_COLORS[ch] || '#4ea1ff', data: d.t.map((x, i) => [x - t0, d.channels[ch][i]]) })),
+    { ylabel: hasU && hasI ? 'V / A' : hasU ? 'V' : 'A', fmtX: x => ts(x + t0), fmtTip: x => fmtLocalInput(x + t0), tbase: t0, height: 260 });
+}
+
+function wpaRemoveItem(path) {
+  WPA.items = WPA.items.filter(it => it.path !== path);
+  wpaRenderFileList(); wpaRenderCanvasArea();
+}
+
+function wpaClearAll() {
+  WPA.items = [];
+  wpaRenderFileList(); wpaRenderCanvasArea();
+  $('#wpa-status').innerHTML = '';
+}
+
+function wpaRenderFileList() {
+  const box = $('#wpa-filelist'); if (!box) return;
+  if (WPA.items.length === 0) { box.innerHTML = '<div class="notes">暂无文件</div>'; return; }
+  box.innerHTML = WPA.items.map(it => {
+    const mark = it.loaded ? '✓' : (it.error ? '✗' : '○');
+    const cls = it.loaded ? 'ok' : (it.error ? 'bad' : '');
+    const p = esc(it.path).replace(/'/g, "\\\\'");
+    return `<div class="fileitem ${cls}"><span>${mark}</span> <span title="${esc(it.path)}">${esc(it.path)}</span> <span class="src">${it.source === 'realtime' ? '实时监测' : '离线文件'}</span> <button onclick="wpaRemoveItem('${p}')" title="移除">×</button></div>`;
+  }).join('');
+}
+
+function wpaRenderCanvasArea() {
+  const container = $('#wpa-canvas-container'); if (!container) return;
+  if (WPA.items.length === 0) {
+    container.innerHTML = '<div class="empty-hint">暂无曲线，左侧添加文件后自动生成独立曲线图</div>';
+    return;
+  }
+  let html = '';
+  WPA.items.forEach(it => {
+    const cvId = wpaCanvasId(it.path);
+    html += `<div class="wpd-curve-block"><h4>${esc(it.path)} <small>(${it.source === 'realtime' ? '实时监测' : '离线文件'})</small></h4><canvas id="${cvId}" height="260"></canvas></div>`;
+  });
+  container.innerHTML = html;
+  WPA.items.forEach(it => wpaDrawWave(it));
+}
+
+function wpaStatus(html, cls) { const el = $('#wpa-status'); if (el) el.innerHTML = html ? `<div class="${cls || ''}">${html}</div>` : ''; }
+
+function renderWaveAnalyze() {
+  wpaRenderFileList();
+  wpaRenderCanvasArea();
+}
+
+function bindWaveAnalyzeUI() {
+  if (!$('#wpa-form')) return;
+  $('#wpa-files').addEventListener('change', () => { if ($('#wpa-files').value) $('#wpa-path').value = $('#wpa-files').value; });
+  $('#btn-wpa-add').addEventListener('click', () => { wpaAddItem(wpaVal('wpa-path'), $('#wpa-source').value); });
+  $('#btn-wpa-clear').addEventListener('click', wpaClearAll);
+  $('#btn-wpa-refresh').addEventListener('click', wpaListFiles);
+  $('#wpa-path').addEventListener('keydown', (e) => { if (e.key === 'Enter') { $('#btn-wpa-add').click(); } });
+  wpaListFiles();
+  renderWaveAnalyze();
+}
+
+/* 波形预览子界面渲染（动态多预览
 }
 
 // v0.34：误差统计参数默认值来自配置 processing（状态接口 defaults），只在用户未改动时回填
@@ -4546,126 +4666,127 @@ async function ntApply() {
   } catch (e) { toast('套用失败：' + e.message, 'err'); }
 }
 
-/* v0.61：数据处理 · 波形预览（GET /api/process/wave/info|load|rms） */
-/* 波形分析子界面渲染（多文件 + 实时监测文件，1个文件=1个独立曲线图；仅在切换到 wave-preview 视图时调用） */
-const WPD = { items: [], files: [] };
-window.WPD = WPD;
-const WPD_COLORS = { Ua: '#4ea1ff', Ub: '#3ddc97', Uc: '#ffb648', Ia: '#ff7ac6', Ib: '#9d7bff', Ic: '#5ee0d0' };
-function wpdVal(id) { const el = $('#' + id); return el ? String(el.value || '').trim() : ''; }
+/* 波形预览子界面渲染（动态多预览，1个预览=1个独立曲线图；仅在切换到 wave-preview 视图时调用） */
+const WPV = { items: [], files: [], nextId: 0 };
+window.WPV = WPV;
+const WPV_COLORS = { Ua: '#4ea1ff', Ub: '#3ddc97', Uc: '#ffb648', Ia: '#ff7ac6', Ib: '#9d7bff', Ic: '#5ee0d0' };
+function wpvVal(id) { const el = $('#' + id); return el ? String(el.value || '').trim() : ''; }
 
-async function wpdListFiles() {
-  const sel = $('#wpd-files'); if (!sel) return;
+async function wpvListFiles() {
+  const sel = $('#wpv-files'); if (!sel) return;
   try {
     const r = await api('/api/files?sub=data', undefined, 'bus');
-    WPD.files = (r.files || []).filter(f => !f.dir && f.name.toLowerCase().endsWith('.csv'));
+    WPV.files = (r.files || []).filter(f => !f.dir && f.name.toLowerCase().endsWith('.csv'));
     const cur = sel.value;
-    sel.innerHTML = '<option value="">— 选择 data/ 下的 CSV —</option>' + WPD.files.map(f => `<option value="${esc(f.name)}">${esc(f.name)} (${f.size_mb} MB)</option>`).join('');
-    if (cur && WPD.files.some(f => f.name === cur)) sel.value = cur;
+    sel.innerHTML = '<option value="">— 选择 data/ 下的 CSV —</option>' + WPV.files.map(f => `<option value="${esc(f.name)}">${esc(f.name)} (${f.size_mb} MB)</option>`).join('');
+    if (cur && WPV.files.some(f => f.name === cur)) sel.value = cur;
   } catch (e) { toast('读取文件列表失败：' + e.message, 'err'); }
 }
 
-function wpdChans() { return Array.from(document.querySelectorAll('#wpd-chans .wpd-ch')).filter(c => c.checked).map(c => c.value); }
+function wpvChans() { return Array.from(document.querySelectorAll('#wpv-chans .wpv-ch')).filter(c => c.checked).map(c => c.value); }
 
-function wpdSafeId(path) { return 'wpd-' + path.replace(/[^a-zA-Z0-9]/g, '_'); }
-function wpdCanvasId(path) { return wpdSafeId(path) + '-canvas'; }
+function wpvNewId() { return 'wpv-' + (++WPV.nextId); }
 
-function wpdAddItem(path, source) {
-  if (!path) { toast('请先填写波形文件路径', 'err'); return; }
-  if (WPD.items.some(it => it.path === path)) { toast('文件已添加：' + esc(path), 'err'); return; }
-  const item = { id: wpdSafeId(path), path, source, data: null, loaded: false, error: null };
-  WPD.items.push(item);
-  wpdRenderFileList();
-  wpdRenderCanvasArea();
-  wpdLoadItem(item);
+function wpvAddPreview() {
+  const id = wpvNewId();
+  const path = wpvVal('wpv-path');
+  const source = $('#wpv-source').value;
+  const nCycles = wpvVal('wpv-ncyc');
+  const chans = wpvChans().join(',');
+  const item = { id, path, source, nCycles, chans, data: null, loaded: false, error: null };
+  WPV.items.push(item);
+  wpvRenderFileList();
+  wpvRenderCanvasArea();
+  wpvLoadPreview(item);
 }
 
-async function wpdLoadItem(item) {
-  const path = item.path;
-  const nCycles = wpdVal('wpd-ncyc');
-  const chans = wpdChans().join(',');
+async function wpvLoadPreview(item) {
+  if (!item.path) { item.error = '请先填写波形文件路径'; wpvRenderFileList(); wpvRenderCanvasArea(); return; }
   const q = new URLSearchParams();
-  q.set('path', path);
-  if (nCycles) q.set('n_cycles', nCycles);
-  if (chans) q.set('channels', chans);
+  q.set('path', item.path);
+  if (item.nCycles) q.set('n_cycles', item.nCycles);
+  if (item.chans) q.set('channels', item.chans);
   item.error = null; item.loaded = false;
-  wpdRenderFileList();
+  wpvRenderFileList();
   try {
     const d = await api('/api/process/wave/load?' + q.toString(), undefined, 'bus');
     item.data = d; item.loaded = true;
-    wpdDrawWave(item);
-    wpdStatus(`已加载：${esc(path)} · ${d.n} 点 × ${d.channels_loaded.length} 通道`, 'ok');
+    wpvDrawPreview(item);
+    wpvStatus(`预览 ${item.id} 已加载：${esc(item.path)} · ${d.n} 点 × ${d.channels_loaded.length} 通道`, 'ok');
   } catch (e) {
     item.error = e.message;
-    wpdStatus(`加载失败 ${esc(path)}：${esc(e.message)}`, 'bad');
-    wpdRenderFileList(); wpdRenderCanvasArea();
+    wpvStatus(`加载失败 ${esc(item.path)}：${esc(e.message)}`, 'bad');
+    wpvRenderFileList(); wpvRenderCanvasArea();
   }
 }
 
-function wpdDrawWave(item) {
-  const cv = $('#' + wpdCanvasId(item.path));
+function wpvDrawPreview(item) {
+  const cv = $('#' + item.id + '-canvas');
   if (!cv) return;
   const d = item.data;
   if (!d || !d.t || !d.t.length) { drawLine(cv, [], { empty: '加载中…', height: 260 }); return; }
   const t0 = d.t[0];
   const chans = Object.keys(d.channels || {});
   const hasU = chans.some(c => c[0] === 'U'), hasI = chans.some(c => c[0] === 'I');
-  drawLine(cv, chans.map(ch => ({ name: `${ch}`, color: WPD_COLORS[ch] || '#4ea1ff', data: d.t.map((x, i) => [x - t0, d.channels[ch][i]]) })),
+  drawLine(cv, chans.map(ch => ({ name: `${ch}`, color: WPV_COLORS[ch] || '#4ea1ff', data: d.t.map((x, i) => [x - t0, d.channels[ch][i]]) })),
     { ylabel: hasU && hasI ? 'V / A' : hasU ? 'V' : 'A', fmtX: x => ts(x + t0), fmtTip: x => fmtLocalInput(x + t0), tbase: t0, height: 260 });
 }
 
-function wpdRemoveItem(path) {
-  WPD.items = WPD.items.filter(it => it.path !== path);
-  wpdRenderFileList(); wpdRenderCanvasArea();
+function wpvRemovePreview(id) {
+  WPV.items = WPV.items.filter(it => it.id !== id);
+  wpvRenderFileList(); wpvRenderCanvasArea();
 }
 
-function wpdClearAll() {
-  WPD.items = [];
-  wpdRenderFileList(); wpdRenderCanvasArea();
-  $('#wpd-status').innerHTML = '';
+function wpvClearAll() {
+  WPV.items = [];
+  WPV.nextId = 0;
+  wpvRenderFileList(); wpvRenderCanvasArea();
+  $('#wpv-status').innerHTML = '';
 }
 
-function wpdRenderFileList() {
-  const box = $('#wpd-filelist'); if (!box) return;
-  if (WPD.items.length === 0) { box.innerHTML = '<div class="notes">暂无文件</div>'; return; }
-  box.innerHTML = WPD.items.map(it => {
+function wpvRenderFileList() {
+  const box = $('#wpv-filelist'); if (!box) return;
+  if (WPV.items.length === 0) { box.innerHTML = '<div class="notes">暂无预览</div>'; return; }
+  box.innerHTML = WPV.items.map(it => {
     const mark = it.loaded ? '✓' : (it.error ? '✗' : '○');
     const cls = it.loaded ? 'ok' : (it.error ? 'bad' : '');
-    const p = esc(it.path).replace(/'/g, "\\'");
-    return `<div class="fileitem ${cls}"><span>${mark}</span> <span title="${esc(it.path)}">${esc(it.path)}</span> <span class="src">${it.source === 'realtime' ? '实时监测' : '离线文件'}</span> <button onclick="wpdRemoveItem('${p}')" title="移除">×</button></div>`;
+    const p = esc(it.path).replace(/'/g, "\\\\'");
+    return `<div class="fileitem ${cls}"><span>${mark}</span> <span title="${esc(it.path)}">${esc(it.path)}</span> <span class="src">${it.source === 'realtime' ? '实时监测' : '离线文件'}</span> <button onclick="wpvRemovePreview('${it.id}')" title="移除">×</button></div>`;
   }).join('');
 }
 
-function wpdRenderCanvasArea() {
-  const container = $('#wpd-canvas-container'); if (!container) return;
-  if (WPD.items.length === 0) {
-    container.innerHTML = '<div class="empty-hint">暂无曲线，左侧添加文件后自动生成独立曲线图</div>';
+function wpvRenderCanvasArea() {
+  const container = $('#wpv-canvas-container'); if (!container) return;
+  if (WPV.items.length === 0) {
+    container.innerHTML = '<div class="empty-hint">暂无预览，点击「新增预览」添加第一个波形预览</div>';
     return;
   }
   let html = '';
-  WPD.items.forEach(it => {
-    const cvId = wpdCanvasId(it.path);
-    html += `<div class="wpd-curve-block"><h4>${esc(it.path)} <small>(${it.source === 'realtime' ? '实时监测' : '离线文件'})</small></h4><canvas id="${cvId}" height="260"></canvas></div>`;
+  WPV.items.forEach(it => {
+    html += `<div class="wpd-curve-block"><h4>${esc(it.path)} <small>(${it.source === 'realtime' ? '实时监测' : '离线文件'})</small></h4><canvas id="${it.id}-canvas" height="260"></canvas></div>`;
   });
   container.innerHTML = html;
-  WPD.items.forEach(it => wpdDrawWave(it));
+  WPV.items.forEach(it => wpvDrawPreview(it));
 }
 
-function wpdStatus(html, cls) { const el = $('#wpd-status'); if (el) el.innerHTML = html ? `<div class="${cls || ''}">${html}</div>` : ''; }
+function wpvStatus(html, cls) { const el = $('#wpv-status'); if (el) el.innerHTML = html ? `<div class="${cls || ''}">${html}</div>` : ''; }
 
 function renderWavePreview() {
-  wpdRenderFileList();
-  wpdRenderCanvasArea();
+  wpvRenderFileList();
+  wpvRenderCanvasArea();
 }
 
-
 function bindWavePreview() {
-  if (!$('#wpd-form')) return;
-  $('#wpd-files').addEventListener('change', () => { if ($('#wpd-files').value) $('#wpd-path').value = $('#wpd-files').value; });
-  $('#btn-wpd-add').addEventListener('click', () => { wpdAddItem(wpdVal('wpd-path'), $('#wpd-source').value); });
-  $('#btn-wpd-clear').addEventListener('click', wpdClearAll);
-  $('#btn-wpd-refresh').addEventListener('click', wpdListFiles);
-  $('#wpd-path').addEventListener('keydown', (e) => { if (e.key === 'Enter') { $('#btn-wpd-add').click(); } });
-  wpdListFiles();
+  if (!$('#wpv-form')) return;
+  $('#wpv-files').addEventListener('change', () => { if ($('#wpv-files').value) $('#wpv-path').value = $('#wpv-files').value; });
+  $('#btn-wpv-add').addEventListener('click', wpvAddPreview);
+  $('#btn-wpv-clear').addEventListener('click', wpvClearAll);
+  $('#btn-wpv-refresh').addEventListener('click', wpvListFiles);
+  $('#wpv-path').addEventListener('keydown', (e) => { if (e.key === 'Enter') { wpvAddPreview(); } });
+  wpvListFiles();
+  // 默认添加一个预览（使用当前表单中的路径，若有的话）
+  const defaultPath = $('#wpv-path') ? $('#wpv-path').value.trim() : '';
+  if (defaultPath) { wpvAddPreview(); }
   renderWavePreview();
 }
 
@@ -4998,7 +5119,7 @@ const ASSISTANT_IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp'])
 const ASSISTANT_IMAGE_MAX_BYTES = 3 * 1024 * 1024;
 const ASSISTANT_IMAGE_TOTAL_MAX_BYTES = 5 * 1024 * 1024;
 const ASSISTANT_IMAGE_MAX_COUNT = 3;
-const ASSISTANT_VIEW_LABELS = { overview: '总览面板', source: '数据源与控制', compare: '跨侧对比', voltage: '三相电压', current: '三相电流', power: '有功 / 无功 / 视在', power_factor: '功率因数', fundamental: '基波', harmonic: '谐波', interharmonic: '间谐波', dc: '直流偏置', spectrum: '频谱', events: '电能质量事件', nilm: '负荷辨识事件', windows: '窗口配置', export: '导出与日志', selftest: '算法自检', process: '数据处理', rsample: '离线波形重采样', 'nilm-tune': '负荷辨识调参', 'profile-extract': '设备画像提取', 'wave-preview': '波形分析' };
+const ASSISTANT_VIEW_LABELS = { overview: '总览面板', source: '数据源与控制', compare: '跨侧对比', voltage: '三相电压', current: '三相电流', power: '有功 / 无功 / 视在', power_factor: '功率因数', fundamental: '基波', harmonic: '谐波', interharmonic: '间谐波', dc: '直流偏置', spectrum: '频谱', events: '电能质量事件', nilm: '负荷辨识事件', windows: '窗口配置', export: '导出与日志', selftest: '算法自检', process: '数据处理', rsample: '离线波形重采样', 'nilm-tune': '负荷辨识调参', 'profile-extract': '设备画像提取', 'wave-analyze': '波形分析', 'wave-preview': '波形预览' };
 const ASSISTANT_TOOL_LABELS = {
   get_runtime_status: '查询当前侧运行状态', get_runtime_settings: '查询当前侧计算配置摘要',
   get_electrical_result: '查询当前侧最新电气量结果', get_history: '查询当前侧趋势历史',
