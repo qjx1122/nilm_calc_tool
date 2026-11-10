@@ -1,8 +1,10 @@
 # STATUS.md
 
 > 续接文件（BOOTSTRAP.md v2.2 台账）。每次收尾必更新；只改本文件，不另建同类文件。
-> 最后更新：2026-11-10（旧文件覆盖事故已处理：`app/server.py` 已恢复、`tests/test_server.py` 丢失的断言已放回、2026-11-05～11-06 丢失的台账已补录；全量 pytest 639 passed / 1 skipped / 1 xfailed；`app/assistant.py` 的澄清回归没有修，登记在「下一步」；活动分支 `arena/51b63974-nilm-calc-tool`，基线 `e05542a`；`tmp/` 保持原样）
-> 本次任务（2026-11-10）：开局基线全量 pytest 为 1 failed / 638 passed / 1 skipped；失败根因是提交 `2c51d2f` 把 `app/server.py` 写回了 2026-11-05 的内容，助手「确认执行」接口每次调用都抛 `TypeError`。经用户批准，本任务恢复该文件、放回丢失的测试断言并补录丢失台账；`app/assistant.py` 的澄清回归只登记待办。经过与验证见 `REPORT_TEST.md` T-019。
+> 最后更新：2026-11-10（第二项任务已立项、进行中：按用户 5 条指令确认正式分支、不合入 3 个波形分析提交、修复澄清回归、为 37 个提交补台账、更新 README 并补 `configs/intent_actions.csv` 文档；开局基线全量 pytest 639 passed / 1 skipped / 1 xfailed；活动分支 `arena/51b63974-nilm-calc-tool`，开局远端 tip `161bd00`；`tmp/` 保持原样）
+> 本次任务（2026-11-10 第二项）：用户对上一项任务留下的三个待定项作了答复并追加两条指令。范围、验收与开局基线见「当前目标」第一条；本行在收尾时改写为结果。
+> 前次更新：2026-11-10（旧文件覆盖事故已处理：`app/server.py` 已恢复、`tests/test_server.py` 丢失的断言已放回、2026-11-05～11-06 丢失的台账已补录；全量 pytest 639 passed / 1 skipped / 1 xfailed；`app/assistant.py` 的澄清回归没有修，登记在「下一步」；活动分支 `arena/51b63974-nilm-calc-tool`，基线 `e05542a`；`tmp/` 保持原样）
+> 前次任务（2026-11-10 第一项）：开局基线全量 pytest 为 1 failed / 638 passed / 1 skipped；失败根因是提交 `2c51d2f` 把 `app/server.py` 写回了 2026-11-05 的内容，助手「确认执行」接口每次调用都抛 `TypeError`。经用户批准，本任务恢复该文件、放回丢失的测试断言并补录丢失台账；`app/assistant.py` 的澄清回归只登记待办。经过与验证见 `REPORT_TEST.md` T-019。
 > 前次更新：2026-11-05（智能问答“播放/启动数据源”六种说法确定性路由到当前数据源启动提案；全量 pytest 635 passed / 1 skipped / 1 warning；真实模型调用未做；活动分支 active；严格排除 `tmp/`）
 > 前次任务（2026-11-05）：审查六条用户报告后，确认原确定性入口只覆盖精确工具标题和少数固定别名，其余自然语言落入模型 `tool_choice=auto`；增加局部规范化的启动短句 grammar、强化速度工具提示、当前侧配置错误的操作指引，以及 6 条短语的单元/API 回归。未调用真实 Qwen，不能声称复现 provider 实际输出。`tmp/` 未触碰。
 > 前次运行任务（2026-11-04）：先核验未有 Python/8000 监听进程，修复缺失的 `.venv` 依赖并在 `0.0.0.0:8000` 恢复预览；首页、JS、CSS、`/api/state` 均 HTTP 200，WebSocket `/ws` 握手收到 `hello`。启动时用 `ELEC_TOOL_AUTOLOAD_LAST=0`，未自动加载历史运行数据；未读取 / 修改 `tmp/`。
@@ -16,14 +18,26 @@
 
 ## 当前角色
 - 角色：**资深电力算法专家**（`ROLE.md` v1.4 指定的默认当前角色）
-- 本任务级覆盖：**工程实现工程师**（`ROLE.md` 已定义；2026-11-10 旧工作副本覆盖事故的恢复与台账补录）
-- 生效范围：仅限用户 2026-11-10 批准的范围——恢复 `app/server.py`、放回 `tests/test_server.py` 丢失的断言、补录丢失的台账条目；`app/assistant.py` 的澄清回归只登记待办，本任务不修改
+- 本任务级覆盖：**工程实现工程师**（`ROLE.md` 已定义；2026-11-10 第二项任务：澄清回归修复、37 个提交的台账补记、README 与 `configs/intent_actions.csv` 文档）
+- 生效范围：用户 2026-11-10 的 5 条指令——正式分支为 `arena/51b63974-nilm-calc-tool`；不合入 `restore_branch_full_history` 的 3 个波形分析提交；立即修澄清回归；为 2026-11-06～11-09 的 37 个提交补台账；更新 README 并补 `configs/intent_actions.csv` 文档。逐条范围见「当前目标」第一条。
 - 默认执行模式：**模式 A（沙盒自执行）**；真实模型、目标浏览器与部署网络未连接时只报告未实测，不臆断现场验收。保持 `tmp/` 原样且排除提交。
 - 历史任务执行模式基线（本任务单独声明为模式 A）：**混合**——沙盒侧（模式 A）写码 + 合成信号解析解自验证 + live preview 实跑，**已有实录**；用户侧（模式 B）Windows 部署 / 真实数据对账 / 生产常驻，**只出执行包，未获实录不下结论**（执行包见 `REPORT_TEST.md` T-002 的 W/R/P 三组）
   - 说明：更早任务用户显式指定过模式 B（仅对「补齐台账骨架」生效）；历史任务若用户跳过模式澄清，曾按上述混合模式执行；每个新任务仍以当前任务登记的角色与模式为准。第 5 轮（界面下拉框检查）沙盒侧＝jsdom 驱动真实页面打真实服务端 + REST 空值语义实录，**已✅实录**；用户侧＝浏览器手点 U 组 7 步，**🔶待回报**。**第 6 轮（四功能）**沙盒侧＝pytest 25 项 + jsdom 30 项 + REST/CLI 实录，**已✅实录**；用户侧＝浏览器手点 U6 组 8 步，**🔶待回报**。**第 7 轮（三功能）**沙盒侧＝pytest 18 项 + jsdom 39 项 + CLI/源层实录，**已✅实录**；用户侧＝U7 组 8 步，**🔶待回报**。**第 9 轮（间谐波/直流/事件）**沙盒侧＝pytest 13 项 + jsdom 28 项 + live preview 实跑，**已✅实录**；用户侧＝U9 组 6 步，**🔶待回报**。**第 10 轮（离线列映射开关）**沙盒侧＝pytest 8 项 + jsdom 15 项 + REST 实录，**已✅实录**；用户侧＝U10 组 6 步，**🔶待回报**。**第 11 轮（时标 UTC 开关）**沙盒侧＝pytest 6 项 + 双时区全量 + jsdom 11 项，**已✅实录**；用户侧＝U11 组 5 步，**🔶待回报**。**第 12 轮（负荷辨识）**沙盒侧＝pytest 8 项 + jsdom 16 项 + 引擎/CSV 实录，**已✅实录**；用户侧＝U12 组 5 步，**🔶待回报**
 
 ## 当前目标
-- **本任务（2026-11-10：恢复被旧工作副本覆盖的 `app/server.py` 并补录丢失台账）已完成**：
+- **本任务（2026-11-10 第二项：修复澄清回归、为 37 个提交补台账、更新 README 并补 `configs/intent_actions.csv` 文档）进行中**：
+  - **角色 / 模式**：工程实现工程师；模式 A；固定活动分支 `arena/51b63974-nilm-calc-tool`，开局远端 tip `161bd00`；`tmp/` 保持原样。
+  - **用户指令（2026-11-10 原话）**：① 「arena/51b63974-nilm-calc-tool是正式分支。」② 「`restore_branch_full_history` 上那 3 个「波形分析子界面」提交不合进来」③ 「澄清回归立即修」④ 「11-06 到 11-09 有 37 个提交补充台账记录。」⑤ 「README更新，并补充`configs/intent_actions.csv` 文档。」
+  - **范围（按指令逐条）**：
+    - 指令 ①：`README.md` 两处克隆命令改为本分支；本文件「关键文件路径」的分支行与「下一步」里对应的待定项更新；决策落盘。GitHub 仓库的默认分支设置不改（`main` 仍无代码，只在交付说明里提示）。
+    - 指令 ②：不合入 `bbf7fca`、`63a2378`、`22d8d9c`，只记录决策。
+    - 指令 ③：按「下一步」第一条登记的 5 点完成标准全部做——修 `app/assistant.py` 的 `complete()` / `stream()` 与 SSE 澄清帧，删除 `xfail` 标记；补回 `tests/test_assistant.py` 丢失的 5 个用例；恢复 T-017 的 7 种路由诊断日志并接上 `payload["_assistant_trace_id"]`；放回说明书 §6.8 / §6.9；做前端澄清标记。用户原话只有「澄清回归立即修」，后 4 点是按已登记的完成标准一并纳入，交付时说明。
+    - 指令 ④：逐组读 37 个提交的 diff，能跑的用测试复核，在 `REPORT_TEST.md`（专题自 T-020 起）、会话纪要、本文件「已完成」写补记，并标明是事后依据 diff 与复测重建，不是当时的实录。
+    - 指令 ⑤：`README.md` 更新状态行、克隆分支、智能问答与 2026-11-09 界面改动、配置结构；`configs/intent_actions.csv` 的列含义、编辑方法、生效方式写入 README 与《智能问答助手说明》；重新生成四份手册。
+  - **不在范围**：不合并其他分支；不处理 `node_modules/` 缺 10 个文件、pytest 残留目录、`elec_tool.__version__` 与 README 版本号不一致、2026-10-31 的 HTTP 500；不动 `tmp/`。
+  - **验收**：删除 `xfail` 标记后澄清用例通过；全量 pytest 无失败、无 xfail；`tools/generate_assistant_docs.py --check` 四份 `OK`；`node tools/ui_assistant_check.cjs` 通过；改动全部提交并推送，`git status` 干净；交付说明列出验证方式 / 覆盖范围 / 仍存在的缺口。
+  - **开局基线**：沙盒被重置，本地 HEAD 停在 `e05542a`，工作区却是 `161bd00` 的内容；先 `git fetch`，确认工作区与远端 tip 无差异，再 `git reset --mixed 161bd00`，没有在旧 HEAD 上提交。全量 pytest **639 passed / 1 skipped / 1 xfailed / 1 warning**（149.17 s）；`cli.py selftest` 44/44；四份手册 `--check` 均 `OK`；jsdom **192 checks**（先按「下一步·环境与仓库卫生」① 的临时做法补齐 10 个文件）；`tmp/` 校验和与上一项任务结束时一致。
+- **上一任务（2026-11-10 第一项：恢复被旧工作副本覆盖的 `app/server.py` 并补录丢失台账）已完成**：
   - **角色 / 模式**：工程实现工程师；模式 A；固定活动分支 `arena/51b63974-nilm-calc-tool`（取自 `restore2remote` 的 `e05542a`；用户确认留在该基线，不合入 `restore_branch_full_history` 多出的 3 个提交）；`tmp/` 保持原样。
   - **起因（开局基线）**：`cli.py selftest` 44/44；全量 pytest **1 failed / 638 passed / 1 skipped**。失败用例 `tests/test_server.py::test_assistant_proposal_confirm_is_branch_scoped_and_reauthorized`：`app/server.py:2120` 以 5 个位置参数调用 `AssistantService.claim_tool_proposal()`（现签名最多 4 个）→ `TypeError`，`POST /api/assistant/tools/confirm` 每次调用都会抛出该异常。
   - **根因**：提交 `2c51d2f`（2026-11-09 08:49 UTC）把 `app/server.py` 写回了 `7a88bd3`（2026-11-05 01:40 UTC）时点的内容，只多一行 `pausable`；2026-11-06 八个提交（`b3d1cc5`、`bc4e329`、`5be8837`、`5b490c6`、`568083f`、`c01a5d6`、`6aff7c0`、`24f2d09`）对该文件的修改全部丢失。同类覆盖还有 `c5cf96f`（6 个文件）与 `e31e0d9`（`tests/test_server.py`），明细见 `REPORT_TEST.md` T-019。
