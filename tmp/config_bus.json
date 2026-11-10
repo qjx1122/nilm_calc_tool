@@ -121,7 +121,7 @@
   },
   "source": {
     "kind": "csv_file",
-    "path": "data\\化工行业-海湾化工-bus-停止.csv",
+    "path": "data\\化工行业-海湾化工-bus-启动.csv",
     "poll_interval_s": 0.05,
     "block_samples": 640,
     "tail_from_end": false,
@@ -223,11 +223,11 @@
         "Sc",
         "Pc",
         "Pb",
-        "Ib",
         "Q",
         "S",
-        "Ic",
-        "Pa"
+        "Pa",
+        "Ia",
+        "Ib"
       ],
       "pf-trend-br": [
         "PFb",
@@ -274,17 +274,15 @@
         "Ua (V)"
       ],
       "wp-rms": [
-        "Uc RMS (V)",
         "Ic RMS (A)",
         "Ib RMS (A)",
-        "Ua RMS (V)"
+        "Ua RMS (V)",
+        "Uc RMS (V)",
+        "Ub RMS (V)"
       ],
       "ov-i": [
         "Ib",
         "Ic"
-      ],
-      "ov-u-br": [
-        "Ub"
       ],
       "ov-u": [
         "Ub"
@@ -292,7 +290,19 @@
       "wp-cyc": [
         "Ua RMS (V)",
         "Uc RMS (V)",
-        "Ic RMS (A)"
+        "Ic RMS (A)",
+        "Ib RMS (A)"
+      ],
+      "wp-cyc2": [
+        "Ua (V)",
+        "Ub (V)",
+        "Uc (V)",
+        "Ic (A)",
+        "Ib (A)",
+        "Ia (A)"
+      ],
+      "ov-i-br": [
+        "Ic"
       ]
     },
     "source_id": 0,
@@ -415,7 +425,7 @@
     "common_end": ""
   },
   "processing": {
-    "error_report": true,
+    "error_report": false,
     "error_window_s": 5.0
   },
   "windows": {

@@ -1,20 +1,16 @@
 {
-  "created_local": "2026-11-04 11:26:48.164",
-  "started_side": "bus",
+  "created_local": "2026-11-10 09:02:18.801",
+  "started_side": "branch",
   "starts": [
     {
-      "side": "bus",
-      "at_local": "2026-11-04 11:26:48.164"
-    },
-    {
       "side": "branch",
-      "at_local": "2026-11-04 11:26:48.924"
+      "at_local": "2026-11-10 09:02:18.801"
     }
   ],
   "sides": {
     "bus": {
       "source_kind": "csv_file",
-      "source_path": "D:\\Work\\testPython\\NILM_Test2026\\nilm_calc_tool\\data\\化工行业-海湾化工-bus-停止.csv",
+      "source_path": "data\\化工行业-海湾化工-bus-启动.csv",
       "source_id": 0,
       "config_file": "config_bus.json",
       "config_copied_from": "configs\\runtime.json",
@@ -30,7 +26,7 @@
     },
     "branch": {
       "source_kind": "csv_file",
-      "source_path": "D:\\Work\\testPython\\NILM_Test2026\\nilm_calc_tool\\data\\化工行业-海湾化工-bus-停止.csv",
+      "source_path": "D:\\Work\\testPython\\NILM_Test2026\\nilm_calc_tool\\data\\化工行业-天云龙涂料厂-dev-1号搅拌机-1-停止1.csv",
       "source_id": 1,
       "config_file": "config_branch.json",
       "config_copied_from": "configs\\branch_runtime.json",
