@@ -446,6 +446,8 @@ input.flash{animation:ntflash 1.5s ease-out}
 .assistant-message.user{align-self:flex-end;background:#17325a;border-color:#2b5b9b;border-bottom-right-radius:4px}
 .assistant-message.assistant{align-self:flex-start;border-bottom-left-radius:4px}
 .assistant-message .assistant-role{font-size:10px;color:#9eb4df;margin-bottom:5px}
+.assistant-message.assistant-message-clarification{border-color:#b9893a}
+.assistant-clarification-note{display:inline-block;margin-bottom:6px;padding:1px 8px;border:1px solid #b9893a;border-radius:10px;background:#33270f;color:#f3d9a5;font-size:11px;line-height:1.6}
 .assistant-user-content{font-size:13px;line-height:1.65;overflow-wrap:anywhere}
 .assistant-message-images{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}
 .assistant-message-images figure,.assistant-image-preview{position:relative;margin:0;padding:5px;border:1px solid #405276;border-radius:8px;background:#101829}

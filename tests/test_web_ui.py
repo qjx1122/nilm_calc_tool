@@ -326,6 +326,10 @@ def test_assistant_ui_contract_and_safe_markdown_renderer(page):
     assert "assistantApiUrl(path) { return apiUrl(path, sideOf()); }" in assistant_js
     assert "text/event-stream" in assistant_js and "response.body.getReader" in assistant_js
     assert "data.type === 'proposal'" in assistant_js and "assistantConfirmProposal" in assistant_js
+    # 澄清：SSE 的 clarification 帧与 JSON 的 clarification 字段都落到同一个标记上（行为由 ui_assistant_check.cjs 覆盖）
+    assert "data.type === 'clarification'" in assistant_js and "data.clarification === true" in assistant_js
+    assert "assistantBuildClarificationNote" in assistant_js
+    assert ".assistant-clarification-note{" in (ROOT / "app/static/style.css").read_text(encoding="utf-8")
     assert "assistantClearContext" in assistant_js and "assistantVerifyOperator" in assistant_js
     assert "X-Assistant-Operator-Token" in assistant_js and "X-Assistant-Admin-Token" in assistant_js
     assert "localStorage" not in assistant_js and "sessionStorage" not in assistant_js

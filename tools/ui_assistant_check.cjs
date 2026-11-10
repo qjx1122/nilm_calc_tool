@@ -60,6 +60,8 @@ let lastChatPayload = null;
 let lastConfirmPayload = null;
 let lastConfirmHeaders = null;
 let emitProposal = false;
+let emitClarification = false;
+const CLARIFICATION_TEXT = '我暂未创建操作预览。你的请求更符合「切换当前侧接线模式」，而不是「查询当前侧运行状态」。请确认希望执行的单一动作。';
 let lastImportedDocuments = null;
 let lastLocalModelRefresh = null;
 let nextLocalModelRefresh = { status: 'ready', models: ['refreshed-local-model'] };
@@ -127,13 +129,15 @@ window.fetch = async (url, options = {}) => {
     if (!payload.stream || !['builtin', 'local', 'cloud'].includes(payload.model_type)) throw new Error('聊天请求参数不符合预期');
     const frames = [
       { type: 'sources', sources: [{ name: payload.model_type === 'builtin' ? '平台参数清单' : 'guide.md', score: 0.91 }] },
-      { type: 'delta', text: payload.model_type === 'builtin' ? '### 内置知识库｜本地文档检索\n\n平台参数清单摘录：`pre_cycles` 与 `window_cycles` 的代码默认值须与当前配置核对。' : '## 结论\n\n支持 **Markdown**、`代码`。\n\n```js\nalert(1)\n```\n\n<img src=x onerror=alert(1)>\n\n[坏链接](javascript:alert(1))' },
+      { type: 'delta', text: emitClarification ? CLARIFICATION_TEXT : payload.model_type === 'builtin' ? '### 内置知识库｜本地文档检索\n\n平台参数清单摘录：`pre_cycles` 与 `window_cycles` 的代码默认值须与当前配置核对。' : '## 结论\n\n支持 **Markdown**、`代码`。\n\n```js\nalert(1)\n```\n\n<img src=x onerror=alert(1)>\n\n[坏链接](javascript:alert(1))' },
       ...(emitProposal ? [{ type: 'proposal', proposal: {
         id: 'proposal-jsdom-1', tool: 'set_wiring_mode', title: '切换当前侧接线模式',
         summary: '将当前侧接线模式切换为 3p4w', impact: '只改当前侧接线模式。',
         arguments: { wiring: '3p4w' }, side: 'bus', status: 'pending',
         requires_second_confirmation: true, confirmation_code: '123456', expires_at: Date.now() / 1000 + 300,
       } }] : []),
+      // 与服务端一致：澄清文字先走 delta，随后单独发一帧 clarification 标记，不发 proposal。
+      ...(emitClarification ? [{ type: 'clarification', message: CLARIFICATION_TEXT }] : []),
       { type: 'done' },
     ].map(frame => 'data: ' + JSON.stringify(frame) + '\n\n').join('');
     const bytes = encoder.encode(frames);
@@ -531,6 +535,42 @@ check($('assistant-launcher').hidden, '配置读取前问答入口应默认隐�
   check(lastConfirmPayload.confirmation_code === '123456', '确认接口没有携带二次确认码');
   check(lastConfirmHeaders['X-Assistant-Operator-Token'] === 'memory-only-operator-token', '确认接口没有带操作员令牌');
   check(!!proposalCard && proposalCard.textContent.includes('接线模式已切换为 3p4w'), '确认执行结果未更新到提案卡');
+
+  // 服务端拒绝模型的工具调用时返回澄清：回答带“待澄清”标记，不出现操作预览卡；普通回答不带标记。
+  check(!$('assistant-messages').querySelector('.assistant-clarification-note'), '普通回答或操作预览被误标为澄清');
+  const pendingCardsBefore = $('assistant-messages').querySelectorAll('.assistant-proposal').length;
+  emitClarification = true;
+  $('assistant-prompt').value = '切换接线模式到3p4w';
+  await window.assistantSubmit();
+  emitClarification = false;
+  let clarified = Array.from($('assistant-messages').querySelectorAll('.assistant-message.assistant')).pop();
+  let clarificationNote = clarified.querySelector('.assistant-clarification-note');
+  check(!!clarificationNote && clarificationNote.textContent.includes('未创建操作预览'), 'SSE clarification 帧没有显示澄清标记');
+  check(clarified.classList.contains('assistant-message-clarification'), '澄清回答没有加上专用样式类');
+  check(clarified.querySelector('.assistant-markdown').textContent.includes('请确认希望执行的单一动作'), '澄清文字没有显示在回答正文');
+  check(clarificationNote.compareDocumentPosition(clarified.querySelector('.assistant-markdown')) & window.Node.DOCUMENT_POSITION_FOLLOWING, '澄清标记应显示在回答正文之前');
+  check(!clarified.querySelector('.assistant-proposal'), '澄清回答不应带操作预览卡');
+  check($('assistant-messages').querySelectorAll('.assistant-proposal').length === pendingCardsBefore, '澄清回答新增了操作预览卡');
+  check($('assistant-messages').querySelectorAll('.assistant-clarification-note').length === 1, '澄清标记数量不对');
+  const clarifiedMessage = window.__assistantState.conversations[0].messages[window.__assistantState.conversations[0].messages.length - 1];
+  check(clarifiedMessage.clarification === true && !clarifiedMessage.proposal, '澄清状态没有记在该条回答上');
+  // 整个会话重画（例如切换侧栏后）标记仍在；下一条普通回答不带标记。
+  $('assistant-prompt').value = '解释一下画像匹配';
+  await window.assistantSubmit();
+  const assistantBubbles = Array.from($('assistant-messages').querySelectorAll('.assistant-message.assistant'));
+  check(!assistantBubbles[assistantBubbles.length - 1].querySelector('.assistant-clarification-note'), '普通回答被误标为澄清');
+  check(!!assistantBubbles[assistantBubbles.length - 2].querySelector('.assistant-clarification-note'), '会话重画后澄清标记丢失');
+  // 非流式 JSON 响应用 clarification=true 表示同一状态。
+  const nativeFetchForClarification = window.fetch;
+  window.fetch = async (url, options = {}) => (String(url).endsWith('/api/assistant/chat')
+    ? jsonResponse({ ok: true, answer: CLARIFICATION_TEXT, sources: [], proposal: null, clarification: true })
+    : nativeFetchForClarification(url, options));
+  $('assistant-prompt').value = '切换接线模式到3p4w';
+  await window.assistantSubmit();
+  window.fetch = nativeFetchForClarification;
+  clarified = Array.from($('assistant-messages').querySelectorAll('.assistant-message.assistant')).pop();
+  check(!!clarified.querySelector('.assistant-clarification-note') && !clarified.querySelector('.assistant-proposal'), 'JSON clarification=true 没有显示澄清标记');
+  check($('assistant-messages').querySelectorAll('.assistant-clarification-note').length === 2, 'JSON 澄清后标记数量不对');
 
   // 图片仅保存在页面内存；文件选择 / 粘贴 / 拖放共用同一条受限图片管线。
   const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x01]);

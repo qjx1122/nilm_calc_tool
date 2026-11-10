@@ -5354,9 +5354,19 @@ function assistantBuildProposal(msg) {
   }
   return card;
 }
+// 澄清标记：服务端没有为本轮请求创建操作预览、改为要求补充或更正时（JSON 的 clarification=true，
+// 或 SSE 的 type=clarification 帧），在这条回答上方显示一个标签，和普通回答、待确认预览区分开。
+function assistantBuildClarificationNote(msg) {
+  if (!msg || msg.role !== 'assistant' || !msg.clarification) return null;
+  const note = document.createElement('div'); note.className = 'assistant-clarification-note'; note.setAttribute('role', 'note');
+  note.textContent = '待澄清：未创建操作预览';
+  return note;
+}
 function assistantBuildMessage(msg) {
   const root = document.createElement('div'); root.className = 'assistant-message ' + (msg.role === 'user' ? 'user' : 'assistant');
   const role = document.createElement('div'); role.className = 'assistant-role'; role.textContent = msg.role === 'user' ? '你' : '助手'; root.appendChild(role);
+  const clarification = assistantBuildClarificationNote(msg);
+  if (clarification) { root.classList.add('assistant-message-clarification'); root.appendChild(clarification); }
   const body = document.createElement('div');
   if (msg.role === 'user') { body.className = 'assistant-user-content'; body.style.whiteSpace = 'pre-wrap'; body.textContent = msg.content || ''; }
   else { body.className = 'assistant-markdown'; assistantRenderMarkdown(body, msg.content || ''); }
@@ -5378,7 +5388,7 @@ function assistantBuildMessage(msg) {
   assistantRenderSourceBadges(refs, msg.sources);
   if (refs.childNodes.length) root.appendChild(refs);
   const proposal = assistantBuildProposal(msg); if (proposal) root.appendChild(proposal);
-  msg._dom = { root, body, refs, proposal, images };
+  msg._dom = { root, body, refs, proposal, images, clarification };
   return root;
 }
 function assistantRefreshMessage(msg) {
@@ -5389,6 +5399,10 @@ function assistantRefreshMessage(msg) {
   const followBottom = isActiveMessage && assistantNearMessagesBottom(list);
   if (msg.role === 'assistant') assistantRenderMarkdown(msg._dom.body, msg.content || '');
   else msg._dom.body.textContent = msg.content || '';
+  if (msg._dom.clarification && msg._dom.clarification.parentNode) msg._dom.clarification.remove();
+  msg._dom.clarification = assistantBuildClarificationNote(msg);
+  if (msg._dom.clarification) msg._dom.root.insertBefore(msg._dom.clarification, msg._dom.body);
+  msg._dom.root.classList.toggle('assistant-message-clarification', !!msg._dom.clarification);
   assistantRenderSourceBadges(msg._dom.refs, msg.sources);
   if (!msg._dom.refs.childNodes.length && msg._dom.refs.parentNode) msg._dom.refs.remove();
   else if (msg._dom.refs.childNodes.length && !msg._dom.refs.parentNode) msg._dom.root.appendChild(msg._dom.refs);
@@ -6166,6 +6180,7 @@ function assistantHandleStreamData(raw, msg) {
     if (data.type === 'sources') { msg.sources = Array.isArray(data.sources) ? data.sources : []; assistantRefreshMessage(msg); }
     else if (data.type === 'delta' && typeof data.text === 'string') { msg.content += data.text; assistantRefreshMessage(msg); }
     else if (data.type === 'proposal' && data.proposal && typeof data.proposal === 'object') { msg.proposal = data.proposal; assistantRefreshMessage(msg); }
+    else if (data.type === 'clarification') { msg.clarification = true; assistantRefreshMessage(msg); }
     else if (data.type === 'error') throw new Error(data.error || '模型生成失败');
   }
 }
@@ -6255,7 +6270,7 @@ async function assistantSubmit() {
     if (!response.ok) { let body = null; try { body = await response.json(); } catch (e) { /* response may not be JSON */ } throw new Error(body && body.error ? body.error : 'HTTP ' + response.status); }
     const contentType = response.headers.get('content-type') || '';
     if (!contentType.includes('text/event-stream')) {
-      const data = await response.json(); answerMessage.content = String(data.answer || ''); answerMessage.sources = Array.isArray(data.sources) ? data.sources : []; answerMessage.proposal = data.proposal || null; assistantRefreshMessage(answerMessage);
+      const data = await response.json(); answerMessage.content = String(data.answer || ''); answerMessage.sources = Array.isArray(data.sources) ? data.sources : []; answerMessage.proposal = data.proposal || null; answerMessage.clarification = data.clarification === true; assistantRefreshMessage(answerMessage);
     } else {
       if (!response.body || !response.body.getReader) throw new Error('浏览器不支持流式读取，请更新浏览器后重试。');
       reader = response.body.getReader(); const decoder = new TextDecoder('utf-8'); let buffer = '';
