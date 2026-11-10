@@ -2095,9 +2095,11 @@ class AssistantService:
 
         # --- 阶段 B：结构化意图识别（设计文档 §8.4.1） ---
         # 确定性路由未命中时，通过 recognize_intent 进行结构化意图判定：
-        #   high tier（ok=True）且工具接受空参数：直接路由，不调用模型
-        #   （两个只读状态工具在 medium tier 也直接路由，见下方注释）；
-        #   其余情况（low tier、其余 medium tier，或工具需要参数）：继续走下面的模型判定流程，
+        #   high tier（ok=True）且工具接受空参数：直接路由，不调用模型；
+        #   get_runtime_status / get_runtime_settings 只要是首位候选就直接执行，与 tier 无关
+        #   （2026-11-10 实测 low tier 也执行；下方 e592aef 的注释写“只要不是 low”，与代码不一致，
+        #   以哪个为准待用户决定，见 STATUS.md 下一步）；
+        #   其余情况（工具需要参数，或其余工具的 medium / low tier）：继续走下面的模型判定流程，
         #   模型提出的工具调用再由 _accept_tool_calls 做意图门控，未通过则返回澄清。
         intent_recognition = None
         intent_tier = ""
