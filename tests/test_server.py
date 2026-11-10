@@ -594,6 +594,10 @@ def test_assistant_chat_returns_clarification_for_mismatched_model_tool_in_json_
     assert any(frame.get("type") == "clarification" for frame in frames)
     assert any(frame.get("type") == "delta" and "暂未创建操作预览" in frame["text"] for frame in frames)
     assert not any(frame.get("type") == "proposal" for frame in frames)
+    # 整个 SSE 文本都不应出现模型的自述。注意 sources 帧带知识库片段，而知识库包含由 README、
+    # 助手说明生成的手册：文档若照抄本用例的提问和这句自述，那一段会被检索进 sources 帧（也会进入
+    # 发给模型的上下文），本断言随之失败。2026-11-10 发生过一次，处理办法是改文档措辞，
+    # 不是放宽本断言；见 REPORT_TEST.md T-020 第 8 点。
     assert "操作已经完成" not in streamed.text
     assert not service._pending_tools
 
