@@ -1,8 +1,10 @@
 # STATUS.md
 
 > 续接文件（BOOTSTRAP.md v2.2 台账）。每次收尾必更新；只改本文件，不另建同类文件。
-> 最后更新：2026-11-05（智能问答“播放/启动数据源”六种说法确定性路由到当前数据源启动提案；全量 pytest 635 passed / 1 skipped / 1 warning；真实模型调用未做；活动分支 active；严格排除 `tmp/`）
-> 本次任务（2026-11-05）：审查六条用户报告后，确认原确定性入口只覆盖精确工具标题和少数固定别名，其余自然语言落入模型 `tool_choice=auto`；增加局部规范化的启动短句 grammar、强化速度工具提示、当前侧配置错误的操作指引，以及 6 条短语的单元/API 回归。未调用真实 Qwen，不能声称复现 provider 实际输出。`tmp/` 未触碰。
+> 最后更新：2026-11-10（任务立项：恢复被旧工作副本覆盖的 `app/server.py`、放回 `tests/test_server.py` 丢失的断言、补录 2026-11-05～11-06 丢失的台账条目；活动分支 `arena/51b63974-nilm-calc-tool`，基线 `e05542a`；`tmp/` 保持原样）
+> 本次任务（2026-11-10）：开局基线全量 pytest 为 1 failed / 638 passed / 1 skipped；失败根因是提交 `2c51d2f` 把 `app/server.py` 写回了 2026-11-05 的内容，助手「确认执行」接口每次调用都抛 `TypeError`。经用户批准，本任务恢复该文件、放回丢失的测试断言并补录丢失台账；`app/assistant.py` 的澄清回归只登记待办。
+> 前次更新：2026-11-05（智能问答“播放/启动数据源”六种说法确定性路由到当前数据源启动提案；全量 pytest 635 passed / 1 skipped / 1 warning；真实模型调用未做；活动分支 active；严格排除 `tmp/`）
+> 前次任务（2026-11-05）：审查六条用户报告后，确认原确定性入口只覆盖精确工具标题和少数固定别名，其余自然语言落入模型 `tool_choice=auto`；增加局部规范化的启动短句 grammar、强化速度工具提示、当前侧配置错误的操作指引，以及 6 条短语的单元/API 回归。未调用真实 Qwen，不能声称复现 provider 实际输出。`tmp/` 未触碰。
 > 前次运行任务（2026-11-04）：先核验未有 Python/8000 监听进程，修复缺失的 `.venv` 依赖并在 `0.0.0.0:8000` 恢复预览；首页、JS、CSS、`/api/state` 均 HTTP 200，WebSocket `/ws` 握手收到 `hello`。启动时用 `ELEC_TOOL_AUTOLOAD_LAST=0`，未自动加载历史运行数据；未读取 / 修改 `tmp/`。
 > （沙盒全量 634 passed / 1 skipped / 1 warning；助手 / 服务端 66 passed；jsdom 188 checks。用户实测身份 `field-readonly-1` 只有 `profiles.read`、`recordings.read`，当前模型 2 项工具；真实 Qwen 工具选择仍待补授权后复测，不声称已通过。）
 > （第 207 轮沙盒实现与验证已完成：定向 84 passed、全量 629 passed / 1 skipped；jsdom 188 checks；四份生成手册一致。真实浏览器 / 键盘 / 触屏与真实模型服务验收待用户，不声称已通过。）
@@ -14,14 +16,33 @@
 
 ## 当前角色
 - 角色：**资深电力算法专家**（`ROLE.md` v1.4 指定的默认当前角色）
-- 本任务级覆盖：**工程实现工程师**（`ROLE.md` 已定义；智能问答播放 / 启动数据源误识别分析、确定性路由与回归）
-- 生效范围：将明确的播放 / 启动数据源短句路由到当前侧 `start_current_source` 提案；区分速度修改意图，保留配置、权限、二次确认和服务端安全校验
+- 本任务级覆盖：**工程实现工程师**（`ROLE.md` 已定义；2026-11-10 旧工作副本覆盖事故的恢复与台账补录）
+- 生效范围：仅限用户 2026-11-10 批准的范围——恢复 `app/server.py`、放回 `tests/test_server.py` 丢失的断言、补录丢失的台账条目；`app/assistant.py` 的澄清回归只登记待办，本任务不修改
 - 默认执行模式：**模式 A（沙盒自执行）**；真实模型、目标浏览器与部署网络未连接时只报告未实测，不臆断现场验收。保持 `tmp/` 原样且排除提交。
 - 历史任务执行模式基线（本任务单独声明为模式 A）：**混合**——沙盒侧（模式 A）写码 + 合成信号解析解自验证 + live preview 实跑，**已有实录**；用户侧（模式 B）Windows 部署 / 真实数据对账 / 生产常驻，**只出执行包，未获实录不下结论**（执行包见 `REPORT_TEST.md` T-002 的 W/R/P 三组）
   - 说明：更早任务用户显式指定过模式 B（仅对「补齐台账骨架」生效）；历史任务若用户跳过模式澄清，曾按上述混合模式执行；每个新任务仍以当前任务登记的角色与模式为准。第 5 轮（界面下拉框检查）沙盒侧＝jsdom 驱动真实页面打真实服务端 + REST 空值语义实录，**已✅实录**；用户侧＝浏览器手点 U 组 7 步，**🔶待回报**。**第 6 轮（四功能）**沙盒侧＝pytest 25 项 + jsdom 30 项 + REST/CLI 实录，**已✅实录**；用户侧＝浏览器手点 U6 组 8 步，**🔶待回报**。**第 7 轮（三功能）**沙盒侧＝pytest 18 项 + jsdom 39 项 + CLI/源层实录，**已✅实录**；用户侧＝U7 组 8 步，**🔶待回报**。**第 9 轮（间谐波/直流/事件）**沙盒侧＝pytest 13 项 + jsdom 28 项 + live preview 实跑，**已✅实录**；用户侧＝U9 组 6 步，**🔶待回报**。**第 10 轮（离线列映射开关）**沙盒侧＝pytest 8 项 + jsdom 15 项 + REST 实录，**已✅实录**；用户侧＝U10 组 6 步，**🔶待回报**。**第 11 轮（时标 UTC 开关）**沙盒侧＝pytest 6 项 + 双时区全量 + jsdom 11 项，**已✅实录**；用户侧＝U11 组 5 步，**🔶待回报**。**第 12 轮（负荷辨识）**沙盒侧＝pytest 8 项 + jsdom 16 项 + 引擎/CSV 实录，**已✅实录**；用户侧＝U12 组 5 步，**🔶待回报**
 
 ## 当前目标
-- **本任务（2026-11-05：智能问答“播放 / 启动数据源”误识别分析与修复）**：
+- **本任务（2026-11-10：恢复被旧工作副本覆盖的 `app/server.py` 并补录丢失台账）**：
+  - **角色 / 模式**：工程实现工程师；模式 A；固定活动分支 `arena/51b63974-nilm-calc-tool`（取自 `restore2remote` 的 `e05542a`；用户确认留在该基线，不合入 `restore_branch_full_history` 多出的 3 个提交）；`tmp/` 保持原样。
+  - **起因（开局基线）**：`cli.py selftest` 44/44；全量 pytest **1 failed / 638 passed / 1 skipped**。失败用例 `tests/test_server.py::test_assistant_proposal_confirm_is_branch_scoped_and_reauthorized`：`app/server.py:2120` 以 5 个位置参数调用 `AssistantService.claim_tool_proposal()`（现签名最多 4 个）→ `TypeError`，`POST /api/assistant/tools/confirm` 每次调用都会抛出该异常。
+  - **根因**：提交 `2c51d2f`（2026-11-09 08:49 UTC）把 `app/server.py` 写回了 `7a88bd3`（2026-11-05 01:40 UTC）时点的内容，只多一行 `pausable`；2026-11-06 八个提交（`b3d1cc5`、`bc4e329`、`5be8837`、`5b490c6`、`568083f`、`c01a5d6`、`6aff7c0`、`24f2d09`）对该文件的修改全部丢失。同类覆盖还有 `c5cf96f`（6 个文件）与 `e31e0d9`（`tests/test_server.py`），明细见 `REPORT_TEST.md` T-019。
+  - **用户批准范围（2026-11-10）**：① `app/server.py` 恢复为 `05b7ba8` 版本并保留 `pausable` 一行；② 放回 `tests/test_server.py` 丢失的断言；③ 把丢失的专题与会话纪要按「补录」追加回台账；④ `app/assistant.py`「模型选错工具时不返回澄清」的回归只登记待办。
+  - **不在范围**：不改 `app/assistant.py`、`tests/test_assistant.py`、`docs/智能问答助手说明.md`、`README.md` 的功能说明、`node_modules/`、`.gitignore`；不合并其他分支。
+  - **验收**：全量 pytest 无失败；`tools/generate_assistant_docs.py --check` 与 `node tools/ui_assistant_check.cjs` 通过；改动已提交并推送，`git status` 干净。
+- **上一任务（2026-11-06：智能问答基于大模型技术的意图识别技术设计文档落盘）**：
+  - **位置说明**：本条原被追加在文件末尾（「关键文件路径」之后），2026-11-10 移入本节，以下内容未改。
+  - **角色 / 模式**：工程实现工程师；模式 A；固定活动分支 `arena/82e34fb8-nilm-calc-tool`（active）；严格排除 `tmp/`。
+  - **目标**：按用户提供的 12 章 + 4 附录模板结构，结合 `app/assistant.py`、`app/assistant_intents.py`、`app/assistant_tools.py`、`app/server.py` 实际代码，撰写基于大模型技术的受控工具意图识别完整设计文档并落盘 md，覆盖编写目的、项目背景、适用范围与边界、术语、设计依据；业务场景、功能/非功能需求、设计约束；分层架构、在问答链路中的位置、核心处理流程、关键设计取舍；意图粒度、划分原则、命名编码、意图字典模板、业务意图集示例（start/pause/resume/stop/current_source 等）、生命周期管理；技术路线候选、对比、加权评分、推荐方案、切换判据；预处理、候选召回、大模型判定、结构化输出校验、置信度计算分流、复合意图拆解、槽位抽取澄清、查询改写、多轮上下文、缓存优化；冷启动数据、标注规范、质量校验、微调方案、数据闭环；接口清单、接口定义、错误码、调用示例；离线/在线评估、准入标准、持续监控；提示注入防护、数据安全、内容安全、审计留痕；部署架构、性能预算、监控告警、灰度回滚；实施阶段、人力配置、风险应对；附录 A-D。
+  - **代码与文档对齐**：
+    * 确定性路由仅 cover `start`/`pause`/`resume`/`stop`（`app/assistant.py::_explicit_tool_command`，含“执行”动词 + 可选“播放”后缀、英文单字 `_EXACT_SOURCE_VERB_RE` 分支），已 py_compile 并通过回归；
+    * 46 个受控工具闭集在 `app/assistant_tools.py::TOOL_CATALOG`，每项带严格 JSON Schema（`additionalProperties: false`、`strict: true`）与 scope；
+    * 服务端门控：`app/assistant_intents.py::validate_model_tool_result` 做语法/结构/业务三级校验 + 参数 grounding（`_value_grounded`）+ 复合意图拆解；
+    * trace_id：响应头 `X-Assistant-Trace-ID`；审计留痕写入 `tool_audit.jsonl`；
+    * 脱敏日志：`_redact_names` / `_StreamingNameRedactor` 对文件名流式脱敏，图像不写知识库/持久目录。
+  - **验证**：新文档 `docs/智能问答助手基于大模型技术的意图识别技术设计文档.md`（约 580 行，V2.0）已落盘；内容与现有代码对齐，未引入与代码不符的新假设；未启动或重启用户服务，未获现场日志，未连接真实 Qwen，不声称现场验收通过；`tmp/` 未读取、修改、清理或提交。
+  - **相关文件 / 分支**：`docs/智能问答助手基于大模型技术的意图识别技术设计文档.md`、`STATUS.md`、`REPORT_TEST.md` T-014、本会话纪要；固定活动分支 `arena/82e34fb8-nilm-calc-tool`。
+- **上一任务（2026-11-05：智能问答“播放 / 启动数据源”误识别分析与修复）**：
   - **角色 / 模式**：工程实现工程师；模式 A；固定活动分支 `arena/82e34fb8-nilm-calc-tool`（active）；严格排除 `tmp/`。
   - **用户报告**：六种自然语言短句被误选 `set_playback_speed` 或未选到工具，见 `REPORT_TEST.md` 最新专题。目标是在 local / cloud、无图片的明确命令流程中确定性建 `start_current_source` 提案。
   - **审查结论**：旧入口只识别精确标题及少数别名，六句未覆盖而进入 `tool_choice=auto`。该机制可能令模型将“播放 / 离线”词汇误认为速度操作；另有先前现场权限回报显示只读身份缺 `engine.start`，所以实际部署的 allow-list / scope 也必须确认。未连接 Qwen，未复现 provider 的实际输出；不把静态推断写成真实模型根因。
@@ -681,15 +702,3 @@
 - 运行环境：`.venv/`（gitignore，沙盒回收后需重建：`python3 -m venv .venv && .venv/bin/pip install -r requirements.txt`）
 - 分支：`arena/82e34fb8-nilm-calc-tool`（远端同名，已 push；第 9 轮提交＝`8539d8a`（feat）+ docs；第 8 轮提交＝`a6fd42d`（feat）+ `b6c7ca6`（docs）；第 6 轮 tip `f1966e8`；第 7 轮提交＝`f0fdea6` feat(r7) / `341fc9e` test(r7) / docs）｜基点 `main`=`27b28ea`
 - 第 189 轮 live preview：`cli.py serve --host 0.0.0.0 --port 8001` 常驻（`ELEC_TOOL_AUTOSTART=0`；输出隔离到 `/tmp/nilm-assistant-preview-189`）；首页、完整文档目录 API、配置与 builtin 参数问答已实测 HTTP 200。
-
-- **本任务（2026-11-06：智能问答基于大模型技术的意图识别技术设计文档落盘）**：
-  - **角色 / 模式**：工程实现工程师；模式 A；固定活动分支 `arena/82e34fb8-nilm-calc-tool`（active）；严格排除 `tmp/`。
-  - **目标**：按用户提供的 12 章 + 4 附录模板结构，结合 `app/assistant.py`、`app/assistant_intents.py`、`app/assistant_tools.py`、`app/server.py` 实际代码，撰写基于大模型技术的受控工具意图识别完整设计文档并落盘 md，覆盖编写目的、项目背景、适用范围与边界、术语、设计依据；业务场景、功能/非功能需求、设计约束；分层架构、在问答链路中的位置、核心处理流程、关键设计取舍；意图粒度、划分原则、命名编码、意图字典模板、业务意图集示例（start/pause/resume/stop/current_source 等）、生命周期管理；技术路线候选、对比、加权评分、推荐方案、切换判据；预处理、候选召回、大模型判定、结构化输出校验、置信度计算分流、复合意图拆解、槽位抽取澄清、查询改写、多轮上下文、缓存优化；冷启动数据、标注规范、质量校验、微调方案、数据闭环；接口清单、接口定义、错误码、调用示例；离线/在线评估、准入标准、持续监控；提示注入防护、数据安全、内容安全、审计留痕；部署架构、性能预算、监控告警、灰度回滚；实施阶段、人力配置、风险应对；附录 A-D。
-  - **代码与文档对齐**：
-    * 确定性路由仅 cover `start`/`pause`/`resume`/`stop`（`app/assistant.py::_explicit_tool_command`，含“执行”动词 + 可选“播放”后缀、英文单字 `_EXACT_SOURCE_VERB_RE` 分支），已 py_compile 并通过回归；
-    * 46 个受控工具闭集在 `app/assistant_tools.py::TOOL_CATALOG`，每项带严格 JSON Schema（`additionalProperties: false`、`strict: true`）与 scope；
-    * 服务端门控：`app/assistant_intents.py::validate_model_tool_result` 做语法/结构/业务三级校验 + 参数 grounding（`_value_grounded`）+ 复合意图拆解；
-    * trace_id：响应头 `X-Assistant-Trace-ID`；审计留痕写入 `tool_audit.jsonl`；
-    * 脱敏日志：`_redact_names` / `_StreamingNameRedactor` 对文件名流式脱敏，图像不写知识库/持久目录。
-  - **验证**：新文档 `docs/智能问答助手基于大模型技术的意图识别技术设计文档.md`（约 580 行，V2.0）已落盘；内容与现有代码对齐，未引入与代码不符的新假设；未启动或重启用户服务，未获现场日志，未连接真实 Qwen，不声称现场验收通过；`tmp/` 未读取、修改、清理或提交。
-  - **相关文件 / 分支**：`docs/智能问答助手基于大模型技术的意图识别技术设计文档.md`、`STATUS.md`、`REPORT_TEST.md` T-014、本会话纪要；固定活动分支 `arena/82e34fb8-nilm-calc-tool`。
