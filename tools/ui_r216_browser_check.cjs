@@ -1,0 +1,69 @@
+#!/usr/bin/env node
+/* 第 216 轮：在隔离测试服务运行（会写浏览器 localStorage；只发只读 API）。
+ * 依赖 playwright-core 与 @sparticuz/chromium：通过 NODE_PATH 指向临时安装位置。
+ * 示例：NODE_PATH=/tmp/browser-deps/node_modules node tools/ui_r216_browser_check.cjs http://127.0.0.1:8767
+ * 服务与本脚本必须位于同一主机，以便服务读取临时合成 CSV；完成后自动删除合成数据。 */
+const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
+const BASE = process.argv[2] || 'http://127.0.0.1:8767';
+const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ui_r216_'));
+const wave = path.join(dir, 'wave.csv'), monFile = path.join(dir, 'voltage_20260921.csv');
+function writeInputs() {
+ const rows = ['时间戳,A相电压,A相电流,B相电压,B相电流,C相电压,C相电流'];
+ for (let k=0; k<6*6400; k++) { let t=k/6400, row=[(1700000000+t).toFixed(6)];
+   for (const p of [0,-2*Math.PI/3,2*Math.PI/3]) row.push((81.65*Math.sin(2*Math.PI*50*t+p)).toFixed(4), (7.07*Math.sin(2*Math.PI*50*t+p-.3)).toFixed(5));
+   rows.push(row.join(',')); }
+ fs.writeFileSync(wave,rows.join('\n')+'\n');
+ const mon=['t_epoch_s,time_local,source_id,window_s,Ua,Ub,Uc,Uab,Ubc,Uca,unbalance_pct,U1,run_id'];
+ for (let k=0;k<5;k++) mon.push(`${1700000000+k},2026-09-21 00:00:00.000,0,1,${100+k},${200+k},${300+k},1,2,3,0.1,,1790000200222`);
+ fs.writeFileSync(monFile,mon.join('\n')+'\n');
+}
+writeInputs();
+process.on('exit',()=>fs.rmSync(dir,{recursive:true,force:true}));
+const chromiumPkg = require('@sparticuz/chromium').default;
+const {chromium} = require('playwright-core');
+const assert = require('node:assert/strict');
+(async()=>{
+ const browser = await chromium.launch({executablePath:await chromiumPkg.executablePath(), args:chromiumPkg.args, headless:true});
+ const page = await browser.newPage({viewport:{width:1440,height:1000},deviceScaleFactor:1});
+ const errors=[], writes=[]; page.on('pageerror',e=>errors.push(e.message));
+ page.on('request',r=>{if (new URL(r.url()).pathname.startsWith('/api/') && r.method() !== 'GET') writes.push(r.method()+' '+r.url());});
+ let n=0; const ok=(name,cond)=>{assert.ok(cond,name);n++;console.log('✓ '+name)};
+ async function info(which) {return page.locator(which).evaluate(el=>{
+  const row=el.closest('.wb-chart-row'), a=row.querySelector('.wb-chart canvas'), b=row.querySelector('.wb-detail canvas'), t=row.querySelector('.wb-chart-title'), d=row.querySelector('.wb-detail-title');
+  const r=x=>{let q=x.getBoundingClientRect();return {top:q.top,bottom:q.bottom,left:q.left,right:q.right,width:q.width,height:q.height}};
+  const sty=x=>{let s=getComputedStyle(x);return [s.fontSize,s.fontWeight,s.fontFamily,s.color,s.lineHeight]};
+  return {a:r(a),b:r(b),t:r(t),d:r(d),ta:sty(t),tb:sty(d),width:row.clientWidth,scrollWidth:row.scrollWidth,scrollLeft:row.scrollLeft,heightA:a.__chart?.h,heightB:b.__chart?.h,status:row.querySelector('.wb-detail-status').textContent,tip:getComputedStyle(row.querySelector('.wb-detail .zoomtip')).display};
+ });}
+ async function checkAlignment(selector, label) {let x=await info(selector); console.log(label, JSON.stringify(x));
+  ok(label+' 画布顶底对齐',Math.abs(x.a.top-x.b.top)<1 && Math.abs(x.a.bottom-x.b.bottom)<1 && x.heightA===x.heightB);
+  ok(label+' 标题字体一致',JSON.stringify(x.ta)===JSON.stringify(x.tb) && Math.abs(x.t.top-x.d.top)<1);
+  ok(label+' 无常规说明',!x.status && x.tip==='none'); return x; }
+ async function open(main,key){let c=page.locator(main);await c.click({button:'right', position:{x:120,y:80}});await page.locator('#ctxmenu [data-key="'+key+'"]').click(); await page.waitForFunction(()=>Object.values(window.WB.rt).some(rt=>rt.detail));}
+ try {
+ await page.goto(BASE + '/',{waitUntil:'domcontentloaded'});
+ await page.locator('.navitem[data-view="process"]').click(); await page.locator('#sub-nav-process .sub-navitem[data-subview="wave-board"]').click();
+ await page.locator('#btn-wb-add-offline').click(); const off=page.locator('#wb-modules .wb-module').first();
+ await off.locator('[data-wb-f="off-path"]').fill(wave); await off.locator('[data-wb-f="off-path"]').dispatchEvent('change'); await off.locator('[data-wb-act="load"]').click();
+ await page.waitForFunction(()=>{let m=window.WB.modules[0];return window.WB.rt[m.id]?.data && document.querySelector('[data-wb-chart="u"] canvas').__chart});
+ await open('[data-wb-chart="u"] canvas','show-window2'); await checkAlignment('[data-wb-chart="u"]','桌面电压瞬时');
+ let u=off.locator('[data-wb-chart="u"]'); let d=off.locator('.wb-detail');
+ await u.locator('[data-z="x-"]').click(); let z=await page.evaluate(()=>{let m=window.WB.modules[0];return {main:window.ZOOM['wb-cv-'+m.id+'-u'], detail:window.ZOOM['wb-detail-'+m.id]}});
+ ok('主图缩放不改变周波图',!!z.main?.x && !z.detail);
+ await d.locator('[data-z="x-"]').click(); await d.locator('[data-z="pr"]').click(); let z2=await page.evaluate(()=>{let m=window.WB.modules[0];return {main:window.ZOOM['wb-cv-'+m.id+'-u'], detail:window.ZOOM['wb-detail-'+m.id]}});
+ ok('周波图缩放移动不改变主图',JSON.stringify(z.main)===JSON.stringify(z2.main) && !!z2.detail?.x);
+ await d.locator('.ser-vis[data-name="Ua"]').uncheck(); let counts=await page.evaluate(()=>{let m=window.WB.modules[0];return [document.getElementById('wb-cv-'+m.id+'-u').__chart.pts.length,document.getElementById('wb-detail-'+m.id).__chart.pts.length]});
+ ok('图例显示分别操作',counts[0]===3 && counts[1]===2);
+ await off.locator('[data-wb-act="detail-close"]').click(); await open('[data-wb-chart="i"] canvas','show-window'); await checkAlignment('[data-wb-chart="i"]','桌面电流有效值');
+ await off.locator('[data-wb-f="off-show"]').selectOption('i');await checkAlignment('[data-wb-chart="i"]','单电流模式');
+ await page.setViewportSize({width:500,height:900});await page.waitForTimeout(300); let narrow=await checkAlignment('[data-wb-chart="i"]','窄屏');
+ ok('窄屏保持并排并可横向滚动',narrow.scrollWidth>narrow.width && narrow.b.left>=narrow.a.right);
+ let canScroll=await off.locator('[data-wb-chart="i"]').evaluate(el=>{let row=el.closest('.wb-chart-row');row.scrollLeft=200;return row.scrollLeft>0});ok('窄屏横向滚动实际可用',canScroll);
+ await page.setViewportSize({width:1600,height:1000});await page.locator('#btn-wb-add-monitor').click();const mon=page.locator('#wb-modules .wb-module').nth(1);
+ await mon.locator('[data-wb-f="mon-path"]').fill(monFile);await mon.locator('[data-wb-f="mon-path"]').dispatchEvent('change');
+ await mon.locator('[data-wb-act="more"]').click();await mon.locator('[data-wb-f="mon-raw-path"]').fill(wave);await mon.locator('[data-wb-f="mon-raw-path"]').dispatchEvent('change');await mon.locator('[data-wb-act="load"]').click();
+ await page.waitForFunction(()=>{let m=window.WB.modules[1];return document.getElementById('wb-cv-'+m.id+'-m')?.__chart});
+ await open('[data-wb-chart="m"] canvas','show-window2'); await page.waitForFunction(()=>{let m=window.WB.modules[1];return window.WB.rt[m.id]?.detail}); await checkAlignment('[data-wb-chart="m"]','监测瞬时');
+ await page.locator('#wb-layout').selectOption('2');await page.waitForTimeout(300);await checkAlignment('[data-wb-chart="m"]','两列模块');
+ ok('浏览器未发生脚本错误',errors.length===0);ok('没有修改类 API 请求',writes.length===0);console.log('PASS',n);
+ } finally {await browser.close();}
+})().catch(e=>{console.error(e.stack);process.exit(1)});
