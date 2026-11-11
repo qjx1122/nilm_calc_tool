@@ -4192,6 +4192,87 @@ async def process_wave_rms(path: str, t_start: str = "", t_end: str = "", durati
         return _wave_err(exc)
 
 
+# ------------------------------------------------------------------ 数据处理：波形预览子界面（v0.99.51）
+# 离线波形 CSV 的电压 / 电流有效值曲线沿用上面的 /api/process/wave/rms；这里只管“实时监测输出文件”，
+# 即实时落盘写出的曲线 CSV（output/realtime/<曲线>_<日期>.csv，或离线播放时运行目录 output/<时间>/realtime/ 下的同名文件）。
+
+MONITOR_RUN_DIRS = 5        # 文件下拉里列出最近几次离线播放的运行目录
+
+
+def _monitor_dirs() -> List[Tuple[str, str]]:
+    """可能有实时监测输出文件的目录：两侧引擎正在写的目录、配置里的实时落盘目录、最近几次离线播放的运行目录。"""
+    dirs: List[Tuple[str, str]] = []
+    for side in SIDES:
+        r = RUNNERS[side]
+        with r.lock:
+            eng = r.engine
+            d_eng = getattr(getattr(eng, "writer", None), "dir", None) if eng is not None else None
+            d_cfg = os.environ.get("ELEC_TOOL_REALTIME_DIR") or r.cfg.output.realtime_dir or "output/realtime"
+        if d_eng:
+            dirs.append((f"{SIDE_LABELS[side]}当前落盘目录", str(d_eng)))
+        dirs.append(("实时落盘目录", d_cfg if os.path.isabs(d_cfg) else os.path.join(ROOT, d_cfg)))
+    base = _output_base()
+    if os.path.isdir(base):
+        runs = sorted((n for n in os.listdir(base) if re.match(r"^\d{8}_\d{6}(_\d+)?$", n)), reverse=True)
+        for name in runs[:MONITOR_RUN_DIRS]:
+            dirs.append((f"运行目录 {name}", os.path.join(base, name, "realtime")))
+    return dirs
+
+
+@app.get("/api/process/monitor/files")
+async def process_monitor_files() -> Any:
+    """「波形预览」实时监测输出模块的文件下拉：列出能显示的曲线文件（电压 / 电流 / 功率 / 功率因数），新的在前。只列文件名，不读内容。"""
+    from elec_tool.monitor_curve import QUANTITIES, QUANTITY_ORDER, list_curve_files
+    files = await asyncio.to_thread(list_curve_files, _monitor_dirs())
+    for f in files:
+        f["path"] = _display_path(f["path"]); f["dir"] = _display_path(f["dir"])
+        f["mtime_local"] = fmt_local(f["mtime"], ms=False)
+    return {"ok": True, "files": files,
+            "quantities": [{"id": q, "label": QUANTITIES[q]["label"], "unit": QUANTITIES[q]["unit"], "file": QUANTITIES[q]["file"]}
+                           for q in QUANTITY_ORDER]}
+
+
+@app.get("/api/process/monitor/curve")
+async def process_monitor_curve(path: str = "", quantity: str = "", source_id: str = "", run: str = "latest",
+                                t_start: str = "", t_end: str = "", last_s: str = "", max_points: int = 5000) -> Any:
+    """读一个实时监测输出的曲线 CSV，返回一种量的曲线（只读）。
+
+    quantity：voltage / current / p（有功）/ q（无功）/ pf（功率因数）；空＝文件里有的第一种。
+    source_id：0 总线侧 / 1 分路侧；空＝自动。run：latest（最近一次运行）/ all / 具体的 run_id。
+    t_start / t_end：按数据时间筛选（写法同其他时间输入：'2026-10-12 08:00:00' 或 epoch 秒）；last_s：只保留最后若干秒。
+    """
+    from elec_tool.monitor_curve import read_curve_file
+    try:
+        p = _wave_path(path)
+        sid: Optional[int] = None
+        s = str(source_id or "").strip()
+        if s:
+            if s not in ("0", "1"):
+                raise ConfigError(f"数据来源只能是 0（总线侧）或 1（分路侧），当前 '{source_id}'")
+            sid = int(s)
+        ts = float(parse_time_text(t_start)) if str(t_start or "").strip() else None
+        te = float(parse_time_text(t_end)) if str(t_end or "").strip() else None
+        if ts is not None and te is not None and te <= ts:
+            raise ConfigError(f"结束时刻必须晚于起始时刻（{t_start} → {t_end}）")
+        ls: Optional[float] = None
+        if str(last_s or "").strip():
+            try:
+                ls = float(str(last_s).strip())
+            except ValueError:
+                raise ConfigError(f"「只看最近」的时长必须是数字（秒），当前 '{last_s}'") from None
+        d = await asyncio.to_thread(read_curve_file, p, quantity=quantity, source_id=sid, run=run,
+                                    t_start=ts, t_end=te, last_s=ls, max_points=max_points)
+        d["path_display"] = _display_path(p)
+        d["t_first_local"] = fmt_local(d["t_first"]); d["t_last_local"] = fmt_local(d["t_last"])
+        d["mtime_local"] = fmt_local(d["mtime"], ms=False)
+        for r in d["run_ids"]:
+            r["started_local"] = fmt_local(r["id"] / 1000.0, ms=False)      # run_id 是那次运行启动时的墙钟毫秒
+            r["t_first_local"] = fmt_local(r["t_first"], ms=False); r["t_last_local"] = fmt_local(r["t_last"], ms=False)
+        return d
+    except Exception as exc:
+        return _wave_err(exc)
+
+
 # ------------------------------------------------------------------ WebSocket
 
 WS_STATE_INTERVAL_S = 1.0   # state 定期推送周期（秒）；与 result 流量无关
