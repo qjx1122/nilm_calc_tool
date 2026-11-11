@@ -657,35 +657,33 @@ input.flash{animation:ntflash 1.5s ease-out}
   .assistant-operator-status{min-width:0;flex-basis:100%}
 }
 
-/* 数据处理页子界面导航条 */
+/* 数据处理页子界面导航条：颜色全部取页面的主题变量，选中态与左侧导航条（.navitem.active）同一套配色 */
 .sub-nav {
   display: flex;
   gap: 6px;
   margin: 12px 0 8px 0;
   padding: 8px 0;
-  border-bottom: 1px solid #ddd;
+  border-bottom: 1px solid var(--line);
   overflow-x: auto;
 }
 .sub-navitem {
   padding: 6px 14px;
   font-size: 13px;
-  background: #f0f0f0;
-  color: #333;
-  border: 1px solid #ccc;
+  background: var(--panel2);
+  color: var(--fg);
+  border: 1px solid var(--line);
   border-radius: 4px;
   cursor: pointer;
   white-space: nowrap;
   transition: all 0.2s;
 }
 .sub-navitem:not(.active):hover {
-  background: #dce9ff;
-  border-color: #0066cc;
+  border-color: var(--acc);
 }
 .sub-navitem.active {
-  background: #0066cc;
-  color: #fff;
-  border-color: #0066cc;
-  box-shadow: 0 1px 2px rgba(0,0,0,0.15);
+  background: #1b2a4a;
+  color: #cfe4ff;
+  border-color: var(--acc);
 }
 
 /* 子界面显示/隐藏 */

@@ -936,7 +936,8 @@ function renderTop() {
                : ps.paused ? ['已暂停', 'pill warn'] : ps.running ? ['运行中', 'pill on'] : ps.finished ? ['已完成', 'pill off'] : ['未启动', 'pill']),
     source: brFull ? ((brCfg.source && brCfg.source.kind) || '—') : (ps.source_kind || '—'),
     time: brFull ? (isNum(brFull.latest_t_ref) ? ts(brFull.latest_t_ref) : '—') : (ps.t_ref ? ts(ps.t_ref) : '—'),
-    freq: '—',
+    // 对侧频率只在对侧摘要里有（/api/branch/state 的完整状态不带 f_used），所以两种情况都从摘要取
+    freq: isNum(ps.f_used) ? num(ps.f_used, 3) + ' Hz' : '—',
     fs: brFull ? (brCfg.sampling ? brCfg.sampling.fs + ' Hz' : '—') : (isNum(ps.fs) ? ps.fs + ' Hz' : '—'),
     ptct: brFull ? (brCfg.transform ? `${brCfg.transform.pt_ratio} / ${brCfg.transform.ct_ratio}` : '—') : (isNum(ps.pt_ratio) ? `${ps.pt_ratio} / ${ps.ct_ratio}` : '—'),
     samples: brFull ? (brEng.samples_in !== undefined ? `${brEng.samples_in} (${num(brEng.data_duration_s, 1)}s)` : '—') : (ps.samples_in !== undefined ? `${ps.samples_in} (${num(ps.data_duration_s, 1)}s)` : '—'),
@@ -1036,24 +1037,22 @@ function renderPauseButtons(st, eng, brFull) {
 
 async function togglePause() {
   const st = S.state || {}, eng = st.engine || {};
-  const brFull = (S.side === 'bus' && S.branchFullState) || null;
-  const busRunning = !!(eng.running && !eng.finished);
+  // S.state 是当前视图所在一侧的状态：分路侧视图下它就是分路侧，不能当成总线侧
+  const here = S.side === 'branch' ? 'branch' : 'bus';
+  const brFull = (here === 'bus' && S.branchFullState) || null;
+  const hereRunning = !!(eng.running && !eng.finished);
   const branchRunning = !!(brFull && brFull.running && !brFull.finished);
-  const busPausable = st.pausable;
-  const branchPausable = brFull ? brFull.pausable : false;
-  const busPaused = st.paused;
-  const branchPaused = brFull ? brFull.paused : false;
 
-  // 确定需要操作的侧：仅对运行中的侧进行操作
+  // 确定需要操作的侧：仅对运行中的侧进行操作（总线侧视图下，独立运行的分路侧也算）
   const targets = [];
-  if (busRunning) targets.push({ side: 'bus', paused: busPaused, pausable: busPausable });
-  if (branchRunning) targets.push({ side: 'branch', paused: branchPaused, pausable: branchPausable });
+  if (hereRunning) targets.push({ side: here, paused: st.paused, pausable: st.pausable });
+  if (branchRunning) targets.push({ side: 'branch', paused: brFull.paused, pausable: brFull.pausable });
   if (targets.length === 0) {
     toast('没有数据源正在播放，无法暂停', 'err'); return;
   }
 
-  // 仅总线侧单独运行时保留原有完整错误提示（兼容前端契约测试所需字符串）
-  if (busRunning && !branchRunning) {
+  // 仅本侧单独运行时保留原有完整错误提示（兼容前端契约测试所需字符串）
+  if (hereRunning && !branchRunning) {
     if (!(st.pausable && eng.running && !eng.finished)) {
       toast(st.pausable ? '离线文件未在播放，无法暂停' : '暂停/恢复仅支持离线文件（csv_file）源', 'err'); return;
     }
@@ -1065,28 +1064,27 @@ async function togglePause() {
     toast('暂停/恢复仅支持离线文件（csv_file）源', 'err'); return;
   }
 
-  // 若任何可暂停的目标侧处于暂停，则执行恢复；否则执行暂停
-  const isAnyPaused = pausableTargets.some(t => t.paused);
+  // 每一侧按它自己的状态切换：已暂停 → 恢复，否则 → 暂停。
+  // 已知问题（补-B6，尚未处理）：总线侧视图下两侧一个暂停、一个在播时，点一次的结果是两侧互换状态，
+  // 而不是都恢复或都暂停；按钮文字此时只跟分路侧的状态走（见 renderTop 里的 btnSt）。
   const results = [];
-
+  let failed = false;
   for (const t of pausableTargets) {
+    const name = t.side === 'branch' ? '分路侧' : '总线侧';
     try {
-      if (t.side === 'bus') {
-        const ep = t.paused ? '/api/engine/resume' : '/api/engine/pause';
-        const r = await api(ep, { method: 'POST' });
-        S.state = r.state || S.state;
-      } else {
-        const ep = t.paused ? '/api/branch/engine/resume' : '/api/branch/engine/pause';
-        await fetch(ep, { method: 'POST' });
-        S.branchFullState = await api('/api/branch/state');
-      }
-      results.push(t.side + '侧' + (t.paused ? '已恢复' : '已暂停'));
+      // 显式传侧别；api() 在 HTTP 状态码不是 2xx 时抛出服务端给的错误信息，不会把失败报成成功
+      const r = await api(t.paused ? '/api/engine/resume' : '/api/engine/pause', { method: 'POST' }, t.side);
+      if (t.side === here) S.state = r.state || S.state;
+      results.push(name + (t.paused ? '已恢复' : '已暂停'));
     } catch (e) {
-      results.push(t.side + '侧' + (t.paused ? '恢复' : '暂停') + '失败：' + e.message);
+      failed = true;
+      results.push(name + (t.paused ? '恢复' : '暂停') + '失败：' + e.message);
+      continue;
     }
+    // 对侧（分路侧）的完整状态要另取一次。取不到不算这次操作失败：下一次状态推送或看门狗会补上
+    if (t.side !== here) { try { S.branchFullState = await api('/api/state', undefined, 'branch'); } catch (e) { /* 见上 */ } }
   }
 
-  const failed = results.some(r => r.includes('失败'));
   toast(results.join('，'), failed ? 'err' : 'ok');
   renderTop(); if (S.view === 'source') render();
 }
@@ -2702,7 +2700,7 @@ function render() {
       case 'windows': renderDual(renderWindows); break;
       case 'source': renderSource(); break;
       case 'export': renderDual(renderExport); break;
-      case 'process': renderProcess(); break;          // 子界面：重采样/负荷辨识调参/设备画像提取/波形预览/估计 CT
+      case 'process': renderProcess(); break;          // 子界面：重采样/负荷辨识调参/设备画像提取/波形分析/估计 CT
       default: break;
     }
   } catch (e) {
@@ -3008,36 +3006,35 @@ async function startEngine(payloadExtra = {}) {
 
 async function stopEngine() {
   const st = S.state || {}, eng = st.engine || {};
-  const brFull = (S.side === 'bus' && S.branchFullState) || null;
-  const busRunning = !!eng.running;
-  const branchRunning = !!(brFull && brFull.running);
+  // S.state 是当前视图所在一侧的状态：分路侧视图下它就是分路侧，不能当成总线侧
+  const here = S.side === 'branch' ? 'branch' : 'bus';
+  const brFull = (here === 'bus' && S.branchFullState) || null;
 
-  // 确定需要停止的侧：单侧运行时只停该侧；双侧都运行时同时停两侧
+  // 确定需要停止的侧：本侧在运行就停本侧；总线侧视图下，分路侧在运行也一并停
   const targets = [];
-  if (busRunning) targets.push('bus');
-  if (branchRunning) targets.push('branch');
+  if (eng.running) targets.push(here);
+  if (brFull && brFull.running) targets.push('branch');
   if (targets.length === 0) {
     toast('没有数据源正在运行，无法停止', 'err'); return;
   }
 
   const results = [];
+  let failed = false;
   for (const side of targets) {
+    const name = side === 'branch' ? '分路侧' : '总线侧';
     try {
-      if (side === 'bus') {
-        await api('/api/engine/stop', { method: 'POST' });
-        results.push('总线侧已停止');
-      } else {
-        await fetch('/api/branch/engine/stop', { method: 'POST' });
-        results.push('分路侧已停止');
-      }
+      // 显式传侧别；api() 在 HTTP 状态码不是 2xx 时抛出服务端给的错误信息，不会把失败报成成功
+      await api('/api/engine/stop', { method: 'POST' }, side);
+      results.push(name + '已停止');
     } catch (e) {
-      results.push(side + '侧停止失败：' + e.message);
+      failed = true;
+      results.push(name + '停止失败：' + e.message);
     }
   }
 
-  S.state = await api('/api/state');
+  // 刷新本侧状态。取不到不影响下面如实报告停止结果：下一次状态推送或看门狗会补上
+  try { S.state = await api('/api/state'); } catch (e) { /* 见上 */ }
   renderTop(); render();
-  const failed = results.some(r => r.includes('失败'));
   toast(results.join('，'), failed ? 'err' : 'ok');
 }
 
@@ -4064,7 +4061,7 @@ function renderProfileExtract() {
   if (!_npRendered) { _npRendered = true; ntListFiles('np'); ntInitBase('np'); }
 }
 
-/* 波形预览子界面渲染（仅在切换到 wave-preview 视图时调用） */
+/* 波形分析子界面渲染（仅在切换到 wave-preview 视图时调用） */
 let _wpRendered = false;
 function renderWavePreviewView() {
   if (!_wpRendered) { _wpRendered = true; wpLoadDefaults(); wpListFiles(); }
@@ -4548,7 +4545,8 @@ async function ntApply() {
   } catch (e) { toast('套用失败：' + e.message, 'err'); }
 }
 
-/* v0.61：数据处理 · 波形预览（GET /api/process/wave/info|load|rms） */
+/* v0.61：数据处理 · 波形预览（GET /api/process/wave/info|load|rms）
+   v0.99.50 起界面上这个子界面叫「波形分析」；内部标识（wave-preview、wp-*、接口路径、模块名）没有改。 */
 const WP = { info: null, wave: null, rms: null, cyc: null, files: [], defaults: null };
 window.WP = WP;
 const WP_COLORS = { Ua: '#4ea1ff', Ub: '#3ddc97', Uc: '#ffb648', Ia: '#ff7ac6', Ib: '#9d7bff', Ic: '#5ee0d0' };
@@ -4926,8 +4924,13 @@ async function ctRun() {
     ctStatus('');
   } catch (e) { ctStatus('估计失败：' + esc(e.message), 'bad'); }
 }
+let CT_ESTIMATE_BOUND = false;
 function initCtEstimate() {
   if (!$('#btn-ct-run')) return;
+  // 这个函数有两个调用点（页面初始化的 bindProcess、首次打开子界面的 renderProcess）。事件只绑定一次，
+  // 否则用匿名函数绑定的控件点一次会触发两次（「加载逐周波 RMS 曲线」会发两次请求）。
+  if (CT_ESTIMATE_BOUND) return;
+  CT_ESTIMATE_BOUND = true;
   $('#btn-ct-run').addEventListener('click', ctRun);
   $('#btn-ct-refresh').addEventListener('click', ctListFiles);
   $('#btn-ct-copy').addEventListener('click', () => { navigator.clipboard && navigator.clipboard.writeText($('#ct-cmd').textContent || ''); toast('已复制'); });
@@ -5151,7 +5154,7 @@ const ASSISTANT_IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp'])
 const ASSISTANT_IMAGE_MAX_BYTES = 3 * 1024 * 1024;
 const ASSISTANT_IMAGE_TOTAL_MAX_BYTES = 5 * 1024 * 1024;
 const ASSISTANT_IMAGE_MAX_COUNT = 3;
-const ASSISTANT_VIEW_LABELS = { overview: '总览面板', source: '数据源与控制', compare: '跨侧对比', voltage: '三相电压', current: '三相电流', power: '有功 / 无功 / 视在', power_factor: '功率因数', fundamental: '基波', harmonic: '谐波', interharmonic: '间谐波', dc: '直流偏置', spectrum: '频谱', events: '电能质量事件', nilm: '负荷辨识事件', windows: '窗口配置', export: '导出与日志', selftest: '算法自检', process: '数据处理', rsample: '离线波形重采样', 'nilm-tune': '负荷辨识调参', 'profile-extract': '设备画像提取', 'wave-preview': '波形预览' };
+const ASSISTANT_VIEW_LABELS = { overview: '总览面板', source: '数据源与控制', compare: '跨侧对比', voltage: '三相电压', current: '三相电流', power: '有功 / 无功 / 视在', power_factor: '功率因数', fundamental: '基波', harmonic: '谐波', interharmonic: '间谐波', dc: '直流偏置', spectrum: '频谱', events: '电能质量事件', nilm: '负荷辨识事件', windows: '窗口配置', export: '导出与日志', selftest: '算法自检', process: '数据处理', rsample: '离线波形重采样', 'nilm-tune': '负荷辨识调参', 'profile-extract': '设备画像提取', 'wave-preview': '波形分析' };
 const ASSISTANT_TOOL_LABELS = {
   get_runtime_status: '查询当前侧运行状态', get_runtime_settings: '查询当前侧计算配置摘要',
   get_electrical_result: '查询当前侧最新电气量结果', get_history: '查询当前侧趋势历史',

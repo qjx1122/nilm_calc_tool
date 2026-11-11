@@ -494,3 +494,89 @@ def test_assistant_is_a_fixed_session_and_chat_sidebar_with_zero_config_backend(
     assert "toggle.setAttribute('aria-label', label)" in APPJS and "展开会话管理面板" in APPJS and "收起会话管理面板" in APPJS
     assert "assistantNewConversation('builtin', null, false)" in APPJS, "助手启动会话的初始免模型通道未正确初始化"
     assert "model_type: conv.backend || 'builtin'" in APPJS, "聊天载荷仍回退到需要模型配置的后端"
+
+
+# ---------------------------------------------------------------------------------------------
+# v0.99.50（第 209 轮）：补-B1～B4 与「波形预览」改名「波形分析」
+# 这里只钉静态文本；真实交互（点按钮→请求→提示）由 tools/ui_r209_check.cjs 对着真实服务检查。
+# ---------------------------------------------------------------------------------------------
+
+STYLE = (ROOT / "app/static/style.css").read_text(encoding="utf-8")
+
+
+def _js_function(name: str) -> str:
+    """取 app.js 里一个顶层函数的全文：从 `function name(` 那一行到它后面第一个顶格的 `}`。"""
+    m = re.search(rf"^(?:async )?function {re.escape(name)}\(", APPJS, re.M)
+    assert m, f"app.js 里没有顶层函数 {name}"
+    end = APPJS.index("\n}\n", m.start())
+    return APPJS[m.start(): end + 3]
+
+
+def test_wave_subview_is_named_wave_analysis_and_keeps_internal_ids():
+    """数据处理页第 4 个子界面在界面上叫「波形分析」；内部标识、接口路径不变。"""
+    assert '<button class="sub-navitem" data-subview="wave-preview">📈 波形分析</button>' in HTML
+    section = HTML[HTML.index('<section id="view-process-wave-preview"'):]
+    section = section[: section.index("</section>")]
+    assert re.search(r"<h2[^>]*>波形分析</h2>", section), "子界面标题没有改成「波形分析」"
+    visible = re.sub(r"<!--.*?-->", "", HTML, flags=re.S)
+    assert "波形预览" not in visible, "index.html 注释之外还有「波形预览」"
+    assert visible.count("与波形分析同一套自定义时间") == 2, "调参、画像提取两个子界面的提示应改称「波形分析」"
+    assert "'wave-preview': '波形分析'" in APPJS, "助手里这个子界面的名称没有同步"
+    # 只改名：内部标识和接口路径保持原样
+    for kept in ('id="view-process-wave-preview"', 'id="wp-form"', 'id="wp-files"', 'id="wp-path"'):
+        assert kept in HTML, f"index.html 缺少 {kept}"
+    for kept in ("case 'wave-preview':", "/api/process/wave/info", "/api/process/wave/load", "/api/process/wave/rms"):
+        assert kept in APPJS, f"app.js 缺少 {kept}"
+
+
+def test_sub_nav_uses_theme_variables():
+    """补-B4：数据处理页内导航条的颜色取页面主题变量，不再是浅色主题的写死颜色。"""
+    start = STYLE.index("\n.sub-nav {")
+    block = STYLE[start: STYLE.index("/* 子界面显示/隐藏 */", start)]
+    assert block.count("{") == 4, "页内导航条的规则数变了，请同步这个测试"
+    for light in ("#f0f0f0", "#333", "#ccc", "#ddd", "#0066cc", "#dce9ff", "#fff"):
+        assert light not in block, f"页内导航条仍写死浅色主题的颜色 {light}"
+    for var in ("var(--line)", "var(--panel2)", "var(--fg)", "var(--acc)"):
+        assert var in block, f"页内导航条没有用到 {var}"
+    for var in ("--line", "--panel2", "--fg", "--acc"):
+        assert re.search(rf"{var}:\s*#[0-9a-fA-F]{{3,6}}", STYLE[: STYLE.index("}")]), f":root 里没有定义 {var}"
+    # 选中态与左侧导航条的选中态同一套配色
+    nav_active = re.search(r"\.navitem\.active\{([^}]*)\}", STYLE).group(1)
+    sub_active = re.search(r"\.sub-navitem\.active \{([^}]*)\}", STYLE).group(1)
+    for colour in ("#1b2a4a", "#cfe4ff"):
+        assert colour in nav_active and colour in sub_active, f"选中态配色 {colour} 两处不一致"
+
+
+def test_topbar_peer_row_shows_frequency_from_peer_summary():
+    """补-B1：顶栏对侧一行的频率取对侧摘要里的 f_used，不能写死成「—」。"""
+    body = _js_function("renderTop")
+    assert "freq: isNum(ps.f_used) ? num(ps.f_used, 3) + ' Hz' : '—'," in body
+    assert "freq: '—'," not in body, "对侧频率仍写死为「—」"
+    # 服务端的对侧摘要确实带这个字段
+    server = (ROOT / "app/server.py").read_text(encoding="utf-8")
+    summary = server[server.index("def _side_summary("):]
+    summary = summary[: summary.index("\n\n\n")]
+    assert '"f_used": (getattr(latest, "f_used", None) if latest else None),' in summary, "对侧摘要不再带 f_used"
+
+
+@pytest.mark.parametrize("name", ["togglePause", "stopEngine"])
+def test_topbar_pause_and_stop_report_the_right_side_and_real_outcome(name):
+    """补-B2：顶栏「暂停」「停止」按当前视图所在的一侧说话、用中文侧名，并且经 api() 发请求（非 2xx 会抛错）。"""
+    body = _js_function(name)
+    assert "const here = S.side === 'branch' ? 'branch' : 'bus';" in body, "没有按当前视图判断本侧是哪一侧"
+    assert "'分路侧' : '总线侧'" in body, "提示里的侧名不是中文名称"
+    assert "side + '侧'" not in body, "提示里仍在拼内部标识（bus侧 / branch侧）"
+    assert "fetch(" not in body, "仍直接用 fetch 发请求：HTTP 400 / 500 不会抛错，会被当成成功"
+    assert re.search(r"await api\([^;]*\{ method: 'POST' \}, (?:t\.)?side\)", body), "操作请求没有显式带侧别"
+    assert "失败：' + e.message" in body and "failed = true" in body
+    assert "toast(results.join('，'), failed ? 'err' : 'ok');" in body
+
+
+def test_ct_estimate_binds_its_events_only_once():
+    """补-B3：initCtEstimate 有两个调用点，事件只能绑定一次（否则点一次按钮发两次请求）。"""
+    body = _js_function("initCtEstimate")
+    guard = body.index("if (CT_ESTIMATE_BOUND) return;")
+    assert guard < body.index("CT_ESTIMATE_BOUND = true;") < body.index("addEventListener")
+    assert re.search(r"^let CT_ESTIMATE_BOUND = false;$", APPJS, re.M)
+    callers = [m.start() for m in re.finditer(r"initCtEstimate\(\)", APPJS)]
+    assert len(callers) == 3, "initCtEstimate 的定义加两个调用点应该是 3 处；调用点有变化时请重新确认只绑定一次"
