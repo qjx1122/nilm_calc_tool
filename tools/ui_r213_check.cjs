@@ -222,7 +222,7 @@ async function main() {
   const saved=JSON.parse(window.localStorage.getItem(KEY));
   check('原始文件及周波数保存在模块本地配置', () => saved.modules.find(x=>x.id===monel.dataset.wbId).monitor.raw_path===wave && saved.modules.find(x=>x.id===monel.dataset.wbId).detail.cycles==='10');
   set(field(monel,'detail-cycles'),'1001'); ctx(mc); await choose('show-window2');
-  check('周波数上限生效且保留已有曲线', () => !!detail(monel));
+  check('监测模块周波数上限生效', () => !detail(monel));
   set(field(monel,'detail-cycles'),'10');
   set(field(monel,'mon-raw-path'),path.join(temp,'missing.csv')); ctx(mc); await choose('show-window2');
   check('错误文件有明确失败提示，错误在画布之后且两图仍同高', () => /读取失败/.test(monel.querySelector('.wb-detail-status').textContent) && monel.querySelector('.wb-detail-chart').nextElementSibling === monel.querySelector('.wb-detail-status') && dcv(monel).style.height === mc.style.height);

@@ -5554,7 +5554,7 @@ function wbOnChange(ev) {
   if (f === 'off-map-enabled') { const row = wbEl(m).querySelector('.wb-colmap-row'); if (row) row.hidden = m.offline.col_map_enabled !== '1'; }
   if (f === 'off-show') { wbRenderCharts(m); wbDraw(m); return; }
   if (f === 'mon-refresh') { wbRt(m).nextAt = 0; return; }
-  if (f === 'detail-cycles') return; // 新周波数只用于下一次右键，不改变已显示的曲线
+  if (f === 'detail-cycles') { if (m.type === 'monitor') wbClearDetail(m); return; } // 离线模块的新周波数只用于下一次右键
   if (f.startsWith('mon-raw-')) { wbClearDetail(m); return; }
   if (m.type === 'monitor' && f !== 'title' && m.monitor.path && JSON.stringify(wbCfg(m)) !== before) wbLoad(m);
 }
@@ -5563,7 +5563,7 @@ function wbOnKeydown(ev) {                                   // 在输入框里�
   if (ev.key !== 'Enter' || !inp || inp.tagName !== 'INPUT' || !inp.dataset || !inp.dataset.wbF || inp.dataset.wbF === 'title') return;
   const m = wbModuleOf(inp); if (!m) return;
   ev.preventDefault();
-  if (inp.dataset.wbF === 'detail-cycles' || inp.dataset.wbF.startsWith('mon-raw-')) { wbReadForm(m); wbSave(); if (inp.dataset.wbF.startsWith('mon-raw-')) wbClearDetail(m); return; }
+  if (inp.dataset.wbF === 'detail-cycles' || inp.dataset.wbF.startsWith('mon-raw-')) { wbReadForm(m); wbSave(); if (m.type === 'monitor' || inp.dataset.wbF.startsWith('mon-raw-')) wbClearDetail(m); return; }
   wbLoad(m);
 }
 function wbShown() { return S.view === 'process' && PROCESS_SUBVIEW === 'wave-board' && !document.hidden; }
