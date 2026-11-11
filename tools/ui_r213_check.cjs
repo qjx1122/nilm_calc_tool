@@ -153,8 +153,12 @@ async function main() {
   check('两图各有显示和缩放移动控件', () => mainLegend.querySelector('.ser-vis') && detailLegend.querySelector('.ser-vis') && mainLegend.querySelector('[data-z="x-"]') && detailLegend.querySelector('[data-z="pr"]'));
   click(mainLegend.querySelector('[data-z="x-"]')); const mainZoom = JSON.stringify(window.ZOOM[cv.id]);
   check('主图缩放不影响周波图', () => !!window.ZOOM[cv.id].x && !window.ZOOM[dcv(off).id]);
+  check('主图放大后不显示移动说明，保留缩放说明和移动按钮', () => { const tip = mainLegend.querySelector('.zoomtip').textContent; return !/移动坐标轴|拖动图面|方向键/.test(tip) && /拖选|双击复位/.test(tip) && mainLegend.querySelector('[data-z=pr]') && !mainLegend.querySelector('[data-z=pr]').disabled; });
   click(detailLegend.querySelector('[data-z="x-"]')); const beforePan = window.ZOOM[dcv(off).id].x[0]; click(detailLegend.querySelector('[data-z="pr"]'));
   check('周波图独立缩放移动不影响主图', () => window.ZOOM[dcv(off).id].x[0] > beforePan && JSON.stringify(window.ZOOM[cv.id]) === mainZoom);
+  check('周波图移动说明也已移除', () => !/移动坐标轴|拖动图面|方向键/.test(detailLegend.querySelector('.zoomtip').textContent));
+  const other = document.createElement('canvas'); other.id='r217-other'; document.body.appendChild(other); window.drawLine(other,[{name:'test', data:[[0,1],[1,2]]}],{height:200}); click(other.__zoombar.querySelector('[data-z="x-"]'));
+  check('其他曲线仍显示原移动说明', () => /拖动图面.*移动坐标轴/.test(other.__zoombar.querySelector('.zoomtip').textContent)); other.remove();
   click(detailLegend.querySelector('[data-z="reset"]')); click(mainLegend.querySelector('[data-z="reset"]'));
   check('两图复位各自有效', () => !window.ZOOM[cv.id] && !window.ZOOM[dcv(off).id]);
   const toggle = off.querySelector('.wb-detail .ser-vis[data-name=Ua]'); toggle.checked = false; toggle.dispatchEvent(new window.Event('change', {bubbles:true})); await sleep(50);
@@ -193,6 +197,9 @@ async function main() {
   ctx(mc); await choose('show-window');
   check('监测模块从指定原始 CSV 读取，按选定时刻及独立 PT 显示', () => detail(monel) && detail(monel).data.n >= 9 && detail(monel).data.n <= 10 && Math.abs(detail(monel).data.channels.Ua[0]-4*U_RMS)<1 && !monel.querySelector('.wb-detail-status').textContent && mc.__chart.h === 280 && dcv(monel).__chart.h === 280);
   check('监测曲线与周波图同一行且其他模块不受影响', () => !detail(off) && detail(monel) && mc.closest('.wb-chart-row').classList.contains('wb-paired') && mc.closest('.wb-chart-row').contains(dcv(monel)));
+  click(monel.querySelector('[data-wb-chart="m"] [data-z="x-"]'));
+  check('监测主图放大后也不显示移动说明', () => !/移动坐标轴|拖动图面|方向键/.test(monel.querySelector('[data-wb-chart="m"] .zoomtip').textContent));
+  click(monel.querySelector('[data-wb-chart="m"] [data-z="reset"]'));
   set(document.getElementById('wb-layout'), '2');
   check('更改模块排列后仍保持同一行并排', () => mc.closest('.wb-chart-row').classList.contains('wb-paired') && mc.closest('.wb-chart-row').contains(dcv(monel)));
   set(document.getElementById('wb-layout'), '1');

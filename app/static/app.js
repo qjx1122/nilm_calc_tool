@@ -527,7 +527,10 @@ function renderZoomBar(cv) {
   bar.querySelectorAll('.pan-btn').forEach(b => { const ax = (b.dataset.z === 'pl' || b.dataset.z === 'pr') ? 'x' : 'y'; b.disabled = !(z && z[ax]); });
   if (cv.__setCursor && !cv.__pan) cv.__setCursor();
   const tip = bar.querySelector('.zoomtip');
-  if (tip) tip.textContent = z ? ('已缩放' + (z.x ? ' X' : '') + (z.y ? ' Y' : '') + '：拖动图面 / 方向键 / ◀▶▲▼ 移动坐标轴；在 X / Y 轴刻度带上拖选或 Ctrl+拖选再放大；双击复位') : '拖选区间＝只显示该区间（在 X / Y 轴刻度带上拖选＝只缩放该轴）';
+  if (tip) {
+    const movingHelp = cv.closest('.wb-module') ? '' : '拖动图面 / 方向键 / ◀▶▲▼ 移动坐标轴；';
+    tip.textContent = z ? ('已缩放' + (z.x ? ' X' : '') + (z.y ? ' Y' : '') + '：' + movingHelp + '在 X / Y 轴刻度带上拖选或 Ctrl+拖选再放大；双击复位') : '拖选区间＝只显示该区间（在 X / Y 轴刻度带上拖选＝只缩放该轴）';
+  }
 }
 
 /* 公共时间段模式：时间轴固定为 [公共起点, 公共终点]（相对 tbase），段外的点不画 —— 两侧、各子界面坐标轴一致 */
