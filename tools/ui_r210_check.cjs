@@ -369,6 +369,14 @@ async function run(wave, mon) {
     field(off, 'off-path').value = wave;
     field(off, 'off-path').dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); await idle(); d = offData();
     check('O17 在输入框里按回车也能加载', () => !!d && d.n === 30 && status(off).startsWith('已加载 30 个点'), () => status(off).slice(0, 40));
+    // 引擎运行时整个页面每 0.2 秒重画一次（render）：预览模块不能跟着把几万个点重新整理一遍，也不能跟着去列文件
+    const drawnSeries = cv(off, 'u').__series;
+    const boardCalls = () => page.calls.filter((c) => c.url.includes('/api/process/') || c.url.includes('/api/files')).length;
+    const callsBeforeRender = boardCalls();
+    for (let k = 0; k < 20; k++) window.render();
+    await sleep(300);
+    check('O18 页面反复重画时，预览模块不重新整理曲线数据，也不发请求', () => drawnSeries.length === 3 && cv(off, 'u').__series === drawnSeries
+      && boardCalls() === callsBeforeRender, () => `期间请求 ${boardCalls() - callsBeforeRender} 次；曲线数据${cv(off, 'u').__series === drawnSeries ? '没有' : '被'}重新整理`);
   });
 
   // ------------------------------------------------------------------ R：实时监测输出文件

@@ -4850,7 +4850,8 @@ const WB_FIELDS = {
   'mon-path': ['monitor', 'path'], 'mon-quantity': ['monitor', 'quantity'], 'mon-source': ['monitor', 'source'], 'mon-run': ['monitor', 'run'],
   'mon-last': ['monitor', 'last_min'], 'mon-tstart': ['monitor', 't_start'], 'mon-tend': ['monitor', 't_end'], 'mon-refresh': ['monitor', 'refresh_s'],
 };
-const WB = { modules: [], seq: 1, layout: 1, rt: {}, offlineFiles: [], monitorFiles: [], listedAt: 0, defaults: null, chain: Promise.resolve(), timer: null, inited: false };
+const WB = { modules: [], seq: 1, layout: 1, rt: {}, offlineFiles: [], monitorFiles: [], listedAt: 0, defaults: null, chain: Promise.resolve(), timer: null, inited: false,
+             away: false, stale: false, drawnWidth: -1 };
 window.WB = WB;
 
 function wbBlankOffline() { return { path: '', t_start: '', t_end: '', cycles: WB_OFFLINE_CYCLES, show: 'both', pt: '', ct: '', f_nom: '', utc: '', max_points: '' }; }
@@ -5005,6 +5006,9 @@ function wbFillRunSelect(m) {
   const opts = [['latest', '最近一次运行'], ['all', '全部（不按运行筛选）']].concat(runs.map(r => [String(r.id), `${r.started_local || r.id} 启动 · ${r.rows} 行`]));
   const cur = m.monitor.run || 'latest';
   if (!opts.some(o => o[0] === cur)) opts.push([cur, `运行 ${cur}`]);
+  const sig = JSON.stringify([opts, cur]);
+  if (sel.dataset.sig === sig) return;                       // 选项没变就不重建：自动刷新时不打断正在展开的下拉框
+  sel.dataset.sig = sig;
   sel.innerHTML = wbOptions(opts, cur);
 }
 function wbSyncMore(m) {
@@ -5156,23 +5160,35 @@ function wbBindCanvas(m, key, cv) {
     { key: 'native', label: '浏览器原生菜单（Shift + 右键）', disabled: true },
   ]));
 }
+/* 一张图的曲线数据。同一次读取的结果只整理一遍：引擎运行时整个页面每 0.2 秒重画一次，不能每次都把几万个点重新排一遍 */
+function wbSeries(m, ch, d) {
+  const rt = wbRt(m);
+  if (rt.seriesFor !== d) { rt.seriesFor = d; rt.series = {}; }
+  if (!rt.series[ch.key]) {
+    const src = m.type === 'monitor' ? (d.series || {}) : (d.channels || {});
+    const names = (m.type === 'monitor' ? (d.fields || []) : ch.names).filter(name => Array.isArray(src[name]));
+    const t0 = d.t[0];
+    rt.series[ch.key] = names.map(name => ({ name, color: wbColor(name), data: d.t.map((x, i) => [x - t0, src[name][i]]) }));
+  }
+  return rt.series[ch.key];
+}
 function wbDraw(m) {
   const el = wbEl(m); if (!el) return;
   const rt = wbRt(m), d = wbData(m);
+  if (!wbShown()) WB.stale = true;                           // 不在显示状态时画的图宽度不对，回到本子界面时要重画
   wbCharts(m).forEach(ch => {
     const cv = wbCanvas(m, ch.key); if (!cv) return;
     wbBindCanvas(m, ch.key, cv);
-    let names = [], pick = null, title = '';
+    let title = '';
     if (m.type === 'monitor') {
       title = d ? `${d.label}${d.unit ? '（' + d.unit + '）' : ''}${isNum(d.window_s) ? ' · 每个点的计算窗口 ' + (+(+d.window_s).toFixed(3)) + ' s' : ''}` : (wbQuantityLabel(m.monitor.quantity) || '曲线');
-      if (d) { names = d.fields || []; pick = name => d.series[name]; }
     } else {
       title = `${ch.label}（${ch.unit}）` + (d ? ` · 每个点 ${d.agg_cycles} 个周波` : '');
-      if (d) { names = ch.names.filter(name => (d.channels || {})[name]); pick = name => d.channels[name]; }
     }
     const titleEl = el.querySelector('.wb-chart[data-wb-chart="' + ch.key + '"] .wb-chart-title');
     if (titleEl) titleEl.textContent = title;
-    if (!d || !d.t || !d.t.length || !names.length) {
+    const series = (d && d.t && d.t.length) ? wbSeries(m, ch, d) : [];
+    if (!series.length) {
       const why = (rt.queued || rt.loading) ? '读取中…' : rt.failed ? '读取失败（原因见下方）' : d ? `文件里没有${ch.what || ''}通道`
         : wbCfg(m).path.trim() ? '点「加载曲线」后显示' : '先选择文件，再点「加载曲线」';
       drawLine(cv, [], { empty: why, height: ch.height });
@@ -5180,8 +5196,7 @@ function wbDraw(m) {
     }
     const t0 = d.t[0], span = d.t[d.t.length - 1] - t0;
     // ownRange：时间轴按这个文件自己的数据，不套用两侧播放的「公共时间段」（那是给跟随播放的趋势图用的）
-    drawLine(cv, names.map(name => { const ys = pick(name); return { name, color: wbColor(name), data: d.t.map((x, i) => [x - t0, ys[i]]) }; }),
-      { fmtX: x => tsX(x + t0, span), fmtTip: x => fmtLocalInput(x + t0), tbase: t0, height: ch.height, ownRange: true });
+    drawLine(cv, series, { fmtX: x => tsX(x + t0, span), fmtTip: x => fmtLocalInput(x + t0), tbase: t0, height: ch.height, ownRange: true });
   });
   wbRenderHead(m);
 }
@@ -5257,7 +5272,7 @@ function wbLoad(m, opt = {}) {
     } catch (e) {
       if (wbAlive(m) && m.type === type) {
         if (opt.auto && rt.data) wbSetStatus(m, `自动刷新失败，仍显示 ${wbClock(rt.at)} 读到的曲线：${esc(e.message)}`, 'bad');
-        else { rt.data = null; rt.failed = true; wbSetStatus(m, '读取失败：' + esc(e.message), 'bad'); if (!opt.auto && !opt.quiet) toast('波形预览读取失败：' + e.message, 'err'); }
+        else { rt.data = null; rt.seriesFor = null; rt.series = {}; rt.failed = true; wbSetStatus(m, '读取失败：' + esc(e.message), 'bad'); if (!opt.auto && !opt.quiet) toast('波形预览读取失败：' + e.message, 'err'); }
       }
     } finally {
       rt.loading = false; rt.manual = false; rt.tookMs = Date.now() - started;
@@ -5325,7 +5340,7 @@ function wbOnChange(ev) {
   if (f === 'type') {                                        // 换数据源类型：两种类型各自的配置都保留，表单和画布按新类型重建
     wbReadForm(m);
     m.type = inp.value === 'monitor' ? 'monitor' : 'offline';
-    const rt = wbRt(m); rt.data = null; rt.failed = false;
+    const rt = wbRt(m); rt.data = null; rt.seriesFor = null; rt.series = {}; rt.failed = false;
     wbSave(); wbSetStatus(m, ''); wbRenderForm(m); wbRenderCharts(m); wbRenderHead(m); wbDraw(m);
     if (wbCfg(m).path.trim()) wbLoad(m, { quiet: true });
     return;
@@ -5362,7 +5377,7 @@ function wbOnKeydown(ev) {                                   // 在输入框里�
 }
 function wbShown() { return S.view === 'process' && PROCESS_SUBVIEW === 'wave-board' && !document.hidden; }
 function wbTick() {                                          // 每秒一次：到点的实时监测模块自动重新读取（只在本子界面显示时）
-  if (!wbShown()) return;
+  if (!wbShown()) { WB.away = true; return; }
   const now = Date.now();
   WB.modules.forEach(m => {
     if (m.type !== 'monitor' || !m.monitor.path || !((parseFloat(m.monitor.refresh_s) || 0) > 0)) return;
@@ -5371,9 +5386,15 @@ function wbTick() {                                          // 每秒一次：�
     wbLoad(m, { auto: true });
   });
 }
-function wbOnShow() {                                        // 子界面显示出来、窗口大小变化时
-  wbDrawAll();                                               // 按当前宽度重画
-  if (Date.now() - WB.listedAt > 5000) { WB.listedAt = Date.now(); wbListFiles('offline'); wbListFiles('monitor'); }   // 文件下拉跟上新写出的文件
+/* 本子界面处于显示状态时，页面每次重画都会调到这里（引擎运行时每 0.2 秒一次、窗口大小变化、切换页面），所以只在需要时才动手：
+   宽度变了或者有图是在不显示时画的 → 按当前宽度重画；离开过本子界面再回来 → 重新列一次文件（新的一次运行会写出新文件）。 */
+function wbOnShow() {
+  const host = $('#wb-modules'), w = host ? host.clientWidth : 0;
+  if (WB.stale || w !== WB.drawnWidth) { WB.stale = false; WB.drawnWidth = w; wbDrawAll(); }
+  if (WB.away) {
+    WB.away = false;
+    if (Date.now() - WB.listedAt > 5000) { WB.listedAt = Date.now(); wbListFiles('offline'); wbListFiles('monitor'); }
+  }
 }
 function wbInit() {
   if (WB.inited || !$('#wb-modules')) return;
