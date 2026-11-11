@@ -40,8 +40,8 @@ const assert = require('node:assert/strict');
   ok(label+' 无拖选和缩放说明',!x.status && !/拖选|缩放|复位/.test(x.tip)); return x; }
  async function open(main,key){let c=page.locator(main);await c.click({button:'right', position:{x:120,y:80}});await page.locator('#ctxmenu [data-key="'+key+'"]').click(); await page.waitForFunction(()=>Object.values(window.WB.rt).some(rt=>rt.detail));}
  async function checkBoardHelp(module,label){
-  const res = await module.locator('.zoombar').evaluateAll(bars => bars.map(bar => ({label:bar.querySelector('.panlbl')?.textContent, tip:bar.querySelector('.zoomtip').textContent, visible:getComputedStyle(bar.querySelector('.zoomtip')).display!=='none', zoom:!!window.ZOOM[bar.dataset.chart], buttons:[...bar.querySelectorAll('.pan-btn')].map(btn=>({title:btn.getAttribute('title'),name:btn.getAttribute('aria-label')}))})));
-  ok(label+'保留移动说明并去除拖选和缩放说明',res.length>0 && res.every(x=>x.label==='移动：' && !/拖选|缩放|复位/.test(x.tip) && (x.zoom ? x.visible && /拖动图面.*移动坐标轴/.test(x.tip) : !x.visible && x.tip==='') && x.buttons.length===4 && x.buttons.every(b=>/移动/.test(b.title||'') && /平移/.test(b.name||''))));
+  const res = await module.locator('.zoombar').evaluateAll(bars => bars.map(bar => ({label:bar.querySelector('.panlbl')?.textContent, legend:bar.closest('.serlegend')?.innerText||'', tip:bar.querySelector('.zoomtip').textContent, visible:getComputedStyle(bar.querySelector('.zoomtip')).display!=='none', zoom:!!window.ZOOM[bar.dataset.chart], buttons:[...bar.querySelectorAll('.pan-btn')].map(btn=>({title:btn.getAttribute('title'),name:btn.getAttribute('aria-label')}))})));
+  ok(label+'无三个文字标签，保留移动说明和悬停提示',res.length>0 && res.every(x=>!x.label && !/(显示|缩放|移动)：/.test(x.legend) && !/拖选|缩放|复位/.test(x.tip) && (x.zoom ? x.visible && /拖动图面.*移动坐标轴/.test(x.tip) : !x.visible && x.tip==='') && x.buttons.length===4 && x.buttons.every(b=>/移动/.test(b.title||'') && /平移/.test(b.name||''))));
  }
  try {
  await page.goto(BASE + '/',{waitUntil:'domcontentloaded'});
@@ -52,6 +52,14 @@ const assert = require('node:assert/strict');
  await checkBoardHelp(off,'电压、电流未缩放');
  await open('[data-wb-chart="u"] canvas','show-window2'); await checkAlignment('[data-wb-chart="u"]','桌面电压瞬时'); await checkBoardHelp(off,'电压与瞬时');
  let u=off.locator('[data-wb-chart="u"]'); let d=off.locator('.wb-detail');
+ await u.locator('canvas').hover({position:{x:160,y:80}}); await page.mouse.wheel(0,-120);
+ await page.waitForFunction(()=>{let m=window.WB.modules[0];return !!window.ZOOM['wb-cv-'+m.id+'-u']?.x});
+ await checkBoardHelp(off,'鼠标滚轮缩放后');
+ await u.locator('[data-z="reset"]').click();
+ const canvas = u.locator('canvas'); await canvas.scrollIntoViewIfNeeded(); const rect=await canvas.boundingBox();
+ await page.mouse.move(rect.x+120,rect.y+50); await page.mouse.down(); await page.mouse.move(rect.x+220,rect.y+140,{steps:4}); await page.mouse.up();
+ ok('鼠标框选完成后缩放成功',await canvas.evaluate(cv=>!!window.ZOOM[cv.id]?.x)); await checkBoardHelp(off,'鼠标框选缩放后');
+ await u.locator('[data-z="reset"]').click();
  await u.locator('[data-z="x-"]').click(); let z=await page.evaluate(()=>{let m=window.WB.modules[0];return {main:window.ZOOM['wb-cv-'+m.id+'-u'], detail:window.ZOOM['wb-detail-'+m.id]}});
  ok('主图缩放不改变周波图',!!z.main?.x && !z.detail);
  const mainTip=await u.locator('.zoomtip').innerText(); ok('放大后主图保留移动说明、不显示拖选和缩放说明',/拖动图面.*移动坐标轴/.test(mainTip) && !/拖选|缩放|复位/.test(mainTip));
@@ -59,7 +67,9 @@ const assert = require('node:assert/strict');
  ok('主图移动按钮仍可用',zMoved.x[0] > z.main.x[0]); z.main=zMoved; await checkBoardHelp(off,'主图缩放移动后');
  await u.locator('[data-z="pr"]').hover(); ok('主图方向按钮悬停说明保留',/向右移动 X 轴（→ 键）/.test(await u.locator('[data-z="pr"]').getAttribute('title')));
  await u.locator('canvas').hover({position:{x:120,y:80}}); ok('主图曲线悬停取值保留',await u.locator('canvas').evaluate(cv=>!!cv.__hoverInfo && cv.__hoverInfo.items.length===3));
- await d.locator('[data-z="x-"]').click(); await d.locator('[data-z="pr"]').click(); let z2=await page.evaluate(()=>{let m=window.WB.modules[0];return {main:window.ZOOM['wb-cv-'+m.id+'-u'], detail:window.ZOOM['wb-detail-'+m.id]}});
+ await d.locator('canvas').hover({position:{x:160,y:80}}); await page.mouse.wheel(0,-120);
+ await page.waitForFunction(()=>{let m=window.WB.modules[0];return !!window.ZOOM['wb-detail-'+m.id]?.x}); await checkBoardHelp(off,'周波图鼠标滚轮缩放后');
+ await d.locator('[data-z="pr"]').click(); let z2=await page.evaluate(()=>{let m=window.WB.modules[0];return {main:window.ZOOM['wb-cv-'+m.id+'-u'], detail:window.ZOOM['wb-detail-'+m.id]}});
  ok('周波图缩放移动不改变主图',JSON.stringify(z.main)===JSON.stringify(z2.main) && !!z2.detail?.x);
  await d.locator('[data-z="pr"]').hover(); ok('周波图方向按钮悬停说明保留',/向右移动 X 轴（→ 键）/.test(await d.locator('[data-z="pr"]').getAttribute('title')));
  await d.locator('canvas').hover({position:{x:120,y:80}}); ok('周波图曲线悬停取值保留',await d.locator('canvas').evaluate(cv=>!!cv.__hoverInfo && cv.__hoverInfo.items.length===3));

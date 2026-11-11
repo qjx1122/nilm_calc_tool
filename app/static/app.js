@@ -503,9 +503,9 @@ function renderZoomBar(cv) {
   let bar = cv.__zoombar;
   if (!bar) {
     bar = document.createElement('span'); bar.className = 'zoombar'; bar.dataset.chart = cv.id;
-    bar.innerHTML = '<span class="muted">缩放：</span>' + [['x-', 'X＋', '放大 X 轴（滚轮）'], ['x+', 'X－', '缩小 X 轴'], ['y-', 'Y＋', '放大 Y 轴（Shift+滚轮）'], ['y+', 'Y－', '缩小 Y 轴'], ['reset', '复位', '恢复全图（双击图面）']]
+    bar.innerHTML = (board ? '' : '<span class="muted">缩放：</span>') + [['x-', 'X＋', '放大 X 轴（滚轮）'], ['x+', 'X－', '缩小 X 轴'], ['y-', 'Y＋', '放大 Y 轴（Shift+滚轮）'], ['y+', 'Y－', '缩小 Y 轴'], ['reset', '复位', '恢复全图（双击图面）']]
       .map(([a, t, tip]) => `<button type="button" class="zoom-btn" data-z="${a}" title="${tip}">${t}</button>`).join('') +
-      '<span class="muted panlbl">移动：</span>' + [['pl', '◀', '向左移动 X 轴（放大后拖动图面 / ← 键 / Alt+滚轮）', '向左平移'], ['pr', '▶', '向右移动 X 轴（→ 键）', '向右平移'], ['pu', '▲', '向上移动 Y 轴（↑ 键 / Alt+Shift+滚轮）', '向上平移'], ['pd', '▼', '向下移动 Y 轴（↓ 键）', '向下平移']]
+      (board ? '' : '<span class="muted panlbl">移动：</span>') + [['pl', '◀', '向左移动 X 轴（放大后拖动图面 / ← 键 / Alt+滚轮）', '向左平移'], ['pr', '▶', '向右移动 X 轴（→ 键）', '向右平移'], ['pu', '▲', '向上移动 Y 轴（↑ 键 / Alt+Shift+滚轮）', '向上平移'], ['pd', '▼', '向下移动 Y 轴（↓ 键）', '向下平移']]
       .map(([a, t, tip, label]) => `<button type="button" class="zoom-btn pan-btn" data-z="${a}" title="${tip}"${board ? ` aria-label="${label}"` : ''}>${t}</button>`).join('') +
       '<span class="zoomtip muted">拖选区间＝只显示该区间</span>';
     bar.addEventListener('click', (ev) => {
@@ -582,7 +582,7 @@ function renderSeriesLegend(cv, series, hidden) {
     cv.insertAdjacentElement('afterend', d); cv.__legend = d;
   }
   cv.__legendKey = key;
-  cv.__legend.innerHTML = '<span class="muted">显示：</span>' + series.filter(s => s && s.name).map(s =>
+  cv.__legend.innerHTML = (cv.closest('.wb-module') ? '' : '<span class="muted">显示：</span>') + series.filter(s => s && s.name).map(s =>
     `<label class="${hidden.has(s.name) ? 'off' : ''}" title="勾选＝显示该曲线；取消＝隐藏（${cv.__hiddenOwn ? '保存在这个预览模块的配置里' : '已保存到配置'}）"><input type="checkbox" class="ser-vis" data-chart="${esc(cv.id)}" data-name="${esc(s.name)}" ${hidden.has(s.name) ? '' : 'checked'}><i style="background:${s.color || '#4ea1ff'}"></i>${esc(s.name)}</label>`).join('');
   if (cv.__zoombar) cv.__legend.appendChild(cv.__zoombar);
 }
