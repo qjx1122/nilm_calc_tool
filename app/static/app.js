@@ -5125,7 +5125,7 @@ function wbMount(m) {                      // 建出模块的页面元素，放�
     </h3>
     <div class="wb-body"><div class="form wb-form"></div><div class="wb-charts"></div></div>
     <div class="wb-detail-controls"><label>周波窗周波数 <input data-wb-f="detail-cycles" type="number" min="1" max="1000" step="1" value="${esc(m.detail.cycles)}"></label><span class="notes">在曲线上右键显示瞬时采样或逐周波有效值</span></div>
-    <div class="wb-detail" hidden><div class="wb-detail-head"><strong class="wb-detail-title"></strong><button type="button" data-wb-act="detail-close">关闭周波曲线</button></div><div class="notes wb-detail-status"></div><div class="wb-detail-chart"></div></div>
+    <div class="wb-detail" hidden><div class="wb-detail-head"><div class="wb-chart-title wb-detail-title"></div><button type="button" data-wb-act="detail-close">关闭周波曲线</button></div><div class="wb-detail-chart"></div><div class="notes wb-detail-status" role="status" aria-live="polite"></div></div>
     <div class="notes wb-status"></div>`;
   host.insertBefore(el, host.children[WB.modules.indexOf(m)] || null);
   wbRenderForm(m); wbRenderCharts(m); wbRenderHead(m); wbDraw(m);
@@ -5217,7 +5217,7 @@ function wbDraw(m) {
       title = `${ch.label}（${ch.unit}）` + (d ? ` · 每个点 ${d.agg_cycles} 个周波` : '');
     }
     const titleEl = el.querySelector('.wb-chart[data-wb-chart="' + ch.key + '"] .wb-chart-title');
-    if (titleEl) titleEl.textContent = title;
+    if (titleEl) { titleEl.textContent = title; titleEl.title = title; }
     const series = (d && d.t && d.t.length) ? wbSeries(m, ch, d) : [];
     if (!series.length) {
       const why = (rt.queued || rt.loading) ? '读取中…' : rt.failed ? '读取失败（原因见下方）' : d ? `文件里没有${ch.what || ''}通道`
@@ -5245,7 +5245,14 @@ function wbClearDetail(m) {
 }
 function wbDrawDetail(m) {
   const rt = wbRt(m), d = rt.detail, el = wbEl(m), cv = document.getElementById(`wb-detail-${m.id}`);
-  if (!d || !el || !cv || !d.data || !d.data.t || !d.data.t.length) return;
+  if (!el || !cv) return;
+  const key = el.querySelector('.wb-detail').dataset.wbKey;
+  const height = (wbCharts(m).find(ch => ch.key === key) || {}).height || 240;
+  if (!d || !d.data || !d.data.t || !d.data.t.length) {
+    const failed = !!el.querySelector('.wb-detail-status').textContent;
+    drawLine(cv, [], {empty: failed ? '读取失败（原因见下方）' : '读取中…', height});
+    return;
+  }
   const t0 = d.data.t[0], span = d.data.t[d.data.t.length - 1] - t0;
   const channels = d.data.channels || {};
   const names = Object.keys(channels).filter(k => Array.isArray(channels[k]));
@@ -5253,7 +5260,7 @@ function wbDrawDetail(m) {
   if (!d.series) d.series = names.map(k => ({name: k, color: wbColor(k), data: d.data.t.map((t, i) => [t - t0, channels[k][i]])}));
   const hasU = names.some(name => name[0] === 'U'), hasI = names.some(name => name[0] === 'I');
   drawLine(cv, d.series,
-    { ylabel: hasU && hasI ? 'V / A' : hasU ? 'V' : 'A', fmtX: x => tsX(x + t0, span), fmtTip: x => fmtLocalInput(x + t0), tbase: t0, height: 240, ownRange: true });
+    { ylabel: hasU && hasI ? 'V / A' : hasU ? 'V' : 'A', fmtX: x => tsX(x + t0, span), fmtTip: x => fmtLocalInput(x + t0), tbase: t0, height, ownRange: true });
   bindCtxMenu(cv, () => canvasNativeItems(cv).concat([{sep: true},
     {key: 'zoom-reset', label: '复位缩放', onClick: () => zoomReset(cv)},
     {key: 'native', label: '浏览器原生菜单（Shift + 右键）', disabled: true}]));
@@ -5276,17 +5283,17 @@ function wbLoadDetail(m, key, center, kind) {
   if (box.parentElement) box.parentElement.classList.remove('wb-paired');
   row.appendChild(box); row.classList.add('wb-paired'); box.dataset.wbKey = key;
   rt.detail = null; box.hidden = false; el.querySelector('.wb-detail-title').textContent = kind === 'wave' ? '周波瞬时采样曲线' : '周波有效值曲线';
-  status.textContent = '排队读取原始波形…';
+  status.textContent = '';
+  const height = (wbCharts(m).find(ch => ch.key === key) || {}).height || 240;
   const detailChart = el.querySelector('.wb-detail-chart'); detailChart.replaceChildren();
-  const cv = document.createElement('canvas'); cv.id = 'wb-detail-' + m.id; cv.height = 240; detailChart.appendChild(cv);
+  const cv = document.createElement('canvas'); cv.id = 'wb-detail-' + m.id; cv.height = height; detailChart.appendChild(cv);
   cv.__hiddenOwn = m.hidden.detail || [];
   cv.__onSeriesToggle = (name, on) => { const hidden = new Set(cv.__hiddenOwn); if (on) hidden.delete(name); else hidden.add(name); m.hidden.detail = cv.__hiddenOwn = [...hidden]; wbSave(); if (cv.__redraw) cv.__redraw(); };
-  drawLine(cv, [], {empty: '读取中…', height: 240});
+  drawLine(cv, [], {empty: '读取中…', height});
   wbDraw(m); // 主图宽度变窄后立即重画，保持悬停、缩放及右键坐标准确。
   const job = async () => {
     if (!valid()) return false;
     try {
-      status.textContent = '读取原始波形文件信息…';
       const info = await api('/api/process/wave/info?' + wpQuery(params), undefined, 'bus');
       if (!valid()) return false;
       if (!isNum(info.t_start) || !isNum(info.t_end) || center < info.t_start || center > info.t_end)
@@ -5304,17 +5311,16 @@ function wbLoadDetail(m, key, center, kind) {
       const q = Object.assign({}, params, {t_start: start.toFixed(6), t_end: end.toFixed(6), channels: chans});
       if (kind === 'rms') { q.agg_cycles = 1; q.max_points = 1000; }
       else q.max_points = WB_DETAIL_MAX_SAMPLES;
-      status.textContent = '读取周波曲线…';
       const data = await api('/api/process/wave/' + (kind === 'wave' ? 'load' : 'rms') + '?' + wpQuery(q), undefined, 'bus');
       if (!valid()) return false;
       if (!data.t || !data.t.length) throw new Error('所选时段没有可显示的数据');
       rt.detail = {data, kind, center, source: source.path}; delete ZOOM[cv.id];
-      status.textContent = `原始文件：${source.path}；所选时刻 ${fmtLocalInput(center)}；${kind === 'wave' ? '瞬时采样' : '逐周波有效值'} ${data.n} 点；实际 ${fmtLocalInput(data.t[0])} → ${fmtLocalInput(data.t[data.t.length - 1])}` + ((data.notes || []).length ? '；' + data.notes.join('；') : '') + (type === 'monitor' ? '；请核对文件与监测曲线的侧别、批次及口径' : '');
+      if ((data.notes || []).length) toast('周波曲线：' + data.notes.join('；'), 'warn');
       wbDrawDetail(m);
       if (box.scrollIntoView) box.scrollIntoView({block: 'nearest'});
       return true;
     } catch (err) {
-      if (valid()) { status.textContent = '周波曲线读取失败：' + err.message; drawLine(cv, [], {empty: '读取失败（原因见上方）', height: 240}); }
+      if (valid()) { status.textContent = '周波曲线读取失败：' + err.message; drawLine(cv, [], {empty: '读取失败（原因见下方）', height: (wbCharts(m).find(ch => ch.key === key) || {}).height || height}); }
       return false;
     }
   };
