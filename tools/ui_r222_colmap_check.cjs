@@ -26,9 +26,9 @@ async function main() {
   check('修改未加载配置不覆盖主曲线快照',()=>JSON.parse(rt().loadedOffline.col_map).ua==='3');
   const center=rt().data.t[Math.floor(rt().data.t.length/2)];
   await window.wbLoadDetail(model(),'u',center,'wave');
-  check('瞬时周波用加载快照读取电压',()=>rt().detail && Math.max(...rt().detail.data.channels.Ua)>80);
+  check('瞬时周波用加载快照读取电压',()=>rt().details.u?.data && Math.max(...rt().details.u.data.data.channels.Ua)>80);
   await window.wbLoadDetail(model(),'i',center,'rms');
-  check('有效值周波用加载快照读取电流',()=>rt().detail && Math.abs(rt().detail.data.channels.Ia[0]-5)<0.2);
+  check('有效值周波用加载快照读取电流',()=>rt().details.i?.data && Math.abs(rt().details.i.data.data.channels.Ia[0]-5)<0.2);
   const last = p.calls.filter(x=>x.url.includes('/api/process/wave/')).slice(-4);
   check('详情两个接口均携带旧映射',()=>last.every(x=>JSON.parse(new URL(x.url, 'http://localhost').searchParams.get('col_map')).ua==='3'));
   click(act(a,'load')); await idle();

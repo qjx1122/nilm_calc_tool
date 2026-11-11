@@ -123,10 +123,13 @@ async function main() {
  const wave = path.join(temp, 'wave.csv'), mon = path.join(temp, 'voltage_20260921.csv');
  writeWaveCsv(wave); writeMonitorCsv(mon);
  const p = await boot(null); const {window, document, click, set, idle, mods, field, act} = p;
- const detail = (e) => window.WB.rt[e.dataset.wbId].detail;
- const dcv = (e) => document.getElementById('wb-detail-' + e.dataset.wbId);
+ let lastKey = 'u';
+ const detail = (e, key = lastKey) => window.WB.rt[e.dataset.wbId].details?.[key]?.data;
+ const dcv = (e, key = lastKey) => document.getElementById('wb-detail-' + e.dataset.wbId + '-' + key);
+ const detailBox = (e, key = lastKey) => e.querySelector('.wb-detail[data-wb-key="' + key + '"]');
  const checkBoardHelp = (el) => { const bars = [...el.querySelectorAll('.zoombar')]; return bars.length > 0 && [...el.querySelectorAll('.serlegend')].every(legend => !/(显示|缩放|移动)：/.test(legend.textContent)) && bars.every(bar => { const tip = bar.querySelector('.zoomtip').textContent; return !bar.querySelector('.panlbl') && tip === '' && [...bar.querySelectorAll('.pan-btn')].length === 4 && [...bar.querySelectorAll('.pan-btn')].every(btn => /移动/.test(btn.getAttribute('title') || '') && /平移/.test(btn.getAttribute('aria-label') || '')); }); };
  const ctx = (cv, shift = false, frac = 0.5) => {
+   lastKey = cv.closest('[data-wb-row]').dataset.wbRow;
    const c = cv.__chart; cv.getBoundingClientRect = () => ({left: 0, top: 0, width: c.w, height: c.h});
    const ev = new window.MouseEvent('contextmenu', {bubbles: true, cancelable: true, button: 2, clientX: c.pad.l + (c.w - c.pad.l - c.pad.r)*frac, clientY: 100, shiftKey: shift});
    cv.dispatchEvent(ev); return ev;
@@ -172,15 +175,15 @@ async function main() {
   click(detailLegend.querySelector('[data-z="reset"]')); click(mainLegend.querySelector('[data-z="reset"]'));
   check('两图复位各自有效', () => !window.ZOOM[cv.id] && !window.ZOOM[dcv(off).id]);
   const toggle = off.querySelector('.wb-detail .ser-vis[data-name=Ua]'); toggle.checked = false; toggle.dispatchEvent(new window.Event('change', {bubbles:true})); await sleep(50);
-  check('周波图图例切换保存在模块且不写运行配置', () => dcv(off).__chart.pts.length === 2 && JSON.parse(window.localStorage.getItem(KEY)).modules[0].hidden.detail.includes('Ua') && !p.calls.some(c=>c.method!=='GET'));
+  check('周波图图例切换保存在模块且不写运行配置', () => dcv(off).__chart.pts.length === 2 && JSON.parse(window.localStorage.getItem(KEY)).modules[0].hidden.detail_u.includes('Ua') && !p.calls.some(c=>c.method!=='GET'));
   check('周波图显示开关不影响主图', () => cv.__chart.pts.length === 3);
   ctx(cv); await choose('show-window');
   check('逐周波有效值：每周波一点且 PT 生效', () => detail(off).kind === 'rms' && detail(off).data.agg_cycles === 1 && detail(off).data.n >= 49 && detail(off).data.n <= 50 && Math.abs(detail(off).data.channels.Ua[0]-2*U_RMS) < 1);
   check('有效值周波图没有三个标签，保留悬停说明', () => checkBoardHelp(off));
   cv = document.getElementById('wb-cv-'+off.dataset.wbId+'-i'); ctx(cv); await choose('show-window');
   check('电流图右键只显示电流且 CT 生效', () => Object.keys(detail(off).data.channels).join(',') === 'Ia,Ib,Ic' && Math.abs(detail(off).data.channels.Ia[0]-3*I_RMS) < 1);
-  check('有效值图随所选电流主图同一行，电压行不再配对', () => cv.closest('.wb-chart-row').classList.contains('wb-paired') && cv.closest('.wb-chart-row').contains(dcv(off)) && !off.querySelector('[data-wb-row="u"]').classList.contains('wb-paired'));
-  check('周波图移到电流后，原电压主图按恢复的宽度重画', () => voltageCv.__chart.w === 720);
+  check('电压和电流周波图各自与主图同一行', () => cv.closest('.wb-chart-row').contains(dcv(off)) && off.querySelector('[data-wb-row="u"]').contains(dcv(off,'u')) && !!detail(off,'u'));
+  check('电压周波图继续显示，电压主图保持配对宽度', () => voltageCv.__chart.w === 360);
   set(field(off,'off-show'),'both'); cv = document.getElementById('wb-cv-'+off.dataset.wbId+'-i');
   check('主图重建后若所选图仍存在则保持并排及周波数据', () => cv.closest('.wb-chart-row').classList.contains('wb-paired') && cv.closest('.wb-chart-row').contains(dcv(off)) && detail(off).kind === 'rms');
   set(field(off,'off-show'),'i'); cv = document.getElementById('wb-cv-'+off.dataset.wbId+'-i');
@@ -188,10 +191,10 @@ async function main() {
   set(field(off,'off-show'),'both'); cv = document.getElementById('wb-cv-'+off.dataset.wbId+'-i');
   check('切回双主图后周波画布恢复 210 高', () => cv.__chart.h === 210 && dcv(off).__chart.h === 210);
   set(field(off,'off-show'),'u');
-  check('切换后所选主图不可见时关闭其周波图', () => off.querySelector('.wb-detail').hidden && !detail(off));
+  check('切换后所选主图不可见时关闭其周波图', () => detailBox(off, 'i').hidden && !detail(off, 'i'));
   set(field(off,'off-show'),'both'); cv = document.getElementById('wb-cv-'+off.dataset.wbId+'-i'); ctx(cv); await choose('show-window');
   set(field(off,'detail-cycles'),'0'); ctx(cv); await choose('show-window');
-  check('非法周波数不启动请求', () => !detail(off)); set(field(off,'detail-cycles'),'20');
+  check('非法周波数不启动请求且保留已显示周波图', () => !!detail(off)); set(field(off,'detail-cycles'),'20');
   set(field(off,'off-path'), path.join(temp,'not-loaded.csv')); ctx(cv); await choose('show-window');
   check('表单尚未重新加载时使用主图实际文件', () => detail(off) && detail(off).source === wave);
   set(field(off,'off-path'), wave);
@@ -199,7 +202,7 @@ async function main() {
   check('文件开头边界平移后仍可读取', () => detail(off) && detail(off).data.n >= 19 && detail(off).data.t[0] >= WAVE_T0);
   Object.defineProperty(cv, 'clientWidth', {configurable:true, get() {return this.closest('.wb-chart-row').classList.contains('wb-paired') ? 360 : 720;}});
   window.wbDraw(window.WB.modules.find(m => m.id === off.dataset.wbId));
-  click(act(off,'detail-close')); check('关闭周波曲线后主图恢复宽度并重画', () => off.querySelector('.wb-detail').hidden && cv.__chart.w === 720 && !dcv(off));
+  click(detailBox(off, 'i').querySelector('[data-wb-act=detail-close]')); check('关闭周波曲线后主图恢复宽度并重画', () => detailBox(off, 'i').hidden && cv.__chart.w === 720 && !dcv(off));
   event=ctx(cv,true); check('Shift 右键保留浏览器原生菜单', () => !event.defaultPrevented);
   set(field(monel,'mon-path'),mon); await idle();
   const mc=document.getElementById('wb-cv-'+monel.dataset.wbId+'-m'); ctx(mc);
@@ -219,7 +222,7 @@ async function main() {
   const saved=JSON.parse(window.localStorage.getItem(KEY));
   check('原始文件及周波数保存在模块本地配置', () => saved.modules.find(x=>x.id===monel.dataset.wbId).monitor.raw_path===wave && saved.modules.find(x=>x.id===monel.dataset.wbId).detail.cycles==='10');
   set(field(monel,'detail-cycles'),'1001'); ctx(mc); await choose('show-window2');
-  check('周波数上限生效', () => !detail(monel));
+  check('周波数上限生效且保留已有曲线', () => !!detail(monel));
   set(field(monel,'detail-cycles'),'10');
   set(field(monel,'mon-raw-path'),path.join(temp,'missing.csv')); ctx(mc); await choose('show-window2');
   check('错误文件有明确失败提示，错误在画布之后且两图仍同高', () => /读取失败/.test(monel.querySelector('.wb-detail-status').textContent) && monel.querySelector('.wb-detail-chart').nextElementSibling === monel.querySelector('.wb-detail-status') && dcv(monel).style.height === mc.style.height);

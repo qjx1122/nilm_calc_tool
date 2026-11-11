@@ -11,7 +11,7 @@ def test_board_titles_and_empty_error_status_do_not_shift_chart():
                  '.wb-module .zoomtip:empty{display:none}', '.wb-detail-status:empty{display:none}'):
         assert text in css
     js = (ROOT / 'app/static/app.js').read_text(encoding='utf-8')
-    html = next(line for line in js.splitlines() if '<div class="wb-detail" hidden>' in line)
+    html = next(line for line in js.splitlines() if 'box.innerHTML = `<div class="wb-detail-head"' in line)
     assert 'class="wb-chart-title wb-detail-title"' in html
     assert html.index('wb-detail-chart') < html.index('wb-detail-status')
     assert 'aria-live="polite"' in html

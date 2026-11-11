@@ -18,7 +18,7 @@ def test_detail_attaches_to_the_selected_chart_and_redraws_on_layout_changes():
     js = (ROOT / 'app/static/app.js').read_text(encoding='utf-8')
     board = js[js.index('/* ------------------------------------------------------------------ 数据处理 · 波形预览（v0.99.51'):js.index('/* v0.96 / v0.97：数据处理 · 估计 CT')]
     for expected in ('data-wb-row=', "row.appendChild(box)", "row.classList.add('wb-paired')", 'box.dataset.wbKey = key',
-                     'detail.dataset.wbKey', 'if (paired) wbDraw(m)', 'if (row) { row.appendChild(detail)'):
+                     'const key = box.dataset.wbKey', 'if (paired && redraw) wbDraw(m)', 'if (row && !box.hidden) { row.appendChild(box)'):
         assert expected in board
-    assert "else wbClearDetail(m)" in board
+    assert "else if (!row) wbClearDetail(m, key, false)" in board
     assert 'wbDraw(m); // 主图宽度变窄后立即重画' in board
