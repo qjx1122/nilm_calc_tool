@@ -1281,3 +1281,4 @@
   4. 上一轮登记的补-A12～A14、补-B6、补-B7 没有处理；`main` 上仍然没有程序代码。
   5. `ui_r210_check.cjs`、`ui_r209_check.cjs` 和 6 个旧脚本不在 pytest 里，要有临时服务才能跑。
 - 相关文件/分支：`elec_tool/monitor_curve.py`、`app/server.py`、`app/static/app.js`、`app/static/index.html`、`app/static/style.css`、`tests/test_r210_wave_board.py`、`tests/test_web_ui.py`、`tools/ui_r210_check.cjs`、`tools/ui_r209_check.cjs`、`README.md`、三份生成手册、`REPORT_TEST.md`（T-024）、`STATUS.md`、本文件；分支 `arena/51b63974-nilm-calc-tool`。
+- 收尾提交之后的补充（同一会话）：调参手册 `NILM_TUNING_GUIDE.md` 两处「波形分析（原名 / 之前叫「波形预览」）」补上“与 v0.99.51 新增的「🧩 波形预览」不是同一个子界面”，重新生成 `docs/软件算法调参与验证文档.md`（提交 `2b9c9c8`）。之后重跑全量 pytest 716 passed / 1 skipped / 1 warning、助手 jsdom 210 checks、四份手册 `--check` 均 `OK`。记录见 `REPORT_TEST.md` T-024 末尾的补充。
