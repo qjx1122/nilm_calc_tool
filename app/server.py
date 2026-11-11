@@ -4101,6 +4101,17 @@ def _wave_path(path: str) -> str:
     return _abs_path(p)
 
 
+def _wave_check_colmap(cfg: AppConfig, path: str) -> None:
+    """波形预览模块可选严格检查首行列数；不改变波形分析的既有行为。"""
+    if not cfg.columns.mapping_enabled:
+        return
+    from elec_tool.sources.parsing import read_header
+    header, _ = read_header(path, cfg.columns.encoding, cfg.columns.delimiter)
+    for field, col in cfg.columns.layout(header if cfg.columns.looks_like_header(header) else None).items():
+        if col is not None and col >= len(header):
+            raise ConfigError(f"列映射 {field} 的列号 {col + 1} 超出文件列数 {len(header)}")
+
+
 def _wave_err(exc: Exception):
     from elec_tool.wave_preview import WaveError
     if isinstance(exc, (WaveError, ConfigError, ValueError)):
@@ -4121,12 +4132,14 @@ async def process_wave_info(path: str, fs: Optional[str] = None, f_nom: Optional
                             pt_ratio: Optional[str] = None, ct_ratio: Optional[str] = None, file_time_utc: Optional[str] = None,
                             wiring: Optional[str] = None, reconstruct_3w: Optional[str] = None, invert_current: Optional[str] = None, invert_phases: Optional[str] = None,
                             custom_time: Optional[str] = None, custom_time_start: Optional[str] = None, custom_time_end: Optional[str] = None,
-                            col_map_enabled: Optional[str] = None, col_map: Optional[str] = None) -> Any:
+                            col_map_enabled: Optional[str] = None, col_map: Optional[str] = None, strict_col_map: bool = False) -> Any:
     """波形文件信息：通道数 / 通道 / 采样率（时标推算，<0.5% 偏差按基准配置值）/ 行数 / 时长（＝行数 / 采样率）/ 起止时间
     （结束＝起始 + (行数−1)/采样率）。基准配置项（fs/f_nom/pt_ct_enabled/pt_ratio/ct_ratio/file_time_utc）独立于运行配置。"""
     from elec_tool.wave_preview import file_info
     try:
         cfg = _wave_base_cfg(fs, f_nom, pt_ct_enabled, pt_ratio, ct_ratio, file_time_utc, custom_time, custom_time_start, custom_time_end, col_map_enabled, col_map, wiring, reconstruct_3w, invert_current, invert_phases); p = _wave_path(path)
+        if strict_col_map:
+            await asyncio.to_thread(_wave_check_colmap, cfg, p)
         d = await asyncio.to_thread(file_info, cfg, p)
         d["path_display"] = _display_path(p)
         d["t_start_local"] = fmt_local(d["t_start"]) if d.get("t_start") is not None else None
@@ -4144,12 +4157,14 @@ async def process_wave_load(path: str, t_start: str = "", t_end: str = "", n: Op
                             pt_ratio: Optional[str] = None, ct_ratio: Optional[str] = None, file_time_utc: Optional[str] = None,
                             wiring: Optional[str] = None, reconstruct_3w: Optional[str] = None, invert_current: Optional[str] = None, invert_phases: Optional[str] = None,
                             custom_time: Optional[str] = None, custom_time_start: Optional[str] = None, custom_time_end: Optional[str] = None,
-                            col_map_enabled: Optional[str] = None, col_map: Optional[str] = None) -> Any:
+                            col_map_enabled: Optional[str] = None, col_map: Optional[str] = None, strict_col_map: bool = False) -> Any:
     """按 起止时刻、点数 n 或周波数 n_cycles（都空＝整段；v0.62 界面默认 300 周波）、重采样率 fs_out + 方式 method
     （linear/nearest/fft）、通道 加载一段原始波形（一次侧口径）。fs_out 空＝原采样率；channels 空＝全部。"""
     from elec_tool.wave_preview import load_waveform
     try:
         cfg = _wave_base_cfg(fs, f_nom, pt_ct_enabled, pt_ratio, ct_ratio, file_time_utc, custom_time, custom_time_start, custom_time_end, col_map_enabled, col_map, wiring, reconstruct_3w, invert_current, invert_phases); p = _wave_path(path)
+        if strict_col_map:
+            await asyncio.to_thread(_wave_check_colmap, cfg, p)
         n_pts: Optional[int] = None; n_cyc: Optional[int] = None
         if n is not None and str(n).strip() != "":
             n_pts = int(float(str(n).strip()))
@@ -4178,11 +4193,13 @@ async def process_wave_rms(path: str, t_start: str = "", t_end: str = "", durati
                            pt_ratio: Optional[str] = None, ct_ratio: Optional[str] = None, file_time_utc: Optional[str] = None,
                             wiring: Optional[str] = None, reconstruct_3w: Optional[str] = None, invert_current: Optional[str] = None, invert_phases: Optional[str] = None,
                             custom_time: Optional[str] = None, custom_time_start: Optional[str] = None, custom_time_end: Optional[str] = None,
-                            col_map_enabled: Optional[str] = None, col_map: Optional[str] = None) -> Any:
+                            col_map_enabled: Optional[str] = None, col_map: Optional[str] = None, strict_col_map: bool = False) -> Any:
     """指定时间段的逐周波有效值曲线（Ua/Ub/Uc/Ia/Ib/Ic）；点数过多时自动合并相邻周波。"""
     from elec_tool.wave_preview import rms_curve
     try:
         cfg = _wave_base_cfg(fs, f_nom, pt_ct_enabled, pt_ratio, ct_ratio, file_time_utc, custom_time, custom_time_start, custom_time_end, col_map_enabled, col_map, wiring, reconstruct_3w, invert_current, invert_phases); p = _wave_path(path)
+        if strict_col_map:
+            await asyncio.to_thread(_wave_check_colmap, cfg, p)
         chans = [c for c in str(channels or "").split(",") if c.strip()] or None
         d = await asyncio.to_thread(rms_curve, cfg, p, t_start=t_start, t_end=t_end, duration_s=duration_s, channels=chans,
                                     agg_cycles=max(1, int(agg_cycles or 1)), max_points=max(10, min(int(max_points), 2_000_000)))

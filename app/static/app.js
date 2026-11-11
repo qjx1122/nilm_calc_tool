@@ -4847,6 +4847,7 @@ const WB_OFFLINE_CHARTS = { u: { label: '电压有效值', what: '电压', unit:
 const WB_OFFLINE_CYCLES = '10';          // 每个点的周波数默认值（50 Hz 下是 0.2 秒）
 const WB_OFFLINE_MAX_POINTS = 20000;     // 离线曲线的点数上限默认值（超出时服务端自动加大每个点的周波数）
 const WB_MONITOR_MAX_POINTS = 5000;
+const WB_COLS = [['timestamp', '时间'], ['ua', 'A相电压'], ['ia', 'A相电流'], ['ub', 'B相电压'], ['ib', 'B相电流'], ['uc', 'C相电压'], ['ic', 'C相电流']];
 const WB_DETAIL_MAX_SAMPLES = 200000; // 限制单次瞬时值响应，超限时要求缩小周波窗
 /* 表单控件（data-wb-f）→ 模块配置里的位置 */
 const WB_FIELDS = {
@@ -4862,7 +4863,7 @@ const WB = { modules: [], seq: 1, layout: 1, rt: {}, offlineFiles: [], monitorFi
              away: false, stale: false, drawnWidth: -1 };
 window.WB = WB;
 
-function wbBlankOffline() { return { path: '', t_start: '', t_end: '', cycles: WB_OFFLINE_CYCLES, show: 'both', pt: '', ct: '', f_nom: '', utc: '', max_points: '' }; }
+function wbBlankOffline() { return { col_map_enabled: '0', ...Object.fromEntries(WB_COLS.map(([k], i) => ['col_' + k, String(i + 1)])), path: '', t_start: '', t_end: '', cycles: WB_OFFLINE_CYCLES, show: 'both', pt: '', ct: '', f_nom: '', utc: '', max_points: '' }; }
 function wbBlankMonitor() { return { path: '', quantity: '', source: '', run: 'latest', last_min: '', t_start: '', t_end: '', refresh_s: '0', raw_path: '', raw_pt: '', raw_ct: '', raw_f_nom: '', raw_utc: '' }; }
 /* 一条模块记录（来自本地存储，或复制时的原模块）→ 字段齐全、取值合法的新记录；不认识的字段丢掉，id 由调用方给 */
 function wbNormalize(raw) {
@@ -4875,6 +4876,7 @@ function wbNormalize(raw) {
     const src = (raw[part] && typeof raw[part] === 'object') ? raw[part] : {};
     Object.keys(m[part]).forEach(k => { if (src[k] !== undefined && src[k] !== null) m[part][k] = str(src[k]).trim(); });
   });
+  m.offline.col_map_enabled = oneOf(m.offline.col_map_enabled, ['0', '1'], '0');
   m.offline.show = oneOf(m.offline.show, ['both', 'u', 'i'], 'both');
   m.offline.utc = oneOf(m.offline.utc, ['', '0', '1'], '');
   m.monitor.raw_utc = oneOf(m.monitor.raw_utc, ['', '0', '1'], '');
@@ -5000,6 +5002,10 @@ function wbFormHtml(m) {
           <label title="每周波的采样点数 = 采样率 / 额定频率；空＝出厂配置"><span class="lbl">额定频率 (Hz)</span><input data-wb-f="off-fnom" type="number" min="1" step="any" value="${esc(o.f_nom)}" placeholder="空＝出厂配置"></label>
           <label title="文件里的时间按 UTC 解释，显示时换算成本地时间"><span class="lbl">文件时标为 UTC</span><select data-wb-f="off-utc">${wbOptions([['', '按出厂配置'], ['1', '是'], ['0', '否']], o.utc)}</select></label>
         </div>
+        <div class="colmap-blk">
+          <label class="chk"><input type="checkbox" data-wb-f="off-map-enabled"${o.col_map_enabled === '1' ? ' checked' : ''}><span>启用离线波形文件列映射<span class="note">列号从 1 开始，留空表示不映射；至少映射一个电压或电流通道。修改后需重新加载曲线。</span></span></label>
+          <div class="colmap-row wb-colmap-row"${o.col_map_enabled === '1' ? '' : ' hidden'}>${WB_COLS.map(([key, label]) => `<label>${label}<input data-wb-f="off-map-${key}" type="text" inputmode="numeric" value="${esc(o['col_' + key])}" aria-label="${label}列号" placeholder="不映射"></label>`).join('')}</div>
+        </div>
         <div class="row2">
           <label title="时间段很长、每个点的周波数又很小时，点数会超过这个上限；这时服务端自动加大每个点的周波数，并在模块下方说明"><span class="lbl">曲线点数上限</span><input data-wb-f="off-maxpts" type="number" min="10" max="200000" step="1" value="${esc(o.max_points)}" placeholder="${WB_OFFLINE_MAX_POINTS}"></label>
           <span></span>
@@ -5050,7 +5056,9 @@ function wbReadForm(m) {                   // 表单 → 模块配置（只有�
   const el = wbEl(m); if (!el) return;
   el.querySelectorAll('[data-wb-f]').forEach(inp => {
     const f = inp.dataset.wbF, map = WB_FIELDS[f], v = String(inp.value === undefined || inp.value === null ? '' : inp.value).trim();
-    if (map) m[map[0]][map[1]] = v;
+    if (f === 'off-map-enabled') m.offline.col_map_enabled = inp.checked ? '1' : '0';
+    else if (f.startsWith('off-map-') && WB_COLS.some(([k]) => f === 'off-map-' + k)) m.offline['col_' + f.slice(8)] = v;
+    else if (map) m[map[0]][map[1]] = v;
     else if (f === 'title') m.title = v.slice(0, 80);
     else if (f === 'detail-cycles') m.detail.cycles = v;
   });
@@ -5280,6 +5288,7 @@ function wbLoadDetail(m, key, center, kind) {
     f_nom: m.monitor.raw_f_nom, file_time_utc: m.monitor.raw_utc};
   if (!source || !source.path) { toast('请先配置对应的原始波形 CSV', 'err'); return Promise.resolve(false); }
   const params = {path: source.path, f_nom: source.f_nom, pt_ratio: source.pt_ratio, ct_ratio: source.ct_ratio, file_time_utc: source.file_time_utc};
+  if (m.type === 'offline') { params.col_map_enabled = source.col_map_enabled; params.col_map = source.col_map; params.strict_col_map = source.strict_col_map; }
   const type = m.type, quantity = (wbData(m) || {}).quantity, token = rt.detailToken = (rt.detailToken || 0) + 1;
   const valid = () => wbAlive(m) && m.type === type && rt.detailToken === token;
   const status = el.querySelector('.wb-detail-status');
@@ -5334,6 +5343,21 @@ function wbLoadDetail(m, key, center, kind) {
 }
 
 /* ---- 读文件 ---- */
+function wbColMapQuery(o) {
+  if (o.col_map_enabled !== '1') return {col_map_enabled: '0'};
+  const map = {}, used = new Set();
+  for (const [key, label] of WB_COLS) {
+    const value = o['col_' + key];
+    if (value && (!/^[0-9]+$/.test(value) || !Number.isSafeInteger(Number(value)) || Number(value) < 1))
+      throw new Error(`「${label}列号」须为从 1 开始的整数或留空`);
+    const col = value ? String(Number(value)) : '';
+    if (col && used.has(col)) throw new Error(`列号 ${col} 重复，请检查离线文件列映射`);
+    if (col) used.add(col);
+    map[key] = col;
+  }
+  if (!WB_COLS.slice(1).some(([key]) => map[key])) throw new Error('离线文件列映射至少需要一个电压或电流通道');
+  return {col_map_enabled: '1', col_map: JSON.stringify(map), strict_col_map: '1'};
+}
 function wbOfflineQuery(m) {
   const o = m.offline;
   const cyc = o.cycles === '' ? +WB_OFFLINE_CYCLES : Number(o.cycles);
@@ -5341,7 +5365,7 @@ function wbOfflineQuery(m) {
   const maxPts = o.max_points === '' ? WB_OFFLINE_MAX_POINTS : Number(o.max_points);
   if (!Number.isInteger(maxPts) || maxPts < 10 || maxPts > 200000) throw new Error(`「曲线点数上限」要填 10 到 200000 之间的整数（当前“${o.max_points}”）`);
   return wpQuery({ path: o.path, t_start: o.t_start, t_end: o.t_end, agg_cycles: cyc, max_points: maxPts,
-                   f_nom: o.f_nom, pt_ratio: o.pt, ct_ratio: o.ct, file_time_utc: o.utc });
+                   f_nom: o.f_nom, pt_ratio: o.pt, ct_ratio: o.ct, file_time_utc: o.utc, ...wbColMapQuery(o) });
 }
 function wbMonitorQuery(m) {
   const n = m.monitor;
@@ -5376,7 +5400,7 @@ function wbDescribe(m, d) {                // 读取成功后模块下方的说�
 function wbLoad(m, opt = {}) {
   const rt = wbRt(m);
   const say = (msg) => { wbSetStatus(m, esc(msg), 'bad'); if (!opt.auto && !opt.quiet) toast('波形预览：' + msg, 'err'); };
-  if (!opt.auto) { wbReadForm(m); wbSave(); wbRenderHead(m); }
+  if (!opt.auto) { wbReadForm(m); wbSave(); wbRenderHead(m); rt.infoToken = (rt.infoToken || 0) + 1; }
   if (!wbCfg(m).path.trim()) { if (!opt.auto) say('请先选择文件，或填写文件路径'); return Promise.resolve(false); }
   let url;
   try { url = wbUrl(m); } catch (e) { say(e.message); return Promise.resolve(false); }
@@ -5424,14 +5448,17 @@ async function wbFileInfo(m, quiet) {      // 离线波形 CSV 的文件信息�
   const o = m.offline, path = o.path;
   if (m.type !== 'offline') return null;
   if (!path) { wbSetStatus(m, '请先选择文件，或填写文件路径', 'bad'); if (!quiet) toast('波形预览：请先选择文件，或填写文件路径', 'err'); return null; }
+  const rt = wbRt(m), token = rt.infoToken = (rt.infoToken || 0) + 1;
+  const valid = () => wbAlive(m) && m.type === 'offline' && rt.infoToken === token;
   try {
-    const d = await api('/api/process/wave/info?' + wpQuery({ path, f_nom: o.f_nom, pt_ratio: o.pt, ct_ratio: o.ct, file_time_utc: o.utc }), undefined, 'bus');
-    if (!wbAlive(m) || m.type !== 'offline' || m.offline.path !== path) return null;
+    const d = await api('/api/process/wave/info?' + wpQuery({ path, f_nom: o.f_nom, pt_ratio: o.pt, ct_ratio: o.ct, file_time_utc: o.utc, ...wbColMapQuery(o) }), undefined, 'bus');
+    if (!valid()) return null;
     wbRt(m).info = d; wbApplyInfo(m);
     wbSetStatus(m, `文件信息：采样率 ${wpFs(d.fs)} Hz，每周波 ${d.samples_per_cycle} 个采样点；${d.rows} 行，时长 ${fmtDur(d.duration_s)}；${wpFmtT(d.t_start)} → ${wpFmtT(d.t_end)}；通道 ${(d.channels || []).map(esc).join(' / ')}。配置好时间段和每个点的周波数后，点「加载曲线」`, 'ok');
     return d;
   } catch (e) {
-    if (wbAlive(m) && m.type === 'offline') wbSetStatus(m, '读取文件信息失败：' + esc(e.message), 'bad');
+    if (!valid()) return null;
+    wbSetStatus(m, '读取文件信息失败：' + esc(e.message), 'bad');
     if (!quiet) toast('波形预览：' + e.message, 'err');
     return null;
   }
@@ -5471,6 +5498,10 @@ function wbOnClick(ev) {
 function wbOnChange(ev) {
   const inp = ev.target, f = (inp && inp.dataset && inp.dataset.wbF) || ''; if (!f) return;
   const m = wbModuleOf(inp); if (!m) return;
+  if (f === 'type' || f === 'off-file' || f === 'off-path' || f.startsWith('off-map-') || ['off-fnom', 'off-pt', 'off-ct', 'off-utc'].includes(f)) {
+    const rt = wbRt(m); rt.infoToken = (rt.infoToken || 0) + 1; rt.info = null;
+    wbApplyInfo(m);
+  }
   if (f === 'type') {                                        // 换数据源类型：两种类型各自的配置都保留，表单和画布按新类型重建
     wbReadForm(m);
     m.type = inp.value === 'monitor' ? 'monitor' : 'offline';
@@ -5499,6 +5530,7 @@ function wbOnChange(ev) {
   if (f === 'mon-path') { m.monitor.run = 'latest'; wbFillRunSelect(m); wbFillFileSelect(m); }     // 换了文件：原来指定的运行批次不再适用
   if (f === 'off-path') { wbRt(m).info = null; wbApplyInfo(m); wbFillFileSelect(m); }
   wbSave(); wbRenderHead(m);
+  if (f === 'off-map-enabled') { const row = wbEl(m).querySelector('.wb-colmap-row'); if (row) row.hidden = m.offline.col_map_enabled !== '1'; }
   if (f === 'off-show') { wbRenderCharts(m); wbDraw(m); return; }
   if (f === 'mon-refresh') { wbRt(m).nextAt = 0; return; }
   if (f === 'detail-cycles' || f.startsWith('mon-raw-')) { wbClearDetail(m); return; }

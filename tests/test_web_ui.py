@@ -627,13 +627,15 @@ def test_wave_board_forms_cover_the_settings_named_in_the_requirement():
         assert f'data-wb-f="{field}"' in form, f"模块表单缺少 {field}"
     assert ("const WB_QUANTITIES = [['voltage', '电压'], ['current', '电流'], ['p', '有功功率'], ['q', '无功功率'], ['pf', '功率因数']];"
             in APPJS)
-    # 表单里的每个控件都在「控件 → 配置字段」对应表里（数据源类型、两个文件下拉另有处理），对应表里也没有多余的项
+    # 常规控件在对应表中；数据源、文件下拉及动态列映射由 wbReadForm 单独处理。
     fields = set(re.findall(r'data-wb-f="([\w-]+)"', form))
     table = APPJS[APPJS.index("const WB_FIELDS = {"):]
     table = table[: table.index("};")]
     mapped = set(re.findall(r"'([\w-]+)': \[", table))
-    assert fields - mapped == {"type", "off-file", "mon-file"}, sorted(fields - mapped)
+    assert fields - mapped == {"type", "off-file", "mon-file", "off-map-enabled"}, sorted(fields - mapped)
     assert mapped <= fields, sorted(mapped - fields)
+    assert 'data-wb-f="off-map-${key}"' in form
+    assert "off-map-enabled" in _js_function("wbReadForm") and "off-map-" in _js_function("wbReadForm")
     offline = _js_function("wbOfflineQuery")
     for param in ("path: o.path", "t_start: o.t_start", "t_end: o.t_end", "agg_cycles: cyc"):
         assert param in offline, f"离线波形的请求没有带 {param}"

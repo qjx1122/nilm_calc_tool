@@ -140,3 +140,18 @@ def test_resample_col_map(client, swapped):
         for f in (src, out, data_dir / "_r86_t2_re_3200_err.csv"):
             if f.exists():
                 f.unlink()
+
+
+@pytest.mark.parametrize("endpoint", ["info", "load", "rms"])
+@pytest.mark.parametrize("no_header", [False, True])
+def test_wave_colmap_out_of_range_rejected(client, swapped, tmp_path, endpoint, no_header):
+    source = pathlib.Path(swapped)
+    if no_header:
+        source = tmp_path / "no_header.csv"
+        with open(swapped, encoding="utf-8") as inp, source.open("w", encoding="utf-8") as out:
+            next(inp)
+            shutil.copyfileobj(inp, out)
+    mapping = dict(MAP, ua="8")
+    response = client.get(f"/api/process/wave/{endpoint}", params={"path": str(source), "col_map_enabled": "1", "col_map": json.dumps(mapping), "strict_col_map": "1"})
+    assert response.status_code == 400
+    assert "超出文件列数" in response.json()["error"]

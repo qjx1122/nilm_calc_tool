@@ -746,3 +746,7 @@ button.wb-morebtn:hover{border-color:transparent;text-decoration:underline}
 .wb-status:empty{display:none}
 .wb-status b{color:var(--fg)}
 @media(max-width:1100px){.wb-modules.wb-cols-2{grid-template-columns:minmax(0,1fr)}.wb-body{grid-template-columns:minmax(0,1fr)}}
+
+/* 波形预览的模块列映射关闭时不占空间。 */
+.wb-colmap-row{grid-template-columns:repeat(auto-fit,minmax(65px,1fr))}
+.wb-colmap-row[hidden]{display:none}

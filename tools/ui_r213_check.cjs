@@ -235,4 +235,5 @@ async function main() {
  } finally { p.window.close(); fs.rmSync(temp,{recursive:true,force:true}); }
  console.log(`PASS ${pass} FAIL ${fail}`); if(fail) process.exitCode=1;
 }
-main().catch(e=>{console.error(e.stack || e); process.exitCode=2;});
+if (require.main === module) main().catch(e=>{console.error(e.stack || e); process.exitCode=2;});
+module.exports = {boot, sleep};
