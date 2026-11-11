@@ -1311,3 +1311,12 @@
   4. 没有在网页上用实时引擎播放总线侧；TCP 数据源、3P3W 接线、档位自由匹配、多画像没有在「只取一相」下试过。
   5. 第四项任务里由我决定的 12 条做法仍待用户确认；补-C1、补-A12～A14、补-B6、补-B7 仍未处理。
 - 相关文件/分支：只读 `elec_tool/nilm_profile.py`、`elec_tool/nilm.py`、`elec_tool/config.py`、`elec_tool/nilm_auto.py`、`elec_tool/wave_preview.py`、`app/server.py`、`app/static/app.js`、`tools/nilm_profile.py`、`tools/nilm_replay.py`、`NILM_TUNING_GUIDE.md` H.32；改了 `REPORT_TEST.md`（T-025）、`STATUS.md`、本文件；分支 `arena/51b63974-nilm-calc-tool`。
+
+
+## [2026-11-10] 会话纪要：设备画像自动定位漏掉停止事件（第 212 轮 / v0.99.52）
+- 目标：查明设备侧无标签画像漏停止的原因，局部修复并验证。
+- 本会话角色：资深电力算法专家（默认）；模式 A。
+- 完成项：只读已有用户画像和 `tmp/` 输出，确认原设备 CSV 缺失且实时输出属于 bus4；实现稳态起点精修与保持状态翻转补漏；新增 40 项回归、文档与四份手册检查。合成 CSV 从旧版启动 9/9、停止 4/10 改为 9/9、10/10、无多余事件；18 组网格全对；定向 132 passed，全量 756 passed、1 skipped、1 warning。
+- 关键决策：由原定电平连续性检查改为启停交替校验，避免漂移和星三角误补；仅改画像自动定位，不修改共享在线算法。`REPORT.md` 暂不升格，现场未验证。
+- 未决问题：原设备 CSV 需用户重提并核对事件及 notes；慢斜坡、强冲击、抖动、多级停止仍可能漏或误报；49 个变异有 4 个存活，详见 T-026；补-D1～D5 和历史事项未处理。
+- 相关文件/分支：`elec_tool/nilm_profile.py`、`tests/test_r212_profile_auto_alternation.py`、README、调参手册、`REPORT_TEST.md` T-026；`arena/51b63974-nilm-calc-tool`。`tmp/` 摘要未变。
