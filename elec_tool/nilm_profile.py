@@ -891,16 +891,286 @@ def _locate_near(x: np.ndarray, k_center: int, half: int, pre_n: int, post_n: in
     #   得分＝紧随其后 m 周波相对前窗中位数的**最小**偏离（m 个周波都偏离才算真正起点，单个尖峰 / 起点前的周波得分为 0）；
     #   取第一个得分 ≥ 0.5×最大得分的周波为 onset（台阶：恰为起点；斜坡：起点附近而非坡顶）
     m = max(2, min(5, post_n))
-    ks = list(range(lo, hi + 1)); sc = []
-    for k in ks:
-        pre_med = float(np.median(x[k - pre_n:k]))
-        dev = x[k:k + m] - pre_med
-        sc.append(float(np.min(np.abs(dev))) if (np.all(dev > 0) or np.all(dev < 0)) else 0.0)
+    ks = list(range(lo, hi + 1)); sc = _onset_scores(x, lo, hi, pre_n, m)
     bd = max(sc)
     best = ks[next(i for i, v in enumerate(sc) if v >= 0.5 * bd)] if bd > 0 else lo
     delta = float(np.median(x[best:best + post_n]) - np.median(x[best - pre_n:best]))
     end = transition_end(x, best, post_n, float(np.median(x[best:best + post_n])), abs(delta))   # v0.99.23：与在线候选同一规则
     return best, end, delta
+
+
+def _onset_scores(x: np.ndarray, lo: int, hi: int, pre_n: int, m: int, sign: float = 0.0) -> List[float]:
+    """[lo, hi] 内每个周波 k 的「突变得分」（``_locate_near`` 的打分，v0.99.52 抽成函数供自动定位复用）：
+    紧随其后 m 个周波相对前窗（k 之前 pre_n 周波）中位数的**最小**偏离；m 个周波不同号记 0。要求 lo ≥ pre_n。
+    ``sign``≠0 时只认这个方向的偏离（自动定位的两道补救知道要找的方向，运行中反方向的摆动不该得分）；
+    ``sign``＝0（标签模式）两个方向都认，与 v0.99.51 及以前完全一致。"""
+    sc: List[float] = []
+    for k in range(lo, hi + 1):
+        pre_med = float(np.median(x[k - pre_n:k]))
+        dev = x[k:k + m] - pre_med
+        ok = bool(dev.size) and ((sign >= 0 and bool(np.all(dev > 0))) or (sign <= 0 and bool(np.all(dev < 0))))
+        sc.append(float(np.min(np.abs(dev))) if ok else 0.0)
+    return sc
+
+
+# ------------------------------------------------------------------ 自动定位的两道补救（v0.99.52，第 212 轮）
+#   用户实录（搅拌机，约每 123 s 运行 31 s）：停机时电流很平，运行时逐周波有效值上下波动几安（电流里约三成不是工频分量）。
+#   自动定位的两种方法都要求**动作之前**的电平平稳——稳态分段要动作前有一段 ≥ min_steady 周波、极差 ≤ tol 的稳态段，
+#   双滑窗的门槛是 k×前窗标准差。启动之前是停机（很平）⇒ 9 次启动全找到；停止之前是运行（在波动）⇒ 10 次停止只找到 4 次，
+#   其中 1 次的起点还记在停机前 55 个周波（稳态段早早被波动打断，起点＝稳态段结束处）。
+#   补救一「起点精修」：稳态分段给的起点早于电平真正突变的周波时，把起点挪到突变处。
+#   补救二「启停交替校验」：同一台设备的启动和停止必须交替出现，相邻两次**同方向**的动作之间必定漏了一次反方向的动作。
+#   在这样的段里（以及文件开头到第一个动作、最后一个动作到文件结尾——这两段没有前后两个动作可以对照）按电平状态
+#   （中值平滑后离开 / 回到基准电平并保持）找出每一次状态翻转；事件表里对不上的，在未平滑的序列上把起点定到周波
+#   （``_state_onset``），是明确的突变台阶才补，不是的只在 notes 里报出来。相邻两个动作方向相反的段（顺序对得上）一律不动。
+#   两道补救都只在 ``auto_locate_events`` 里用：标签模式、在线检测（``nilm.py`` / ``nilm_auto.py``）不受影响。
+AUTO_REFINE_MIN_SHIFT = 6      # 起点精修：突变处比稳态分段给的起点晚 ≥ 这么多周波才挪（比精定位的回看长度 m＝5 多 1：陡变本身拖几个周波的不算「起点偏早」）
+AUTO_ALT_FRAC = 0.5            # 「过半」。启停交替校验：幅值 ≥ 典型台阶×它 的事件才算「主要动作」；相邻两个同方向的主要动作，事件前电平相差
+                               #   不到 台阶×它 才算「回到了原来的电平」；文件开头那一段的运行电平 ≥ 第一个主要动作之后那一段×它 才查；
+                               #   补入事件的幅值 ≥ 这一段运行电平×它。起点精修：突变得分 ≥ |Δ|×它
+AUTO_ALT_BAND = 0.25           # 启停交替校验：离基准电平超过 这一段运行电平×它 就算「不在基准电平」；
+                               #   起点精修里「落到事件后电平附近」「起点到突变处还停在事件前电平上」也按 |Δ|×它
+AUTO_ALT_SMOOTH = 25           # 启停交替校验：电平状态扫描的中值平滑窗（周波，奇数）；一个电平状态至少保持这么多周波才算数
+SRC_ALTERNATION = "auto:alternation"
+
+
+def _state_onset(x: np.ndarray, in_new: np.ndarray, off: int, lo: int, hi: int, want: float, m: int,
+                 floor: int) -> Optional[Tuple[int, int]]:
+    """电平换了状态时的起点（v0.99.52）。``in_new[j]``＝周波 ``off+j`` 已经落在新状态（未平滑的序列上逐周波判）。
+
+    在 [lo, hi] 里找第一个「连续 m 个周波都在新状态」的周波 jb；再往前至多 m 个周波里，同时满足下面两条的也算在变化里
+    （突降 / 突升落在周波中间，或拖了两三个周波）：
+      * 已经越出**翻转前电平的波动范围**（jb−m 之前 2×``AUTO_ALT_SMOOTH`` 个周波的最小～最大值，不早于 ``floor``）——
+        运行电平波动大时，停止前恰好处在波谷的那几个周波仍在波动范围以内，不会被算进去（按「相对前窗中位数偏离过半」
+        取起点的话，它们会被当成起点，早出几个到几十个周波）；
+      * 是陡变：比前一个周波又走了「波动范围边界 → 新电平」的 1/(m+1) 以上——先缓慢下滑、再突降的两段式过程，
+        缓慢下滑的那几个周波不算，起点取突降处。
+    返回 (起点, jb)；找不到返回 None。"""
+    n = int(in_new.size)
+    jb = next((k for k in range(max(int(lo), int(off)), min(int(hi), int(off) + n - m) + 1) if in_new[k - off:k - off + m].all()), None)
+    if jb is None:
+        return None
+    e1 = jb - m; e0 = max(int(floor), e1 - 2 * AUTO_ALT_SMOOTH)
+    if e1 - e0 < m:
+        return int(jb), int(jb)
+    lim = float(np.min(x[e0:e1])) if want < 0 else float(np.max(x[e0:e1]))
+    need = abs(float(np.median(x[jb:jb + m])) - lim) / (m + 1.0)
+    k = jb
+    while k > jb - m and ((x[k - 1] < lim) if want < 0 else (x[k - 1] > lim)) and (x[k - 1] - x[k - 2]) * want >= need:
+        k -= 1
+    return int(k), int(jb)
+
+
+def _refine_onset(x: np.ndarray, b0: int, a1: int, pre_lv: float, post_lv: float, pre_n: int, post_n: int) -> int:
+    """v0.99.52 起点精修。稳态分段的起点 b0＝事件前稳态段的结束处，事件后稳态段从 a1 开始，真正的变化在 [b0, a1] 之间。
+    事件前的电平在波动时，稳态段可能在动作之前就被打断，b0 比突变处早几十个周波（事件的持续周波数、轨迹模板跟着错）。
+
+    突变处＝电平第一次落到事件后电平附近（离事件后电平不超过 ``AUTO_ALT_BAND``×|Δ|，越过去也算——启动的冲击）
+    并连续保持 m 个周波的地方（``_state_onset``）。只在三个条件都满足时把起点挪过去，其余情况原样返回 b0
+    （斜坡 / 长过渡都不受影响）：
+      1. 是突变：从起点到落稳这几个周波里 ``_onset_scores`` 的最大得分 ≥ ``AUTO_ALT_FRAC``×|Δ|（方向与 Δ 相同）；
+      2. 突变处比 b0 晚 ≥ ``AUTO_REFINE_MIN_SHIFT`` 个周波；
+      3. b0 到突变处这一段还停在事件前的电平上（中位数离事件前电平 ≤ ``AUTO_ALT_BAND``×|Δ|）——否则是「先缓变、再跳变」，
+         起点仍取缓变开始处。
+    稳态分段的各次过渡互不重叠，逐个事件往后找的总工作量不超过文件长度。"""
+    b0 = int(b0); a1 = int(a1)
+    dlt = float(post_lv) - float(pre_lv)
+    m = max(2, min(5, post_n))
+    sgn = 1.0 if dlt > 0 else -1.0
+    # 起点前要放得下前窗（再留出回看的 m 个周波），起点后要放得下后窗；找到 a1+m 为止：稳态分段的容差宽的时候（运行电平波动大），
+    #   事件后稳态段开头的一两个周波可能还没落稳——波动里最低的那个周波、落在动作中间的半截周波，都还在容差以内
+    lo = max(pre_n + m, b0); hi = min(int(x.size) - post_n - 1, a1 + m)
+    in_new = (x[lo:max(lo, hi + m)] - float(post_lv)) * (-sgn) <= AUTO_ALT_BAND * abs(dlt)
+    r = _state_onset(x, in_new, lo, lo, hi, sgn, m, max(0, b0 - 2 * AUTO_ALT_SMOOTH))
+    if r is None:
+        return b0
+    best, jb = r
+    if best - b0 < AUTO_REFINE_MIN_SHIFT:
+        return b0
+    if max(_onset_scores(x, best, jb, pre_n, m, sgn)) < AUTO_ALT_FRAC * abs(dlt):
+        return b0
+    if abs(float(np.median(x[b0:best])) - float(pre_lv)) > AUTO_ALT_BAND * abs(dlt):
+        return b0
+    return int(best)
+
+
+def _running_median(seg: np.ndarray, w: int, chunk: int = 50000) -> np.ndarray:
+    """居中滑动中值（窗 w 为奇数，两端按边值延拓），输出与 seg 等长；分块算，免得长文件一次占太多内存。"""
+    from numpy.lib.stride_tricks import sliding_window_view
+    r = w // 2
+    pad = np.pad(np.asarray(seg, dtype=np.float64), (r, r), mode="edge")
+    out = np.empty(seg.size, dtype=np.float64)
+    for i in range(0, seg.size, chunk):
+        j = min(seg.size, i + chunk)
+        out[i:j] = np.median(sliding_window_view(pad[i:j + 2 * r], w), axis=1)
+    return out
+
+
+def _alternation_check(x: np.ndarray, evs: Sequence[Tuple[int, int]], pre_n: int, post_n: int
+                       ) -> Tuple[List[Tuple[int, int, float]], List[Tuple[int, int]]]:
+    """v0.99.52 启停交替校验。``evs``＝已定位事件的 (onset, end)，按起点排好。
+
+    返回 ``(found, unresolved)``：``found``＝补出的事件 [(onset, end, delta)]；``unresolved``＝看得出有动作、但没能补出来的段
+    [(起, 止)]（多为缓慢的启停，或启动过渡比后窗长、后窗取在过渡里）。两者都按起点排好。
+
+    做法：
+      * 每个事件的事件前电平＝起点前 pre_n 周波中位数，事件后电平＝终点后 post_n 周波中位数，Δ＝两者之差；
+      * 「典型台阶」＝|Δ| ≥ 参考值一半的那些事件的 |Δ| 中位数，参考值取第二大的 |Δ|（免得被单个偏大的值带偏；不足 3 个事件时
+        取最大的；Δ＝0 的事件不算数）；
+        「主要动作」＝|Δ| ≥ ``AUTO_ALT_FRAC``×典型台阶，其余小台阶（缓升被切出来的片段、噪声）不参与判断。
+        启动的后窗落在冲击里时，启动量出来的台阶比停止大几倍，停止会算不上主要动作——不要紧，查到它那里时
+        认得出「这里已经有事件」（见倒数第二条）；
+      * 要查的段有三种。每一段有一个「基准电平」（取一个主要动作的事件前电平——主要动作是靠事件前的平稳才被找到的，
+        这个电平可靠）和一个方向（那个动作的方向：段里的电平朝这个方向离开基准，就是处在「动作之后」的状态）：
+        ① 相邻两个主要动作同方向，而且后一个的事件前电平回到了前一个的事件前电平附近（相差不到半个台阶；
+           分级带载是「接着往上走」，不算）——两者之间必定缺一次反方向的动作。查前一个的终点到后一个的起点，
+           基准取后一个的事件前电平；
+        ② 文件开头到第一个主要动作的起点；③ 最后一个主要动作的终点到文件结尾。基准和方向取那个主要动作的。
+        不足 2×``AUTO_ALT_SMOOTH`` 周波的段不查：贴着文件头尾没法看电平状态；①类里那是同一次动作被切成了几段
+        （缓慢漂移被稳态分段切出来的小片段，终点可能落在后一次真动作之后，量出来像一次同方向的大动作），留给后面的合并；
+      * 段内把序列做 ``AUTO_ALT_SMOOTH`` 周波的中值平滑，看它朝那个方向离基准多远。「这一段的运行电平」＝离开基准那一侧的
+        周波按「离基准多远」加权的中位数（电平×时长累计到一半处的那个电平）。不直接用台阶：启动的后窗落在冲击里时，
+        台阶比稳定后的运行电平大好几倍；也不用普通中位数：停机后还有小辅机多转一阵的，辅机那一段可能比运行还长。
+        冲击时间短、辅机电平低，加权之后都压不过运行那一段。②类段还要求它的运行电平 ≥ ``AUTO_ALT_FRAC``×
+        「第一个主要动作之后那一段」（到下一个主要动作的起点为止）的运行电平——文件开头的电平只是缓慢漂了一点的，不查；
+        那一段不足 2×``AUTO_ALT_SMOOTH`` 周波、量不出运行电平时也不查；
+      * 离基准超过 ``AUTO_ALT_BAND``×运行电平 算「不在基准」；保持 ≥ ``AUTO_ALT_SMOOTH`` 周波的状态才算数（段开头的状态
+        以第一个保持住的为准），此后状态每翻转一次就是一次动作；
+      * 翻转处在前后各半个平滑窗里做精定位（``_state_onset``）。翻转落在某个已有事件的起点～终点之间（前后各放宽半个平滑窗）⇒ 这次动作
+        已经在事件表里（先缓降、再突降的停止，事件的起点在缓降开始处，翻转在突降处，两者可以差十几个周波）。
+        不在事件表里的，朝翻转方向的幅值 ≥ ``AUTO_ALT_FRAC``×运行电平 才补入；幅值按起点前 pre_n、起点后 post_n 周波的
+        中位数量——拖了几十个周波的斜坡，在定位到的那一点前后差不了这么多，补不进来。贴着文件头尾、前窗 / 后窗
+        放不下的也不补；
+      * 有翻转既没对上已有事件、也没补进来的段，以及①类段里一次翻转都没有的，记进 ``unresolved``。"""
+    L = int(x.size); w = AUTO_ALT_SMOOTH
+    evs = [(int(on), int(en)) for on, en in evs]
+
+    def _lv(a: int, b: int, fb: int) -> float:
+        a, b = max(0, int(a)), min(L, int(b))
+        return float(np.median(x[a:b])) if b > a else float(x[min(max(int(fb), 0), L - 1)])
+
+    lv = [(_lv(on - pre_n, on, on), _lv(en, en + post_n, en)) for on, en in evs]
+    dl = [b - a for a, b in lv]
+    mags = sorted((abs(v) for v in dl if abs(v) > 0), reverse=True)
+    if not mags:
+        return [], []
+    ref_mag = mags[1] if len(mags) >= 3 else mags[0]
+    typ = float(np.median([v for v in mags if v >= 0.5 * ref_mag]))
+    main = [i for i, v in enumerate(dl) if abs(v) >= AUTO_ALT_FRAC * typ]
+    sgn = [1.0 if v > 0 else -1.0 for v in dl]
+
+    def _after(g0: int, g1: int, base: float, sg: float) -> Tuple[np.ndarray, float]:
+        """[g0, g1) 中值平滑后朝 sg 方向离 base 多远；这一段的运行电平（离开基准那一侧不足一个平滑窗时为 0）。"""
+        ex = (_running_median(x[g0:g1], w) - base) * sg
+        pos = np.sort(ex[ex > 0.0])
+        if pos.size < w:
+            return ex, 0.0
+        acc = np.cumsum(pos)
+        return ex, float(pos[min(int(np.searchsorted(acc, 0.5 * acc[-1])), pos.size - 1)])
+
+    # 要查的段：(起, 止, 基准电平, 方向, 类别)
+    spans: List[Tuple[int, int, float, float, str]] = []
+    for a, b in zip(main, main[1:]):
+        if dl[a] * dl[b] > 0 and (lv[b][0] - lv[a][0]) * sgn[a] < AUTO_ALT_FRAC * min(abs(dl[a]), abs(dl[b])):
+            spans.append((evs[a][1], evs[b][0], lv[b][0], sgn[a], "between"))
+    i0, j1 = main[0], main[-1]
+    spans.append((0, evs[i0][0], lv[i0][0], sgn[i0], "head"))
+    spans.append((evs[j1][1], L, lv[j1][0], sgn[j1], "tail"))
+    m = max(2, min(5, post_n))
+    found: List[Tuple[int, int, float]] = []
+    unresolved: List[Tuple[int, int]] = []
+    for g0, g1, base, sg, kind in spans:
+        if g1 - g0 < 2 * w:
+            continue
+        ex, amp = _after(g0, g1, base, sg)
+        if kind == "head":
+            h0, h1 = evs[i0][1], (evs[main[1]][0] if len(main) > 1 else L)       # 第一个主要动作之后的那一段
+            ref_amp = _after(h0, h1, base, sg)[1] if h1 - h0 >= 2 * w else 0.0
+            if ref_amp <= 0 or amp < AUTO_ALT_FRAC * ref_amp:
+                continue                                                          # 文件开头只是漂了一点，不是处在另一个状态
+        thr = AUTO_ALT_BAND * amp
+        away = ex > thr                                                           # True＝不在基准电平（在「动作之后」那一侧）
+        cut = np.flatnonzero(np.diff(away.astype(np.int8))) + 1
+        inb = (x[g0:g1] - base) * sg <= thr                                       # 未平滑序列上逐周波的状态（True＝在基准一侧）
+        state: Optional[bool] = None
+        n_flip = n_bad = 0
+        for s0, e0 in zip(np.concatenate([[0], cut]), np.concatenate([cut, [away.size]])):
+            v = bool(away[s0])
+            if e0 - s0 < w or v == state:
+                continue                                                          # 没保持住的不算；状态没变
+            if state is None:
+                state = v                                                         # 段开头的状态
+                continue
+            state = v; n_flip += 1
+            want = sg if v else -sg                                               # 这次翻转的电平变化方向
+            r = _state_onset(x, ~inb if v else inb, g0, g0 + int(s0) - w // 2, g0 + int(s0) + w // 2, want, m, g0)
+            ok = False
+            if r is not None:
+                best = r[0]
+                if any(on - w // 2 <= best <= en + w // 2 for on, en in evs):
+                    ok = True                                                     # 这次动作已经在事件表里
+                elif pre_n <= best <= L - post_n - 1:                             # 前窗 / 后窗放得下
+                    tgt = float(np.median(x[best:best + post_n]))
+                    delta = tgt - float(np.median(x[best - pre_n:best]))
+                    if delta * want >= AUTO_ALT_FRAC * amp:                       # 朝翻转的方向走了运行电平的一半以上：明确的台阶
+                        end = int(transition_end(x, best, post_n, tgt, abs(delta)))
+                        found.append((int(best), end, float(delta))); ok = True
+            n_bad += not ok
+        if n_bad or (kind == "between" and not n_flip):
+            unresolved.append((int(g0), int(g1)))
+    return sorted(found), sorted(unresolved)
+
+
+def auto_locate_events(x: np.ndarray, cps: float, pre_n: int, post_n: int) -> Tuple[List[Tuple[int, int, str]], Dict[str, Any]]:
+    """不给标签时的自动定位（v0.99.52 从 ``build_profile`` 里抽出，逐周波序列进、事件表出，便于单独测试）。
+
+    四步：① 稳态分段 + 自适应参数（``auto:steady_state``）；② 双滑窗补充稳态分段漏掉的长过渡事件（``auto:two_window``，
+    v0.92.1）；③ 起点精修（``_refine_onset``，v0.99.52）；④ 启停交替校验补出两种方法都漏掉的动作
+    （``auto:alternation``，v0.99.52）。返回 ``([(onset, end, source)], info)``，按 onset 排序；``info`` 供 notes 用。"""
+    from .nilm import detect_steps
+    from .nilm_auto import auto_params
+    x = np.asarray(x, dtype=np.float64)
+    pre_n, post_n = int(pre_n), int(post_n)
+    ap = auto_params(x, cps)
+    if ap is None:
+        raise ProfileError("文件太短（不足 60 个有效周波），无法自动定位启停事件；请给启停标签")
+    prm = ap["algorithms"]["steady_state"]
+    steps = [(int(a_), int(b_), pr_, po_, sc_, "auto:steady_state") for a_, b_, pr_, po_, sc_ in detect_steps("steady_state", x, prm)]
+    # v0.92.1：稳态分段要求过渡在 max_transient 周波内收敛到稳态——电机启动电流（I 口径尤甚）常衰减数秒，整个事件被丢掉；
+    #          用双滑窗补充：其 onset 与已找到事件相距 > max(post_n, max_transient) 周波的才加入（同一次动作不重复）
+    prm2 = ap["algorithms"]["two_window"]
+    guard = max(post_n, int(prm.get("max_transient_cycles", post_n)))
+    for a_, b_, pr_, po_, sc_ in detect_steps("two_window", x, prm2):
+        if all(abs(int(a_) - s0[0]) > guard for s0 in steps):
+            steps.append((int(a_), int(b_), pr_, po_, sc_, "auto:two_window"))
+    steps.sort(key=lambda s0: s0[0])
+    out: List[Tuple[int, int, str]] = []
+    n_ref = 0; max_shift = 0
+    for onset, end, pre, post, score, src in steps:
+        onset = int(onset)
+        if src == "auto:steady_state":
+            # 精修只在这次过渡里挪，最远到事件后稳态段开头的第 m 个周波
+            k = _refine_onset(x, onset, int(end), float(pre), float(post), pre_n, post_n)
+            if k != onset:
+                n_ref += 1; max_shift = max(max_shift, k - onset); onset = k
+        # v0.99.23：终点不再沿用 steady_state / two_window 各自的终点定义，统一按 transition_end（与总线侧在线候选同一规则），
+        #   否则 dur_cycles 在两侧按不同规则量出、不可比
+        if onset + 2 <= x.size:
+            tgt_ = float(np.median(x[onset:onset + post_n])); dl_ = tgt_ - float(np.median(x[max(0, onset - pre_n):onset]))
+            end = transition_end(x, onset, post_n, tgt_, abs(dl_))
+        out.append((onset, int(end), src))
+    # 精修后重排：过渡长度 ≤ max_transient ≤ guard，双滑窗补充的事件都离稳态分段的起点 > guard，所以精修几乎不会越过别的事件；
+    #   只有过渡长度贴近 guard、双滑窗又在事件后稳态段开头报了同一次动作时，精修后的起点会与它重合或晚几个周波
+    #   （同一次动作的两个事件，交给 build_profile 的同方向合并）。交替校验要求事件表按起点排好
+    out.sort(key=lambda s0: s0[0])
+    n_tw = sum(1 for _o, _e, s_ in out if s_ == "auto:two_window")
+    found, unresolved = _alternation_check(x, [(o, e) for o, e, _s in out], pre_n, post_n)
+    out.extend((o, e, SRC_ALTERNATION) for o, e, _d in found)
+    out.sort(key=lambda s0: s0[0])
+    info = {"n_two_window": int(n_tw), "n_refined": int(n_ref), "refine_max_shift": int(max_shift),
+            "n_alternation": len(found), "alternation_unresolved": unresolved, "stats": ap["stats"], "steady_state": dict(prm),
+            "guard": int(guard)}
+    return out, info
 
 
 def load_cycles(cfg, file: str, *, max_cycles: int = 400000, t_start: str = "", t_end: str = "", custom_time: bool = False,
@@ -968,8 +1238,7 @@ def build_profile(cfg, file: str, *, device_id: str = "device", labels: Optional
     ``phases``，总线侧匹配时自动跳过另外两相的 ΔI（见 ``profile_skip_dims``），不会再被那两相的他负荷顶掉。"""
     c, feat, t, p4, q4, i4, ih4, u_nonzero = load_cycles(cfg, file, max_cycles=max_cycles, t_start=t_start, t_end=t_end, custom_time=custom_time,
                                                    custom_time_start=custom_time_start, custom_time_end=custom_time_end)
-    from .nilm import HARM_ORDERS, detect_steps
-    from .nilm_auto import auto_params
+    from .nilm import HARM_ORDERS
     from .timefmt import fmt_local
     q_req = quantity or str(getattr(c.nilm, "quantity", "auto") or "auto")
     use_p = (q_req == "p") or (q_req == "auto" and u_nonzero)
@@ -999,33 +1268,32 @@ def build_profile(cfg, file: str, *, device_id: str = "device", labels: Optional
                             "t_start_local": fmt_local(float(t[onset])), "source": f"label:{lb['text']}"})
         mode = "labels"
     else:
-        ap = auto_params(x, cps)
-        if ap is None:
-            raise ProfileError("文件太短（不足 60 个有效周波），无法自动定位启停事件；请给启停标签")
-        prm = ap["algorithms"]["steady_state"]
-        steps = [(int(a_), int(b_), pr_, po_, sc_, "auto:steady_state") for a_, b_, pr_, po_, sc_ in detect_steps("steady_state", x, prm)]
-        # v0.92.1：稳态分段要求过渡在 max_transient 周波内收敛到稳态——电机启动电流（I 口径尤甚）常衰减数秒，整个事件被丢掉；
-        #          用双滑窗补充：其 onset 与已找到事件相距 > max(post_n, max_transient) 周波的才加入（同一次动作不重复）
-        prm2 = ap["algorithms"]["two_window"]
-        guard = max(post_n, int(prm.get("max_transient_cycles", post_n)))
-        for a_, b_, pr_, po_, sc_ in detect_steps("two_window", x, prm2):
-            if all(abs(int(a_) - s0[0]) > guard for s0 in steps):
-                steps.append((int(a_), int(b_), pr_, po_, sc_, "auto:two_window"))
-        steps.sort(key=lambda s0: s0[0])
-        for onset, end, pre, post, score, src in steps:
-            # v0.99.23：终点不再沿用 steady_state / two_window 各自的终点定义，统一按 transition_end（与总线侧在线候选同一规则），
-            #   否则 dur_cycles 在两侧按不同规则量出、不可比
-            onset = int(onset)
-            if onset + 2 <= x.size:
-                tgt_ = float(np.median(x[onset:onset + post_n])); dl_ = tgt_ - float(np.median(x[max(0, onset - pre_n):onset]))
-                end = transition_end(x, onset, post_n, tgt_, abs(dl_))
+        # v0.99.52：定位的四步（稳态分段 → 双滑窗补充 → 起点精修 → 启停交替校验）集中到 auto_locate_events()
+        steps, loc = auto_locate_events(x, cps, pre_n, post_n)
+        for onset, end, src in steps:
             ef = event_features(p4, q4, i4, int(onset), int(end), pre_n, post_n, ih4=ih4)
             # v0.91.2：方向按合成电流有效值的变化判（RMS 恒正，启动必升、停止必降），不再按 P 判——P 的符号受 CT 极性 / 相别配对影响
             samples.append({**ef, "direction": "START" if ef["d_it"] >= 0 else "STOP", "onset": int(onset), "end": int(end),
                             "t_start": float(t[onset]), "t_start_local": fmt_local(float(t[onset])), "source": src})
-        n_tw = sum(1 for s0 in steps if s0[5] == "auto:two_window")
+        n_tw = int(loc["n_two_window"])
         if n_tw:
             notes.append(f"自动定位：稳态分段漏掉的 {n_tw} 个事件由双滑窗补充（source=auto:two_window）——多为过渡过程长于 max_transient 的启动；其后窗若仍在过渡中，ΔI/ΔP 会偏大，建议加大 post 或给标签")
+        if loc["n_refined"]:
+            notes.append(f"自动定位：{loc['n_refined']} 个事件的起点做了精修（v0.99.52）——事件前的电平在波动，稳态分段给的起点早于电平真正突变的周波，"
+                         f"已挪到突变处（最多挪了 {loc['refine_max_shift']} 个周波）；不挪的话持续周波数和轨迹模板会把突变前的波动算进去")
+        if loc["n_alternation"]:
+            _alt = [s_ for s_ in samples if s_["source"] == SRC_ALTERNATION]
+            _n_up = sum(1 for s_ in _alt if s_["direction"] == "START")
+            notes.append(f"自动定位：启停交替校验补出 {len(_alt)} 个事件（启动 {_n_up} 个、停止 {len(_alt) - _n_up} 个，source={SRC_ALTERNATION}，v0.99.52）——"
+                         f"同一台设备的启动和停止应当交替出现，相邻两次同方向的动作之间必定漏了一次反方向的动作；文件开头到第一个动作、"
+                         f"最后一个动作到文件结尾也按电平状态核对了一遍。稳态分段要求动作前有一段平稳电平，双滑窗的门槛随动作前的波动抬高，"
+                         f"设备运行时电流波动大，停止就容易两边都漏。已按电平状态找到这些动作并补入，请核对事件明细")
+        if loc["alternation_unresolved"]:
+            _g0, _g1 = loc["alternation_unresolved"][0]
+            notes.append(f"自动定位：有 {len(loc['alternation_unresolved'])} 段里还有动作没能补出来（相邻两次动作同方向，或电平换过状态而事件表里没有对应的事件），"
+                         f"第一段在 {fmt_local(float(t[min(max(_g0, 0), t.size - 1)]))} ～ {fmt_local(float(t[min(max(_g1 - 1, 0), t.size - 1)]))} 之间"
+                         f"——多为缓慢的启停（斜坡，没有明确的突变台阶），或启动过渡比后窗长、后窗取在过渡里，或动作贴着文件头尾、前后窗放不下；"
+                         f"建议给启停标签，或加大后窗（post）")
         mode = "auto"
         # v0.92：合并被稳态分段切碎的同一次动作（同方向连续出现、间隔 ≤ merge_gap_s；设备不可能不停就再启）
         if merge_gap_s and float(merge_gap_s) > 0 and len(samples) > 1:
