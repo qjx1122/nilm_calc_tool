@@ -226,8 +226,8 @@
         "Q",
         "S",
         "Pa",
-        "Ia",
-        "Ib"
+        "Ib",
+        "Ic"
       ],
       "pf-trend-br": [
         "PFb",
@@ -244,7 +244,12 @@
       "wp-wave": [
         "Ua (V)",
         "Ub (V)",
-        "Uc (V)"
+        "Uc (V)",
+        "Ia",
+        "Ib",
+        "Ub",
+        "Ua",
+        "Uc"
       ],
       "nilm-wave2-br": [
         "Ua (V)",
@@ -278,7 +283,12 @@
         "Ib RMS (A)",
         "Ua RMS (V)",
         "Uc RMS (V)",
-        "Ub RMS (V)"
+        "Ub RMS (V)",
+        "Uc",
+        "Ub",
+        "Ua",
+        "Ib",
+        "Ic"
       ],
       "ov-i": [
         "Ib",
@@ -291,7 +301,12 @@
         "Ua RMS (V)",
         "Uc RMS (V)",
         "Ic RMS (A)",
-        "Ib RMS (A)"
+        "Ib RMS (A)",
+        "Uc",
+        "Ub",
+        "Ua",
+        "Ib",
+        "Ic"
       ],
       "wp-cyc2": [
         "Ua (V)",
@@ -299,10 +314,16 @@
         "Uc (V)",
         "Ic (A)",
         "Ib (A)",
-        "Ia (A)"
+        "Ia (A)",
+        "Ua",
+        "Ub",
+        "Uc",
+        "Ib",
+        "Ic"
       ],
       "ov-i-br": [
-        "Ic"
+        "Ic",
+        "Ib"
       ]
     },
     "source_id": 0,

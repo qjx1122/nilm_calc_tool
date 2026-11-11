@@ -1,10 +1,10 @@
 {
-  "created_local": "2026-11-10 09:02:18.801",
+  "created_local": "2026-11-11 11:05:52.622",
   "started_side": "branch",
   "starts": [
     {
       "side": "branch",
-      "at_local": "2026-11-10 09:02:18.801"
+      "at_local": "2026-11-11 11:05:52.622"
     }
   ],
   "sides": {
@@ -26,18 +26,18 @@
     },
     "branch": {
       "source_kind": "csv_file",
-      "source_path": "D:\\Work\\testPython\\NILM_Test2026\\nilm_calc_tool\\data\\化工行业-天云龙涂料厂-dev-1号搅拌机-1-停止1.csv",
+      "source_path": "D:\\Work\\testPython\\NILM_Test2026\\nilm_calc_tool\\data\\化工行业-天云龙涂料厂-bus4-2分钟周期启停.csv",
       "source_id": 1,
       "config_file": "config_branch.json",
       "config_copied_from": "configs\\branch_runtime.json",
       "config_mode": "verbatim_copy",
-      "profile_file": "nilm/profile_branch_profile_device_20261104_112427.json",
+      "profile_file": "nilm/profile_branch_profile_device_20261110_104744.json",
       "profile_files": [
-        "nilm/profile_branch_profile_device_20261104_112427.json"
+        "nilm/profile_branch_profile_device_20261110_104744.json"
       ],
-      "profile_copied_from": "output\\nilm\\profile_device_20261104_112427.json",
+      "profile_copied_from": "output\\nilm\\profile_device_20261110_104744.json",
       "profile_copied_from_all": [
-        "output\\nilm\\profile_device_20261104_112427.json"
+        "output\\nilm\\profile_device_20261110_104744.json"
       ]
     }
   }

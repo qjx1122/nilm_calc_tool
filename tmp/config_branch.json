@@ -11,10 +11,10 @@
   },
   "transform": {
     "pt_ratio": 1,
-    "ct_ratio": 1,
+    "ct_ratio": 15,
     "voltage_input": "phase",
     "enabled": true,
-    "invert_phases": "A",
+    "invert_phases": "",
     "wiring": "3p4w",
     "reconstruct_3w": false
   },
@@ -48,7 +48,7 @@
       "ua": "",
       "ia": "3",
       "ub": "",
-      "ib": "4",
+      "ib": "",
       "uc": "",
       "ic": ""
     },
@@ -121,7 +121,7 @@
   },
   "source": {
     "kind": "csv_file",
-    "path": "data\\化工行业-天云龙涂料厂-dev-1号搅拌机-1-停止1.csv",
+    "path": "data\\化工行业-天云龙涂料厂-bus4-2分钟周期启停.csv",
     "poll_interval_s": 0.05,
     "block_samples": 640,
     "tail_from_end": false,
@@ -280,7 +280,7 @@
       }
     },
     "auto_params": true,
-    "profile_path": "output\\nilm\\profile_device_20261104_112427.json"
+    "profile_path": "output\\nilm\\profile_device_20261110_104744.json"
   },
   "branch": {
     "enabled": false,
