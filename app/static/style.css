@@ -726,12 +726,14 @@ input.flash{animation:ntflash 1.5s ease-out}
 button.wb-morebtn{align-self:flex-start;background:transparent;border-color:transparent;color:var(--acc);padding:0;font-size:12px}
 button.wb-morebtn:hover{border-color:transparent;text-decoration:underline}
 .wb-charts{min-width:0;display:flex;flex-direction:column;gap:10px}
+.wb-chart-row{min-width:0}
+.wb-chart-row.wb-paired{display:grid;grid-template-columns:repeat(2,minmax(260px,1fr));gap:12px;align-items:start;overflow-x:auto}
 .wb-chart{min-width:0}
 .wb-chart-title{font-size:12px;color:var(--mut);margin:0 0 4px}
 .wb-detail-controls{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:10px;font-size:12px}
 .wb-detail-controls label{display:flex;align-items:center;gap:6px}
 .wb-detail-controls input{width:80px}
-.wb-detail{margin-top:10px;border-top:1px solid var(--line);padding-top:10px;min-width:0}
+.wb-detail{min-width:0;border-left:1px solid var(--line);padding-left:10px}
 .wb-detail[hidden]{display:none}
 .wb-detail-head{display:flex;justify-content:space-between;gap:8px;align-items:center}
 .wb-detail-status{overflow-wrap:anywhere;margin:6px 0}

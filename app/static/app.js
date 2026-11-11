@@ -5068,8 +5068,16 @@ function wbRenderForm(m) {
 function wbRenderCharts(m) {               // 画布按当前要画的图重建（新建模块、换数据源类型、换显示方式时）
   const el = wbEl(m); if (!el) return;
   el.querySelectorAll('canvas').forEach(cv => { delete ZOOM[cv.id]; });
+  // 重建主图之前先挪出周波图，仍显示所选主图时把它放回同一行。
+  const detail = el.querySelector('.wb-detail');
+  if (detail) el.appendChild(detail);
   el.querySelector('.wb-charts').innerHTML = wbCharts(m).map(c =>
-    `<div class="wb-chart" data-wb-chart="${c.key}"><div class="wb-chart-title"></div><canvas id="wb-cv-${esc(m.id)}-${c.key}" height="${c.height}"></canvas></div>`).join('');
+    `<div class="wb-chart-row" data-wb-row="${c.key}"><div class="wb-chart" data-wb-chart="${c.key}"><div class="wb-chart-title"></div><canvas id="wb-cv-${esc(m.id)}-${c.key}" height="${c.height}"></canvas></div></div>`).join('');
+  if (detail && !detail.hidden) {
+    const row = el.querySelector('.wb-chart-row[data-wb-row="' + detail.dataset.wbKey + '"]');
+    if (row) { row.appendChild(detail); row.classList.add('wb-paired'); }
+    else wbClearDetail(m);                 // 选中的主图被隐藏或切换了数据源
+  }
 }
 function wbRenderHead(m) {
   const el = wbEl(m); if (!el) return;
@@ -5230,8 +5238,10 @@ function wbDrawAll() { WB.modules.forEach(wbDraw); }
 function wbClearDetail(m) {
   const rt = wbRt(m); rt.detailToken = (rt.detailToken || 0) + 1; rt.detail = null;
   const el = wbEl(m), box = el && el.querySelector('.wb-detail');
-  if (box) { box.hidden = true; box.querySelector('.wb-detail-chart').replaceChildren(); }
+  const paired = !!(box && box.parentElement && box.parentElement.classList.contains('wb-paired'));
+  if (box) { if (box.parentElement) box.parentElement.classList.remove('wb-paired'); box.hidden = true; box.querySelector('.wb-detail-chart').replaceChildren(); }
   delete ZOOM['wb-detail-' + m.id];
+  if (paired) wbDraw(m); // 恢复主图宽度（包括修改周波数或原始路径导致关闭的情况）
 }
 function wbDrawDetail(m) {
   const rt = wbRt(m), d = rt.detail, el = wbEl(m), cv = document.getElementById(`wb-detail-${m.id}`);
@@ -5261,6 +5271,10 @@ function wbLoadDetail(m, key, center, kind) {
   const type = m.type, quantity = (wbData(m) || {}).quantity, token = rt.detailToken = (rt.detailToken || 0) + 1;
   const valid = () => wbAlive(m) && m.type === type && rt.detailToken === token;
   const status = el.querySelector('.wb-detail-status');
+  const row = el.querySelector('.wb-chart-row[data-wb-row="' + key + '"]');
+  if (!row) return Promise.resolve(false);
+  if (box.parentElement) box.parentElement.classList.remove('wb-paired');
+  row.appendChild(box); row.classList.add('wb-paired'); box.dataset.wbKey = key;
   rt.detail = null; box.hidden = false; el.querySelector('.wb-detail-title').textContent = kind === 'wave' ? '周波瞬时采样曲线' : '周波有效值曲线';
   status.textContent = '排队读取原始波形…';
   const detailChart = el.querySelector('.wb-detail-chart'); detailChart.replaceChildren();
@@ -5268,6 +5282,7 @@ function wbLoadDetail(m, key, center, kind) {
   cv.__hiddenOwn = m.hidden.detail || [];
   cv.__onSeriesToggle = (name, on) => { const hidden = new Set(cv.__hiddenOwn); if (on) hidden.delete(name); else hidden.add(name); m.hidden.detail = cv.__hiddenOwn = [...hidden]; wbSave(); if (cv.__redraw) cv.__redraw(); };
   drawLine(cv, [], {empty: '读取中…', height: 240});
+  wbDraw(m); // 主图宽度变窄后立即重画，保持悬停、缩放及右键坐标准确。
   const job = async () => {
     if (!valid()) return false;
     try {
