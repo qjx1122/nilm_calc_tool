@@ -412,6 +412,34 @@ def test_monitor_endpoints_read_what_a_real_run_wrote(client, csv_factory, tmp_p
     assert last["n"] == 1 and last["t"][0] == v["t"][-1]
 
 
+def test_saved_curve_files_can_also_be_read(client, csv_factory, tmp_path):
+    """「保存曲线数据」写出的 curves_<时间>/<曲线>.csv 没有日期后缀、没有 run_id 列，多一列 quantity：手填路径时也能显示，
+    读到的点与同一次运行的实时落盘文件一致。"""
+    _play(client, csv_factory, tmp_path)
+    before = client.get("/api/config").json()["output"]["export_dir"]
+    client.put("/api/config", json={"output": {"export_dir": str(tmp_path / "exp")}})
+    try:
+        saved = client.post("/api/curves/save", json={"quantities": ["voltage", "power", "power_factor"], "with_branch": False})
+        assert saved.status_code == 200, saved.text
+        paths = {f["quantity"]: f["path"] for f in saved.json()["files"]}
+    finally:
+        client.put("/api/config", json={"output": {"export_dir": before}})
+    assert set(paths) == {"voltage", "power", "power_factor"} and os.path.basename(paths["voltage"]) == "voltage.csv", paths
+    head = open(paths["voltage"], encoding="utf-8-sig").readline().strip().split(",")
+    assert "run_id" not in head and head[:5] == ["t_epoch_s", "time_local", "source_id", "quantity", "window_s"], head
+
+    rt = {f["kind"]: f["path"] for f in client.get("/api/process/monitor/files").json()["files"]}
+    for kind, quantity, field in (("voltage", "voltage", "Ua"), ("power", "p", "P"), ("power", "q", "Qa"), ("power_factor", "pf", "PF")):
+        a = client.get("/api/process/monitor/curve", params={"path": paths[kind], "quantity": quantity})
+        assert a.status_code == 200, a.text
+        a = a.json()
+        b = client.get("/api/process/monitor/curve", params={"path": rt[kind], "quantity": quantity}).json()
+        assert a["quantity"] == quantity and a["fields"] == b["fields"] and a["source_id"] == 0, (kind, a["fields"], b["fields"])
+        assert a["run_mode"] == "none" and a["run_ids"] == [] and a["window_s"] == b["window_s"], (a["run_mode"], a["run_ids"], a["window_s"])
+        assert a["n"] >= 2 and a["t"] == b["t"], (kind, a["t"], b["t"])                      # 同一批曲线点
+        assert a["series"][field] == pytest.approx(b["series"][field], rel=1e-9), (kind, field)
+
+
 def test_monitor_curve_separates_repeated_runs_of_the_same_file(client, csv_factory, tmp_path):
     """同一份离线文件播放两次：两次的数据时间完全重叠，默认只显示最近一次，也可以指定某一次或全部。"""
     _play(client, csv_factory, tmp_path)

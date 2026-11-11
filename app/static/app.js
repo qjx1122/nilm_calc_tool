@@ -5376,8 +5376,9 @@ function wbOnKeydown(ev) {                                   // 在输入框里�
   ev.preventDefault(); wbLoad(m);
 }
 function wbShown() { return S.view === 'process' && PROCESS_SUBVIEW === 'wave-board' && !document.hidden; }
-function wbTick() {                                          // 每秒一次：到点的实时监测模块自动重新读取（只在本子界面显示时）
+function wbTick() {                                          // 每秒一次（只在本子界面显示时做事）：核对宽度；到点的实时监测模块自动重新读取
   if (!wbShown()) { WB.away = true; return; }
+  wbOnShow();          // 出现或消失滚动条、切回浏览器标签页这类变化不会触发页面重画，靠这里在一秒内补上
   const now = Date.now();
   WB.modules.forEach(m => {
     if (m.type !== 'monitor' || !m.monitor.path || !((parseFloat(m.monitor.refresh_s) || 0) > 0)) return;
@@ -5386,7 +5387,7 @@ function wbTick() {                                          // 每秒一次：�
     wbLoad(m, { auto: true });
   });
 }
-/* 本子界面处于显示状态时，页面每次重画都会调到这里（引擎运行时每 0.2 秒一次、窗口大小变化、切换页面），所以只在需要时才动手：
+/* 本子界面处于显示状态时，页面每次重画都会调到这里（引擎运行时每 0.2 秒一次、窗口大小变化、切换页面），wbTick 也每秒调一次，所以只在需要时才动手：
    宽度变了或者有图是在不显示时画的 → 按当前宽度重画；离开过本子界面再回来 → 重新列一次文件（新的一次运行会写出新文件）。 */
 function wbOnShow() {
   const host = $('#wb-modules'), w = host ? host.clientWidth : 0;

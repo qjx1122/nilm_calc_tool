@@ -373,10 +373,27 @@ async function run(wave, mon) {
     const drawnSeries = cv(off, 'u').__series;
     const boardCalls = () => page.calls.filter((c) => c.url.includes('/api/process/') || c.url.includes('/api/files')).length;
     const callsBeforeRender = boardCalls();
+    window.WB.listedAt = 0;          // 当作“上一次列文件是很久以前”：即使这样，只要没离开过本子界面，重画也不该再去列文件
     for (let k = 0; k < 20; k++) window.render();
-    await sleep(300);
+    await sleep(1300);               // 覆盖一次每秒的定时检查（它也会走同一段逻辑）
     check('O18 页面反复重画时，预览模块不重新整理曲线数据，也不发请求', () => drawnSeries.length === 3 && cv(off, 'u').__series === drawnSeries
       && boardCalls() === callsBeforeRender, () => `期间请求 ${boardCalls() - callsBeforeRender} 次；曲线数据${cv(off, 'u').__series === drawnSeries ? '没有' : '被'}重新整理`);
+    // 容器宽度变了（出现滚动条、侧栏收起……这类变化不触发页面重画）：每秒一次的定时检查发现后按新宽度把各模块重画一遍；宽度没变就不动。
+    // jsdom 不做排版，clientWidth 恒为 0，这里给容器换一个取值函数来模拟宽度变化，并数 wbDrawAll 被调了几次。
+    const host = $('wb-modules'), drawAllOrig = window.wbDrawAll;
+    let drawAlls = 0, fakeWidth = 0;
+    window.wbDrawAll = function () { drawAlls++; return drawAllOrig.apply(this, arguments); };
+    Object.defineProperty(host, 'clientWidth', { configurable: true, get: () => fakeWidth });
+    await sleep(1300);
+    const quietDraws = drawAlls;
+    fakeWidth = 777;
+    await sleep(1300);
+    const afterChange = drawAlls;
+    await sleep(1300);
+    const afterSettled = drawAlls;
+    delete host.clientWidth; window.wbDrawAll = drawAllOrig;
+    check('O19 容器宽度变化后一秒内按新宽度重画一次，宽度不变时不重画', () => quietDraws === 0 && afterChange === 1 && afterSettled === 1,
+      () => `宽度不变的 1.3 秒里重画 ${quietDraws} 次；变宽后 1.3 秒内 ${afterChange} 次；再过 1.3 秒累计 ${afterSettled} 次`);
   });
 
   // ------------------------------------------------------------------ R：实时监测输出文件
@@ -452,12 +469,14 @@ async function run(wave, mon) {
     d = rtData();
     const baseN = d ? d.n : -1;
 
-    // 自动刷新：文件追加了新行，不点按钮曲线也会更新
+    // 自动刷新：文件追加了新行，不点按钮曲线也会更新。
+    // 请求数从打开自动刷新那一刻数起（改「自动刷新」本身不发请求，之后的读取都是定时器发的）：
+    // 第一次自动读取可能在追加之前发出、追加之后才读到文件，从追加之后才开始数会漏掉它。
+    n0 = curveCalls().length;
     set(field(rt, 'mon-refresh'), '2');
     await sleep(400);
     const more = []; for (let k = 30; k < 35; k++) more.push(monRow(k, 0, 110, RUN_B));
     fs.appendFileSync(mon, more.join('\r\n') + '\r\n', 'utf8');
-    n0 = curveCalls().length;
     let grew = false;
     for (let k = 0; k < 60 && !grew; k++) { await sleep(100); const x = rtData(); grew = !!x && x.n === 35; }
     d = rtData();
