@@ -125,7 +125,7 @@ async function main() {
  const p = await boot(null); const {window, document, click, set, idle, mods, field, act} = p;
  const detail = (e) => window.WB.rt[e.dataset.wbId].detail;
  const dcv = (e) => document.getElementById('wb-detail-' + e.dataset.wbId);
- const noMoveHelp = (el) => [...el.querySelectorAll('.zoombar')].every(bar => !/移动|拖动图面|方向键/.test(bar.textContent) && !bar.querySelector('.panlbl') && [...bar.querySelectorAll('.pan-btn')].length === 4 && [...bar.querySelectorAll('.pan-btn')].every(btn => /移动/.test(btn.getAttribute('title') || '') && /平移/.test(btn.getAttribute('aria-label') || '')));
+ const checkBoardHelp = (el) => [...el.querySelectorAll('.zoombar')].every(bar => { const tip = bar.querySelector('.zoomtip').textContent, zoom = window.ZOOM[bar.dataset.chart]; return bar.querySelector('.panlbl')?.textContent === '移动：' && !/拖选|缩放|复位/.test(tip) && (zoom ? /拖动图面.*移动坐标轴/.test(tip) : tip === '') && [...bar.querySelectorAll('.pan-btn')].length === 4 && [...bar.querySelectorAll('.pan-btn')].every(btn => /移动/.test(btn.getAttribute('title') || '') && /平移/.test(btn.getAttribute('aria-label') || '')); });
  const ctx = (cv, shift = false, frac = 0.5) => {
    const c = cv.__chart; cv.getBoundingClientRect = () => ({left: 0, top: 0, width: c.w, height: c.h});
    const ev = new window.MouseEvent('contextmenu', {bubbles: true, cancelable: true, button: 2, clientX: c.pad.l + (c.w - c.pad.l - c.pad.r)*frac, clientY: 100, shiftKey: shift});
@@ -143,7 +143,7 @@ async function main() {
   Object.defineProperty(cv, 'clientWidth', {configurable:true, get() {return this.closest('.wb-chart-row').classList.contains('wb-paired') ? 360 : 720;}});
   window.wbDraw(window.WB.modules.find(m => m.id === off.dataset.wbId));
   check('离线模块加载主曲线', () => cv.__chart && cv.__chart.pts.length === 3);
-  check('电压及电流主图未放大时没有常显移动说明且保留悬停说明', () => noMoveHelp(off));
+  check('电压及电流主图保留移动标签和悬停说明，移除拖选和缩放说明', () => checkBoardHelp(off));
   let event = ctx(cv); let items = [...document.querySelectorAll('#ctxmenu .mi')].map(x => x.dataset.key);
   check('右键保留图片菜单和复位并增加两项', () => ['copy-image','save-image','open-image','show-window','show-window2','zoom-reset'].every(k=>items.includes(k)), () => items.join(','));
   await choose('show-window2');
@@ -151,18 +151,18 @@ async function main() {
   check('瞬时曲线实际已绘制且位于该模块内', () => dcv(off).__chart && dcv(off).__chart.pts.length === 3 && off.contains(dcv(off)));
   check('瞬时图与被右键的电压主图属于同一并排容器，主图宽度重新计算', () => { const row = cv.closest('.wb-chart-row'); return row.classList.contains('wb-paired') && row.querySelector('.wb-detail') === off.querySelector('.wb-detail') && cv.__chart.w === 360; });
   check('瞬时图与双主图模式的电压画布等高、标题共用样式且无说明文字', () => cv.__chart.h === 210 && dcv(off).__chart.h === cv.__chart.h && off.querySelector('.wb-detail-title').classList.contains('wb-chart-title') && !off.querySelector('.wb-detail-status').textContent);
-  check('瞬时图与主图无移动标签且保留按钮悬停说明', () => noMoveHelp(off));
+  check('瞬时图与主图保留移动标签，移除拖选和缩放说明', () => checkBoardHelp(off));
   const mainLegend = off.querySelector('[data-wb-chart="u"] .serlegend'), detailLegend = off.querySelector('.wb-detail .serlegend');
   check('两图各有显示和缩放移动控件', () => mainLegend.querySelector('.ser-vis') && detailLegend.querySelector('.ser-vis') && mainLegend.querySelector('[data-z="x-"]') && detailLegend.querySelector('[data-z="pr"]'));
   click(mainLegend.querySelector('[data-z="x-"]')); const mainZoom = JSON.stringify(window.ZOOM[cv.id]);
   check('主图缩放不影响周波图', () => !!window.ZOOM[cv.id].x && !window.ZOOM[dcv(off).id]);
-  check('主图放大后不显示移动说明，保留缩放说明和移动按钮', () => { const tip = mainLegend.querySelector('.zoomtip').textContent; return !/移动坐标轴|拖动图面|方向键/.test(tip) && /拖选|双击复位/.test(tip) && mainLegend.querySelector('[data-z=pr]') && !mainLegend.querySelector('[data-z=pr]').disabled; });
-  check('主图放大后无常显移动说明，悬停说明和方向无障碍名称保留', () => noMoveHelp(off));
+  check('主图放大后显示移动说明，无拖选和缩放说明', () => { const tip = mainLegend.querySelector('.zoomtip').textContent; return /拖动图面.*移动坐标轴/.test(tip) && !/拖选|缩放|复位/.test(tip) && mainLegend.querySelector('[data-z=pr]') && !mainLegend.querySelector('[data-z=pr]').disabled; });
+  check('主图放大后保留移动说明、悬停说明和方向无障碍名称', () => checkBoardHelp(off));
   click(detailLegend.querySelector('[data-z="x-"]')); const beforePan = window.ZOOM[dcv(off).id].x[0]; click(detailLegend.querySelector('[data-z="pr"]'));
   check('周波图独立缩放移动不影响主图', () => window.ZOOM[dcv(off).id].x[0] > beforePan && JSON.stringify(window.ZOOM[cv.id]) === mainZoom);
   [cv, dcv(off)].forEach(c => { c.getBoundingClientRect = () => ({left:0, top:0, width:c.__chart.w, height:c.__chart.h}); c.dispatchEvent(new window.MouseEvent('mousemove', {bubbles:true, clientX:120, clientY:80})); });
   check('主图和周波图悬停取值保持可用', () => cv.__hoverInfo?.items.length === 3 && dcv(off).__hoverInfo?.items.length === 3);
-  check('周波图移动说明也已移除', () => !/移动坐标轴|拖动图面|方向键/.test(detailLegend.querySelector('.zoomtip').textContent));
+  check('周波图放大后显示移动说明但没有拖选和缩放说明', () => {const tip = detailLegend.querySelector('.zoomtip').textContent; return /拖动图面.*移动坐标轴/.test(tip) && !/拖选|缩放|复位/.test(tip);});
   const other = document.createElement('canvas'); other.id='r217-other'; document.body.appendChild(other); window.drawLine(other,[{name:'test', data:[[0,1],[1,2]]}],{height:200}); click(other.__zoombar.querySelector('[data-z="x-"]'));
   check('其他曲线仍显示原移动说明与按钮悬停提示', () => /拖动图面.*移动坐标轴/.test(other.__zoombar.querySelector('.zoomtip').textContent) && other.__zoombar.querySelector('.panlbl') && /向右移动/.test(other.__zoombar.querySelector('[data-z=pr]').title)); other.remove();
   click(detailLegend.querySelector('[data-z="reset"]')); click(mainLegend.querySelector('[data-z="reset"]'));
@@ -172,7 +172,7 @@ async function main() {
   check('周波图显示开关不影响主图', () => cv.__chart.pts.length === 3);
   ctx(cv); await choose('show-window');
   check('逐周波有效值：每周波一点且 PT 生效', () => detail(off).kind === 'rms' && detail(off).data.agg_cycles === 1 && detail(off).data.n >= 49 && detail(off).data.n <= 50 && Math.abs(detail(off).data.channels.Ua[0]-2*U_RMS) < 1);
-  check('有效值周波图无移动标签且保留悬停说明', () => noMoveHelp(off));
+  check('有效值周波图保留移动标签和悬停说明', () => checkBoardHelp(off));
   cv = document.getElementById('wb-cv-'+off.dataset.wbId+'-i'); ctx(cv); await choose('show-window');
   check('电流图右键只显示电流且 CT 生效', () => Object.keys(detail(off).data.channels).join(',') === 'Ia,Ib,Ic' && Math.abs(detail(off).data.channels.Ia[0]-3*I_RMS) < 1);
   check('有效值图随所选电流主图同一行，电压行不再配对', () => cv.closest('.wb-chart-row').classList.contains('wb-paired') && cv.closest('.wb-chart-row').contains(dcv(off)) && !off.querySelector('[data-wb-row="u"]').classList.contains('wb-paired'));
@@ -205,7 +205,7 @@ async function main() {
   check('监测模块从指定原始 CSV 读取，按选定时刻及独立 PT 显示', () => detail(monel) && detail(monel).data.n >= 9 && detail(monel).data.n <= 10 && Math.abs(detail(monel).data.channels.Ua[0]-4*U_RMS)<1 && !monel.querySelector('.wb-detail-status').textContent && mc.__chart.h === 280 && dcv(monel).__chart.h === 280);
   check('监测曲线与周波图同一行且其他模块不受影响', () => !detail(off) && detail(monel) && mc.closest('.wb-chart-row').classList.contains('wb-paired') && mc.closest('.wb-chart-row').contains(dcv(monel)));
   click(monel.querySelector('[data-wb-chart="m"] [data-z="x-"]'));
-  check('监测主图与周波图没有常显移动说明且保留悬停说明', () => noMoveHelp(monel));
+  check('监测主图与周波图保留移动标签和悬停说明', () => checkBoardHelp(monel));
   click(monel.querySelector('[data-wb-chart="m"] [data-z="reset"]'));
   set(document.getElementById('wb-layout'), '2');
   check('更改模块排列后仍保持同一行并排', () => mc.closest('.wb-chart-row').classList.contains('wb-paired') && mc.closest('.wb-chart-row').contains(dcv(monel)));

@@ -505,7 +505,7 @@ function renderZoomBar(cv) {
     bar = document.createElement('span'); bar.className = 'zoombar'; bar.dataset.chart = cv.id;
     bar.innerHTML = '<span class="muted">缩放：</span>' + [['x-', 'X＋', '放大 X 轴（滚轮）'], ['x+', 'X－', '缩小 X 轴'], ['y-', 'Y＋', '放大 Y 轴（Shift+滚轮）'], ['y+', 'Y－', '缩小 Y 轴'], ['reset', '复位', '恢复全图（双击图面）']]
       .map(([a, t, tip]) => `<button type="button" class="zoom-btn" data-z="${a}" title="${tip}">${t}</button>`).join('') +
-      (board ? '' : '<span class="muted panlbl">移动：</span>') + [['pl', '◀', '向左移动 X 轴（放大后拖动图面 / ← 键 / Alt+滚轮）', '向左平移'], ['pr', '▶', '向右移动 X 轴（→ 键）', '向右平移'], ['pu', '▲', '向上移动 Y 轴（↑ 键 / Alt+Shift+滚轮）', '向上平移'], ['pd', '▼', '向下移动 Y 轴（↓ 键）', '向下平移']]
+      '<span class="muted panlbl">移动：</span>' + [['pl', '◀', '向左移动 X 轴（放大后拖动图面 / ← 键 / Alt+滚轮）', '向左平移'], ['pr', '▶', '向右移动 X 轴（→ 键）', '向右平移'], ['pu', '▲', '向上移动 Y 轴（↑ 键 / Alt+Shift+滚轮）', '向上平移'], ['pd', '▼', '向下移动 Y 轴（↓ 键）', '向下平移']]
       .map(([a, t, tip, label]) => `<button type="button" class="zoom-btn pan-btn" data-z="${a}" title="${tip}"${board ? ` aria-label="${label}"` : ''}>${t}</button>`).join('') +
       '<span class="zoomtip muted">拖选区间＝只显示该区间</span>';
     bar.addEventListener('click', (ev) => {
@@ -529,8 +529,9 @@ function renderZoomBar(cv) {
   if (cv.__setCursor && !cv.__pan) cv.__setCursor();
   const tip = bar.querySelector('.zoomtip');
   if (tip) {
-    const movingHelp = board ? '' : '拖动图面 / 方向键 / ◀▶▲▼ 移动坐标轴；';
-    tip.textContent = z ? ('已缩放' + (z.x ? ' X' : '') + (z.y ? ' Y' : '') + '：' + movingHelp + '在 X / Y 轴刻度带上拖选或 Ctrl+拖选再放大；双击复位') : '拖选区间＝只显示该区间（在 X / Y 轴刻度带上拖选＝只缩放该轴）';
+    const movingHelp = '拖动图面 / 方向键 / ◀▶▲▼ 移动坐标轴';
+    tip.textContent = board ? (z ? movingHelp : '')
+      : z ? ('已缩放' + (z.x ? ' X' : '') + (z.y ? ' Y' : '') + '：' + movingHelp + '；在 X / Y 轴刻度带上拖选或 Ctrl+拖选再放大；双击复位') : '拖选区间＝只显示该区间（在 X / Y 轴刻度带上拖选＝只缩放该轴）';
   }
 }
 

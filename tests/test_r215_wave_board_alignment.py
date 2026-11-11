@@ -8,7 +8,7 @@ def test_board_titles_and_empty_error_status_do_not_shift_chart():
     css = (ROOT / 'app/static/style.css').read_text(encoding='utf-8')
     for text in ('.wb-paired .wb-chart-title{height:26px;line-height:26px;',
                  '.wb-detail-head{height:26px;', '.wb-detail-head .wb-chart-title{min-width:0;margin:0}',
-                 '.wb-detail .zoomtip{display:none}', '.wb-detail-status:empty{display:none}'):
+                 '.wb-module .zoomtip:empty{display:none}', '.wb-detail-status:empty{display:none}'):
         assert text in css
     js = (ROOT / 'app/static/app.js').read_text(encoding='utf-8')
     html = next(line for line in js.splitlines() if '<div class="wb-detail" hidden>' in line)

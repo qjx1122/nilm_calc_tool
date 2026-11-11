@@ -32,16 +32,16 @@ const assert = require('node:assert/strict');
   const row=el.closest('.wb-chart-row'), a=row.querySelector('.wb-chart canvas'), b=row.querySelector('.wb-detail canvas'), t=row.querySelector('.wb-chart-title'), d=row.querySelector('.wb-detail-title');
   const r=x=>{let q=x.getBoundingClientRect();return {top:q.top,bottom:q.bottom,left:q.left,right:q.right,width:q.width,height:q.height}};
   const sty=x=>{let s=getComputedStyle(x);return [s.fontSize,s.fontWeight,s.fontFamily,s.color,s.lineHeight]};
-  return {a:r(a),b:r(b),t:r(t),d:r(d),ta:sty(t),tb:sty(d),width:row.clientWidth,scrollWidth:row.scrollWidth,scrollLeft:row.scrollLeft,heightA:a.__chart?.h,heightB:b.__chart?.h,status:row.querySelector('.wb-detail-status').textContent,tip:getComputedStyle(row.querySelector('.wb-detail .zoomtip')).display};
+  return {a:r(a),b:r(b),t:r(t),d:r(d),ta:sty(t),tb:sty(d),width:row.clientWidth,scrollWidth:row.scrollWidth,scrollLeft:row.scrollLeft,heightA:a.__chart?.h,heightB:b.__chart?.h,status:row.querySelector('.wb-detail-status').textContent,tip:row.querySelector('.wb-detail .zoomtip').textContent};
  });}
  async function checkAlignment(selector, label) {let x=await info(selector); console.log(label, JSON.stringify(x));
   ok(label+' 画布顶底对齐',Math.abs(x.a.top-x.b.top)<1 && Math.abs(x.a.bottom-x.b.bottom)<1 && x.heightA===x.heightB);
   ok(label+' 标题字体一致',JSON.stringify(x.ta)===JSON.stringify(x.tb) && Math.abs(x.t.top-x.d.top)<1);
-  ok(label+' 无常规说明',!x.status && x.tip==='none'); return x; }
+  ok(label+' 无拖选和缩放说明',!x.status && !/拖选|缩放|复位/.test(x.tip)); return x; }
  async function open(main,key){let c=page.locator(main);await c.click({button:'right', position:{x:120,y:80}});await page.locator('#ctxmenu [data-key="'+key+'"]').click(); await page.waitForFunction(()=>Object.values(window.WB.rt).some(rt=>rt.detail));}
- async function noMoveHelp(module,label){
-  const res = await module.locator('.zoombar').evaluateAll(bars => bars.map(bar => ({text:bar.innerText, label:!!bar.querySelector('.panlbl'), buttons:[...bar.querySelectorAll('.pan-btn')].map(btn=>({title:btn.getAttribute('title'),name:btn.getAttribute('aria-label')}))})));
-  ok(label+'无常显移动说明且保留按钮悬停说明',res.length>0 && res.every(x=>!/移动|拖动图面|方向键/.test(x.text) && !x.label && x.buttons.length===4 && x.buttons.every(b=>/移动/.test(b.title||'') && /平移/.test(b.name||''))));
+ async function checkBoardHelp(module,label){
+  const res = await module.locator('.zoombar').evaluateAll(bars => bars.map(bar => ({label:bar.querySelector('.panlbl')?.textContent, tip:bar.querySelector('.zoomtip').textContent, visible:getComputedStyle(bar.querySelector('.zoomtip')).display!=='none', zoom:!!window.ZOOM[bar.dataset.chart], buttons:[...bar.querySelectorAll('.pan-btn')].map(btn=>({title:btn.getAttribute('title'),name:btn.getAttribute('aria-label')}))})));
+  ok(label+'保留移动说明并去除拖选和缩放说明',res.length>0 && res.every(x=>x.label==='移动：' && !/拖选|缩放|复位/.test(x.tip) && (x.zoom ? x.visible && /拖动图面.*移动坐标轴/.test(x.tip) : !x.visible && x.tip==='') && x.buttons.length===4 && x.buttons.every(b=>/移动/.test(b.title||'') && /平移/.test(b.name||''))));
  }
  try {
  await page.goto(BASE + '/',{waitUntil:'domcontentloaded'});
@@ -49,24 +49,24 @@ const assert = require('node:assert/strict');
  await page.locator('#btn-wb-add-offline').click(); const off=page.locator('#wb-modules .wb-module').first();
  await off.locator('[data-wb-f="off-path"]').fill(wave); await off.locator('[data-wb-f="off-path"]').dispatchEvent('change'); await off.locator('[data-wb-act="load"]').click();
  await page.waitForFunction(()=>{let m=window.WB.modules[0];return window.WB.rt[m.id]?.data && document.querySelector('[data-wb-chart="u"] canvas').__chart});
- await noMoveHelp(off,'电压、电流未缩放');
- await open('[data-wb-chart="u"] canvas','show-window2'); await checkAlignment('[data-wb-chart="u"]','桌面电压瞬时'); await noMoveHelp(off,'电压与瞬时');
+ await checkBoardHelp(off,'电压、电流未缩放');
+ await open('[data-wb-chart="u"] canvas','show-window2'); await checkAlignment('[data-wb-chart="u"]','桌面电压瞬时'); await checkBoardHelp(off,'电压与瞬时');
  let u=off.locator('[data-wb-chart="u"]'); let d=off.locator('.wb-detail');
  await u.locator('[data-z="x-"]').click(); let z=await page.evaluate(()=>{let m=window.WB.modules[0];return {main:window.ZOOM['wb-cv-'+m.id+'-u'], detail:window.ZOOM['wb-detail-'+m.id]}});
  ok('主图缩放不改变周波图',!!z.main?.x && !z.detail);
- const mainTip=await u.locator('.zoomtip').innerText(); ok('放大后主图保留缩放说明但不显示移动说明',!/移动坐标轴|拖动图面|方向键/.test(mainTip) && /拖选|双击复位/.test(mainTip));
+ const mainTip=await u.locator('.zoomtip').innerText(); ok('放大后主图保留移动说明、不显示拖选和缩放说明',/拖动图面.*移动坐标轴/.test(mainTip) && !/拖选|缩放|复位/.test(mainTip));
  await u.locator('[data-z="pr"]').click(); let zMoved=await page.evaluate(()=>{let m=window.WB.modules[0];return window.ZOOM['wb-cv-'+m.id+'-u']});
- ok('主图移动按钮仍可用',zMoved.x[0] > z.main.x[0]); z.main=zMoved; await noMoveHelp(off,'主图缩放移动后');
+ ok('主图移动按钮仍可用',zMoved.x[0] > z.main.x[0]); z.main=zMoved; await checkBoardHelp(off,'主图缩放移动后');
  await u.locator('[data-z="pr"]').hover(); ok('主图方向按钮悬停说明保留',/向右移动 X 轴（→ 键）/.test(await u.locator('[data-z="pr"]').getAttribute('title')));
  await u.locator('canvas').hover({position:{x:120,y:80}}); ok('主图曲线悬停取值保留',await u.locator('canvas').evaluate(cv=>!!cv.__hoverInfo && cv.__hoverInfo.items.length===3));
  await d.locator('[data-z="x-"]').click(); await d.locator('[data-z="pr"]').click(); let z2=await page.evaluate(()=>{let m=window.WB.modules[0];return {main:window.ZOOM['wb-cv-'+m.id+'-u'], detail:window.ZOOM['wb-detail-'+m.id]}});
  ok('周波图缩放移动不改变主图',JSON.stringify(z.main)===JSON.stringify(z2.main) && !!z2.detail?.x);
  await d.locator('[data-z="pr"]').hover(); ok('周波图方向按钮悬停说明保留',/向右移动 X 轴（→ 键）/.test(await d.locator('[data-z="pr"]').getAttribute('title')));
  await d.locator('canvas').hover({position:{x:120,y:80}}); ok('周波图曲线悬停取值保留',await d.locator('canvas').evaluate(cv=>!!cv.__hoverInfo && cv.__hoverInfo.items.length===3));
- ok('周波图不显示移动说明',await d.locator('.zoomtip').evaluate(el => getComputedStyle(el).display==='none' && !/移动坐标轴|拖动图面|方向键/.test(el.textContent)));
+ ok('放大后周波图保留移动说明、不显示拖选和缩放说明',await d.locator('.zoomtip').evaluate(el => getComputedStyle(el).display!=='none' && /拖动图面.*移动坐标轴/.test(el.textContent) && !/拖选|缩放|复位/.test(el.textContent)));
  await d.locator('.ser-vis[data-name="Ua"]').uncheck(); let counts=await page.evaluate(()=>{let m=window.WB.modules[0];return [document.getElementById('wb-cv-'+m.id+'-u').__chart.pts.length,document.getElementById('wb-detail-'+m.id).__chart.pts.length]});
  ok('图例显示分别操作',counts[0]===3 && counts[1]===2);
- await off.locator('[data-wb-act="detail-close"]').click(); await open('[data-wb-chart="i"] canvas','show-window'); await checkAlignment('[data-wb-chart="i"]','桌面电流有效值'); await noMoveHelp(off,'电流与有效值');
+ await off.locator('[data-wb-act="detail-close"]').click(); await open('[data-wb-chart="i"] canvas','show-window'); await checkAlignment('[data-wb-chart="i"]','桌面电流有效值'); await checkBoardHelp(off,'电流与有效值');
  await off.locator('[data-wb-f="off-show"]').selectOption('i');await checkAlignment('[data-wb-chart="i"]','单电流模式');
  await page.setViewportSize({width:500,height:900});await page.waitForTimeout(300); let narrow=await checkAlignment('[data-wb-chart="i"]','窄屏');
  ok('窄屏保持并排并可横向滚动',narrow.scrollWidth>narrow.width && narrow.b.left>=narrow.a.right);
@@ -75,7 +75,7 @@ const assert = require('node:assert/strict');
  await mon.locator('[data-wb-f="mon-path"]').fill(monFile);await mon.locator('[data-wb-f="mon-path"]').dispatchEvent('change');
  await mon.locator('[data-wb-act="more"]').click();await mon.locator('[data-wb-f="mon-raw-path"]').fill(wave);await mon.locator('[data-wb-f="mon-raw-path"]').dispatchEvent('change');await mon.locator('[data-wb-act="load"]').click();
  await page.waitForFunction(()=>{let m=window.WB.modules[1];return document.getElementById('wb-cv-'+m.id+'-m')?.__chart});
- await open('[data-wb-chart="m"] canvas','show-window2'); await page.waitForFunction(()=>{let m=window.WB.modules[1];return window.WB.rt[m.id]?.detail}); await checkAlignment('[data-wb-chart="m"]','监测瞬时'); await noMoveHelp(mon,'监测与瞬时');
+ await open('[data-wb-chart="m"] canvas','show-window2'); await page.waitForFunction(()=>{let m=window.WB.modules[1];return window.WB.rt[m.id]?.detail}); await checkAlignment('[data-wb-chart="m"]','监测瞬时'); await checkBoardHelp(mon,'监测与瞬时');
  await page.locator('#wb-layout').selectOption('2');await page.waitForTimeout(300);await checkAlignment('[data-wb-chart="m"]','两列模块');
  ok('浏览器未发生脚本错误',errors.length===0);ok('没有修改类 API 请求',writes.length===0);console.log('PASS',n);
  } finally {await browser.close();}
