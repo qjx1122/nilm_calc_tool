@@ -41,9 +41,10 @@
 | T-018 | 2026-11-06 | 离线数据源启动意图回归语料（正/负/易混淆/复合/状态） | 用户专题（实现＋验证） | A（沙盒自验证） | ✅回归语料建立并通过完整回归；未连接真实 provider | 否（产品工具路由回归，不是算法结论） |
 | T-014b | 2026-11-06 | 智能问答基于大模型技术的意图识别技术设计文档（落盘） | 用户专题（设计文档） | A（代码对照） | ✅文档已落盘；现场未验。该条目标题自编为「T-014」，与 2026-11-05 的 T-014 重号，本索引记作 T-014b | 否（产品设计文档，不是算法结论） |
 | T-019 | 2026-11-10 | 旧文件覆盖新提交的事故复盘、`app/server.py` 恢复与台账补录 | 验证专题（事故复盘＋恢复） | A（沙盒自验证） | ✅`app/server.py`、`tests/test_server.py` 已恢复，台账已补录；✅`app/assistant.py` 的澄清返回与路由诊断日志已由 T-020 修复（2026-11-10 翻状态） | 是（第 5 节教训，v0.12） |
-| T-020 | 2026-11-10 | 模型选错工具时不返回澄清的回归修复（放回 T-015 门控与 T-017 排查日志，新增前端澄清标记） | 用户专题（实现＋验证） | A（沙盒自验证） | ✅代码 / 回归 / 文档完成；🔶真实模型、真实浏览器未测；INFO 级路由日志默认不可见 | 否（产品工具路由与可观测性，不是算法结论） |
-| T-021 | 2026-11-10 | （补记）2026-11-06 智能问答 23 个无台账提交的事后核对 | 验证专题（事后补记） | A（读 diff＋当前代码复测） | ✅已补记；🔶核对出 补-A1～A10 共 10 处问题，均未修 | 否 |
-| T-022 | 2026-11-10 | （补记）2026-11-09 前端 13 个无台账提交的事后核对，附 11-10 的 1 个数据提交 | 验证专题（事后补记） | A（读 diff＋jsdom / pytest 复测；无真实浏览器） | ✅已补记；🔶核对出 补-B1～B5 共 5 处问题，均未修；界面未经浏览器验收 | 否 |
+| T-020 | 2026-11-10 | 模型选错工具时不返回澄清的回归修复（放回 T-015 门控与 T-017 排查日志，新增前端澄清标记） | 用户专题（实现＋验证） | A（沙盒自验证） | ✅代码 / 回归 / 文档完成；🔶真实模型、真实浏览器未测；✅INFO 级路由日志已在 T-023 改为默认可见 | 否（产品工具路由与可观测性，不是算法结论） |
+| T-021 | 2026-11-10 | （补记）2026-11-06 智能问答 23 个无台账提交的事后核对 | 验证专题（事后补记） | A（读 diff＋当前代码复测） | ✅已补记；✅核对出的 补-A1～A10 共 10 处问题已于 2026-11-11 修复（T-023） | 否 |
+| T-022 | 2026-11-10 | （补记）2026-11-09 前端 13 个无台账提交的事后核对，附 11-10 的 1 个数据提交 | 验证专题（事后补记） | A（读 diff＋jsdom / pytest 复测；无真实浏览器） | ✅已补记；✅核对出的 补-B1～B5 共 5 处问题已于 2026-11-11 修复（T-023）；🔶界面未经浏览器验收 | 否 |
+| T-023 | 2026-11-11 | 修 15 处已登记问题（补-A1～A10、补-B1～B5）、路由日志默认可见、「波形预览」子界面改名「波形分析」 | 用户专题（实现＋验证） | A（沙盒自验证；真实接口用例＋jsdom 对临时服务） | ✅代码 / 回归 / 文档完成；🔶真实模型、真实浏览器、Windows、Excel 未测；🔶修复中新发现 补-A12～A14、补-B6、补-B7 共 5 处，未修 | 是（只进方法论教训 2 条，`REPORT.md` v0.13） |
 
 > **2026-11-10 补录说明**：T-013～T-018 六行原已入库（最后完整版本见提交 `ca5dc28`），在提交 `c5cf96f`（2026-11-06）中被旧文件覆盖而丢失，现按原文补回；T-014～T-017 的正文同样丢失，已原文补录在文末「[2026-11-10] 补录」一节，T-018 当时只有索引行与会话纪要、没有专题正文。T-014b 是为现存「[2026-11-06] T-014 …设计文档（落盘）」条目加的区分编号。经过见 T-019。
 
@@ -4586,3 +4587,153 @@ md 文件已落盘；内容与 NILM 系统实际代码一致（46 个受控工�
   5. **没有核对的**。顶栏双侧状态的显示是否正确、按钮在各种运行组合下的可用状态、两侧同时暂停 / 停止的实际效果（需要两侧都在运行的服务进程，没有做）；子界面切换时未保存输入是否保留；窄屏下导航条的表现；波形预览标题改动后的图例显示。这些都需要在浏览器里看。
 - **是否进入 REPORT.md（稳定结论）**：否。
 - **遗留问题**：补-B1 ～ 补-B5 均未修，登记在 `STATUS.md`「下一步」。2026-11-09 这批界面改动至今没有真实浏览器验收，也没有针对性的自动化测试。
+
+## [2026-11-11] 专题 T-023：修 15 处已登记问题（补-A1～A10、补-B1～B5）、路由日志默认可见、「波形预览」子界面改名「波形分析」
+
+- **类型 / 模式**：用户专题（实现＋验证）；模式 A（沙盒自执行），角色为工程实现工程师。2026-11-10 立项（`b38c2a7`），2026-11-11 完成。分支 `arena/51b63974-nilm-calc-tool`，开局远端 tip `4cad4f2`。没有连接真实模型、真实浏览器和用户部署环境：模型响应全部是测试里的假响应，界面检查用 jsdom。
+- **目标与假设**：用户 2026-11-10 的三条指令，原话：① 「核对出的 15 处问题修改」② 「让路由日志默认可见」③ 「将数据处理界面中波形预览子界面标题改为波形分析」。
+  - 「15 处」按 `STATUS.md`「下一步」当时的登记理解为 T-021 的补-A1～A10 与 T-022 的补-B1～B5。
+  - 登记时写「待定」的 4 个子项（补-A3、补-A7、补-A8、补-B5）用户没有另作指示，立项时由我定了做法并写进 `STATUS.md`「当前目标」，见结果第 9 点。
+  - 完成标准（立项时登记）：每处修复有回归用例，并对修复前的代码做反向对照；全量 pytest 无失败；`node tools/ui_assistant_check.cjs` 通过；四份手册 `--check` 为 `OK`；说明书 §6.8 已知限制、README、`STATUS.md`「下一步」按修复结果更新；全部提交并推送。
+  - 指令 ③ 按「只改名称」理解：界面上的名称和文档里描述当前界面的地方改，内部标识（`wave-preview`、`wp-*`、接口路径、模块名）和历史记录不动。`restore_branch_full_history` 上另有一个功能不同的子界面 `wave-analyze`，按用户第二项任务的决定不合入，与这次改名无关。
+- **方法 / 数据 / 参数**：
+  - **开局**。在 `4cad4f2` 上重跑助手三个测试文件和 jsdom 作基线。动手前先用真实接口把登记的现象复现一遍，过程中发现登记之外的补-A11（「恢复」的前置检查方向反了）。补-A9 要给跨侧的恢复补上检查，绕不开它，所以一并修，并在立项提交里登记。
+  - **后端（补-A1～A11，`818c3a5`）**。改 `app/assistant.py`、`app/server.py`、`app/assistant_intents.py`、`configs/intent_actions.csv`。主要是三件事：① 侧别解析统一到 `_resolve_target_side`，返回目标侧和「是否同时点名了两侧」；② 服务端给助手的上下文可以按侧取（`prepare_chat` 新增参数 `tool_context_for`），前置条件、资源清单、参数核对都用目标侧的上下文，上下文里新增 `paused`；③ 启动 / 暂停 / 恢复 / 停止的前置条件集中到 `_source_state_blocker`，确定性路由和意图识别直达共用。
+  - **指令 ②（`480206a`）**。`cli.py` 新增 `configure_app_logging()`，`cmd_serve` 在启动 uvicorn 之前调用；新增选项 `--app-log-level`。
+  - **前端与改名（`4be5c9a`）**。改 `app/static/app.js`、`index.html`、`style.css`、`tools/nilm_tune.py`。
+  - **补-B5（`def6ccb`）**。6 个脚本先逐个原样运行，按失败项找原因，再改脚本。这些脚本会在 `data/`、`output/` 下写文件并改运行配置，所以把仓库拷到 `/tmp` 下的副本里，在副本目录用 `python cli.py serve` 起临时服务；服务与脚本同为 `TZ=Asia/Shanghai`；每个脚本各用一个全新的服务进程和全新的副本。
+  - **文档（`04bbfd7`）**。说明书 §6.7～§6.10、§7；README；调参手册；四份生成手册；`REPORT.md` v0.13。动笔之前，把要写进说明书的行为在真实接口上逐条试过：延时的 6 种说法、同时点名两侧、档位边界、日志在三种启动方式下的输出、意图配置的 5 种编码。
+  - **验证手段**。
+    - pytest，模型用假响应。
+    - 真实接口用例（新文件 `tests/test_assistant_cross_side.py`）：同进程 `TestClient` 走真实 HTTP 接口；两侧的数据源由真实的引擎线程运行，以 0.25 倍速播放一份 8 秒的录波文件；凡是跨侧的用例，两侧的运行状态都不相同，并且从非目标侧的页面发起。这些用例只依赖 HTTP 接口，可以原样拿去跑修复前的代码。
+    - jsdom 驱动真实的 `index.html` + `app.js`，对着真实的临时服务（新脚本 `tools/ui_r209_check.cjs` 和 6 个旧脚本）。
+    - 反向对照：把修复前的文件换回去跑新用例。各次提交前做过一遍；收尾时在 `/tmp` 下的仓库副本里又完整做了一遍（不动仓库），第 7 点的数字是收尾这一遍的。
+    - `tests/test_cli.py` 新增的 5 条都在独立的子进程里执行，其中 2 条启动真实的服务进程、发一次问答请求、读标准错误。
+- **用户执行命令（含实录路径）**：本节无用户命令。全部命令在沙盒执行，输出摘录见下，没有单独的实录文件。
+- **结果 / 结论**：
+  1. **提交**（均已推送）。`b38c2a7` 立项，只改 `STATUS.md`；`818c3a5` 后端补-A1～A11；`480206a` 指令 ②；`4be5c9a` 补-B1～B4 与改名；`def6ccb` 补-B5；`04bbfd7` 文档；另有本专题所在的台账提交。`4cad4f2..04bbfd7` 共 30 个文件，+2368 / −648 行。
+  2. **逐项结果**。「修复前」取自 T-021 / T-022 的登记。用例名里，`tests/test_assistant.py` 的记作「单元」，`tests/test_assistant_cross_side.py` 的记作「真实接口」，`tests/test_web_ui.py` 的记作「静态」。
+
+     | 编号 | 修复前 | 修复后 | 回归用例 |
+     | --- | --- | --- | --- |
+     | 补-A1 | 延时检查把单个「后」字当成延时，「查看后台重采样任务状态」「取消后台重采样」「查询最后10条电能质量事件」被 400 拒绝 | 只认 6 种延时写法：时长加「后 / 之后 / 以后 / 过后」；「等 / 过 / 推迟 / 晚」加时长；「定时」「稍后」等词；「之后 / 然后」紧接动作；动作加「后」再接动作；「等……完……再」。上面三句正常处理，「15秒过后启动数据源」等仍返回 400 | 单元 `test_delay_refusal_needs_a_delay_phrase_not_a_bare_hou_character`；真实接口 `test_background_and_last_n_requests_are_not_refused_as_delayed` |
+     | 补-A2 | 侧别词按子串匹配，先出现的优先；在分路侧页面说「查看 Modbus 运行状态」返回总线侧的状态 | 英文 `bus` / `branch` 只在是独立单词时才算。一句话同时点名两侧时不取先出现的一侧：确定性路由返回 400，意图识别直达不介入，模型路径返回澄清（原因码 `ambiguous_target_side`）。`compare_sides`、`estimate_ct_ratio`、`set_compare_alignment` 本身涉及两侧，不受此限 | 单元 `test_side_words_are_whole_words_and_two_named_sides_are_never_guessed`；真实接口 `test_modbus_is_not_read_as_the_bus_side`、`test_a_prompt_naming_both_sides_is_never_resolved_to_the_first_one` |
+     | 补-A3 | `_exclusive_limit`、`_parsed_side` 写入计划后无人读取 | 删除 `_parsed_side`。`_exclusive_limit` 现在由 `create_tool_proposal` 读取：提案绑定总线侧、且该操作会连带分路侧时，卡片的影响说明里加一句「系统不支持只作用于总线侧；不想影响分路侧请取消」。实际执行的内容不变 | 单元 `test_exclusive_wording_adds_a_linkage_warning_and_no_unread_plan_keys`；真实接口 `test_exclusive_wording_warns_that_the_bus_side_cannot_act_alone` |
+     | 补-A4 | 意图识别直达对「启动」一律要求文件数据源：数据源是模拟器时「启动分路侧数据源检测」返回 409，而「启动分路侧数据源」可以生成提案 | 两条路由共用 `_source_state_blocker`，只有话里说到离线 / CSV / 文件时才要求文件数据源 | 单元 `test_intent_route_start_requires_a_file_source_only_for_offline_wording`；真实接口 `test_simulator_source_can_be_started_through_either_direct_route` |
+     | 补-A5 | 模型路径的提案绑定在提问页面所在的一侧 | 提案绑定话里点名的一侧，资源清单和参数核对用那一侧的上下文，跨侧提案的标题写实际执行的一侧。连带修了一处：导出文件的下载地址按结果里的 `side` 拼，此前跨侧导出下载返回 403 | 单元 `test_model_path_proposal_is_bound_to_the_side_named_in_the_prompt`；真实接口 `test_model_path_proposal_runs_on_the_side_named_in_the_prompt`、`test_cross_side_export_is_downloaded_from_the_side_that_produced_it`；`tools/ui_assistant_check.cjs` 新增 5 项 |
+     | 补-A6 | 意图识别直达只在工具已授权时介入，未授权时转入模型路径；直达分支里 5 处 403 检查走不到 | 保留「未授权时不报 403、转入模型路径」，删掉走不到的 5 处检查；路由日志新增 `intent_tool`、`intent_tool_available`，从日志能看出这种情况 | 单元 `test_intent_route_leaves_unauthorized_requests_to_the_model_path`；真实接口 `test_unavailable_intent_tool_falls_through_to_the_model_and_is_logged` |
+     | 补-A7 | `get_runtime_status` / `get_runtime_settings` 直接执行时不写审计，并且任何档位都直接执行 | 只在非 low 档位直接执行，low 档位交给模型。每次直接执行写一条审计记录（`status=direct_read`、`origin=intent`，没有 `proposal_id`）。摘要由 `app/server.py` 的 `assistant_read_tool` 生成，与确认后执行是同一段代码 | 单元 `test_direct_reads_skip_the_low_tier_and_leave_an_audit_record`；真实接口 `test_direct_reads_leave_an_audit_record`、`test_low_tier_read_request_is_left_to_the_model` |
+     | 补-A8 | `configs/intent_actions.csv` 没有 BOM；文件存成 GBK 时服务无法启动 | 恢复 UTF-8 BOM，其余字节不变；读取时 UTF-8 解码失败改按 GB18030 再读一次；其它编码报「意图配置 CSV 的编码无法识别…」 | 单元 `test_intent_config_csv_in_the_repository_has_a_utf8_bom`、`test_intent_config_csv_saved_as_gbk_still_loads` |
+     | 补-A9 | 跨侧的暂停 / 恢复 / 停止在生成提案时不检查目标侧是否在运行 | 按目标侧自己的状态检查，不满足时返回 409，与同侧的规则相同 | 单元 `test_cross_side_source_checks_read_the_target_side_state`；真实接口 `test_cross_side_pause_resume_stop_are_refused_when_the_target_is_not_running` |
+     | 补-A10 | 跨侧「启动」的前置检查读的是提问页面所在一侧的状态：总线侧在运行、分路侧未运行时，在总线侧页面说「启动分路侧数据源」被 409 误拒；目标侧已在运行时提案照样生成 | 读目标侧的状态 | 单元同上一行；真实接口 `test_cross_side_start_is_not_blocked_by_the_state_of_the_page_side`、`test_bus_playing_branch_stopped_from_the_branch_page`、`test_branch_playing_bus_stopped_from_the_bus_page` |
+     | 补-A11（登记之外） | 同侧「恢复」的检查方向反了：数据源已暂停时被 409「…正在运行，无需恢复」拒绝；已停止时反而生成提案，确认时才 400 | 上下文新增 `paused`；「恢复」只在已暂停时生成提案，未运行、在运行但没有暂停都返回 409 | 真实接口 `test_resume_is_offered_only_while_the_source_is_paused`；既有用例的预期改正，见第 8 点 |
+     | 补-B1 | 顶栏对侧一行的频率恒为「—」 | 取对侧摘要的 `f_used`，3 位小数；对侧还没有结果时仍显示「—」 | 静态 `test_topbar_peer_row_shows_frequency_from_peer_summary`；`ui_r209_check.cjs` B1 段 6 项，其中 2 项是两侧模拟器运行时的实测 |
+     | 补-B2 | 顶栏「暂停」「停止」的提示：分路侧视图下把侧别说成总线侧；总线侧视图下操作分路侧时不检查返回状态，服务端报错也提示成功；侧别用英文标识 | 按实际操作的一侧提示，写「总线侧」「分路侧」；两侧都经 `api()`，服务端拒绝时提示「<侧>暂停 / 恢复 / 停止失败：<原因>」并用错误样式；操作成功而刷新状态失败时不再算作失败 | 静态 `test_topbar_pause_and_stop_report_the_right_side_and_real_outcome`（2 条）；`ui_r209_check.cjs` B2 段 19 项：11 项用假响应重现服务端返回 400 / 500，8 项是两侧各自播放录波文件的实测 |
+     | 补-B3 | `initCtEstimate()` 被调用两次且没有防重，「加载逐周波 RMS 曲线」点一次发两次请求 | 加一次性标记，只绑定一次；两个调用点都保留 | 静态 `test_ct_estimate_binds_its_events_only_once`；`ui_r209_check.cjs` B3 段 3 项 |
+     | 补-B4 | 页内导航条用写死的浅色，没有用主题变量 | 改为取主题变量，选中态与左侧导航条的选中态同一套配色 | 静态 `test_sub_nav_uses_theme_variables`。只核对了样式表的写法，实际观感没有看过 |
+     | 补-B5 | 数据处理页的 6 个 jsdom 脚本没有随改版更新；`ui_r61` 原样运行失败，其余 5 个当时没有运行 | 6 个脚本全部更新，没有停用，也没有删除；结果见第 5 点 | 脚本本身；更新前后在同一条件下各跑一遍 |
+     | 指令 ② | `python cli.py serve` 下 `elec_tool.*` 的 INFO 行不输出，WARNING 行只有消息正文 | 见第 3 点 | `tests/test_cli.py` 新增 5 条 |
+     | 指令 ③ | 子界面叫「波形预览」 | 见第 4 点 | 静态 `test_wave_subview_is_named_wave_analysis_and_keeps_internal_ids`；`ui_r209_check.cjs` N 段 11 项 |
+
+  3. **指令 ②：路由日志默认可见**。
+     - `python cli.py serve` 默认给 `elec_tool` 记录器装一个写标准错误的输出，级别 INFO，每行是「时间 级别 记录器名 消息」，例如 `2026-11-11 01:33:13,318 INFO elec_tool.assistant assistant_route_decision trace_id=…`。
+     - 新增 `--app-log-level {debug,info,warning,error,critical}`，默认 `info`。`--log-level` 的含义和默认值不变（`warning`，只管 uvicorn），两者互不影响。
+     - 重复调用只更新级别，不装第二个输出。根记录器或 `elec_tool` 记录器上已经有别处装的输出时不再另装，只设级别，同一行只输出一次。保留向根记录器传播，pytest 的 `caplog` 照常工作。
+     - 实测输出（2026-11-11，Linux）：默认启动时，「● 启动 Web 界面…」一行之后是「服务启动 version=…」和「启动自动加载上次数据…」两行 INFO；`--app-log-level warning` 时只剩「●」一行；`--log-level info` 时另有 uvicorn 自己的 INFO 行。
+     - 没有覆盖的启动方式：不经 `cli.py`、直接 `python -m uvicorn app.server:app` 启动时没有这项配置，INFO 行仍不输出，WARNING 行仍只有正文（实测）。说明书 §6.9 和 README §3.1 已写明。
+     - 一个连带的变化：管理员打开 `log_queries` 之后的 `assistant_question` 行（脱敏后的问题原文）也是 INFO 级，现在同样默认输出。该开关默认关闭。
+  4. **指令 ③：改名**。页内导航按钮、子界面标题、助手里该子界面的名称、另外两个子界面提示文字里对它的称呼、`tools/nilm_tune.py` 中 `--custom-time` 的帮助文字，都由「波形预览」改为「波形分析」。README 该节标题和 §3.1 的说明、调参手册两处同步，并注明原名。变更记录、验证记录里的历史条目和内部标识不动。
+  5. **补-B5：6 个脚本更新前后**。同一条件：全新的临时服务，服务与脚本同为东八区。数字是「通过 / 失败」的检查项数。
+
+     | 脚本 | 更新前（脚本取自 `4be5c9a`） | 更新后 |
+     | --- | --- | --- |
+     | `ui_r8_check.cjs` | 50 / 7，随后异常退出（退出码 2） | 70 / 0 |
+     | `ui_r61_check.cjs` | 5 / 5，随后异常退出（退出码 2） | 48 / 0 |
+     | `ui_r72_check.cjs` | 3 / 5，随后异常退出（退出码 2） | 30 / 1（退出码 1） |
+     | `ui_r80_check.cjs` | 7 / 3，退出码 0 | 10 / 0 |
+     | `ui_r86_check.cjs` | 15 / 3，退出码 0 | 18 / 0 |
+     | `ui_r90_check.cjs` | 5 / 8 | 13 / 0 |
+
+     - 更新后的结果在 `def6ccb` 提交前连续 3 轮相同，收尾时在 `04bbfd7` 上又跑一轮，仍相同。
+     - 过期的原因有两类。一是 2026-11-09 的改版：数据处理页分成 5 个子界面，各子界面的文件列表、默认值、事件绑定推迟到第一次打开时才做，脚本进入页面后没有点子界面。二是 v0.99.23（2026-10-30）：去掉了「启用 PT/CT」开关，出厂变比由 PT 100 / CT 15 改成 1 / 1，脚本里写死的出厂值和「取消勾选开关」的步骤对不上。第二类比改版早 10 天：T-022 第 3 点已经看到 `ui_r61` 在改版前就有 15 项失败，当时没有逐项查原因，这次查明主要是这一条。
+     - 另外改了三处。`ui_r8` / `ui_r72` / `ui_r90` 手动调用 `init()`，而 `app.js` 自己在 `DOMContentLoaded` 时也调用，jsdom 在构造函数返回之后才派发这个事件，`init` 实际跑了两遍（开局 2 秒内的请求 31 次，改后 19 次）；改为先去掉监听再调一次。`ui_r80` / `ui_r86` 的退出码原来恒为 0，改为有失败项时返回 1。`ui_r90` 原来钉死「算法面板有 6 个数值参数」，现在面板有 13 个，改为要求 v0.90 的 6 个参数都在。
+     - `ui_r72` 剩下的 1 项失败不是脚本过期，是产品问题，见第 10 点补-B7。这一项保留，问题修掉后应通过。
+     - 运行这些脚本的前提写在各自的文件头里。两个容易踩的：服务用了状态目录覆盖（`ELEC_TOOL_NILM_DIR` 等环境变量）时，`ui_r8` 有 8 项会失败，因为它到仓库目录下的 `output/nilm` 找文件；服务在 UTC、脚本在东八区时，`ui_r61` 通过 20 项后抛 `TypeError`。
+  6. **验证（命令 / 输出 / 判读）**。除注明的以外都在 `04bbfd7`（最终的代码与文档）上运行。
+
+     | 步骤 | 命令 | 输出 | 判读 |
+     | --- | --- | --- | --- |
+     | 开局基线 | `pytest tests/test_assistant.py tests/test_server.py tests/test_web_ui.py`；`node tools/ui_assistant_check.cjs`（`4cad4f2`） | 109 passed；`PASS 205 checks` | 与第二项任务收尾时一致 |
+     | 真实接口用例的稳定性 | `pytest tests/test_assistant_cross_side.py` 连跑 5 次（`818c3a5` 提交前） | 5 次都是 15 passed | 用例里有真实线程和等待，确认结果不抖 |
+     | 全量 | `.venv/bin/python -m pytest -o addopts='' tests -q -p no:cacheprovider -rxXs` | `690 passed, 1 skipped, 1 warning in 220.75s` | 654 + 36（真实接口 15、单元 10、CLI 5、静态 6）。skipped 是既有的 60 Hz 用例，warning 是既有的 Starlette / httpx 弃用提示。文档最后几处修改之前也跑过一次，同为 690 passed / 1 skipped（215.90 s）；后端刚修完、只写了头 9 条单元用例时是 663 passed / 1 skipped |
+     | 定向 | `pytest tests/test_assistant.py tests/test_assistant_cross_side.py tests/test_server.py tests/test_web_ui.py tests/test_cli.py` | 164 passed / 1 skipped | 各文件用例数：55、15、40、30、25（其中 1 条跳过） |
+     | 助手界面 | `node tools/ui_assistant_check.cjs` | `PASS 210 checks` | 205 + 5（跨侧导出的下载地址）。不在 pytest 里，要先补齐 `node_modules/` 缺的 10 个文件 |
+     | 本轮界面 | 临时服务；`TZ=Asia/Shanghai JSDOM_DIR=/tmp/uitest node tools/ui_r209_check.cjs http://127.0.0.1:8766` | `PASS：通过 40 项，失败 0 项` | N 段 11、B3 段 3、B1 段 6、B2 段 19、页面没有未捕获的脚本错误 1 |
+     | 6 个旧脚本 | 同样方式逐个运行，每个脚本一个全新的临时服务 | 70 / 0、48 / 0、30 / 1、10 / 0、18 / 0、13 / 0 | 与第 5 点一致 |
+     | 手册 | `.venv/bin/python tools/generate_assistant_docs.py --check` | 四份均 `OK` | — |
+     | 自检 | `.venv/bin/python cli.py selftest` | 44 项通过 44 | 电气量计算没有受影响 |
+     | 语法与静态检查 | `node --check`：`app/static/app.js` 和 8 个 `.cjs` 脚本；pyflakes：`app/assistant.py`、`app/assistant_intents.py`、`app/server.py`、`cli.py` | 全部通过；pyflakes 的告警条数与 `4cad4f2` 相同（1 / 2 / 8 / 6，逐条相同，都是既有的未使用导入等） | 没有新增告警 |
+     | `app.js` 顶层函数清单 | `grep -oE '^(async )?function [A-Za-z0-9_$]+' app/static/app.js \| sort`，与 `4cad4f2` 的对比 | 418 个，完全相同 | 防误删，见第 11 点 |
+     | 知识库措辞 | 在 README、`REPORT.md`、调参手册、`docs/*.md` 里搜第二项任务验收用例的提问原话和假模型的自述 | 0 处 | T-020 第 8 点的约束 |
+     | `tmp/` | `find tmp -type f -print0 \| sort -z \| xargs -0 sha256sum \| sha256sum` | 开头 `c480302f2baa0020`，与任务开始时相同 | 只计算过校验和，没有查看内容 |
+
+  7. **反向对照**。收尾时在 `/tmp` 下的仓库副本里做，仓库本身不动；用例是 `04bbfd7` 的。
+
+     | 换回的文件 | 命令 | 输出 | 判读 |
+     | --- | --- | --- | --- |
+     | `app/assistant.py`、`app/server.py`、`app/assistant_intents.py`、`configs/intent_actions.csv` 换成 `b38c2a7` 的版本 | `pytest tests/test_assistant.py tests/test_assistant_cross_side.py` | `26 failed, 44 passed` | 失败的 26 条 = 真实接口 15 条 + 新增单元 10 条 + 改了预期的既有用例 1 条；通过的 44 条是 `tests/test_assistant.py` 其余的既有用例 |
+     | `cli.py` 换成 `b38c2a7` 的版本 | `pytest tests/test_cli.py` | `5 failed, 19 passed, 1 skipped` | 新增的 5 条全部失败 |
+     | `app/static/app.js`、`index.html`、`style.css` 换成 `480206a` 的版本 | `pytest tests/test_web_ui.py` | `6 failed, 24 passed` | 新增的 6 条全部失败 |
+     | 同上 | `ui_r209_check.cjs`（临时服务） | `FAIL：通过 12 项，失败 28 项` | 失败处就是登记的现象，例子见下 |
+     | `app/static/app.js` 换成 `b38c2a7` 的版本 | `node tools/ui_assistant_check.cjs` | `FAIL: Error: 总线侧页面下载分路侧的导出文件时，地址没有带分路侧前缀` | 换回当前文件后 `PASS 210 checks` |
+
+     - 15 条真实接口用例在旧代码上都失败在各自登记的现象上。例如：总线侧在运行、分路侧已停止时，在总线侧页面说「启动分路侧数据源」得到 409「分路侧数据源已在运行或暂停，不会重复启动…」（补-A10）；「暂停分路侧离线播放」在分路侧未运行时照样生成提案（补-A9）；「查看后台重采样任务状态」得到 400「请求包含延时执行指令…」（补-A1）；在分路侧页面问 Modbus 的运行状态，回答是「查询总线侧运行状态」（补-A2）；直接执行之后审计记录为空（补-A7）；模型路径的提案 `side` 是 `bus` 而不是 `branch`（补-A5）。
+     - 新增的 10 条单元用例里，5 条失败在行为上（没有 BOM、`UnicodeDecodeError`、「查看后台重采样任务状态」被判为延时、「查看只读配置」被判为带限定词、日志里没有 `intent_tool` 字段）。另外 5 条失败在旧代码没有新接口（4 条是 `prepare_chat` 不认识 `tool_context_for` 参数，1 条是没有 `_resolve_target_side`），**这 5 条单独不能证明现象**；它们对应的现象（补-A4、补-A5、补-A7、补-A9 / A10、补-A2）由上一条的真实接口用例证明。
+     - `cli.py` 的 5 条里，「默认启动能看到路由日志」一条失败在标准错误为空，即登记的现象；3 条失败在没有 `configure_app_logging`；1 条失败在服务进程不认识 `--app-log-level` 而退出。
+     - jsdom 失败的 28 项里有：分路侧视图下提示「bus侧已暂停」「总线侧已停止」；总线侧视图下分路侧被拒仍提示「branch侧已暂停」；「加载逐周波 RMS 曲线」点一次发 2 次请求；对侧频率「—」；子界面仍叫旧名称。
+  8. **改动的既有预期**（都是原预期把错误行为写成了正确结果，或者写死了已经变更的出厂值）。
+     - `tests/test_assistant.py::test_offline_source_stop_resume_pause_regression_corpus`：「恢复」的正常路径由 `running=False` 改为 `running=True, paused=True`，并补上 `running=False` 时被拒绝的情形。原预期对应补-A11 的错误行为。
+     - 6 个旧 jsdom 脚本里写死的出厂变比（PT 100 / CT 15 → 1 / 1）、「取消勾选启用 PT/CT」的步骤（开关已在 v0.99.23 去掉）、`ui_r90` 的参数个数（6 → 要求 v0.90 的 6 个都在）。
+     - 没有删除任何既有用例，也没有放宽任何断言来让测试通过。
+  9. **由我决定的事项**（用户可以改）。前 4 条是立项时登记的，其余是实施中定的。
+     - **补-A3**：不做「只操作总线侧」的执行方式，改为在卡片上提示。理由：两侧联动播放共用同一个节拍，单独暂停或停止总线侧是新功能，不属于修已登记的问题。另一种做法是遇到这类限定词直接拒绝。加载上次历史数据（`load_last_history`）在总线侧也可能连带分路侧，一并纳入提示。
+     - **补-A7**：直接执行只限非 low 档位，并写审计。理由：提交 `e592aef` 的注释原意如此；审计记录不完整是这一条登记时最主要的顾虑。另一种做法是取消直接执行，一律走确认卡片。
+     - **补-A8**：恢复 BOM，并让 GBK 文件也能读入。理由：中文版 Excel 靠 BOM 识别 UTF-8，另存为「CSV（逗号分隔）」时写出的是 GBK。Excel 的实际表现没有条件验证。
+     - **补-B5**：6 个脚本全部更新，没有停用。
+     - **补-A11**：不在登记的 15 处里，一并修了，理由见「方法」。
+     - **补-A2**：同时点名两侧时拒绝或澄清，不替用户选一侧，也不拆成两步执行。
+     - **补-A5**：跨侧提案的标题写实际执行的一侧；导出的下载地址跟随结果里的 `side`（测补-A5 时发现的连带问题）。
+     - **补-A6**：保留「未授权时转入模型路径」，不报 403。试过报 403：知识性问题也会被打成 high 档位，而工具总开关默认关闭，这样会挡住普通问答，所以放弃。
+     - **补-A8**：UTF-8 和 GB18030 都解不开的文件给出明确的中文报错，不再抛 `UnicodeDecodeError`。
+     - **指令 ②**：选项名用 `--app-log-level`，默认 `info`；不改 `--log-level` 的含义。
+     - **指令 ③**：改名的范围见第 4 点。
+     - **补-B2**：只改提示和错误处理，没有改「每一侧按它自己的暂停状态取反」这个点击语义；它在两侧状态不同时的表现登记为补-B6，留给用户决定。
+     - **补-B5**：`ui_r72` 保留那一项失败的检查，不为了全绿而放宽。
+     - **版本号**：按 README 的惯例记为 v0.99.50、第 209 轮。`elec_tool.__version__` 仍是 `0.1.0`，没有动（已登记在环境卫生一条）。
+     - **`REPORT.md`**：按收尾仪式新增 2 条方法论教训（v0.13），并把 2026-11-10 一行的状态翻为已恢复（依据 T-020）。
+  10. **修复过程中新发现、只登记没有修的 5 处**。都不在登记的 15 处里，各自需要先定行为。前三条 2026-11-11 在 `04bbfd7` 上用真实接口重新确认过（假模型）。
+      - **补-A12**：「暂停」的前置条件只看数据源是否在运行。① 总线侧离线文件已经暂停时，说「暂停当前侧离线播放」或「暂停数据源」仍生成 `pause_current_source` 提案；确认返回 200「总线侧离线播放已暂停」，状态不变。② 总线侧模拟器在运行时，说「暂停数据源」同样生成提案；确认返回 400「暂停/恢复仅支持离线文件（csv_file）源，当前为 simulator」。补-A9 登记的只是「目标侧未运行」这一种情形，已修；这两种是同一项检查里没有覆盖的。
+      - **补-A13**：只给出时刻的说法不算延时。「明天8点启动总线侧数据源」「今晚10点启动数据源」得到一张**立即**启动的提案（意图识别直达），回答里不提时间被忽略；「15秒过后启动数据源」返回 400。延时检查只认第 2 点补-A1 一行列出的 6 种写法；修复前的代码同样不认绝对时刻。
+      - **补-A14**：知识性问句被认成查询。「电能质量事件有哪些类型」在操作员有 `events.read` 时得到 `get_event_list` 提案；没有该权限时是模型的文字回答；「电能质量事件怎么定义」是模型的文字回答。原因是打分只看用词。补-A6 保留「未授权时转入模型路径」正是因为这一点。
+      - **补-B6**：总线侧视图下两侧暂停状态不同时，顶栏暂停按钮点一次是两侧状态互换。实测（jsdom 驱动真实页面，真实临时服务，两侧各自播放录波文件）：总线侧在播、分路侧已暂停时，按钮文字是「恢复」（只跟分路侧走）；点一次，请求是 `/api/engine/pause` 和 `/api/branch/engine/resume`，提示「总线侧已暂停，分路侧已恢复」，服务端变成总线侧已暂停、分路侧运行中；再点一次又换回来。修复前后在这一点上相同；这次只把提示改对了，`togglePause` 里留了注释。
+      - **补-B7**：「负荷辨识调参」「设备画像提取」两个子界面，基准配置选「沿用总线侧 / 分路侧运行配置」时，标题写着「不可修改」，PT、CT 两个输入框在约 1 秒后又变回可编辑。原因：`ntFillQCFromRunning` → `ntSetBase` → `ptctSync`，后者自 v0.99.23 起无条件解除禁用。这种模式下请求不上送界面上的基准配置，改了也不生效。`ui_r72_check.cjs` 剩下的 1 项失败就是它。
+  11. **过程中的问题**。
+      - **沙盒重置 3 次**。每次都是本地 HEAD 回到 `e05542a`、工作区是最新内容、`.venv` 和 `/tmp` 清空。处理同第二项任务：`git fetch` 后看 `git diff --stat FETCH_HEAD`，确认只多出进行中的文件；在旧 HEAD 之后才入库的文件此时显示为「未跟踪」，逐个与远端版本比 sha256；一致后 `git reset --mixed FETCH_HEAD`，重建环境。没有在旧 HEAD 上提交，没有丢改动。丢的是 `/tmp` 下的探针脚本和中间日志，所以第 7、10 点在收尾时重做了一遍。第三次重置后，文档改完就先提交推送（`04bbfd7`），再做最终验证。
+      - **一次自动替换误删了 74 行**。用脚本替换 `app.js` 的 `togglePause` 时，切片的终点取成了「下一个 `async function`」，把中间 6 个无关的函数一起删了；`node tools/ui_assistant_check.cjs` 仍然全部通过，因为那些函数不在它的覆盖范围里。提交前发现，从 HEAD 恢复。之后的做法：切片按函数自己的结束行界定；每次脚本替换后对比顶层函数清单（第 6 点倒数第三行）。
+      - **工具中断一次**，下一轮恢复，没有丢东西。
+      - **jsdom 里 `init` 跑两遍**，见第 5 点。新脚本 `ui_r209_check.cjs` 按同样的办法处理（先去掉监听再调一次）；不这样做的话，B3 数出来的请求次数会比浏览器里多 1。
+  12. **没有验证的**。
+      - 真实模型：全部是假响应。模型路径上的侧别绑定、澄清，只验证了服务端拿到某种模型输出之后的行为。
+      - 真实浏览器：补-B4 的配色只核对了样式表；提示条、子界面名称只看了 DOM 文字；窄屏没有看。
+      - Windows：`--app-log-level` 和日志输出只在 Linux 上试过。
+      - Excel：没有实际用 Excel 打开和保存意图配置文件。
+      - 直接用 uvicorn 启动时程序的 INFO 日志仍不输出（没有改，文档已写明）。
+      - 流式响应里模型的工具调用不带 `arguments` 的情形仍没有用例（T-020 遗留 1）。
+      - `docs/智能问答助手基于大模型技术的意图识别技术设计文档.md`（V2.0）没有按这次的改动更新（立项时列为不在范围）。
+- **是否进入 REPORT.md（稳定结论）**：是，只进方法论教训：第 5 节新增 2 条（涉及两侧的功能没有在两侧状态不同的情况下测过；不在回归入口里的检查脚本无声过期），`REPORT.md` v0.13。产品行为本身不进入。
+- **遗留问题**：
+  1. 补-A12、补-A13、补-A14、补-B6、补-B7 未修，登记在 `STATUS.md`「下一步」。
+  2. 真实模型、真实浏览器、Windows、Excel 未验（第 12 点）。
+  3. 数据处理页的 6 个旧脚本和 `ui_r209_check.cjs` 都不在 pytest 里，要有临时服务才能跑，容易被漏跑。
+  4. `main` 上仍没有程序代码，用户没有答复。
+  5. 以前登记、这次没有处理的：流式工具调用不带 `arguments`；`tool_intent_hint()` 无人调用；README 的验证记录和变更记录整段在知识库里；意图识别设计文档；`node_modules/` 缺 10 个文件；全量 pytest 在当前目录留下 `data/`、`output/`；`elec_tool.__version__`。
