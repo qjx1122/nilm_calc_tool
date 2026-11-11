@@ -1346,3 +1346,12 @@
 - 关键决策：用户明确选择仅合并显示区域，图例 / 缩放 / 移动保持独立、不联动；服务端 notes 用短暂通知显示。
 - 未决问题：真实浏览器 / Windows / 现场视觉待验；T-027 中 r63 曾失败一次未查明原因。
 - 相关文件 / 分支：`app/static/app.js`、`app/static/style.css`、`tools/ui_r213_check.cjs`、`tests/test_r215_wave_board_alignment.py`、README、生成手册、`REPORT_TEST.md` T-029；`arena/51b63974-nilm-calc-tool`，代码 `632497e`、文档 `a8b58aa`。
+
+
+## [2026-11-10] 会话纪要：波形预览无头浏览器补验（第 216 轮）
+- 目标：用户要求继续，对第 215 轮并排布局补做真实浏览器自动化检查。
+- 本会话角色：资深电力算法专家，模式 A。
+- 完成项：隔离服务、合成波形和无头 Chromium 153 下对桌面 / 单图 / 监测 / 500px 窄屏 / 双列的画布位置、标题样式和交互检查 25/25；新增 `tools/ui_r216_browser_check.cjs`，更新文档与手册；`tmp/` 摘要未变。
+- 关键决策：继续沿用用户确认的两图独立操作；未修改应用代码。
+- 未决问题：无头测试未人工审阅中文字体、未验证可见滚动条；目标浏览器、Windows、触控及现场文件仍待验。
+- 相关文件 / 分支：`tools/ui_r216_browser_check.cjs`（`52ffdd9`）、README / 手册（`2086128`）、`REPORT_TEST.md` T-030；正式分支 `arena/51b63974-nilm-calc-tool`。
