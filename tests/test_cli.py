@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
+import textwrap
+import time
 
 import pytest
 
@@ -243,3 +246,141 @@ def test_cli_live_csv_tail_from_end_and_watch_newest(tmp_path, csv_factory):
                  "--duration", "2", "--config", str(cfg_path))
     assert p4.returncode == 0
     assert "输出 0 次" not in p4.stdout, p4.stdout[-600:]
+
+
+# ---------------------------------------------------------------- serve：程序自己的日志默认可见
+# 2026-11-10 第三项任务指令 ②（REPORT_TEST.md T-023）。elec_tool.* 记录器原先没有配置输出：
+# INFO 行（包括每个问答请求的路由日志）完全看不到，WARNING 行只有消息正文。
+
+_LOG_LINE = r"\d{4}-\d\d-\d\d \d\d:\d\d:\d\d,\d{3} %s %s %s"
+
+
+def _run_logging_script(body):
+    """Run a few lines in a fresh interpreter (``logging`` and ``cli`` imported); return ``(stdout, stderr)`` lines.
+
+    A fresh process has no logging configuration at all, exactly like ``python cli.py serve`` at start-up.
+    """
+    proc = subprocess.run([PY, "-c", "import logging, cli\n" + textwrap.dedent(body)], cwd=ROOT,
+                          capture_output=True, encoding="utf-8", timeout=120,
+                          env=dict(os.environ, PYTHONIOENCODING="utf-8"))
+    assert proc.returncode == 0, proc.stderr[-2000:]
+    return proc.stdout.splitlines(), proc.stderr.splitlines()
+
+
+def test_configure_app_logging_prints_info_lines_once_with_time_level_and_logger():
+    stdout, stderr = _run_logging_script("""
+        print(cli.configure_app_logging())
+        logging.getLogger("elec_tool.assistant").info("assistant_route_decision trace_id=%s", "0123456789abcdef")
+        logging.getLogger("elec_tool.server").warning("警告行")
+        logging.getLogger("elec_tool.assistant").debug("调试行不输出")
+        logging.getLogger("uvicorn.error").info("别的记录器不受影响")
+        # 再调用一次（同一进程里再次进入 cmd_serve）：不装第二个 handler，同一行不会出现两次
+        print(cli.configure_app_logging("info"))
+        app = logging.getLogger("elec_tool")
+        print(len(app.handlers), app.propagate, logging.getLogger().handlers)
+        logging.getLogger("elec_tool.assistant.docs").info("第二次调用之后")
+    """)
+    assert stdout == ["installed", "updated", "1 True []"]
+    assert len(stderr) == 3, stderr
+    assert re.fullmatch(_LOG_LINE % ("INFO", r"elec_tool\.assistant",
+                                     "assistant_route_decision trace_id=0123456789abcdef"), stderr[0])
+    assert re.fullmatch(_LOG_LINE % ("WARNING", r"elec_tool\.server", "警告行"), stderr[1])
+    assert re.fullmatch(_LOG_LINE % ("INFO", r"elec_tool\.assistant\.docs", "第二次调用之后"), stderr[2])
+
+
+def test_configure_app_logging_level_can_be_raised_or_lowered():
+    stdout, stderr = _run_logging_script("""
+        cli.configure_app_logging("warning")
+        logging.getLogger("elec_tool.assistant").info("INFO 行不输出")
+        logging.getLogger("elec_tool.assistant").warning("WARNING 行输出")
+        print(cli.configure_app_logging("debug"))
+        logging.getLogger("elec_tool.server").debug("DEBUG 行输出")
+        try:
+            cli.configure_app_logging("verbose")
+        except ValueError as exc:
+            print("ValueError", exc)
+    """)
+    assert stdout[0] == "updated" and stdout[1].startswith("ValueError 日志级别必须是")
+    assert [line.split(" ", 2)[2] for line in stderr] == [
+        "WARNING elec_tool.assistant WARNING 行输出", "DEBUG elec_tool.server DEBUG 行输出"]
+
+
+def test_configure_app_logging_leaves_an_existing_logging_setup_alone():
+    """调用方已经配置过日志（根记录器上有 handler）时不再装 handler，同一行只由已有的 handler 输出一次。"""
+    stdout, stderr = _run_logging_script("""
+        logging.basicConfig(level=logging.WARNING, format="ROOT|%(levelname)s|%(name)s|%(message)s")
+        print(cli.configure_app_logging())
+        app = logging.getLogger("elec_tool")
+        print(app.handlers, app.level == logging.INFO)
+        logging.getLogger("elec_tool.assistant").info("只输出一次")
+    """)
+    assert stdout == ["external", "[] True"]
+    assert stderr == ["ROOT|INFO|elec_tool.assistant|只输出一次"]
+
+
+def _serve_and_chat(tmp_path, *extra_args):
+    """Run ``python cli.py serve`` for real, send one assistant question, return ``(trace_id, stderr_text)``."""
+    import shutil
+    import socket
+    import urllib.request
+
+    shutil.copy(os.path.join(ROOT, "configs", "default.json"), tmp_path / "cfg.json")
+    shutil.copy(os.path.join(ROOT, "configs", "branch.json"), tmp_path / "branch.json")
+    env = dict(os.environ, PYTHONIOENCODING="utf-8", ELEC_TOOL_AUTOSTART="", ELEC_TOOL_PERSIST_CONFIG="0",
+               ELEC_TOOL_RUN_DIRS="0", ELEC_TOOL_BRANCH_CONFIG_PATH=str(tmp_path / "branch.json"),
+               ELEC_TOOL_EVENTS_DIR=str(tmp_path / "ev"), ELEC_TOOL_REALTIME_DIR=str(tmp_path / "rt"),
+               ELEC_TOOL_NILM_DIR=str(tmp_path / "nilm"), ELEC_TOOL_OUTPUT_DIR=str(tmp_path / "output"),
+               ELEC_TOOL_LAST_RESULT_FILE=str(tmp_path / "last.json"),
+               ELEC_TOOL_ASSISTANT_DATA_DIR=str(tmp_path / "assistant"))
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+    base = f"http://127.0.0.1:{port}"
+    with open(tmp_path / "stdout.log", "w", encoding="utf-8") as out, \
+            open(tmp_path / "stderr.log", "w", encoding="utf-8") as err:
+        proc = subprocess.Popen([PY, os.path.join(ROOT, "cli.py"), "serve", "--host", "127.0.0.1", "--port", str(port),
+                                 "--config", str(tmp_path / "cfg.json"), *extra_args],
+                                cwd=str(tmp_path), env=env, stdout=out, stderr=err)
+        try:
+            deadline = time.time() + 60.0
+            while True:
+                try:
+                    with urllib.request.urlopen(base + "/api/health", timeout=2) as response:
+                        if response.status == 200:
+                            break
+                except OSError:
+                    pass
+                assert proc.poll() is None, "服务进程提前退出"
+                assert time.time() < deadline, "服务 60 秒内没有就绪"
+                time.sleep(0.1)
+            request = urllib.request.Request(
+                base + "/api/assistant/chat", headers={"Content-Type": "application/json"},
+                data=json.dumps({"prompt": "采样率默认是多少", "model_type": "builtin", "stream": False}).encode("utf-8"))
+            with urllib.request.urlopen(request, timeout=60) as response:
+                assert response.status == 200
+                trace_id = response.headers["X-Assistant-Trace-ID"]
+        finally:
+            proc.terminate()
+            proc.wait(timeout=30)
+    return trace_id, (tmp_path / "stderr.log").read_text(encoding="utf-8")
+
+
+def test_cli_serve_prints_assistant_route_logs_by_default(tmp_path):
+    """默认启动（不带任何日志参数）：每个问答请求的 INFO 路由日志出现在标准错误里，带时间、级别、记录器名。"""
+    trace_id, stderr = _serve_and_chat(tmp_path)
+    lines = stderr.splitlines()
+    for logger, message in ((r"elec_tool\.server", r"服务启动 version=\S+ pid=\d+ .*"),
+                            (r"elec_tool\.server", rf"assistant_chat_received trace_id={trace_id} .*"),
+                            (r"elec_tool\.assistant", rf"assistant_route_decision trace_id={trace_id} .*")):
+        matching = [line for line in lines if re.fullmatch(_LOG_LINE % ("INFO", logger, message), line)]
+        assert len(matching) == 1, (message, stderr[-3000:])          # 出现，而且只出现一次
+    # uvicorn 自己的日志仍由 --log-level 管（默认 warning），不会因此多出 uvicorn 的 INFO 行
+    assert "Uvicorn running" not in stderr and "Started server process" not in stderr
+
+
+def test_cli_serve_app_log_level_option_hides_info_lines(tmp_path):
+    """--app-log-level warning 回到只输出 WARNING 及以上；--log-level 与它互不影响。"""
+    trace_id, stderr = _serve_and_chat(tmp_path, "--app-log-level", "warning", "--log-level", "info")
+    assert trace_id and " INFO elec_tool." not in stderr
+    assert "assistant_route_decision" not in stderr and "服务启动 version=" not in stderr
+    assert "Uvicorn running on http://127.0.0.1:" in stderr       # uvicorn 的 INFO 行按 --log-level info 输出

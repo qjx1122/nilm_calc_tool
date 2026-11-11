@@ -18,6 +18,7 @@ import argparse
 import csv
 import dataclasses
 import json
+import logging
 import math
 import os
 import re
@@ -486,6 +487,47 @@ def cmd_resample(args: argparse.Namespace) -> int:
     return 0
 
 
+APP_LOG_LEVELS = ("debug", "info", "warning", "error", "critical")
+APP_LOG_FORMAT = "{asctime} {levelname} {name} {message}"
+_APP_LOG_HANDLER_NAME = "elec_tool.cli.stderr"
+
+
+def configure_app_logging(level: str = "info") -> str:
+    """让程序自己的日志（``elec_tool.*`` 记录器：智能问答路由日志、服务启动信息等）默认可见。
+
+    uvicorn 的 ``--log-level`` 只管 uvicorn 自己的记录器。程序的记录器原先没有配置输出：INFO 行
+    完全看不到，WARNING 及以上的行只有消息正文、没有时间和级别。这里把 ``elec_tool`` 记录器的级别
+    设为 ``level``，并给它装一个写标准错误的 handler，每行是“时间 级别 记录器名 消息”。
+
+    不会造成重复输出：
+
+    - 重复调用只更新级别，不装第二个 handler；
+    - ``elec_tool`` 记录器或根记录器上已经有别处装的 handler（例如调用方先执行过
+      ``logging.basicConfig``）时不再装，日志交给已有的 handler，这里只设置级别。
+
+    返回 ``"installed"``（新装了 handler）、``"updated"``（更新了此前装的 handler 的级别）或
+    ``"external"``（沿用外部已有的日志配置）。
+    """
+    name = str(level or "").strip().lower()
+    if name not in APP_LOG_LEVELS:
+        raise ValueError(f"日志级别必须是 {' / '.join(APP_LOG_LEVELS)} 之一（当前 {level!r}）")
+    numeric = getattr(logging, name.upper())
+    logger = logging.getLogger("elec_tool")
+    logger.setLevel(numeric)
+    for handler in logger.handlers:
+        if handler.get_name() == _APP_LOG_HANDLER_NAME:
+            handler.setLevel(numeric)
+            return "updated"
+    if logger.handlers or logging.getLogger().handlers:
+        return "external"
+    handler = logging.StreamHandler()          # 标准错误
+    handler.set_name(_APP_LOG_HANDLER_NAME)
+    handler.setLevel(numeric)
+    handler.setFormatter(logging.Formatter(APP_LOG_FORMAT, style="{"))
+    logger.addHandler(handler)
+    return "installed"
+
+
 def cmd_serve(args: argparse.Namespace) -> int:
     """启动 Web 界面（导航条 + 各电气量子界面 + 实时推送）。"""
     try:
@@ -493,6 +535,7 @@ def cmd_serve(args: argparse.Namespace) -> int:
     except ImportError:
         print("✗ 未安装 Web 依赖：pip install fastapi 'uvicorn[standard]'", file=sys.stderr)
         return 2
+    configure_app_logging(args.app_log_level)
     cfg = _apply_overrides(load_or_default(args.config), args)
     os.environ["ELEC_TOOL_CONFIG"] = json.dumps(cfg.to_dict(), ensure_ascii=False)
     os.environ["ELEC_TOOL_HOST"] = args.host
@@ -684,7 +727,11 @@ def build_parser() -> argparse.ArgumentParser:
     common(sp)
     sp.add_argument("--host", default="0.0.0.0")
     sp.add_argument("--port", type=int, default=8000)
-    sp.add_argument("--log-level", default="warning")
+    sp.add_argument("--log-level", default="warning",
+                    help="uvicorn 自身日志（启动信息、访问日志）的级别，默认 warning；不影响程序自己的日志")
+    sp.add_argument("--app-log-level", dest="app_log_level", choices=APP_LOG_LEVELS, default="info",
+                    help="程序自己的日志（elec_tool.* 记录器，含智能问答路由日志）输出到标准错误的最低级别，"
+                         "默认 info；每行带时间、级别、记录器名")
     sp.set_defaults(func=cmd_serve)
     return p
 
