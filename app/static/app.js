@@ -530,7 +530,7 @@ function renderZoomBar(cv) {
   const tip = bar.querySelector('.zoomtip');
   if (tip) {
     const movingHelp = '拖动图面 / 方向键 / ◀▶▲▼ 移动坐标轴';
-    tip.textContent = board ? (z ? movingHelp : '')
+    tip.textContent = board ? ''
       : z ? ('已缩放' + (z.x ? ' X' : '') + (z.y ? ' Y' : '') + '：' + movingHelp + '；在 X / Y 轴刻度带上拖选或 Ctrl+拖选再放大；双击复位') : '拖选区间＝只显示该区间（在 X / Y 轴刻度带上拖选＝只缩放该轴）';
   }
 }

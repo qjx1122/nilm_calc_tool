@@ -125,7 +125,7 @@ async function main() {
  const p = await boot(null); const {window, document, click, set, idle, mods, field, act} = p;
  const detail = (e) => window.WB.rt[e.dataset.wbId].detail;
  const dcv = (e) => document.getElementById('wb-detail-' + e.dataset.wbId);
- const checkBoardHelp = (el) => { const bars = [...el.querySelectorAll('.zoombar')]; return bars.length > 0 && [...el.querySelectorAll('.serlegend')].every(legend => !/(显示|缩放|移动)：/.test(legend.textContent)) && bars.every(bar => { const tip = bar.querySelector('.zoomtip').textContent, zoom = window.ZOOM[bar.dataset.chart]; return !bar.querySelector('.panlbl') && !/拖选|缩放|复位/.test(tip) && (zoom ? /拖动图面.*移动坐标轴/.test(tip) : tip === '') && [...bar.querySelectorAll('.pan-btn')].length === 4 && [...bar.querySelectorAll('.pan-btn')].every(btn => /移动/.test(btn.getAttribute('title') || '') && /平移/.test(btn.getAttribute('aria-label') || '')); }); };
+ const checkBoardHelp = (el) => { const bars = [...el.querySelectorAll('.zoombar')]; return bars.length > 0 && [...el.querySelectorAll('.serlegend')].every(legend => !/(显示|缩放|移动)：/.test(legend.textContent)) && bars.every(bar => { const tip = bar.querySelector('.zoomtip').textContent; return !bar.querySelector('.panlbl') && tip === '' && [...bar.querySelectorAll('.pan-btn')].length === 4 && [...bar.querySelectorAll('.pan-btn')].every(btn => /移动/.test(btn.getAttribute('title') || '') && /平移/.test(btn.getAttribute('aria-label') || '')); }); };
  const ctx = (cv, shift = false, frac = 0.5) => {
    const c = cv.__chart; cv.getBoundingClientRect = () => ({left: 0, top: 0, width: c.w, height: c.h});
    const ev = new window.MouseEvent('contextmenu', {bubbles: true, cancelable: true, button: 2, clientX: c.pad.l + (c.w - c.pad.l - c.pad.r)*frac, clientY: 100, shiftKey: shift});
@@ -156,17 +156,17 @@ async function main() {
   check('两图各有显示和缩放移动控件', () => mainLegend.querySelector('.ser-vis') && detailLegend.querySelector('.ser-vis') && mainLegend.querySelector('[data-z="x-"]') && detailLegend.querySelector('[data-z="pr"]'));
   cv.getBoundingClientRect = () => ({left:0, top:0, width:cv.__chart.w, height:cv.__chart.h});
   cv.dispatchEvent(new window.WheelEvent('wheel', {bubbles:true,cancelable:true,clientX:160,clientY:80,deltaY:-100}));
-  check('鼠标滚轮缩放后不显示拖选和缩放说明，仍保留移动说明', () => !!window.ZOOM[cv.id]?.x && checkBoardHelp(off));
+  check('鼠标滚轮缩放后不显示拖选、缩放或移动说明', () => !!window.ZOOM[cv.id]?.x && checkBoardHelp(off));
   click(mainLegend.querySelector('[data-z="reset"]'));
   click(mainLegend.querySelector('[data-z="x-"]')); const mainZoom = JSON.stringify(window.ZOOM[cv.id]);
   check('主图缩放不影响周波图', () => !!window.ZOOM[cv.id].x && !window.ZOOM[dcv(off).id]);
-  check('主图放大后显示移动说明，无拖选和缩放说明', () => { const tip = mainLegend.querySelector('.zoomtip').textContent; return /拖动图面.*移动坐标轴/.test(tip) && !/拖选|缩放|复位/.test(tip) && mainLegend.querySelector('[data-z=pr]') && !mainLegend.querySelector('[data-z=pr]').disabled; });
-  check('主图放大后保留移动说明、悬停说明和方向无障碍名称', () => checkBoardHelp(off));
+  check('主图放大后无操作说明，移动按钮仍可用', () => mainLegend.querySelector('.zoomtip').textContent === '' && mainLegend.querySelector('[data-z=pr]') && !mainLegend.querySelector('[data-z=pr]').disabled);
+  check('主图放大后无操作说明，保留悬停说明和方向无障碍名称', () => checkBoardHelp(off));
   click(detailLegend.querySelector('[data-z="x-"]')); const beforePan = window.ZOOM[dcv(off).id].x[0]; click(detailLegend.querySelector('[data-z="pr"]'));
   check('周波图独立缩放移动不影响主图', () => window.ZOOM[dcv(off).id].x[0] > beforePan && JSON.stringify(window.ZOOM[cv.id]) === mainZoom);
   [cv, dcv(off)].forEach(c => { c.getBoundingClientRect = () => ({left:0, top:0, width:c.__chart.w, height:c.__chart.h}); c.dispatchEvent(new window.MouseEvent('mousemove', {bubbles:true, clientX:120, clientY:80})); });
   check('主图和周波图悬停取值保持可用', () => cv.__hoverInfo?.items.length === 3 && dcv(off).__hoverInfo?.items.length === 3);
-  check('周波图放大后显示移动说明但没有拖选和缩放说明', () => {const tip = detailLegend.querySelector('.zoomtip').textContent; return /拖动图面.*移动坐标轴/.test(tip) && !/拖选|缩放|复位/.test(tip);});
+  check('周波图放大后不显示拖选、缩放或移动说明', () => detailLegend.querySelector('.zoomtip').textContent === '');
   const other = document.createElement('canvas'); other.id='r217-other'; document.body.appendChild(other); window.drawLine(other,[{name:'test', data:[[0,1],[1,2]]},{name:'test2',data:[[0,2],[1,3]]}],{height:200}); click(other.__zoombar.querySelector('[data-z="x-"]'));
   check('其他曲线仍显示原移动说明与按钮悬停提示', () => /拖动图面.*移动坐标轴/.test(other.__zoombar.querySelector('.zoomtip').textContent) && ['显示：','缩放：','移动：'].every(x=>other.__legend.textContent.includes(x)) && /向右移动/.test(other.__zoombar.querySelector('[data-z=pr]').title)); other.remove();
   click(detailLegend.querySelector('[data-z="reset"]')); click(mainLegend.querySelector('[data-z="reset"]'));
