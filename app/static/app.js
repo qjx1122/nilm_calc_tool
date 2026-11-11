@@ -4842,6 +4842,7 @@ const WB_OFFLINE_CHARTS = { u: { label: '电压有效值', what: '电压', unit:
 const WB_OFFLINE_CYCLES = '10';          // 每个点的周波数默认值（50 Hz 下是 0.2 秒）
 const WB_OFFLINE_MAX_POINTS = 20000;     // 离线曲线的点数上限默认值（超出时服务端自动加大每个点的周波数）
 const WB_MONITOR_MAX_POINTS = 5000;
+const WB_DETAIL_MAX_SAMPLES = 200000; // 限制单次瞬时值响应，超限时要求缩小周波窗
 /* 表单控件（data-wb-f）→ 模块配置里的位置 */
 const WB_FIELDS = {
   'off-path': ['offline', 'path'], 'off-tstart': ['offline', 't_start'], 'off-tend': ['offline', 't_end'], 'off-cycles': ['offline', 'cycles'],
@@ -4849,32 +4850,35 @@ const WB_FIELDS = {
   'off-utc': ['offline', 'utc'], 'off-maxpts': ['offline', 'max_points'],
   'mon-path': ['monitor', 'path'], 'mon-quantity': ['monitor', 'quantity'], 'mon-source': ['monitor', 'source'], 'mon-run': ['monitor', 'run'],
   'mon-last': ['monitor', 'last_min'], 'mon-tstart': ['monitor', 't_start'], 'mon-tend': ['monitor', 't_end'], 'mon-refresh': ['monitor', 'refresh_s'],
+  'mon-raw-path': ['monitor', 'raw_path'], 'mon-raw-pt': ['monitor', 'raw_pt'], 'mon-raw-ct': ['monitor', 'raw_ct'],
+  'mon-raw-fnom': ['monitor', 'raw_f_nom'], 'mon-raw-utc': ['monitor', 'raw_utc'],
 };
 const WB = { modules: [], seq: 1, layout: 1, rt: {}, offlineFiles: [], monitorFiles: [], listedAt: 0, defaults: null, chain: Promise.resolve(), timer: null, inited: false,
              away: false, stale: false, drawnWidth: -1 };
 window.WB = WB;
 
 function wbBlankOffline() { return { path: '', t_start: '', t_end: '', cycles: WB_OFFLINE_CYCLES, show: 'both', pt: '', ct: '', f_nom: '', utc: '', max_points: '' }; }
-function wbBlankMonitor() { return { path: '', quantity: '', source: '', run: 'latest', last_min: '', t_start: '', t_end: '', refresh_s: '0' }; }
+function wbBlankMonitor() { return { path: '', quantity: '', source: '', run: 'latest', last_min: '', t_start: '', t_end: '', refresh_s: '0', raw_path: '', raw_pt: '', raw_ct: '', raw_f_nom: '', raw_utc: '' }; }
 /* 一条模块记录（来自本地存储，或复制时的原模块）→ 字段齐全、取值合法的新记录；不认识的字段丢掉，id 由调用方给 */
 function wbNormalize(raw) {
   raw = (raw && typeof raw === 'object') ? raw : {};
   const str = (v, max = 500) => (v === null || v === undefined) ? '' : String(v).slice(0, max);
   const oneOf = (v, list, dflt) => (list.includes(v) ? v : dflt);
   const m = { id: '', type: raw.type === 'monitor' ? 'monitor' : 'offline', title: str(raw.title, 80), collapsed: !!raw.collapsed, more: !!raw.more,
-              offline: wbBlankOffline(), monitor: wbBlankMonitor(), hidden: {} };
-  ['offline', 'monitor'].forEach(part => {
+              offline: wbBlankOffline(), monitor: wbBlankMonitor(), detail: { cycles: '50' }, hidden: {} };
+  ['offline', 'monitor', 'detail'].forEach(part => {
     const src = (raw[part] && typeof raw[part] === 'object') ? raw[part] : {};
     Object.keys(m[part]).forEach(k => { if (src[k] !== undefined && src[k] !== null) m[part][k] = str(src[k]).trim(); });
   });
   m.offline.show = oneOf(m.offline.show, ['both', 'u', 'i'], 'both');
   m.offline.utc = oneOf(m.offline.utc, ['', '0', '1'], '');
+  m.monitor.raw_utc = oneOf(m.monitor.raw_utc, ['', '0', '1'], '');
   m.monitor.quantity = oneOf(m.monitor.quantity, [''].concat(WB_QUANTITIES.map(q => q[0])), '');
   m.monitor.source = oneOf(m.monitor.source, ['', '0', '1'], '');
   m.monitor.refresh_s = oneOf(m.monitor.refresh_s, WB_REFRESH.map(r => r[0]), '0');
   if (!m.monitor.run) m.monitor.run = 'latest';
   if (raw.hidden && typeof raw.hidden === 'object') {        // 图例里取消勾选的曲线名，按图分开记：u 电压图 / i 电流图 / m 监测曲线图
-    ['u', 'i', 'm'].forEach(k => { if (Array.isArray(raw.hidden[k])) m.hidden[k] = raw.hidden[k].slice(0, 16).map(x => str(x, 20)); });
+    ['u', 'i', 'm', 'detail'].forEach(k => { if (Array.isArray(raw.hidden[k])) m.hidden[k] = raw.hidden[k].slice(0, 16).map(x => str(x, 20)); });
   }
   return m;
 }
@@ -4954,6 +4958,16 @@ function wbFormHtml(m) {
           <label title="只显示最后这么多分钟的数据（从文件里最新的一个点往前算）；空＝全部"><span class="lbl">只看最近（分钟，空＝全部）</span><input data-wb-f="mon-last" type="number" min="0" step="any" value="${esc(n.last_min)}" placeholder="全部"></label>
           <span></span>
         </div>
+        <label title="监测文件不含采样点。选择与该侧、该运行批次及数据时刻对应的原始波形文件"><span class="lbl">周波曲线用原始波形 CSV 路径</span><input data-wb-f="mon-raw-path" value="${esc(n.raw_path)}" placeholder="原始波形文件路径（不填则无法查看周波）"></label>
+        <div class="row2">
+          <label><span class="lbl">原始波形 PT 变比</span><input data-wb-f="mon-raw-pt" type="number" min="0.000001" step="any" value="${esc(n.raw_pt)}" placeholder="空＝出厂配置"></label>
+          <label><span class="lbl">原始波形 CT 变比</span><input data-wb-f="mon-raw-ct" type="number" min="0.000001" step="any" value="${esc(n.raw_ct)}" placeholder="空＝出厂配置"></label>
+        </div>
+        <div class="row2">
+          <label><span class="lbl">原始波形额定频率 (Hz)</span><input data-wb-f="mon-raw-fnom" type="number" min="1" step="any" value="${esc(n.raw_f_nom)}" placeholder="空＝出厂配置"></label>
+          <label><span class="lbl">原始波形时标为 UTC</span><select data-wb-f="mon-raw-utc">${wbOptions([['', '按出厂配置'], ['1', '是'], ['0', '否']], n.raw_utc)}</select></label>
+        </div>
+        <div class="notes">请自行确认原始文件与监测曲线的侧别、批次、时间和口径一致；系统无法自动证明它们属于同一次运行。</div>
       </div>
       <div class="btnrow">
         <button type="button" class="primary" data-wb-act="load">加载曲线</button>
@@ -5033,6 +5047,7 @@ function wbReadForm(m) {                   // 表单 → 模块配置（只有�
     const f = inp.dataset.wbF, map = WB_FIELDS[f], v = String(inp.value === undefined || inp.value === null ? '' : inp.value).trim();
     if (map) m[map[0]][map[1]] = v;
     else if (f === 'title') m.title = v.slice(0, 80);
+    else if (f === 'detail-cycles') m.detail.cycles = v;
   });
 }
 function wbSetStatus(m, html, cls) {
@@ -5101,6 +5116,8 @@ function wbMount(m) {                      // 建出模块的页面元素，放�
       </span>
     </h3>
     <div class="wb-body"><div class="form wb-form"></div><div class="wb-charts"></div></div>
+    <div class="wb-detail-controls"><label>周波窗周波数 <input data-wb-f="detail-cycles" type="number" min="1" max="1000" step="1" value="${esc(m.detail.cycles)}"></label><span class="notes">在曲线上右键显示瞬时采样或逐周波有效值</span></div>
+    <div class="wb-detail" hidden><div class="wb-detail-head"><strong class="wb-detail-title"></strong><button type="button" data-wb-act="detail-close">关闭周波曲线</button></div><div class="notes wb-detail-status"></div><div class="wb-detail-chart"></div></div>
     <div class="notes wb-status"></div>`;
   host.insertBefore(el, host.children[WB.modules.indexOf(m)] || null);
   wbRenderForm(m); wbRenderCharts(m); wbRenderHead(m); wbDraw(m);
@@ -5154,11 +5171,17 @@ function wbBindCanvas(m, key, cv) {
     wbSave();
     if (cv.__redraw) cv.__redraw();
   };
-  bindCtxMenu(cv, () => canvasNativeItems(cv).concat([
+  bindCtxMenu(cv, (xEpoch) => {
+    const missing = m.type === 'monitor' && !m.monitor.raw_path.trim();
+    const unavailable = !wbData(m) || !isNum(xEpoch) || missing;
+    const why = missing ? '请先在更多选项配置对应的原始波形 CSV' : '请先加载曲线';
+    return canvasNativeItems(cv).concat([
     { key: 'sep', sep: true },
+    { key: 'show-window2', label: '显示周波瞬时采样曲线', disabled: unavailable, hint: unavailable ? why : '以所选时刻为中心读取原始采样', onClick: () => wbLoadDetail(m, key, xEpoch, 'wave') },
+    { key: 'show-window', label: '显示周波有效值曲线', disabled: unavailable, hint: unavailable ? why : '以所选时刻为中心读取逐周波有效值', onClick: () => wbLoadDetail(m, key, xEpoch, 'rms') },
     { key: 'zoom-reset', label: '复位缩放', onClick: () => zoomReset(cv) },
     { key: 'native', label: '浏览器原生菜单（Shift + 右键）', disabled: true },
-  ]));
+  ]); });
 }
 /* 一张图的曲线数据。同一次读取的结果只整理一遍：引擎运行时整个页面每 0.2 秒重画一次，不能每次都把几万个点重新排一遍 */
 function wbSeries(m, ch, d) {
@@ -5198,9 +5221,91 @@ function wbDraw(m) {
     // ownRange：时间轴按这个文件自己的数据，不套用两侧播放的「公共时间段」（那是给跟随播放的趋势图用的）
     drawLine(cv, series, { fmtX: x => tsX(x + t0, span), fmtTip: x => fmtLocalInput(x + t0), tbase: t0, height: ch.height, ownRange: true });
   });
+  wbDrawDetail(m);
   wbRenderHead(m);
 }
 function wbDrawAll() { WB.modules.forEach(wbDraw); }
+
+/* ---- 右键周波曲线：各模块独立，沿用波形文件只读接口 ---- */
+function wbClearDetail(m) {
+  const rt = wbRt(m); rt.detailToken = (rt.detailToken || 0) + 1; rt.detail = null;
+  const el = wbEl(m), box = el && el.querySelector('.wb-detail');
+  if (box) { box.hidden = true; box.querySelector('.wb-detail-chart').replaceChildren(); }
+  delete ZOOM['wb-detail-' + m.id];
+}
+function wbDrawDetail(m) {
+  const rt = wbRt(m), d = rt.detail, el = wbEl(m), cv = document.getElementById(`wb-detail-${m.id}`);
+  if (!d || !el || !cv || !d.data || !d.data.t || !d.data.t.length) return;
+  const t0 = d.data.t[0], span = d.data.t[d.data.t.length - 1] - t0;
+  const channels = d.data.channels || {};
+  const names = Object.keys(channels).filter(k => Array.isArray(channels[k]));
+  cv.__hiddenOwn = cv.__hiddenOwn || [];
+  if (!d.series) d.series = names.map(k => ({name: k, color: wbColor(k), data: d.data.t.map((t, i) => [t - t0, channels[k][i]])}));
+  const hasU = names.some(name => name[0] === 'U'), hasI = names.some(name => name[0] === 'I');
+  drawLine(cv, d.series,
+    { ylabel: hasU && hasI ? 'V / A' : hasU ? 'V' : 'A', fmtX: x => tsX(x + t0, span), fmtTip: x => fmtLocalInput(x + t0), tbase: t0, height: 240, ownRange: true });
+  bindCtxMenu(cv, () => canvasNativeItems(cv).concat([{sep: true},
+    {key: 'zoom-reset', label: '复位缩放', onClick: () => zoomReset(cv)},
+    {key: 'native', label: '浏览器原生菜单（Shift + 右键）', disabled: true}]));
+}
+function wbLoadDetail(m, key, center, kind) {
+  wbReadForm(m); wbSave();
+  const rt = wbRt(m), el = wbEl(m), box = el && el.querySelector('.wb-detail');
+  if (!box || !wbData(m) || !isNum(center)) return Promise.resolve(false);
+  const n = Number(m.detail.cycles);
+  if (!Number.isInteger(n) || n < 1 || n > 1000) { toast('周波窗周波数须为 1～1000 的整数', 'err'); return Promise.resolve(false); }
+  const source = m.type === 'offline' ? rt.loadedOffline : {path: m.monitor.raw_path, pt_ratio: m.monitor.raw_pt, ct_ratio: m.monitor.raw_ct,
+    f_nom: m.monitor.raw_f_nom, file_time_utc: m.monitor.raw_utc};
+  if (!source || !source.path) { toast('请先配置对应的原始波形 CSV', 'err'); return Promise.resolve(false); }
+  const params = {path: source.path, f_nom: source.f_nom, pt_ratio: source.pt_ratio, ct_ratio: source.ct_ratio, file_time_utc: source.file_time_utc};
+  const type = m.type, quantity = (wbData(m) || {}).quantity, token = rt.detailToken = (rt.detailToken || 0) + 1;
+  const valid = () => wbAlive(m) && m.type === type && rt.detailToken === token;
+  const status = el.querySelector('.wb-detail-status');
+  rt.detail = null; box.hidden = false; el.querySelector('.wb-detail-title').textContent = kind === 'wave' ? '周波瞬时采样曲线' : '周波有效值曲线';
+  status.textContent = '排队读取原始波形…';
+  const detailChart = el.querySelector('.wb-detail-chart'); detailChart.replaceChildren();
+  const cv = document.createElement('canvas'); cv.id = 'wb-detail-' + m.id; cv.height = 240; detailChart.appendChild(cv);
+  cv.__hiddenOwn = m.hidden.detail || [];
+  cv.__onSeriesToggle = (name, on) => { const hidden = new Set(cv.__hiddenOwn); if (on) hidden.delete(name); else hidden.add(name); m.hidden.detail = cv.__hiddenOwn = [...hidden]; wbSave(); if (cv.__redraw) cv.__redraw(); };
+  drawLine(cv, [], {empty: '读取中…', height: 240});
+  const job = async () => {
+    if (!valid()) return false;
+    try {
+      status.textContent = '读取原始波形文件信息…';
+      const info = await api('/api/process/wave/info?' + wpQuery(params), undefined, 'bus');
+      if (!valid()) return false;
+      if (!isNum(info.t_start) || !isNum(info.t_end) || center < info.t_start || center > info.t_end)
+        throw new Error('所选时刻不在原始波形文件时间范围内，请核对文件、侧别和时标');
+      const freq = Number(info.f_nom), fs = Number(info.fs);
+      if (!(freq > 0 && fs > 0)) throw new Error('原始波形采样率或额定频率无效');
+      if (kind === 'wave' && Math.ceil(n * fs / freq) + 1 > WB_DETAIL_MAX_SAMPLES)
+        throw new Error(`采样点超过 ${WB_DETAIL_MAX_SAMPLES}，请减少周波窗周波数`);
+      const dur = n / freq;
+      let start = center - dur / 2, end = center + dur / 2;
+      if (start < info.t_start) { start = info.t_start; end = start + dur; }
+      if (end > info.t_end) { end = info.t_end; start = Math.max(info.t_start, end - dur); }
+      const chans = type === 'offline' && key === 'u' ? 'Ua,Ub,Uc' : type === 'offline' && key === 'i' ? 'Ia,Ib,Ic'
+        : (quantity === 'voltage' ? 'Ua,Ub,Uc' : quantity === 'current' ? 'Ia,Ib,Ic' : '');
+      const q = Object.assign({}, params, {t_start: start.toFixed(6), t_end: end.toFixed(6), channels: chans});
+      if (kind === 'rms') { q.agg_cycles = 1; q.max_points = 1000; }
+      else q.max_points = WB_DETAIL_MAX_SAMPLES;
+      status.textContent = '读取周波曲线…';
+      const data = await api('/api/process/wave/' + (kind === 'wave' ? 'load' : 'rms') + '?' + wpQuery(q), undefined, 'bus');
+      if (!valid()) return false;
+      if (!data.t || !data.t.length) throw new Error('所选时段没有可显示的数据');
+      rt.detail = {data, kind, center, source: source.path}; delete ZOOM[cv.id];
+      status.textContent = `原始文件：${source.path}；所选时刻 ${fmtLocalInput(center)}；${kind === 'wave' ? '瞬时采样' : '逐周波有效值'} ${data.n} 点；实际 ${fmtLocalInput(data.t[0])} → ${fmtLocalInput(data.t[data.t.length - 1])}` + ((data.notes || []).length ? '；' + data.notes.join('；') : '') + (type === 'monitor' ? '；请核对文件与监测曲线的侧别、批次及口径' : '');
+      wbDrawDetail(m);
+      if (box.scrollIntoView) box.scrollIntoView({block: 'nearest'});
+      return true;
+    } catch (err) {
+      if (valid()) { status.textContent = '周波曲线读取失败：' + err.message; drawLine(cv, [], {empty: '读取失败（原因见上方）', height: 240}); }
+      return false;
+    }
+  };
+  rt.detailPromise = WB.chain = WB.chain.then(job, job);
+  return rt.detailPromise;
+}
 
 /* ---- 读文件 ---- */
 function wbOfflineQuery(m) {
@@ -5264,7 +5369,9 @@ function wbLoad(m, opt = {}) {
       wbDraw(m);
       const d = await api(rt.url, undefined, 'bus');
       if (!wbAlive(m) || m.type !== type) return false;                          // 读取期间模块被删，或换了数据源类型：结果作废
+      if (!opt.auto) wbClearDetail(m);
       rt.data = d; rt.dataType = type; rt.failed = false; rt.at = Date.now();
+      rt.loadedOffline = type === 'offline' ? Object.fromEntries(new URLSearchParams(rt.url.split('?')[1])) : null;
       if (!opt.auto) wbCharts(m).forEach(c => { const cv = wbCanvas(m, c.key); if (cv) delete ZOOM[cv.id]; });
       if (type === 'monitor') wbFillRunSelect(m);
       const s = wbDescribe(m, d); wbSetStatus(m, s.html, s.cls);
@@ -5323,6 +5430,7 @@ function wbOnClick(ev) {
   const m = wbModuleOf(btn); if (!m) return;
   switch (btn.dataset.wbAct) {
     case 'load': wbLoad(m); break;
+    case 'detail-close': wbClearDetail(m); break;
     case 'info': wbFileInfo(m, false); break;
     case 'files': wbListFiles(m.type, true); break;
     case 'more': m.more = !m.more; wbSave(); wbSyncMore(m); break;
@@ -5340,7 +5448,7 @@ function wbOnChange(ev) {
   if (f === 'type') {                                        // 换数据源类型：两种类型各自的配置都保留，表单和画布按新类型重建
     wbReadForm(m);
     m.type = inp.value === 'monitor' ? 'monitor' : 'offline';
-    const rt = wbRt(m); rt.data = null; rt.seriesFor = null; rt.series = {}; rt.failed = false;
+    const rt = wbRt(m); rt.data = null; rt.seriesFor = null; rt.series = {}; rt.failed = false; wbClearDetail(m);
     wbSave(); wbSetStatus(m, ''); wbRenderForm(m); wbRenderCharts(m); wbRenderHead(m); wbDraw(m);
     if (wbCfg(m).path.trim()) wbLoad(m, { quiet: true });
     return;
@@ -5367,13 +5475,16 @@ function wbOnChange(ev) {
   wbSave(); wbRenderHead(m);
   if (f === 'off-show') { wbRenderCharts(m); wbDraw(m); return; }
   if (f === 'mon-refresh') { wbRt(m).nextAt = 0; return; }
+  if (f === 'detail-cycles' || f.startsWith('mon-raw-')) { wbClearDetail(m); return; }
   if (m.type === 'monitor' && f !== 'title' && m.monitor.path && JSON.stringify(wbCfg(m)) !== before) wbLoad(m);
 }
 function wbOnKeydown(ev) {                                   // 在输入框里按回车＝加载曲线
   const inp = ev.target;
   if (ev.key !== 'Enter' || !inp || inp.tagName !== 'INPUT' || !inp.dataset || !inp.dataset.wbF || inp.dataset.wbF === 'title') return;
   const m = wbModuleOf(inp); if (!m) return;
-  ev.preventDefault(); wbLoad(m);
+  ev.preventDefault();
+  if (inp.dataset.wbF === 'detail-cycles' || inp.dataset.wbF.startsWith('mon-raw-')) { wbReadForm(m); wbSave(); wbClearDetail(m); return; }
+  wbLoad(m);
 }
 function wbShown() { return S.view === 'process' && PROCESS_SUBVIEW === 'wave-board' && !document.hidden; }
 function wbTick() {                                          // 每秒一次（只在本子界面显示时做事）：核对宽度；到点的实时监测模块自动重新读取
