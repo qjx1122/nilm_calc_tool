@@ -92,7 +92,7 @@ New-Item -ItemType Directory -Force output | Out-Null
 .\.venv\Scripts\python.exe tools\nilm_tune.py --file data\bus_bg.csv --config configs\default.json --min-load-w 300000 --json > output\tune.json
 ```
 
-**（v0.52）不想开命令行？** 同样的功能在 Web 界面「🧮 数据处理 → 负荷辨识调参」里：选波形文件（或手填路径）→ 可选填**起始时间 / 结束时间（或时长）**（都留空＝整个文件；v0.73 可勾选「启用自定义时间」：与「波形分析」子界面（v0.99.50 之前叫「波形预览」）同一套——时间轴＝自定义起始时间 + 行号/采样率，文件时长＝数据点数 / 采样率，起止写法 `2026-10-12 08:00:00` / epoch 秒 / `08:00:00`；CLI 对应 `--custom-time --custom-time-start --custom-time-end`）→ 基准配置（v0.72 默认**独立基准配置**：出厂配置 + 本页的 fs / f_nom / PT·CT / 时标 UTC，与两侧运行配置互不关联、可单独修改，并写到 `output\nilm\nilm_tune_base.json` 供 `--config` 复现；也可改选沿用总线侧 / 分路侧运行配置，决定 PT/CT 与列映射；此时检测量 / 检测对象随该侧 `nilm.quantity` / `nilm.channels[0]`，界面上不可改，只有独立基准配置下可单独选择）→ 填最小关心负荷 → 「量噪声并给出参数」。结果表与本节命令输出一一对应；勾选「保存为配置文件」才会在基准配置（独立基准配置，或所选侧原配置文件 `runtime.json` / `branch_runtime.json`）基础上只更新算法参数、其它不变，把完整配置写到 `output\nilm\`（文件名可填，默认 `tune_{时间}.json`，默认**不保存**，原配置文件不改动）；「套用到运行配置」＝ §7-2′ 的一键热生效（v0.72 由「套用目标」下拉选总线侧 / 分路侧，与基准配置无关）。详见附录 H.13。
+**（v0.52）不想开命令行？** 同样的功能在 Web 界面「🧮 数据处理 → 负荷辨识调参」里：选波形文件（或手填路径）→ 可选填**起始时间 / 结束时间（或时长）**（都留空＝整个文件；v0.73 可勾选「启用自定义时间」：与「波形分析」子界面（v0.99.50 之前叫「波形预览」；v0.99.51 新增的「🧩 波形预览」是另一个子界面）同一套——时间轴＝自定义起始时间 + 行号/采样率，文件时长＝数据点数 / 采样率，起止写法 `2026-10-12 08:00:00` / epoch 秒 / `08:00:00`；CLI 对应 `--custom-time --custom-time-start --custom-time-end`）→ 基准配置（v0.72 默认**独立基准配置**：出厂配置 + 本页的 fs / f_nom / PT·CT / 时标 UTC，与两侧运行配置互不关联、可单独修改，并写到 `output\nilm\nilm_tune_base.json` 供 `--config` 复现；也可改选沿用总线侧 / 分路侧运行配置，决定 PT/CT 与列映射；此时检测量 / 检测对象随该侧 `nilm.quantity` / `nilm.channels[0]`，界面上不可改，只有独立基准配置下可单独选择）→ 填最小关心负荷 → 「量噪声并给出参数」。结果表与本节命令输出一一对应；勾选「保存为配置文件」才会在基准配置（独立基准配置，或所选侧原配置文件 `runtime.json` / `branch_runtime.json`）基础上只更新算法参数、其它不变，把完整配置写到 `output\nilm\`（文件名可填，默认 `tune_{时间}.json`，默认**不保存**，原配置文件不改动）；「套用到运行配置」＝ §7-2′ 的一键热生效（v0.72 由「套用目标」下拉选总线侧 / 分路侧，与基准配置无关）。详见附录 H.13。
 
 **（v0.50）想一步到位、直接得到"套好参数的完整配置"**：加 `--apply`。脚本会在**当前运行配置**（`--config` 指定的文件；不填时取界面保存的 `configs\runtime.json`，没有则 `configs\default.json`）基础上只替换 `nilm.quantity / rel_tol_pct / min_delta_pct` 和 6 种算法的建议参数，其余（PT/CT、列映射、输出目录、各算法 `enabled`、建议里没给的键）一律保留，把更新后的**完整配置**写到输出目录 `output\nilm\nilm_tuned_config_<时间戳>.json`；**默认不改配置文件本身**：
 
@@ -705,7 +705,7 @@ Invoke-RestMethod -Method Put -Uri http://localhost:8000/api/branch/config -Cont
 
 **(a) 画像是什么**（`build_profile`，设备侧离线一次性完成）
 
-1. 用与调参 / 波形分析（原名「波形预览」）同一套基准配置（PT/CT、列映射、自定义时间）回放设备侧文件，得到逐周波 `P / Q / Ia / Ib / Ic`（口径同 G.0）。
+1. 用与调参 / 波形分析（v0.99.50 之前叫「波形预览」；不是 v0.99.51 新增的「🧩 波形预览」子界面）同一套基准配置（PT/CT、列映射、自定义时间）回放设备侧文件，得到逐周波 `P / Q / Ia / Ib / Ic`（口径同 G.0）。
 2. **定位每次启停**：有标签 → 在标签 ± `label_tol_s`（默认 2 s）内找"前窗（`pre_cycles`）中位数 vs 紧随其后 5 周波的最小偏离"最大的周波，再取第一个得分 ≥ 0.5×最大的周波作起点（台阶恰为跳变周波、斜坡落在坡脚）；无标签 → `steady_state` + 自适应参数（G.6 / 附录 E）找台阶，ΔP > 0 记为启动、< 0 记为停止。
 3. **每次事件取特征向量**（v0.99.26 起 8 维）`FEATURES = [d_ia, d_ib, d_ic, d_p, d_q, peak_ratio, dur_cycles, d_ih]`：
    - `d_*` ＝ 事件后窗 `[end, end+post_cycles)` 的中位数 − 事件前窗 `[onset−pre_cycles, onset)` 的中位数（前后差分，不受基荷影响）；
