@@ -533,6 +533,7 @@ function renderZoomBar(cv) {
 /* 公共时间段模式：时间轴固定为 [公共起点, 公共终点]（相对 tbase），段外的点不画 —— 两侧、各子界面坐标轴一致 */
 function commonWindowX(opt) {
   const cw = (S.state || {}).common_window;
+  if (opt.ownRange) return null;                         // v0.99.51：这张图显示的是另选的文件（波形预览的模块），时间轴按它自己的数据
   if (!cw || !cw.enabled || opt.tbase === undefined || !isNum(opt.tbase)) return null;
   return [cw.t_start - opt.tbase, (isNum(cw.play_end) ? cw.play_end : cw.t_end) - opt.tbase];
 }
@@ -557,6 +558,7 @@ function chartSig(cv, series, opt) {
 const SER_NONE = '*none*';
 function seriesHiddenSet(cv, series) {
   const id = cv && cv.id; if (!id) return new Set();
+  if (cv.__hiddenOwn) return new Set(cv.__hiddenOwn);       // v0.99.51：这张图自己保管勾选状态（波形预览的模块），不读运行配置
   const ser = series || (cv && cv.__series) || [];
   const local = S.seriesLocal && S.seriesLocal[id];
   const m = ((((S.state || {}).config || {}).output || {}).series_hidden) || {};
@@ -576,11 +578,12 @@ function renderSeriesLegend(cv, series, hidden) {
   }
   cv.__legendKey = key;
   cv.__legend.innerHTML = '<span class="muted">显示：</span>' + series.filter(s => s && s.name).map(s =>
-    `<label class="${hidden.has(s.name) ? 'off' : ''}" title="勾选＝显示该曲线；取消＝隐藏（已保存到配置）"><input type="checkbox" class="ser-vis" data-chart="${esc(cv.id)}" data-name="${esc(s.name)}" ${hidden.has(s.name) ? '' : 'checked'}><i style="background:${s.color || '#4ea1ff'}"></i>${esc(s.name)}</label>`).join('');
+    `<label class="${hidden.has(s.name) ? 'off' : ''}" title="勾选＝显示该曲线；取消＝隐藏（${cv.__hiddenOwn ? '保存在这个预览模块的配置里' : '已保存到配置'}）"><input type="checkbox" class="ser-vis" data-chart="${esc(cv.id)}" data-name="${esc(s.name)}" ${hidden.has(s.name) ? '' : 'checked'}><i style="background:${s.color || '#4ea1ff'}"></i>${esc(s.name)}</label>`).join('');
   if (cv.__zoombar) cv.__legend.appendChild(cv.__zoombar);
 }
 async function setSeriesVisible(chartId, name, on) {
   const cv = document.getElementById(chartId); if (!cv) return;
+  if (cv.__onSeriesToggle) { cv.__onSeriesToggle(name, on); return; }   // v0.99.51：这张图自己保管勾选状态，不写运行配置
   const cur = seriesHiddenSet(cv);
   if (on) cur.delete(name); else cur.add(name);
   const list = [...cur];
@@ -2700,7 +2703,7 @@ function render() {
       case 'windows': renderDual(renderWindows); break;
       case 'source': renderSource(); break;
       case 'export': renderDual(renderExport); break;
-      case 'process': renderProcess(); break;          // 子界面：重采样/负荷辨识调参/设备画像提取/波形分析/估计 CT
+      case 'process': renderProcess(); break;          // 子界面：重采样/负荷辨识调参/设备画像提取/波形分析/波形预览/估计 CT
       default: break;
     }
   } catch (e) {
@@ -3955,10 +3958,12 @@ function renderProcess() {
       case 'nilm-tune': ntListFiles(); ntInitBase(); bindNilmTuneUI(); break;
       case 'profile-extract': ntListFiles('np'); ntInitBase('np'); bindProfileExtractUI(); break;
       case 'wave-preview': wpLoadDefaults(); wpListFiles(); renderWavePreview(); bindWavePreview(); break;
+      case 'wave-board': wbInit(); break;
       case 'ct-estimate': ctListFiles(); ctFillDefaults(); initCtEstimate(); break;
       default: break;
     }
   }
+  if (PROCESS_SUBVIEW === 'wave-board') wbOnShow();     // 波形预览：每次显示、窗口大小变化后按当前宽度重画各模块
 }
 
 /* 各子界面事件绑定（仅在对应 subview 首次激活时调用） */
@@ -4820,6 +4825,582 @@ function bindWavePreview() {
   renderWavePreview();
 }
 
+/* ------------------------------------------------------------------ 数据处理 · 波形预览（v0.99.51，第 210 轮）
+ * 一组可以增删的预览模块，每个模块显示一个文件的曲线，数据源二选一：
+ *   offline  离线波形 CSV：三相电压 / 电流的有效值曲线，每个点由连续 N 个周波算出（GET /api/process/wave/rms）
+ *   monitor  实时监测输出文件：实时落盘写出的曲线 CSV 里的电压 / 电流 / 有功 / 无功 / 功率因数（GET /api/process/monitor/curve）
+ * 模块清单和各模块的配置只存在浏览器本地（localStorage），不写运行配置；用到的接口都是只读的。
+ * 内部标识 wave-board，控件前缀 wb-。「波形分析」子界面的内部标识是 wave-preview / wp-*，与这里无关。
+ * 所有模块共用一条加载队列：一次只向服务端发一个读文件的请求。 */
+const WB_KEY = 'elec_tool.wave_board.v1';
+const WB_MAX_MODULES = 12;
+const WB_QUANTITIES = [['voltage', '电压'], ['current', '电流'], ['p', '有功功率'], ['q', '无功功率'], ['pf', '功率因数']];
+const WB_KIND_QUANTITIES = { voltage: ['voltage'], current: ['current'], power: ['p', 'q'], power_factor: ['pf'] };   // 文件种类 → 能显示的量
+const WB_REFRESH = [['0', '关'], ['2', '每 2 秒'], ['5', '每 5 秒'], ['10', '每 10 秒'], ['30', '每 30 秒'], ['60', '每 60 秒']];
+const WB_OFFLINE_CHARTS = { u: { label: '电压有效值', what: '电压', unit: 'V', names: ['Ua', 'Ub', 'Uc'] },
+                            i: { label: '电流有效值', what: '电流', unit: 'A', names: ['Ia', 'Ib', 'Ic'] } };
+const WB_OFFLINE_CYCLES = '10';          // 每个点的周波数默认值（50 Hz 下是 0.2 秒）
+const WB_OFFLINE_MAX_POINTS = 20000;     // 离线曲线的点数上限默认值（超出时服务端自动加大每个点的周波数）
+const WB_MONITOR_MAX_POINTS = 5000;
+/* 表单控件（data-wb-f）→ 模块配置里的位置 */
+const WB_FIELDS = {
+  'off-path': ['offline', 'path'], 'off-tstart': ['offline', 't_start'], 'off-tend': ['offline', 't_end'], 'off-cycles': ['offline', 'cycles'],
+  'off-show': ['offline', 'show'], 'off-pt': ['offline', 'pt'], 'off-ct': ['offline', 'ct'], 'off-fnom': ['offline', 'f_nom'],
+  'off-utc': ['offline', 'utc'], 'off-maxpts': ['offline', 'max_points'],
+  'mon-path': ['monitor', 'path'], 'mon-quantity': ['monitor', 'quantity'], 'mon-source': ['monitor', 'source'], 'mon-run': ['monitor', 'run'],
+  'mon-last': ['monitor', 'last_min'], 'mon-tstart': ['monitor', 't_start'], 'mon-tend': ['monitor', 't_end'], 'mon-refresh': ['monitor', 'refresh_s'],
+};
+const WB = { modules: [], seq: 1, layout: 1, rt: {}, offlineFiles: [], monitorFiles: [], listedAt: 0, defaults: null, chain: Promise.resolve(), timer: null, inited: false };
+window.WB = WB;
+
+function wbBlankOffline() { return { path: '', t_start: '', t_end: '', cycles: WB_OFFLINE_CYCLES, show: 'both', pt: '', ct: '', f_nom: '', utc: '', max_points: '' }; }
+function wbBlankMonitor() { return { path: '', quantity: '', source: '', run: 'latest', last_min: '', t_start: '', t_end: '', refresh_s: '0' }; }
+/* 一条模块记录（来自本地存储，或复制时的原模块）→ 字段齐全、取值合法的新记录；不认识的字段丢掉，id 由调用方给 */
+function wbNormalize(raw) {
+  raw = (raw && typeof raw === 'object') ? raw : {};
+  const str = (v, max = 500) => (v === null || v === undefined) ? '' : String(v).slice(0, max);
+  const oneOf = (v, list, dflt) => (list.includes(v) ? v : dflt);
+  const m = { id: '', type: raw.type === 'monitor' ? 'monitor' : 'offline', title: str(raw.title, 80), collapsed: !!raw.collapsed, more: !!raw.more,
+              offline: wbBlankOffline(), monitor: wbBlankMonitor(), hidden: {} };
+  ['offline', 'monitor'].forEach(part => {
+    const src = (raw[part] && typeof raw[part] === 'object') ? raw[part] : {};
+    Object.keys(m[part]).forEach(k => { if (src[k] !== undefined && src[k] !== null) m[part][k] = str(src[k]).trim(); });
+  });
+  m.offline.show = oneOf(m.offline.show, ['both', 'u', 'i'], 'both');
+  m.offline.utc = oneOf(m.offline.utc, ['', '0', '1'], '');
+  m.monitor.quantity = oneOf(m.monitor.quantity, [''].concat(WB_QUANTITIES.map(q => q[0])), '');
+  m.monitor.source = oneOf(m.monitor.source, ['', '0', '1'], '');
+  m.monitor.refresh_s = oneOf(m.monitor.refresh_s, WB_REFRESH.map(r => r[0]), '0');
+  if (!m.monitor.run) m.monitor.run = 'latest';
+  if (raw.hidden && typeof raw.hidden === 'object') {        // 图例里取消勾选的曲线名，按图分开记：u 电压图 / i 电流图 / m 监测曲线图
+    ['u', 'i', 'm'].forEach(k => { if (Array.isArray(raw.hidden[k])) m.hidden[k] = raw.hidden[k].slice(0, 16).map(x => str(x, 20)); });
+  }
+  return m;
+}
+function wbSave() {
+  try { localStorage.setItem(WB_KEY, JSON.stringify({ v: 1, seq: WB.seq, layout: WB.layout, modules: WB.modules })); }
+  catch (e) { /* 隐私模式或存储已满：本次打开期间仍然可用，只是刷新页面后不保留 */ }
+}
+function wbRestore() {
+  let saved = null;
+  try { saved = JSON.parse(localStorage.getItem(WB_KEY) || 'null'); } catch (e) { saved = null; }
+  WB.modules = []; WB.seq = 1; WB.layout = 1;
+  if (!saved || typeof saved !== 'object') return;
+  WB.layout = +saved.layout === 2 ? 2 : 1;
+  (Array.isArray(saved.modules) ? saved.modules : []).filter(raw => raw && typeof raw === 'object').slice(0, WB_MAX_MODULES).forEach(raw => {
+    const m = wbNormalize(raw);
+    if (typeof raw.id === 'string' && /^m\d+$/.test(raw.id) && !WB.modules.some(x => x.id === raw.id)) m.id = raw.id;
+    WB.modules.push(m);
+  });
+  const used = WB.modules.map(m => (m.id ? parseInt(m.id.slice(1), 10) + 1 : 1));
+  WB.seq = Math.max(1, parseInt(saved.seq, 10) || 1, ...used);
+  WB.modules.forEach(m => { if (!m.id) m.id = 'm' + (WB.seq++); });
+}
+
+function wbFind(id) { return WB.modules.find(m => m.id === id) || null; }
+function wbAlive(m) { return WB.modules.includes(m); }
+function wbEl(m) { return document.querySelector('#wb-modules .wb-module[data-wb-id="' + m.id + '"]'); }
+function wbField(m, name) { const el = wbEl(m); return el ? el.querySelector('[data-wb-f="' + name + '"]') : null; }
+function wbRt(m) { return WB.rt[m.id] || (WB.rt[m.id] = { data: null, dataType: '', failed: false, info: null, loading: false, queued: false, manual: false, promise: null, url: '', at: 0, nextAt: 0, tookMs: 0 }); }
+function wbCfg(m) { return m.type === 'monitor' ? m.monitor : m.offline; }
+function wbData(m) { const rt = WB.rt[m.id]; return (rt && rt.data && rt.dataType === m.type) ? rt.data : null; }
+function wbBaseName(p) { const s = String(p || '').replace(/[\\/]+$/, ''); return s.slice(Math.max(s.lastIndexOf('/'), s.lastIndexOf('\\')) + 1); }
+function wbQuantityLabel(q) { const hit = WB_QUANTITIES.find(x => x[0] === q); return hit ? hit[1] : ''; }
+function wbClock(ms) { return ts(ms / 1000).slice(0, 8); }
+function wbAutoTitle(m) {
+  const name = wbBaseName(wbCfg(m).path);
+  if (m.type !== 'monitor') return '离线波形' + (name ? ' · ' + name : '（未选文件）');
+  const d = wbData(m), q = wbQuantityLabel((d && d.quantity) || m.monitor.quantity);
+  return '实时监测' + (q ? ' · ' + q : '') + (name ? ' · ' + name : '（未选文件）');
+}
+function wbCharts(m) {                      // 这个模块要画哪几张图
+  if (m.type === 'monitor') return [{ key: 'm', height: 280 }];
+  const keys = m.offline.show === 'u' ? ['u'] : m.offline.show === 'i' ? ['i'] : ['u', 'i'];
+  return keys.map(k => Object.assign({ key: k, height: keys.length > 1 ? 210 : 280 }, WB_OFFLINE_CHARTS[k]));
+}
+function wbCanvas(m, key) { const id = 'wb-cv-' + m.id + '-' + key; return document.getElementById(id); }
+function wbColor(name) {                    // 分相曲线按相别取色（与其他页面的 A / B / C 一致），总量另取
+  const phase = { a: COLORS.A, b: COLORS.B, c: COLORS.C }[name.slice(-1)];
+  return phase || { P: COLORS.P, Q: COLORS.Q, PF: COLORS.S }[name] || '#4ea1ff';
+}
+function wbOptions(list, cur) { return list.map(([v, t]) => `<option value="${esc(v)}"${String(v) === String(cur) ? ' selected' : ''}>${esc(t)}</option>`).join(''); }
+
+/* ---- 表单 ---- */
+function wbFormHtml(m) {
+  const o = m.offline, n = m.monitor;
+  const tStart = '2026-10-12 08:00:00 / epoch 秒', tEnd = '2026-10-12 08:10:00 / epoch 秒';
+  const head = `<label title="离线波形 CSV：显示电压、电流的有效值曲线；实时监测输出文件：显示实时落盘曲线文件里的电压、电流、有功、无功、功率因数"><span class="lbl">数据源类型</span><select data-wb-f="type">${wbOptions([['offline', '离线波形 CSV（电压、电流）'], ['monitor', '实时监测输出文件（电压、电流、有功、无功、功率因数）']], m.type)}</select></label>`;
+  const more = '<button type="button" class="wb-morebtn" data-wb-act="more"></button>';
+  if (m.type === 'monitor') {
+    return head + `
+      <label title="列出实时落盘目录和最近几次离线播放的运行目录里的曲线文件，新的在前；也可以在下面直接填路径"><span class="lbl">监测输出文件</span><select data-wb-f="mon-file"></select></label>
+      <label title="实时监测输出的曲线文件：voltage_日期.csv（电压）、current_日期.csv（电流）、power_日期.csv（有功、无功）、power_factor_日期.csv（功率因数）"><span class="lbl">文件路径</span><input data-wb-f="mon-path" value="${esc(n.path)}" placeholder="output/realtime/voltage_20261111.csv 或绝对路径"></label>
+      <div class="row2">
+        <label title="电压文件只能显示电压，电流文件只能显示电流，功率文件可以显示有功或无功，功率因数文件只能显示功率因数"><span class="lbl">显示的量</span><select data-wb-f="mon-quantity">${wbOptions([['', '按文件自动选择']].concat(WB_QUANTITIES), n.quantity)}</select></label>
+        <label title="文件还在写入时，隔一段时间重新读一次；只在这个子界面显示时刷新"><span class="lbl">自动刷新</span><select data-wb-f="mon-refresh">${wbOptions(WB_REFRESH, n.refresh_s)}</select></label>
+      </div>
+      ${more}
+      <div class="wb-more">
+        <div class="row2">
+          <label title="两侧的数据写在同一个文件里。自动＝文件里只有一侧时取那一侧，两侧都有时取总线侧"><span class="lbl">数据来源</span><select data-wb-f="mon-source">${wbOptions([['', '自动'], ['0', '总线侧'], ['1', '分路侧']], n.source)}</select></label>
+          <label title="同一个文件里可能有多次运行的数据（比如同一份离线文件播放了几遍）。读取一次文件后，这里会列出文件里的各次运行"><span class="lbl">运行批次</span><select data-wb-f="mon-run"></select></label>
+        </div>
+        <div class="row2">
+          <label title="按数据时间筛选；空＝不限制。写法：2026-10-12 08:00:00 或 epoch 秒"><span class="lbl">起始时刻（空＝不限）</span><input data-wb-f="mon-tstart" value="${esc(n.t_start)}" placeholder="${tStart}"></label>
+          <label title="按数据时间筛选；空＝不限制。写法：2026-10-12 08:10:00 或 epoch 秒"><span class="lbl">结束时刻（空＝不限）</span><input data-wb-f="mon-tend" value="${esc(n.t_end)}" placeholder="${tEnd}"></label>
+        </div>
+        <div class="row2">
+          <label title="只显示最后这么多分钟的数据（从文件里最新的一个点往前算）；空＝全部"><span class="lbl">只看最近（分钟，空＝全部）</span><input data-wb-f="mon-last" type="number" min="0" step="any" value="${esc(n.last_min)}" placeholder="全部"></label>
+          <span></span>
+        </div>
+      </div>
+      <div class="btnrow">
+        <button type="button" class="primary" data-wb-act="load">加载曲线</button>
+        <button type="button" data-wb-act="files" title="重新列出监测输出文件（新的一次运行开始后会有新文件）">刷新文件列表</button>
+      </div>`;
+  }
+  return head + `
+      <label title="列出 data 目录下的 CSV；也可以在下面直接填路径"><span class="lbl">波形文件</span><select data-wb-f="off-file"></select></label>
+      <label title="离线波形 CSV：各列依次为 时间、A 相电压、A 相电流、B 相电压、B 相电流、C 相电压、C 相电流"><span class="lbl">文件路径</span><input data-wb-f="off-path" value="${esc(o.path)}" placeholder="data/bus_bg.csv 或绝对路径"></label>
+      <div class="row2">
+        <label title="只显示这个时刻之后的数据；空＝从文件开头。写法：2026-10-12 08:00:00、epoch 秒，或只写 08:00:00（文件数据当天的时刻）"><span class="lbl">起始时刻（空＝文件开头）</span><input data-wb-f="off-tstart" value="${esc(o.t_start)}" placeholder="${tStart} / 08:00:00"></label>
+        <label title="只显示这个时刻之前的数据；空＝到文件末尾。写法同起始时刻"><span class="lbl">结束时刻（空＝文件末尾）</span><input data-wb-f="off-tend" value="${esc(o.t_end)}" placeholder="${tEnd} / 08:10:00"></label>
+      </div>
+      <div class="row2">
+        <label title="曲线上每个点是连续这么多个周波的有效值。1＝逐周波；50 Hz 下 10 个周波是 0.2 秒、50 个周波是 1 秒"><span class="lbl">每个点的周波数</span><input data-wb-f="off-cycles" type="number" min="1" step="1" value="${esc(o.cycles)}" placeholder="${WB_OFFLINE_CYCLES}"></label>
+        <label title="电压和电流分开画，各用各的纵轴"><span class="lbl">显示</span><select data-wb-f="off-show">${wbOptions([['both', '电压和电流（两张图）'], ['u', '只看电压'], ['i', '只看电流']], o.show)}</select></label>
+      </div>
+      ${more}
+      <div class="wb-more">
+        <div class="row2">
+          <label title="电压乘以 PT 变比后显示；空＝出厂配置"><span class="lbl">PT 变比</span><input data-wb-f="off-pt" type="number" min="0.000001" step="any" value="${esc(o.pt)}" placeholder="空＝出厂配置"></label>
+          <label title="电流乘以 CT 变比后显示；空＝出厂配置"><span class="lbl">CT 变比</span><input data-wb-f="off-ct" type="number" min="0.000001" step="any" value="${esc(o.ct)}" placeholder="空＝出厂配置"></label>
+        </div>
+        <div class="row2">
+          <label title="每周波的采样点数 = 采样率 / 额定频率；空＝出厂配置"><span class="lbl">额定频率 (Hz)</span><input data-wb-f="off-fnom" type="number" min="1" step="any" value="${esc(o.f_nom)}" placeholder="空＝出厂配置"></label>
+          <label title="文件里的时间按 UTC 解释，显示时换算成本地时间"><span class="lbl">文件时标为 UTC</span><select data-wb-f="off-utc">${wbOptions([['', '按出厂配置'], ['1', '是'], ['0', '否']], o.utc)}</select></label>
+        </div>
+        <div class="row2">
+          <label title="时间段很长、每个点的周波数又很小时，点数会超过这个上限；这时服务端自动加大每个点的周波数，并在模块下方说明"><span class="lbl">曲线点数上限</span><input data-wb-f="off-maxpts" type="number" min="10" max="200000" step="1" value="${esc(o.max_points)}" placeholder="${WB_OFFLINE_MAX_POINTS}"></label>
+          <span></span>
+        </div>
+      </div>
+      <div class="btnrow">
+        <button type="button" class="primary" data-wb-act="load">加载曲线</button>
+        <button type="button" data-wb-act="info" title="读取文件的采样率、时长、起止时间（不加载曲线）">文件信息</button>
+        <button type="button" data-wb-act="files" title="重新列出 data 目录下的 CSV">刷新文件列表</button>
+      </div>`;
+}
+function wbFillFileSelect(m) {
+  const sel = wbField(m, m.type === 'monitor' ? 'mon-file' : 'off-file'); if (!sel) return;
+  sel.innerHTML = m.type === 'monitor'
+    ? '<option value="">— 选择监测输出文件 —</option>' + WB.monitorFiles.map(f => `<option value="${esc(f.path)}">${esc((f.dir_label ? f.dir_label + ' / ' : '') + f.name)}${f.mtime_local ? '（' + esc(f.mtime_local) + '）' : ''}</option>`).join('')
+    : '<option value="">— 选择 data/ 下的 CSV —</option>' + WB.offlineFiles.map(f => `<option value="${esc(f.name)}">${esc(f.name)}（${esc(f.size_mb)} MB）</option>`).join('');
+  const path = wbCfg(m).path.trim();
+  sel.value = Array.from(sel.options).some(o => o.value === path) ? path : '';
+}
+function wbFillRunSelect(m) {
+  const sel = wbField(m, 'mon-run'); if (!sel) return;
+  const d = wbData(m), runs = (d && d.run_ids) || [];
+  const opts = [['latest', '最近一次运行'], ['all', '全部（不按运行筛选）']].concat(runs.map(r => [String(r.id), `${r.started_local || r.id} 启动 · ${r.rows} 行`]));
+  const cur = m.monitor.run || 'latest';
+  if (!opts.some(o => o[0] === cur)) opts.push([cur, `运行 ${cur}`]);
+  sel.innerHTML = wbOptions(opts, cur);
+}
+function wbSyncMore(m) {
+  const el = wbEl(m); if (!el) return;
+  const box = el.querySelector('.wb-more'), btn = el.querySelector('[data-wb-act="more"]');
+  if (box) box.hidden = !m.more;
+  if (btn) btn.textContent = (m.more ? '▾ 收起' : '▸ 展开') + (m.type === 'monitor' ? '更多选项（数据来源、运行批次、时间段）' : '更多选项（PT / CT 变比、额定频率、时标、点数上限）');
+}
+function wbApplyDefaults(m) {              // 「更多选项」里几个输入框的占位提示写上出厂值
+  const b = WB.defaults && WB.defaults.base; if (!b || m.type !== 'offline') return;
+  [['off-pt', b.pt_ratio], ['off-ct', b.ct_ratio], ['off-fnom', b.f_nom]].forEach(([f, v]) => { const inp = wbField(m, f); if (inp && v !== undefined && v !== null) inp.placeholder = `空＝出厂配置（${v}）`; });
+}
+function wbApplyInfo(m) {                  // 起止时刻输入框的占位提示写上文件的起止时间
+  if (m.type !== 'offline') return;
+  const d = WB.rt[m.id] && WB.rt[m.id].info, a = wbField(m, 'off-tstart'), b = wbField(m, 'off-tend');
+  if (a) a.placeholder = d && isNum(d.t_start) ? `空＝文件开头（${wpFmtT(d.t_start)}）` : '2026-10-12 08:00:00 / epoch 秒 / 08:00:00';
+  if (b) b.placeholder = d && isNum(d.t_end) ? `空＝文件末尾（${wpFmtT(d.t_end)}）` : '2026-10-12 08:10:00 / epoch 秒 / 08:10:00';
+}
+function wbReadForm(m) {                   // 表单 → 模块配置（只有当前数据源类型的控件在表单里，另一种类型的配置原样保留）
+  const el = wbEl(m); if (!el) return;
+  el.querySelectorAll('[data-wb-f]').forEach(inp => {
+    const f = inp.dataset.wbF, map = WB_FIELDS[f], v = String(inp.value === undefined || inp.value === null ? '' : inp.value).trim();
+    if (map) m[map[0]][map[1]] = v;
+    else if (f === 'title') m.title = v.slice(0, 80);
+  });
+}
+function wbSetStatus(m, html, cls) {
+  const el = wbEl(m), box = el && el.querySelector('.wb-status');
+  if (box) box.innerHTML = html ? `<div class="${cls || ''}">${html}</div>` : '';
+}
+function wbSetBusy(m) {                    // 手动加载排队 / 进行中时禁用「加载曲线」；自动刷新不动按钮（否则每次刷新都闪一下）
+  const el = wbEl(m), rt = wbRt(m), btn = el && el.querySelector('[data-wb-act="load"]');
+  if (btn) { const busy = rt.manual && (rt.queued || rt.loading); btn.disabled = busy; btn.textContent = busy ? '读取中…' : '加载曲线'; }
+}
+
+/* ---- 模块的增删、排序与显示 ---- */
+function wbRenderForm(m) {
+  const el = wbEl(m); if (!el) return;
+  el.querySelector('.wb-form').innerHTML = wbFormHtml(m);
+  wbFillFileSelect(m); wbFillRunSelect(m); wbSyncMore(m); wbApplyDefaults(m); wbApplyInfo(m); wbSetBusy(m);
+}
+function wbRenderCharts(m) {               // 画布按当前要画的图重建（新建模块、换数据源类型、换显示方式时）
+  const el = wbEl(m); if (!el) return;
+  el.querySelectorAll('canvas').forEach(cv => { delete ZOOM[cv.id]; });
+  el.querySelector('.wb-charts').innerHTML = wbCharts(m).map(c =>
+    `<div class="wb-chart" data-wb-chart="${c.key}"><div class="wb-chart-title"></div><canvas id="wb-cv-${esc(m.id)}-${c.key}" height="${c.height}"></canvas></div>`).join('');
+}
+function wbRenderHead(m) {
+  const el = wbEl(m); if (!el) return;
+  const idx = WB.modules.indexOf(m), rt = wbRt(m), d = wbData(m);
+  el.classList.toggle('wb-monitor', m.type === 'monitor'); el.classList.toggle('wb-offline', m.type !== 'monitor');
+  el.classList.toggle('wb-collapsed', !!m.collapsed);
+  el.querySelector('.wb-tag').textContent = `模块 ${idx + 1} · ${m.type === 'monitor' ? '实时监测输出' : '离线波形 CSV'}`;
+  const title = el.querySelector('.wb-title');
+  title.placeholder = wbAutoTitle(m);
+  if (document.activeElement !== title) title.value = m.title;
+  let sub = '（未加载）';
+  if (d && m.type === 'monitor') {
+    const every = parseFloat(m.monitor.refresh_s) || 0;
+    sub = `（${d.path_display || d.path} · ${d.label} · ${d.n} 点 · ${wbClock(rt.at)} 读取${every > 0 ? ' · 每 ' + every + ' 秒自动刷新' : ''}）`;
+  } else if (d) {
+    sub = `（${d.path_display || d.path} · 每 ${d.agg_cycles} 个周波一个点 · ${d.n} 点）`;
+  }
+  el.querySelector('.wb-sub').textContent = sub;
+  el.querySelector('[data-wb-act="up"]').disabled = idx <= 0;
+  el.querySelector('[data-wb-act="down"]').disabled = idx >= WB.modules.length - 1;
+  el.querySelector('[data-wb-act="collapse"]').textContent = m.collapsed ? '展开配置' : '收起配置';
+}
+function wbRenderFrame() {                 // 工具条、空白提示、排列方式，以及各模块标题里的序号
+  const host = $('#wb-modules'); if (!host) return;
+  host.classList.toggle('wb-cols-2', WB.layout === 2);
+  const empty = $('#wb-empty'); if (empty) empty.style.display = WB.modules.length ? 'none' : '';
+  const cnt = $('#wb-count'); if (cnt) cnt.textContent = `共 ${WB.modules.length} 个模块（最多 ${WB_MAX_MODULES} 个）`;
+  const lay = $('#wb-layout'); if (lay) lay.value = String(WB.layout);
+  WB.modules.forEach(wbRenderHead);
+}
+function wbMount(m) {                      // 建出模块的页面元素，放到它在清单里的位置
+  const host = $('#wb-modules'); if (!host) return;
+  const el = document.createElement('div');
+  el.className = 'panel wb-module'; el.dataset.wbId = m.id;
+  el.innerHTML = `
+    <h3 class="curvehdr wb-head">
+      <span><span class="wp-tag wb-tag"></span><input class="wb-title" data-wb-f="title" maxlength="80" title="模块名称，可以改；留空时按文件自动命名"><small class="hdrhint wb-sub"></small></span>
+      <span class="toggle wb-actions">
+        <button type="button" data-wb-act="up" title="上移">▲</button>
+        <button type="button" data-wb-act="down" title="下移">▼</button>
+        <button type="button" data-wb-act="copy" title="再添加一个配置相同的模块">复制</button>
+        <button type="button" data-wb-act="collapse" title="收起或展开配置；收起后曲线占满整行"></button>
+        <button type="button" class="danger" data-wb-act="remove" title="删除这个模块和它的配置">删除</button>
+      </span>
+    </h3>
+    <div class="wb-body"><div class="form wb-form"></div><div class="wb-charts"></div></div>
+    <div class="notes wb-status"></div>`;
+  host.insertBefore(el, host.children[WB.modules.indexOf(m)] || null);
+  wbRenderForm(m); wbRenderCharts(m); wbRenderHead(m); wbDraw(m);
+}
+function wbAdd(type, from, at) {
+  if (WB.modules.length >= WB_MAX_MODULES) { toast(`最多 ${WB_MAX_MODULES} 个预览模块，请先删除不用的`, 'err'); return null; }
+  const m = wbNormalize(from || { type });
+  m.id = 'm' + (WB.seq++);
+  WB.modules.splice((at === undefined || at === null) ? WB.modules.length : at, 0, m);
+  wbSave(); wbMount(m); wbRenderFrame();
+  const el = wbEl(m);
+  if (el && el.scrollIntoView) { try { el.scrollIntoView({ block: 'nearest' }); } catch (e) { /* 老浏览器 */ } }
+  return m;
+}
+function wbRemove(m, ask = true) {
+  if (ask && wbCfg(m).path.trim() && !window.confirm(`删除“${m.title || wbAutoTitle(m)}”？它的配置会一并删除。`)) return false;
+  const el = wbEl(m);
+  if (el) { el.querySelectorAll('canvas').forEach(cv => { delete ZOOM[cv.id]; }); el.remove(); }
+  const i = WB.modules.indexOf(m);
+  if (i >= 0) WB.modules.splice(i, 1);
+  delete WB.rt[m.id];
+  wbSave(); wbRenderFrame(); wbDrawAll();
+  return true;
+}
+function wbCopy(m) {
+  wbReadForm(m);
+  const c = wbAdd(m.type, JSON.parse(JSON.stringify(m)), WB.modules.indexOf(m) + 1);
+  if (!c) return null;
+  if (c.title) { c.title = (c.title + '（副本）').slice(0, 80); wbSave(); wbRenderHead(c); }
+  if (wbCfg(c).path.trim()) wbLoad(c, { quiet: true });
+  return c;
+}
+function wbMove(m, dir) {
+  const i = WB.modules.indexOf(m), j = i + dir, host = $('#wb-modules');
+  if (i < 0 || j < 0 || j >= WB.modules.length || !host) return;
+  WB.modules.splice(i, 1); WB.modules.splice(j, 0, m);
+  WB.modules.forEach(x => { const el = wbEl(x); if (el) host.appendChild(el); });      // 按清单顺序重新排列已有的元素（不重建）
+  wbSave(); wbRenderFrame(); wbDrawAll();
+}
+
+/* ---- 画图 ---- */
+function wbBindCanvas(m, key, cv) {
+  cv.__hiddenOwn = m.hidden[key] || [];    // 图例勾选状态存在模块自己的配置里（见 seriesHiddenSet / setSeriesVisible）
+  if (cv.__wbBound) return;
+  cv.__wbBound = true;
+  cv.__onSeriesToggle = (name, on) => {
+    if (!wbAlive(m)) return;
+    const cur = new Set(m.hidden[key] || []);
+    if (on) cur.delete(name); else cur.add(name);
+    m.hidden[key] = [...cur]; cv.__hiddenOwn = m.hidden[key];
+    wbSave();
+    if (cv.__redraw) cv.__redraw();
+  };
+  bindCtxMenu(cv, () => canvasNativeItems(cv).concat([
+    { key: 'sep', sep: true },
+    { key: 'zoom-reset', label: '复位缩放', onClick: () => zoomReset(cv) },
+    { key: 'native', label: '浏览器原生菜单（Shift + 右键）', disabled: true },
+  ]));
+}
+function wbDraw(m) {
+  const el = wbEl(m); if (!el) return;
+  const rt = wbRt(m), d = wbData(m);
+  wbCharts(m).forEach(ch => {
+    const cv = wbCanvas(m, ch.key); if (!cv) return;
+    wbBindCanvas(m, ch.key, cv);
+    let names = [], pick = null, title = '';
+    if (m.type === 'monitor') {
+      title = d ? `${d.label}${d.unit ? '（' + d.unit + '）' : ''}${isNum(d.window_s) ? ' · 每个点的计算窗口 ' + (+(+d.window_s).toFixed(3)) + ' s' : ''}` : (wbQuantityLabel(m.monitor.quantity) || '曲线');
+      if (d) { names = d.fields || []; pick = name => d.series[name]; }
+    } else {
+      title = `${ch.label}（${ch.unit}）` + (d ? ` · 每个点 ${d.agg_cycles} 个周波` : '');
+      if (d) { names = ch.names.filter(name => (d.channels || {})[name]); pick = name => d.channels[name]; }
+    }
+    const titleEl = el.querySelector('.wb-chart[data-wb-chart="' + ch.key + '"] .wb-chart-title');
+    if (titleEl) titleEl.textContent = title;
+    if (!d || !d.t || !d.t.length || !names.length) {
+      const why = (rt.queued || rt.loading) ? '读取中…' : rt.failed ? '读取失败（原因见下方）' : d ? `文件里没有${ch.what || ''}通道`
+        : wbCfg(m).path.trim() ? '点「加载曲线」后显示' : '先选择文件，再点「加载曲线」';
+      drawLine(cv, [], { empty: why, height: ch.height });
+      return;
+    }
+    const t0 = d.t[0], span = d.t[d.t.length - 1] - t0;
+    // ownRange：时间轴按这个文件自己的数据，不套用两侧播放的「公共时间段」（那是给跟随播放的趋势图用的）
+    drawLine(cv, names.map(name => { const ys = pick(name); return { name, color: wbColor(name), data: d.t.map((x, i) => [x - t0, ys[i]]) }; }),
+      { fmtX: x => tsX(x + t0, span), fmtTip: x => fmtLocalInput(x + t0), tbase: t0, height: ch.height, ownRange: true });
+  });
+  wbRenderHead(m);
+}
+function wbDrawAll() { WB.modules.forEach(wbDraw); }
+
+/* ---- 读文件 ---- */
+function wbOfflineQuery(m) {
+  const o = m.offline;
+  const cyc = o.cycles === '' ? +WB_OFFLINE_CYCLES : Number(o.cycles);
+  if (!Number.isInteger(cyc) || cyc < 1) throw new Error(`「每个点的周波数」要填不小于 1 的整数（当前“${o.cycles}”）`);
+  const maxPts = o.max_points === '' ? WB_OFFLINE_MAX_POINTS : Number(o.max_points);
+  if (!Number.isInteger(maxPts) || maxPts < 10 || maxPts > 200000) throw new Error(`「曲线点数上限」要填 10 到 200000 之间的整数（当前“${o.max_points}”）`);
+  return wpQuery({ path: o.path, t_start: o.t_start, t_end: o.t_end, agg_cycles: cyc, max_points: maxPts,
+                   f_nom: o.f_nom, pt_ratio: o.pt, ct_ratio: o.ct, file_time_utc: o.utc });
+}
+function wbMonitorQuery(m) {
+  const n = m.monitor;
+  let lastS = '';
+  if (n.last_min !== '') {
+    const v = Number(n.last_min);
+    if (!(v > 0)) throw new Error(`「只看最近」要填大于 0 的分钟数（当前“${n.last_min}”）`);
+    lastS = String(+(v * 60).toFixed(3));
+  }
+  return wpQuery({ path: n.path, quantity: n.quantity, source_id: n.source, run: n.run || 'latest', t_start: n.t_start, t_end: n.t_end,
+                   last_s: lastS, max_points: WB_MONITOR_MAX_POINTS });
+}
+function wbUrl(m) { return m.type === 'monitor' ? '/api/process/monitor/curve?' + wbMonitorQuery(m) : '/api/process/wave/rms?' + wbOfflineQuery(m); }
+function wbDescribe(m, d) {                // 读取成功后模块下方的说明
+  const notes = (d.notes || []).map(esc);
+  if (m.type === 'monitor') {
+    const run = (d.run_ids || []).find(r => r.id === d.run_id);
+    const runText = d.run_mode === 'all' ? '全部运行' : d.run_mode === 'none' ? '文件里没有运行批次这一列'
+      : (d.run_mode === 'latest' ? '最近一次运行' : '指定的一次运行') + (run && run.started_local ? `（${esc(run.started_local)} 启动）` : '');
+    const span = d.t_last - d.t_first;
+    return { cls: 'ok', html: [`已读取 <b>${d.n}</b> 个点${d.decimated ? `（筛选后共 ${d.rows_selected} 个点，已抽稀）` : ''}：${esc(d.label)}${d.unit ? '（' + esc(d.unit) + '）' : ''}`,
+      d.source_id === 1 ? '分路侧' : '总线侧', runText, `${esc(d.t_first_local)} → ${esc(d.t_last_local)}（${fmtDur(span)}）`,
+      `文件最后写入于 ${esc(d.mtime_local)}`].concat(notes).join('；') };
+  }
+  const asked = d.request ? d.request.agg_cycles : d.agg_cycles, grown = d.agg_cycles !== asked;
+  return { cls: grown ? 'warn' : 'ok', html: [`已加载 <b>${d.n}</b> 个点：每个点 ${d.agg_cycles} 个周波（${+(d.agg_cycles / d.f_nom).toFixed(4)} s）${grown ? `，配置的是 ${asked} 个` : ''}`,
+    `采样率 ${wpFs(d.fs)} Hz，每周波 ${d.samples_per_cycle} 个采样点，共 ${d.cycles_total} 个周波`,
+    `${wpFmtT(d.t_first)} → ${wpFmtT(d.t_last)}（${fmtDur(d.t_last - d.t_first)}）`].concat(notes).join('；') };
+}
+/* 加载一个模块的曲线。opt.auto＝自动刷新（不读表单、不弹提示、不复位缩放、失败时保留上一次的曲线）；opt.quiet＝不弹提示。
+   返回 Promise<是否成功>。所有模块的请求排成一队，逐个发出。 */
+function wbLoad(m, opt = {}) {
+  const rt = wbRt(m);
+  const say = (msg) => { wbSetStatus(m, esc(msg), 'bad'); if (!opt.auto && !opt.quiet) toast('波形预览：' + msg, 'err'); };
+  if (!opt.auto) { wbReadForm(m); wbSave(); wbRenderHead(m); }
+  if (!wbCfg(m).path.trim()) { if (!opt.auto) say('请先选择文件，或填写文件路径'); return Promise.resolve(false); }
+  let url;
+  try { url = wbUrl(m); } catch (e) { say(e.message); return Promise.resolve(false); }
+  if (rt.queued || (rt.loading && rt.url === url)) return rt.promise;          // 已在排队，或同一个请求正在进行
+  rt.queued = true; rt.manual = !opt.auto;
+  wbSetBusy(m);
+  const job = async () => {
+    rt.queued = false;
+    if (!wbAlive(m)) return false;                                               // 排队期间模块被删掉了
+    const type = m.type, started = Date.now();
+    let ok = false;
+    try {
+      rt.url = wbUrl(m);                                                         // 排队期间配置可能又改过：按最新的配置发请求
+      rt.loading = true;
+      if (!opt.auto) wbSetStatus(m, '读取中…');
+      wbDraw(m);
+      const d = await api(rt.url, undefined, 'bus');
+      if (!wbAlive(m) || m.type !== type) return false;                          // 读取期间模块被删，或换了数据源类型：结果作废
+      rt.data = d; rt.dataType = type; rt.failed = false; rt.at = Date.now();
+      if (!opt.auto) wbCharts(m).forEach(c => { const cv = wbCanvas(m, c.key); if (cv) delete ZOOM[cv.id]; });
+      if (type === 'monitor') wbFillRunSelect(m);
+      const s = wbDescribe(m, d); wbSetStatus(m, s.html, s.cls);
+      ok = true;
+    } catch (e) {
+      if (wbAlive(m) && m.type === type) {
+        if (opt.auto && rt.data) wbSetStatus(m, `自动刷新失败，仍显示 ${wbClock(rt.at)} 读到的曲线：${esc(e.message)}`, 'bad');
+        else { rt.data = null; rt.failed = true; wbSetStatus(m, '读取失败：' + esc(e.message), 'bad'); if (!opt.auto && !opt.quiet) toast('波形预览读取失败：' + e.message, 'err'); }
+      }
+    } finally {
+      rt.loading = false; rt.manual = false; rt.tookMs = Date.now() - started;
+      // 下一次自动刷新：至少隔一个刷新周期；文件很大、读一次很慢时再拉长到耗时的 4 倍，避免服务端一直在读文件
+      rt.nextAt = Date.now() + Math.max((parseFloat(m.monitor.refresh_s) || 0) * 1000, 4 * rt.tookMs);
+      try { if (wbAlive(m)) { wbSetBusy(m); wbDraw(m); } }
+      catch (e) { console.error('波形预览：重画失败', e); }      // 画图出错不能让队列卡住，后面的模块照常加载
+    }
+    return ok;
+  };
+  rt.promise = WB.chain = WB.chain.then(job, job);
+  return rt.promise;
+}
+async function wbFileInfo(m, quiet) {      // 离线波形 CSV 的文件信息：采样率、时长、起止时间（不加载曲线）
+  wbReadForm(m); wbSave(); wbRenderHead(m);
+  const o = m.offline, path = o.path;
+  if (m.type !== 'offline') return null;
+  if (!path) { wbSetStatus(m, '请先选择文件，或填写文件路径', 'bad'); if (!quiet) toast('波形预览：请先选择文件，或填写文件路径', 'err'); return null; }
+  try {
+    const d = await api('/api/process/wave/info?' + wpQuery({ path, f_nom: o.f_nom, pt_ratio: o.pt, ct_ratio: o.ct, file_time_utc: o.utc }), undefined, 'bus');
+    if (!wbAlive(m) || m.type !== 'offline' || m.offline.path !== path) return null;
+    wbRt(m).info = d; wbApplyInfo(m);
+    wbSetStatus(m, `文件信息：采样率 ${wpFs(d.fs)} Hz，每周波 ${d.samples_per_cycle} 个采样点；${d.rows} 行，时长 ${fmtDur(d.duration_s)}；${wpFmtT(d.t_start)} → ${wpFmtT(d.t_end)}；通道 ${(d.channels || []).map(esc).join(' / ')}。配置好时间段和每个点的周波数后，点「加载曲线」`, 'ok');
+    return d;
+  } catch (e) {
+    if (wbAlive(m) && m.type === 'offline') wbSetStatus(m, '读取文件信息失败：' + esc(e.message), 'bad');
+    if (!quiet) toast('波形预览：' + e.message, 'err');
+    return null;
+  }
+}
+async function wbListFiles(type, loud) {
+  try {
+    if (type === 'monitor') { const r = await api('/api/process/monitor/files', undefined, 'bus'); WB.monitorFiles = r.files || []; }
+    else { const r = await api('/api/files?sub=data', undefined, 'bus'); WB.offlineFiles = (r.files || []).filter(f => !f.dir && f.name.toLowerCase().endsWith('.csv')); }
+    WB.modules.forEach(m => { if (m.type === type) wbFillFileSelect(m); });
+    if (loud) toast(type === 'monitor' ? `找到 ${WB.monitorFiles.length} 个监测输出文件` : `data 目录下有 ${WB.offlineFiles.length} 个 CSV 文件`);
+  } catch (e) { if (loud) toast('读取文件列表失败：' + e.message, 'err'); }
+}
+async function wbLoadDefaults() {
+  try { WB.defaults = await api('/api/process/wave/defaults', undefined, 'bus'); } catch (e) { return; }
+  WB.modules.forEach(wbApplyDefaults);
+}
+
+/* ---- 事件 ---- */
+function wbModuleOf(node) { const el = node && node.closest ? node.closest('.wb-module') : null; return el ? wbFind(el.dataset.wbId) : null; }
+function wbOnClick(ev) {
+  const btn = ev.target && ev.target.closest ? ev.target.closest('[data-wb-act]') : null; if (!btn) return;
+  const m = wbModuleOf(btn); if (!m) return;
+  switch (btn.dataset.wbAct) {
+    case 'load': wbLoad(m); break;
+    case 'info': wbFileInfo(m, false); break;
+    case 'files': wbListFiles(m.type, true); break;
+    case 'more': m.more = !m.more; wbSave(); wbSyncMore(m); break;
+    case 'collapse': m.collapsed = !m.collapsed; wbSave(); wbRenderHead(m); wbDraw(m); break;
+    case 'copy': wbCopy(m); break;
+    case 'up': wbMove(m, -1); break;
+    case 'down': wbMove(m, 1); break;
+    case 'remove': wbRemove(m); break;
+    default: break;
+  }
+}
+function wbOnChange(ev) {
+  const inp = ev.target, f = (inp && inp.dataset && inp.dataset.wbF) || ''; if (!f) return;
+  const m = wbModuleOf(inp); if (!m) return;
+  if (f === 'type') {                                        // 换数据源类型：两种类型各自的配置都保留，表单和画布按新类型重建
+    wbReadForm(m);
+    m.type = inp.value === 'monitor' ? 'monitor' : 'offline';
+    const rt = wbRt(m); rt.data = null; rt.failed = false;
+    wbSave(); wbSetStatus(m, ''); wbRenderForm(m); wbRenderCharts(m); wbRenderHead(m); wbDraw(m);
+    if (wbCfg(m).path.trim()) wbLoad(m, { quiet: true });
+    return;
+  }
+  if (f === 'off-file' || f === 'mon-file') {                // 从下拉里选了文件：填入路径
+    if (!inp.value) return;
+    wbReadForm(m);
+    wbCfg(m).path = inp.value;
+    const pathEl = wbField(m, f === 'mon-file' ? 'mon-path' : 'off-path'); if (pathEl) pathEl.value = inp.value;
+    if (f === 'mon-file') {
+      const file = WB.monitorFiles.find(x => x.path === inp.value), can = (file && WB_KIND_QUANTITIES[file.kind]) || null;
+      if (can && m.monitor.quantity && !can.includes(m.monitor.quantity)) { m.monitor.quantity = ''; const q = wbField(m, 'mon-quantity'); if (q) q.value = ''; }
+      m.monitor.run = 'latest'; wbFillRunSelect(m);
+      wbSave(); wbRenderHead(m); wbLoad(m);                  // 监测输出文件读得快，选中就加载
+    } else {
+      wbRt(m).info = null; wbSave(); wbRenderHead(m); wbFileInfo(m, true);   // 离线波形文件可能很大：先给文件信息，由用户点「加载曲线」
+    }
+    return;
+  }
+  const before = JSON.stringify(wbCfg(m));
+  wbReadForm(m);
+  if (f === 'mon-path') { m.monitor.run = 'latest'; wbFillRunSelect(m); wbFillFileSelect(m); }     // 换了文件：原来指定的运行批次不再适用
+  if (f === 'off-path') { wbRt(m).info = null; wbApplyInfo(m); wbFillFileSelect(m); }
+  wbSave(); wbRenderHead(m);
+  if (f === 'off-show') { wbRenderCharts(m); wbDraw(m); return; }
+  if (f === 'mon-refresh') { wbRt(m).nextAt = 0; return; }
+  if (m.type === 'monitor' && f !== 'title' && m.monitor.path && JSON.stringify(wbCfg(m)) !== before) wbLoad(m);
+}
+function wbOnKeydown(ev) {                                   // 在输入框里按回车＝加载曲线
+  const inp = ev.target;
+  if (ev.key !== 'Enter' || !inp || inp.tagName !== 'INPUT' || !inp.dataset || !inp.dataset.wbF || inp.dataset.wbF === 'title') return;
+  const m = wbModuleOf(inp); if (!m) return;
+  ev.preventDefault(); wbLoad(m);
+}
+function wbShown() { return S.view === 'process' && PROCESS_SUBVIEW === 'wave-board' && !document.hidden; }
+function wbTick() {                                          // 每秒一次：到点的实时监测模块自动重新读取（只在本子界面显示时）
+  if (!wbShown()) return;
+  const now = Date.now();
+  WB.modules.forEach(m => {
+    if (m.type !== 'monitor' || !m.monitor.path || !((parseFloat(m.monitor.refresh_s) || 0) > 0)) return;
+    const rt = wbRt(m);
+    if (rt.queued || rt.loading || now < rt.nextAt) return;
+    wbLoad(m, { auto: true });
+  });
+}
+function wbOnShow() {                                        // 子界面显示出来、窗口大小变化时
+  wbDrawAll();                                               // 按当前宽度重画
+  if (Date.now() - WB.listedAt > 5000) { WB.listedAt = Date.now(); wbListFiles('offline'); wbListFiles('monitor'); }   // 文件下拉跟上新写出的文件
+}
+function wbInit() {
+  if (WB.inited || !$('#wb-modules')) return;
+  WB.inited = true;
+  wbRestore();
+  $('#btn-wb-add-offline').addEventListener('click', () => wbAdd('offline'));
+  $('#btn-wb-add-monitor').addEventListener('click', () => wbAdd('monitor'));
+  $('#btn-wb-reload').addEventListener('click', () => {
+    const todo = WB.modules.filter(m => wbCfg(m).path.trim());
+    if (!todo.length) { toast('波形预览：还没有选了文件的模块', 'err'); return; }
+    todo.forEach(m => wbLoad(m, { quiet: true }));
+  });
+  $('#btn-wb-clear').addEventListener('click', () => {
+    if (!WB.modules.length || !window.confirm(`删除全部 ${WB.modules.length} 个预览模块和它们的配置？`)) return;
+    WB.modules.slice().forEach(m => wbRemove(m, false));
+  });
+  $('#wb-layout').addEventListener('change', () => { WB.layout = $('#wb-layout').value === '2' ? 2 : 1; wbSave(); wbRenderFrame(); wbDrawAll(); });
+  const host = $('#wb-modules');
+  host.addEventListener('click', wbOnClick); host.addEventListener('change', wbOnChange); host.addEventListener('keydown', wbOnKeydown);
+  WB.modules.forEach(wbMount);
+  wbRenderFrame();
+  WB.listedAt = Date.now();
+  wbListFiles('offline'); wbListFiles('monitor'); wbLoadDefaults();
+  WB.modules.forEach(m => { if (wbCfg(m).path.trim()) wbLoad(m, { quiet: true }); });      // 上次留下的模块：打开时按保存的配置重新读取
+  WB.timer = setInterval(wbTick, 1000);
+}
+
 /* v0.96 / v0.97：数据处理 · 估计 CT（POST /api/process/ct_estimate；每侧逐周波 RMS 曲线 GET /api/process/wave/rms） */
 const CT = { files: [], rms: { 'ct-bus': null, 'ct-br': null } };
 const CT_SIDES = [['ct-bus', 'bus', '总线侧'], ['ct-br', 'branch', '分路侧']];
@@ -5154,7 +5735,7 @@ const ASSISTANT_IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp'])
 const ASSISTANT_IMAGE_MAX_BYTES = 3 * 1024 * 1024;
 const ASSISTANT_IMAGE_TOTAL_MAX_BYTES = 5 * 1024 * 1024;
 const ASSISTANT_IMAGE_MAX_COUNT = 3;
-const ASSISTANT_VIEW_LABELS = { overview: '总览面板', source: '数据源与控制', compare: '跨侧对比', voltage: '三相电压', current: '三相电流', power: '有功 / 无功 / 视在', power_factor: '功率因数', fundamental: '基波', harmonic: '谐波', interharmonic: '间谐波', dc: '直流偏置', spectrum: '频谱', events: '电能质量事件', nilm: '负荷辨识事件', windows: '窗口配置', export: '导出与日志', selftest: '算法自检', process: '数据处理', rsample: '离线波形重采样', 'nilm-tune': '负荷辨识调参', 'profile-extract': '设备画像提取', 'wave-preview': '波形分析' };
+const ASSISTANT_VIEW_LABELS = { overview: '总览面板', source: '数据源与控制', compare: '跨侧对比', voltage: '三相电压', current: '三相电流', power: '有功 / 无功 / 视在', power_factor: '功率因数', fundamental: '基波', harmonic: '谐波', interharmonic: '间谐波', dc: '直流偏置', spectrum: '频谱', events: '电能质量事件', nilm: '负荷辨识事件', windows: '窗口配置', export: '导出与日志', selftest: '算法自检', process: '数据处理', rsample: '离线波形重采样', 'nilm-tune': '负荷辨识调参', 'profile-extract': '设备画像提取', 'wave-preview': '波形分析', 'wave-board': '波形预览' };
 const ASSISTANT_TOOL_LABELS = {
   get_runtime_status: '查询当前侧运行状态', get_runtime_settings: '查询当前侧计算配置摘要',
   get_electrical_result: '查询当前侧最新电气量结果', get_history: '查询当前侧趋势历史',

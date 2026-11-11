@@ -693,3 +693,42 @@ input.flash{animation:ntflash 1.5s ease-out}
 .subview.active {
   display: block;
 }
+
+/* v0.99.51（第 210 轮）：数据处理 · 波形预览（内部标识 wave-board）—— 一组可增删的预览模块。颜色都取页面主题变量。 */
+.wb-toolbar{padding:8px 14px}
+.wb-toolbar .btnrow{align-items:center;margin:4px 0}
+.wb-layout{display:inline-flex;align-items:center;gap:6px;color:var(--mut);font-size:12px;margin-left:8px;white-space:nowrap}
+.wb-layout select{width:auto}
+.wb-count{color:var(--mut);font-size:12px;margin-left:auto}
+.wb-empty{display:block;text-align:center;border:1px dashed var(--line);border-radius:10px;padding:22px 16px;margin-bottom:14px}
+.wb-modules{display:grid;grid-template-columns:minmax(0,1fr);gap:14px;align-items:start}
+.wb-modules.wb-cols-2{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}
+.wb-module{margin-bottom:0;min-width:0;border-left:4px solid var(--line)}
+.wb-module.wb-offline{border-left-color:var(--warn)}
+.wb-module.wb-monitor{border-left-color:var(--ok)}
+.wb-offline .wb-tag{background:var(--warn)}
+.wb-monitor .wb-tag{background:var(--ok)}
+.panel h3.wb-head{align-items:flex-start;margin-bottom:10px}
+.panel h3.wb-head>span:first-child{display:flex;align-items:center;gap:6px;flex-wrap:wrap;min-width:0}
+.wb-tag{flex:0 0 auto;margin-right:0}
+.wb-title{flex:0 1 260px;width:auto;min-width:120px;background:transparent;border-color:transparent;color:var(--fg);font-weight:600;font-size:14px;padding:3px 6px}
+.wb-title:hover,.wb-title:focus{border-color:var(--line);background:var(--bg)}
+.wb-sub{flex:1 1 220px;min-width:0;margin-left:0;overflow-wrap:anywhere}
+.wb-actions{gap:4px;flex-wrap:wrap;justify-content:flex-end}
+.wb-actions button{padding:2px 8px;font-size:12px}
+.wb-body{display:grid;grid-template-columns:minmax(260px,360px) minmax(0,1fr);gap:14px;align-items:start}
+.wb-cols-2 .wb-body,.wb-module.wb-collapsed .wb-body{grid-template-columns:minmax(0,1fr)}
+.wb-module.wb-collapsed .wb-form{display:none}
+.wb-form{min-width:0}
+.wb-form .btnrow{margin:2px 0}
+.wb-more{display:flex;flex-direction:column;gap:9px;border-left:2px solid var(--line);padding-left:10px}
+.wb-more[hidden]{display:none}
+button.wb-morebtn{align-self:flex-start;background:transparent;border-color:transparent;color:var(--acc);padding:0;font-size:12px}
+button.wb-morebtn:hover{border-color:transparent;text-decoration:underline}
+.wb-charts{min-width:0;display:flex;flex-direction:column;gap:10px}
+.wb-chart{min-width:0}
+.wb-chart-title{font-size:12px;color:var(--mut);margin:0 0 4px}
+.wb-status{margin-top:10px;overflow-wrap:anywhere}
+.wb-status:empty{display:none}
+.wb-status b{color:var(--fg)}
+@media(max-width:1100px){.wb-modules.wb-cols-2{grid-template-columns:minmax(0,1fr)}.wb-body{grid-template-columns:minmax(0,1fr)}}

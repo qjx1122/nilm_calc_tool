@@ -519,7 +519,13 @@ def test_wave_subview_is_named_wave_analysis_and_keeps_internal_ids():
     section = section[: section.index("</section>")]
     assert re.search(r"<h2[^>]*>波形分析</h2>", section), "子界面标题没有改成「波形分析」"
     visible = re.sub(r"<!--.*?-->", "", HTML, flags=re.S)
-    assert "波形预览" not in visible, "index.html 注释之外还有「波形预览」"
+    # v0.99.51 起「波形预览」是另一个新子界面（内部标识 wave-board）的名字。这里钉的要求不变：
+    # 去掉新子界面自己的导航按钮和它自己的那一段之后，页面其余部分不出现「波形预览」。
+    board = visible[visible.index('<section id="view-process-wave-board"'):]
+    board = board[: board.index("</section>") + len("</section>")]
+    rest = visible.replace(board, "").replace('<button class="sub-navitem" data-subview="wave-board">🧩 波形预览</button>', "")
+    assert len(rest) < len(visible) - len(board), "没有找到新子界面的导航按钮"
+    assert "波形预览" not in rest, "index.html 里除了新的「波形预览」子界面自己，别处还有「波形预览」"
     assert visible.count("与波形分析同一套自定义时间") == 2, "调参、画像提取两个子界面的提示应改称「波形分析」"
     assert "'wave-preview': '波形分析'" in APPJS, "助手里这个子界面的名称没有同步"
     # 只改名：内部标识和接口路径保持原样
@@ -580,3 +586,88 @@ def test_ct_estimate_binds_its_events_only_once():
     assert re.search(r"^let CT_ESTIMATE_BOUND = false;$", APPJS, re.M)
     callers = [m.start() for m in re.finditer(r"initCtEstimate\(\)", APPJS)]
     assert len(callers) == 3, "initCtEstimate 的定义加两个调用点应该是 3 处；调用点有变化时请重新确认只绑定一次"
+
+
+# ---------------------------------------------------------------------------------------------
+# v0.99.51（第 210 轮）：数据处理页新增「波形预览」子界面（内部标识 wave-board，控件前缀 wb-）
+# 这里只钉静态文本；真实交互（增删模块→读文件→画曲线→刷新页面后恢复）由 tools/ui_r210_check.cjs 对着真实服务检查。
+# ---------------------------------------------------------------------------------------------
+
+def _wave_board_js() -> str:
+    start = APPJS.index("数据处理 · 波形预览（v0.99.51")
+    return APPJS[start: APPJS.index("/* v0.96 / v0.97：数据处理 · 估计 CT", start)]
+
+
+def test_wave_board_subview_is_wired_into_the_process_page():
+    """新子界面的导航按钮、容器、工具条控件都在；排在「波形分析」之后、「估计 CT」之前；首次打开时才初始化。"""
+    nav = HTML[HTML.index('id="sub-nav-process"'):]
+    nav = nav[: nav.index("</div>")]
+    assert re.findall(r'data-subview="([\w-]+)"', nav) == ["rsample", "nilm-tune", "profile-extract", "wave-preview", "wave-board", "ct-estimate"]
+    assert '<button class="sub-navitem" data-subview="wave-board">🧩 波形预览</button>' in nav
+    section = HTML[HTML.index('<section id="view-process-wave-board" class="subview">'):]
+    section = section[: section.index("</section>")]
+    assert re.search(r"<h2[^>]*>波形预览</h2>", section)
+    for cid in ("btn-wb-add-offline", "btn-wb-add-monitor", "btn-wb-reload", "btn-wb-clear", "wb-layout", "wb-count", "wb-empty", "wb-modules"):
+        assert f'id="{cid}"' in section, f"新子界面缺少 {cid}"
+    assert (HTML.index('id="view-process-wave-preview"') < HTML.index('id="view-process-wave-board"')
+            < HTML.index('id="view-process-ct-estimate"'))
+    body = _js_function("renderProcess")
+    assert "case 'wave-board': wbInit(); break;" in body
+    assert "if (PROCESS_SUBVIEW === 'wave-board') wbOnShow();" in body
+    assert "'wave-board': '波形预览'" in APPJS and "'wave-preview': '波形分析'" in APPJS
+
+
+def test_wave_board_forms_cover_the_settings_named_in_the_requirement():
+    """需求点名的可配置项都在模块表单里，并且都进了请求参数。
+
+    离线波形 CSV：文件路径、显示的时间段（起止时刻）、每个点的周波数；实时监测输出文件：文件路径、五种量。
+    """
+    form = _js_function("wbFormHtml")
+    for field in ("type", "off-path", "off-tstart", "off-tend", "off-cycles", "mon-path", "mon-quantity"):
+        assert f'data-wb-f="{field}"' in form, f"模块表单缺少 {field}"
+    assert ("const WB_QUANTITIES = [['voltage', '电压'], ['current', '电流'], ['p', '有功功率'], ['q', '无功功率'], ['pf', '功率因数']];"
+            in APPJS)
+    # 表单里的每个控件都在「控件 → 配置字段」对应表里（数据源类型、两个文件下拉另有处理），对应表里也没有多余的项
+    fields = set(re.findall(r'data-wb-f="([\w-]+)"', form))
+    table = APPJS[APPJS.index("const WB_FIELDS = {"):]
+    table = table[: table.index("};")]
+    mapped = set(re.findall(r"'([\w-]+)': \[", table))
+    assert fields - mapped == {"type", "off-file", "mon-file"}, sorted(fields - mapped)
+    assert mapped <= fields, sorted(mapped - fields)
+    offline = _js_function("wbOfflineQuery")
+    for param in ("path: o.path", "t_start: o.t_start", "t_end: o.t_end", "agg_cycles: cyc"):
+        assert param in offline, f"离线波形的请求没有带 {param}"
+    monitor = _js_function("wbMonitorQuery")
+    for param in ("path: n.path", "quantity: n.quantity", "source_id: n.source", "run: n.run", "last_s: lastS"):
+        assert param in monitor, f"监测输出文件的请求没有带 {param}"
+    assert ("return m.type === 'monitor' ? '/api/process/monitor/curve?' + wbMonitorQuery(m) : '/api/process/wave/rms?' + wbOfflineQuery(m);"
+            in _js_function("wbUrl"))
+
+
+def test_wave_board_only_reads_and_keeps_its_state_in_the_browser():
+    """波形预览只读文件：这一段代码里没有修改类请求，也不碰运行配置；模块清单存在浏览器本地。"""
+    block = _wave_board_js()
+    for url in ("/api/process/wave/rms?", "/api/process/monitor/curve?", "/api/process/monitor/files", "/api/process/wave/info?",
+                "/api/files?sub=data", "/api/process/wave/defaults"):
+        assert url in block, f"没有用到 {url}"
+    for banned in ("method:", "'PUT'", "'POST'", "'DELETE'", "/api/config", "/api/engine"):
+        assert banned not in block, f"波形预览的代码里出现了 {banned}"
+    assert "const WB_KEY = 'elec_tool.wave_board.v1';" in block and "localStorage.setItem(WB_KEY" in block
+    # 图例勾选：自带保管状态的图（波形预览的模块）不读、不写运行配置里的 series_hidden
+    hidden = _js_function("seriesHiddenSet")
+    assert hidden.index("if (cv.__hiddenOwn) return new Set(cv.__hiddenOwn);") < hidden.index("series_hidden")
+    visible = _js_function("setSeriesVisible")
+    assert visible.index("if (cv.__onSeriesToggle) { cv.__onSeriesToggle(name, on); return; }") < visible.index("/api/config")
+    assert "cv.__hiddenOwn = m.hidden[key] || [];" in block and "cv.__onSeriesToggle = (name, on) => {" in block
+
+
+def test_wave_board_styles_use_theme_variables():
+    """新子界面的样式不写死颜色，跟随页面主题变量。"""
+    block = STYLE[STYLE.index("/* v0.99.51（第 210 轮）：数据处理 · 波形预览"):]
+    assert not re.search(r"#[0-9a-fA-F]{3,8}\b", block), "波形预览的样式里写死了颜色"
+    assert "rgb(" not in block and "rgba(" not in block
+    for selector in (".wb-modules{", ".wb-modules.wb-cols-2{", ".wb-module{", ".wb-body{", ".wb-form{", ".wb-charts{", ".wb-status{",
+                     ".wb-more[hidden]{display:none}", ".wb-module.wb-collapsed .wb-form{display:none}"):
+        assert selector in block, f"样式里缺少 {selector}"
+    for var in ("var(--line)", "var(--mut)", "var(--fg)", "var(--acc)", "var(--ok)", "var(--warn)"):
+        assert var in block

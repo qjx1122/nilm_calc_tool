@@ -4250,8 +4250,14 @@ async def process_monitor_curve(path: str = "", quantity: str = "", source_id: s
             if s not in ("0", "1"):
                 raise ConfigError(f"数据来源只能是 0（总线侧）或 1（分路侧），当前 '{source_id}'")
             sid = int(s)
-        ts = float(parse_time_text(t_start)) if str(t_start or "").strip() else None
-        te = float(parse_time_text(t_end)) if str(t_end or "").strip() else None
+        def _when(text: str, what: str) -> Optional[float]:
+            if not str(text or "").strip():
+                return None
+            try:
+                return float(parse_time_text(text))
+            except ConfigError as exc:        # parse_time_text 的报错一律写“起始时间”，这里换成是哪一个输入框
+                raise ConfigError(f"{what}：{str(exc).replace('起始时间', '时间', 1)}") from None
+        ts = _when(t_start, "起始时刻"); te = _when(t_end, "结束时刻")
         if ts is not None and te is not None and te <= ts:
             raise ConfigError(f"结束时刻必须晚于起始时刻（{t_start} → {t_end}）")
         ls: Optional[float] = None

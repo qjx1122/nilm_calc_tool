@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 /* 第 209 轮（v0.99.50）界面检查：jsdom 驱动真实 index.html + app.js，打真实服务端。
  *
- *   N  数据处理页内导航：5 个子界面逐个可切换；原「波形预览」子界面现在叫「波形分析」（内部标识 wave-preview 不变）
+ *   N  数据处理页内导航：各子界面逐个可切换；原「波形预览」子界面现在叫「波形分析」（内部标识 wave-preview 不变）
+ *      2026-11-11（v0.99.51）更新：数据处理页多了一个新的子界面，名字正好叫「波形预览」（内部标识 wave-board，
+ *      由 tools/ui_r210_check.cjs 检查）。N1 的按钮数由 5 改为 6；N5 改为“除了新子界面自己，别处不出现「波形预览」”。
  *   B3 「估计 CT」子界面的事件只绑定一次：点一次「加载逐周波 RMS 曲线」只发一次请求
  *   B1 顶栏对侧一行的频率取自对侧摘要的 f_used，不再恒为「—」
  *   B2 顶栏「暂停」「停止」的提示：侧别说对、用中文名称、服务端报错时提示失败
@@ -84,7 +86,7 @@ async function main() {
   console.log('— N 数据处理页内导航与子界面名称');
   click(document.querySelector('.navitem[data-view="process"]')); await sleep(600);
   const subButtons = Array.from(document.querySelectorAll('#sub-nav-process .sub-navitem'));
-  check('N1 页内导航有 5 个子界面按钮', subButtons.length === 5, subButtons.map((b) => b.dataset.subview).join(','));
+  check('N1 页内导航有 6 个子界面按钮', subButtons.length === 6, subButtons.map((b) => b.dataset.subview).join(','));
   const waveBtn = subButtons.find((b) => b.dataset.subview === 'wave-preview');
   check('N2 第 4 个按钮显示「波形分析」，内部标识仍是 wave-preview', !!waveBtn && waveBtn.textContent.trim() === '📈 波形分析');
   for (const btn of subButtons) {
@@ -96,9 +98,13 @@ async function main() {
   click(waveBtn); await sleep(400);
   const waveSection = $('view-process-wave-preview');
   check('N4 子界面标题是「波形分析」', !!waveSection && waveSection.querySelector('h2').textContent.trim() === '波形分析');
+  // v0.99.51 起「波形预览」是另一个新子界面（wave-board）的名字。这里的要求不变：除了新子界面自己的导航按钮和它自己的那一段，
+  // 数据处理页其余的文字和提示里不出现「波形预览」。
   const processView = $('view-process');
-  const titles = Array.from(processView.querySelectorAll('[title]')).map((el) => el.getAttribute('title')).join('\n');
-  check('N5 数据处理页的文字和提示里不再出现「波形预览」', !processView.textContent.includes('波形预览') && !titles.includes('波形预览'));
+  const others = Array.from(processView.querySelectorAll('.subview')).filter((s) => s.id !== 'view-process-wave-board');
+  const otherText = others.map((s) => s.textContent).concat(subButtons.filter((b) => b.dataset.subview !== 'wave-board').map((b) => b.textContent)).join('\n');
+  const titles = others.flatMap((s) => Array.from(s.querySelectorAll('[title]'))).map((el) => el.getAttribute('title')).join('\n');
+  check('N5 除了新的「波形预览」子界面自己，数据处理页的文字和提示里不出现「波形预览」', others.length === 5 && !otherText.includes('波形预览') && !titles.includes('波形预览'));
   check('N6 其他子界面的提示改称「波形分析」', (titles.match(/与波形分析同一套自定义时间/g) || []).length === 2);
   check('N7 助手里该子界面的名称是「波形分析」', window.__labels['wave-preview'] === '波形分析');
 

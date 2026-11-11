@@ -456,7 +456,9 @@ def test_monitor_curve_errors_are_400_with_a_readable_message(client, tmp_path, 
     assert "运行批次写法不对" in err(path=mixed_voltage, run="newest")
     assert "必须是数字" in err(path=mixed_voltage, last_s="abc")
     assert "结束时刻必须晚于起始时刻" in err(path=mixed_voltage, t_start=repr(T0 + 5), t_end=repr(T0 + 1))
-    assert "无法解析" in err(path=mixed_voltage, t_start="昨天")
+    assert err(path=mixed_voltage, t_start="昨天").startswith("起始时刻：时间 '昨天' 无法解析")
+    msg = err(path=mixed_voltage, t_end="08:00:00")                 # 报错要说清是哪个输入框，不能把结束时刻说成“起始时间”
+    assert msg.startswith("结束时刻：时间 '08:00:00' 无法解析") and "起始时间" not in msg and "2026-10-12 08:00:00" in msg
     ok = client.get("/api/process/monitor/curve", params={"path": mixed_voltage, "source_id": "1", "max_points": 3})
     assert ok.status_code == 200 and ok.json()["source_id"] == 1
 
