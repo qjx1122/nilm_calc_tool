@@ -39,6 +39,7 @@ MAX_POINTS_DEFAULT = 5000            # 返回给界面的点数上限（超出�
 MAX_POINTS_CAP = 50000
 MAX_BYTES_DEFAULT = 256 * 1024 * 1024  # 文件超过这个大小时只读末尾这么多字节（实时文件越靠后越新）
 MAX_RUNS_LISTED = 50
+T_EPOCH_MAX = 1e11                   # 数据时间（epoch 秒）的合理上限；两行粘在一起会得到远大于它的“时间”
 
 # <曲线>_<yyyymmdd>.csv（实时落盘）或 <曲线>.csv（保存曲线数据）；power_factor 要排在 power 前面
 _FILE_RE = re.compile(r"^(voltage|current|power_factor|power)(?:_(\d{8}))?\.csv$", re.IGNORECASE)
@@ -80,21 +81,24 @@ def _read_text(path: str, max_bytes: int) -> Tuple[str, bool, int]:
     return (head + tail).decode("utf-8-sig", errors="replace"), True, size
 
 
-def _parse_columns(body: str, ncol: int, used: Sequence[int]) -> Dict[int, np.ndarray]:
-    """把表头之后的正文解析成 ``{列号: float64 数组}``（只解析用到的列；空格子、非数字、无穷大都记为 NaN）。
+def _parse_columns(body: str, ncol: int, used: Sequence[int]) -> Tuple[Dict[int, np.ndarray], int]:
+    """把表头之后的正文解析成 ``({列号: float64 数组}, 跳过的行数)``。
 
-    先走快路径：numpy 的 C 解析器只转换用到的列，43 万行约 1 秒。实时落盘文件没有引号，空格子先替换成 nan。
-    快路径遇到任何它处理不了的内容（引号、列数不齐的行、非数字）就整体退回 ``csv`` 模块逐行解析，
-    比表头短的行用空格子补齐。两条路径的结果相同（有用例对照）。
+    只解析用到的列；空格子、非数字、无穷大都记为 NaN。
+
+    快路径：numpy 的 C 解析器只转换用到的列（43 万行约 1 秒）。只有在正文没有引号、并且逗号总数恰好等于
+    “行数 ×（列数 − 1）”时才走快路径 —— 这个解析器按列号取值，遇到列数不对的行不会报错，而是悄悄取到错位的格子。
+    其余情况（引号、空行、列数不齐的行、解析器处理不了的数字写法）整体退回 ``csv`` 模块逐行解析：
+    比表头短的行用空格子补齐；比表头长的行整行跳过并计数（进程被杀后续写会把半行和下一行粘在一起，
+    这样的行里各格子已经错位，不能用）。两条路径的结果相同（有用例对照）。
     """
     used = sorted(set(int(i) for i in used))
     out: Optional[np.ndarray] = None
-    if '"' not in body:
+    skipped = 0
+    if '"' not in body and body.count(",") == body.count("\n") * (ncol - 1):
         text = body
         if ",," in text or ",\n" in text or ",\r" in text:
             text = text.replace(",,", ",nan,").replace(",,", ",nan,").replace(",\r\n", ",nan\r\n").replace(",\n", ",nan\n")
-            if text.endswith(","):
-                text += "nan"
         try:
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")                 # 正文为空时 loadtxt 只给一个警告
@@ -104,10 +108,17 @@ def _parse_columns(body: str, ncol: int, used: Sequence[int]) -> Dict[int, np.nd
         if out is not None and (out.ndim != 2 or out.shape[1] != len(used)):
             out = np.zeros((0, len(used))) if out.size == 0 else None      # 正文为空时各版本 numpy 给的形状不一样
     if out is None:
-        rows = [r if len(r) >= ncol else r + [""] * (ncol - len(r)) for r in csv.reader(io.StringIO(body, newline="")) if r]
+        rows: List[List[str]] = []
+        for r in csv.reader(io.StringIO(body, newline="")):
+            if not r:
+                continue
+            if len(r) > ncol:
+                skipped += 1
+                continue
+            rows.append(r if len(r) == ncol else r + [""] * (ncol - len(r)))
         out = np.array([[_num(r[i]) for i in used] for r in rows], dtype=np.float64).reshape(len(rows), len(used))
     out[~np.isfinite(out)] = np.nan
-    return {i: out[:, k] for k, i in enumerate(used)}
+    return {i: out[:, k] for k, i in enumerate(used)}, skipped
 
 
 def _decimate(cols: Sequence[np.ndarray], n: int, max_points: int) -> np.ndarray:
@@ -150,6 +161,11 @@ def read_curve_file(path: str, *, quantity: str = "", source_id: Optional[int] =
     text, truncated, size = _read_text(path, max(1024, int(max_bytes)))
     first, _, body = text.partition("\n")
     head = [str(h).strip() for h in (next(csv.reader([first.rstrip("\r")]), None) or [])]
+    # 最后一行没有换行符＝这一行还在写入（或进程被杀时只写了一半）：最后一个格子可能是被截断的数字，
+    # 整行不用，下次读取时它就完整了。实时落盘每行都以换行结束，所以完整的文件不受影响。
+    partial_tail = bool(body) and not body.endswith("\n")
+    if partial_tail:
+        body = body[: body.rfind("\n") + 1]
     if "t_epoch_s" not in head:
         raise MonitorCurveError("这不是实时监测输出的曲线文件：表头里没有 t_epoch_s 列"
                                 f"（表头前几列：{', '.join(head[:6]) or '空'}）")
@@ -170,12 +186,14 @@ def read_curve_file(path: str, *, quantity: str = "", source_id: Optional[int] =
     i_win = head.index("window_s") if "window_s" in head else -1
     idx = [head.index(f) for f in names]
 
-    parsed = _parse_columns(body, len(head), [i for i in (i_t, i_sid, i_rid, i_win, *idx) if i >= 0])
+    parsed, skipped = _parse_columns(body, len(head), [i for i in (i_t, i_sid, i_rid, i_win, *idx) if i >= 0])
     t_arr = parsed[i_t]
-    valid_t = ~np.isnan(t_arr)
+    with np.errstate(invalid="ignore"):
+        valid_t = ~np.isnan(t_arr) & (np.abs(t_arr) < T_EPOCH_MAX)      # 时间不是数字、或大得不可能是时间的行不用
+    bad_time = int(t_arr.size - valid_t.sum())
     rows_total = int(valid_t.sum())
     if not rows_total:
-        raise MonitorCurveError("文件里只有表头，没有数据行")
+        raise MonitorCurveError("文件里只有表头，没有完整的数据行" + ("（最后一行没有换行符，按“还在写入”处理，没有读它）" if partial_tail else ""))
     t_arr = t_arr[valid_t]
     if i_sid >= 0:
         raw_sid = parsed[i_sid][valid_t]
@@ -193,6 +211,9 @@ def read_curve_file(path: str, *, quantity: str = "", source_id: Optional[int] =
     notes: List[str] = []
     if truncated:
         notes.append(f"文件有 {size / 1024 / 1024:.0f} MB，只读取了末尾 {max_bytes / 1024 / 1024:.0f} MB")
+    if skipped or bad_time:
+        notes.append(f"有 {skipped + bad_time} 行格式不对（列数比表头多，或时间不是有效数字），已跳过；"
+                     "一般是程序异常中断后续写造成的")
 
     # ---- 数据来源（总线侧 / 分路侧）
     source_ids = sorted(int(x) for x in np.unique(sid_arr))

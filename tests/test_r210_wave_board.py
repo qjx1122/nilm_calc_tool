@@ -238,10 +238,10 @@ def test_fast_and_slow_parsers_give_the_same_result(tmp_path):
         return out
 
     head = ",".join(VOLT_HEAD)
-    plain = tmp_path / "voltage_20261111.csv"; quoted = tmp_path / "voltage_20261112.csv"; ragged = tmp_path / "voltage_20261113.csv"
+    plain = tmp_path / "voltage_20261111.csv"; quoted = tmp_path / "voltage_20261112.csv"; short = tmp_path / "voltage_20261113.csv"
     plain.write_bytes(("\ufeff" + head + "\r\n" + "\r\n".join(rows(False)) + "\r\n").encode("utf-8"))       # 实时落盘的写法：BOM + CRLF
     quoted.write_bytes(("\ufeff" + head + "\r\n" + "\r\n".join(rows(True)) + "\r\n").encode("utf-8"))
-    ragged.write_bytes(("\ufeff" + head + "\r\n" + "\r\n".join(rows(False)) + "\r\n" + f"{T0 + 50!r},x,0,0.2,150.0").encode("utf-8"))   # 最后一行只写了一半
+    short.write_bytes(("\ufeff" + head + "\r\n" + "\r\n".join(rows(False)) + "\r\n" + f"{T0 + 50!r},x,0,0.2,150.0\r\n").encode("utf-8"))   # 多一行比表头短的完整行
 
     calls = {"n": 0}
     real = mc._num
@@ -252,7 +252,7 @@ def test_fast_and_slow_parsers_give_the_same_result(tmp_path):
     try:
         a = read_curve_file(str(plain), source_id=0, run="all"); fast_calls = calls["n"]
         b = read_curve_file(str(quoted), source_id=0, run="all"); slow_calls = calls["n"] - fast_calls
-        c = read_curve_file(str(ragged), source_id=0, run="all")
+        c = read_curve_file(str(short), source_id=0, run="all")
     finally:
         mc._num = real
     assert fast_calls == 0 and slow_calls > 0, (fast_calls, slow_calls)        # 第一个文件走快路径，第二个走慢路径
@@ -260,8 +260,55 @@ def test_fast_and_slow_parsers_give_the_same_result(tmp_path):
         assert a[key] == b[key], key
     assert a["n"] == 25 and a["source_ids"] == [0, 1] and a["series"]["Ua"][0] is None and a["series"]["Ua"][1] == 102.0
     assert a["series"]["Ub"][0] is None and a["series"]["Uc"][0] == 102.0
-    assert c["n"] == 26 and c["series"]["Ua"][-1] == 150.0 and c["series"]["Uc"][-1] is None   # 半行里有的格子照用，缺的记为空
-    assert c["series"]["Ua"][:25] == a["series"]["Ua"]
+    assert c["n"] == 26 and c["series"]["Ua"][-1] == 150.0 and c["series"]["Uc"][-1] is None   # 比表头短的完整行：有的格子照用，缺的记为空
+    assert c["series"]["Ua"][:25] == a["series"]["Ua"] and not any("已跳过" in x for x in c["notes"])
+
+
+def test_a_line_still_being_written_is_not_read(tmp_path):
+    """最后一行没有换行符＝还在写入：最后一个格子可能是被截断的数字，整行不能用。
+
+    这里截断的是 run_id（1794371583469 只写出了 1794371）。如果把这一行读进来，它会被当成另一次运行，
+    而“最近一次运行”取的正是文件里最后写入的那一行 —— 曲线就只剩这一个点。
+    """
+    lines = [f"{T0 + k!r},2026-11-11 10:00:00.200,0,0.2,{100.0 + k!r},{101.0 + k!r},{102.0 + k!r},1,2,3,0.1,,{RUN_A}" for k in range(20)]
+    done = tmp_path / "voltage_20261111.csv"; writing = tmp_path / "voltage_20261112.csv"; cut_value = tmp_path / "voltage_20261113.csv"
+    head = "\ufeff" + ",".join(VOLT_HEAD) + "\r\n"
+    done.write_bytes((head + "\r\n".join(lines) + "\r\n").encode("utf-8"))
+    writing.write_bytes((head + "\r\n".join(lines) + "\r\n" + f"{T0 + 20!r},2026-11-11 10:00:00.200,0,0.2,120.0,121.0,122.0,1,2,3,0.1,,1794371").encode("utf-8"))
+    cut_value.write_bytes((head + "\r\n".join(lines) + "\r\n" + f"{T0 + 20!r},2026-11-11 10:00:00.200,0,0.2,12").encode("utf-8"))   # Ua 本该是 120.0
+    a = read_curve_file(str(done)); b = read_curve_file(str(writing)); c = read_curve_file(str(cut_value))
+    for d in (b, c):
+        assert d["n"] == 20 and d["t"] == a["t"] and d["series"] == a["series"]
+        assert [r["id"] for r in d["run_ids"]] == [RUN_A] and d["run_id"] == RUN_A and d["rows_total"] == 20
+    # 只有表头加一行没写完的数据：报错里说明原因
+    only = tmp_path / "current_20261111.csv"
+    only.write_bytes(("\ufefft_epoch_s,time_local,source_id,window_s,Ia,Ib,Ic,run_id\r\n" + f"{T0!r},x,0,0.2,1.0,2.0").encode("utf-8"))
+    with pytest.raises(MonitorCurveError, match="没有完整的数据行.*最后一行没有换行符"):
+        read_curve_file(str(only))
+
+
+def test_glued_lines_and_impossible_times_are_skipped(tmp_path):
+    """程序被杀时只写了半行、重启后接着写，两行会粘成一行：列数比表头多，各格子已经错位，整行跳过并在说明里写明。
+
+    半行断在第一个格子里时，粘出来的行列数是对的，但“时间”成了两个时间拼起来的天文数字，同样不能用。
+    """
+    def line(k, run=RUN_A):
+        return f"{T0 + k!r},2026-11-11 10:00:00.200,0,0.2,{100.0 + k!r},{101.0 + k!r},{102.0 + k!r},1,2,3,0.1,,{run}"
+    good = [line(k) for k in range(10)]
+    head = "\ufeff" + ",".join(VOLT_HEAD) + "\r\n"
+    glued = tmp_path / "voltage_20261111.csv"
+    #   第 10 行只写到 Ua 的一半（"110"），紧接着是重启后写的第 11 行
+    glued.write_bytes((head + "\r\n".join(good) + "\r\n" + f"{T0 + 10!r},2026-11-11 10:00:00.200,0,0.2,110" + line(11, RUN_B) + "\r\n"
+                       + line(12, RUN_B) + "\r\n").encode("utf-8"))
+    d = read_curve_file(str(glued), run="all")
+    assert d["n"] == 11 and d["t"] == [T0 + k for k in range(10)] + [T0 + 12] and d["series"]["Ua"][-1] == 112.0
+    assert d["rows_total"] == 11 and any("有 1 行格式不对" in x and "已跳过" in x for x in d["notes"]), d["notes"]
+    assert all(v is not None and 100.0 <= v <= 112.0 for v in d["series"]["Ua"]) and all(v is not None and 102.0 <= v <= 114.0 for v in d["series"]["Uc"])
+    #   半行断在时间格子里："1790000" + 下一行 → 列数没变，时间是 1790000179… 这样的数
+    bigt = tmp_path / "voltage_20261112.csv"
+    bigt.write_bytes((head + "\r\n".join(good) + "\r\n" + "17900" + line(11) + "\r\n" + line(12) + "\r\n").encode("utf-8"))
+    e = read_curve_file(str(bigt), run="all")
+    assert e["n"] == 11 and e["t_last"] == T0 + 12 and max(e["t"]) < 2e9 and any("有 1 行格式不对" in x for x in e["notes"]), (e["t"][-3:], e["notes"])
 
 
 # --------------------------------------------------------------------------- 文件清单
