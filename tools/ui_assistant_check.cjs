@@ -59,6 +59,7 @@ let lastIdentityToken = null;
 let lastChatPayload = null;
 let lastConfirmPayload = null;
 let lastConfirmHeaders = null;
+const exportDownloadUrls = [];
 let emitProposal = false;
 let emitClarification = false;
 const CLARIFICATION_TEXT = '我暂未创建操作预览。你的请求更符合「切换当前侧接线模式」，而不是「查询当前侧运行状态」。请确认希望执行的单一动作。';
@@ -119,6 +120,10 @@ window.fetch = async (url, options = {}) => {
     lastIdentityModel = decodeURIComponent(url.split('model_type=')[1] || '');
     lastIdentityToken = options.headers['X-Assistant-Operator-Token'] || '';
     return jsonResponse({ ok: true, operator_id: 'jsdom-operator', scopes: ['assistant.read'], available_tools: [] });
+  }
+  if (url.includes('/assistant/tools/export/')) {
+    exportDownloadUrls.push(url);
+    return new Response('a,b\n1,2\n', { status: 200, headers: { 'content-type': 'text/csv' } });
   }
   if (url === '/api/assistant/tools/confirm' && options.method === 'POST') {
     lastConfirmPayload = JSON.parse(options.body); lastConfirmHeaders = options.headers;
@@ -535,6 +540,24 @@ check($('assistant-launcher').hidden, '配置读取前问答入口应默认隐�
   check(lastConfirmPayload.confirmation_code === '123456', '确认接口没有携带二次确认码');
   check(lastConfirmHeaders['X-Assistant-Operator-Token'] === 'memory-only-operator-token', '确认接口没有带操作员令牌');
   check(!!proposalCard && proposalCard.textContent.includes('接线模式已切换为 3p4w'), '确认执行结果未更新到提案卡');
+
+  // 导出文件按生成它的一侧下载（补-A5）：提案可以是另一侧的，下载地址不能按页面当前所在的一侧拼。
+  if (!window.URL.createObjectURL) window.URL.createObjectURL = () => 'blob:jsdom-export';
+  if (!window.URL.revokeObjectURL) window.URL.revokeObjectURL = () => {};
+  window.HTMLAnchorElement.prototype.click = function () {};
+  const exportResult = side => ({ message: '已生成', filename: 'x.csv', download_url: '/api/assistant/tools/export/EXPORT-1', side });
+  await window.assistantDownloadExport(exportResult('branch'));
+  check(exportDownloadUrls.pop() === '/api/branch/assistant/tools/export/EXPORT-1', '总线侧页面下载分路侧的导出文件时，地址没有带分路侧前缀');
+  window.S.side = 'branch';
+  await window.assistantDownloadExport(exportResult('bus'));
+  check(exportDownloadUrls.pop() === '/api/assistant/tools/export/EXPORT-1', '分路侧页面下载总线侧的导出文件时，地址被加上了分路侧前缀');
+  await window.assistantDownloadExport(exportResult('branch'));
+  check(exportDownloadUrls.pop() === '/api/branch/assistant/tools/export/EXPORT-1', '分路侧页面下载本侧导出文件的地址不对');
+  await window.assistantDownloadExport(exportResult(undefined));
+  check(exportDownloadUrls.pop() === '/api/branch/assistant/tools/export/EXPORT-1', '结果里没有 side 时应退回页面当前所在的一侧');
+  window.S.side = 'bus';
+  await window.assistantDownloadExport(exportResult('bus'));
+  check(exportDownloadUrls.pop() === '/api/assistant/tools/export/EXPORT-1' && !$('assistant-error').textContent, '总线侧页面下载本侧导出文件的地址不对');
 
   // 服务端拒绝模型的工具调用时返回澄清：回答带“待澄清”标记，不出现操作预览卡；普通回答不带标记。
   check(!$('assistant-messages').querySelector('.assistant-clarification-note'), '普通回答或操作预览被误标为澄清');

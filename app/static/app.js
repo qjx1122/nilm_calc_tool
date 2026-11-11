@@ -5807,7 +5807,10 @@ async function assistantCancelProposal(msg) {
 }
 async function assistantDownloadExport(result) {
   try {
-    const response = await fetch(assistantApiUrl(result.download_url), { headers: assistantOperatorHeaders() });
+    // 导出文件绑定到生成它的一侧（result.side）；提案可以是另一侧的，页面也可能在生成之后切换了侧别，
+    // 所以下载地址按 result.side 拼，不按页面当前所在的一侧拼（否则服务端返回 403）。
+    const exportSide = result.side === 'bus' || result.side === 'branch' ? result.side : sideOf();
+    const response = await fetch(apiUrl(result.download_url, exportSide), { headers: assistantOperatorHeaders() });
     if (!response.ok) { let data = null; try { data = await response.json(); } catch (e) {} throw new Error(data && data.error ? data.error : '下载失败：HTTP ' + response.status); }
     const blob = await response.blob(), url = URL.createObjectURL(blob), link = document.createElement('a');
     link.href = url; link.download = result.filename || 'assistant-export.csv'; document.body.appendChild(link); link.click(); link.remove();

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import csv
 import hashlib
+import io
 import json
 import math
 import os
@@ -51,6 +52,24 @@ def _split_required_any(value: Optional[str]) -> Tuple[Tuple[str, ...], ...]:
     return tuple(groups)
 
 
+def _read_intent_csv_text(csv_path: str) -> str:
+    """Read the intent CSV as text: UTF-8 first (with or without a BOM), then GB18030.
+
+    The repository file is UTF-8 with a BOM, which Chinese-locale Excel needs in order to
+    show the Chinese columns. Excel's own "CSV (逗号分隔)" format saves the file in GBK, a
+    subset of GB18030; a file saved that way is read too, so that it cannot stop the server
+    from starting. Any other encoding raises ``ValueError``.
+    """
+    with open(csv_path, "rb") as fh:
+        raw = fh.read()
+    for encoding in ("utf-8-sig", "gb18030"):
+        try:
+            return raw.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+    raise ValueError("意图配置 CSV 的编码无法识别：请另存为 UTF-8（带 BOM）或 GBK / GB18030 后重试")
+
+
 def load_intent_data_from_csv(csv_path: str = _INTENT_CSV_PATH) -> Dict[str, Dict[str, Any]]:
     """从 CSV 文件加载意图契约数据，返回与原 _INTENT_DATA 相同结构的字典。
 
@@ -59,8 +78,7 @@ def load_intent_data_from_csv(csv_path: str = _INTENT_CSV_PATH) -> Dict[str, Dic
     - required_any：组内逗号分隔，组间分号分隔；空表示无
     """
     data: Dict[str, Dict[str, Any]] = {}
-    # utf-8-sig 可自动去除 UTF-8 BOM（Excel 中文版打开 CSV 需 BOM 才能正确识别中文）
-    with open(csv_path, encoding="utf-8-sig", newline="") as fh:
+    with io.StringIO(_read_intent_csv_text(csv_path), newline="") as fh:
         reader = csv.DictReader(fh)
         required_cols = {"tool", "intent", "mode", "actions", "targets", "positive", "negative", "policy"}
         missing = required_cols - set(reader.fieldnames or [])

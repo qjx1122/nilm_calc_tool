@@ -1570,10 +1570,12 @@ def _assistant_tool_context(side: str, hide_source_names: bool = False, include_
     runner = RUNNERS[side]
     cfg = runner.cfg
     source_path = str(getattr(cfg.source, "path", "") or "")
+    # running 在暂停期间也是 True（线程还在）；助手的“恢复”前置检查要靠 paused 区分“在播放”和“已暂停”。
     try:
         running = bool(runner.thread and runner.thread.is_alive() and not runner.stop_event.is_set() and not runner._thread_done)
+        paused = bool(running and runner.pause_event.is_set())
     except Exception:
-        running = False
+        running = paused = False
     source_name = os.path.basename(source_path) if source_path else ""
     if hide_source_names and source_name:
         source_name = "已脱敏数据源"
@@ -1593,7 +1595,7 @@ def _assistant_tool_context(side: str, hide_source_names: bool = False, include_
         for recording in recordings:
             recording["name"] = "已脱敏录波文件"
     return {"side": side, "source": {"kind": str(getattr(cfg.source, "kind", "")),
-                                       "name": source_name, "running": running,
+                                       "name": source_name, "running": running, "paused": paused,
                                        "has_path": bool(source_path)},
             "latest_profile": latest, "profiles": public_profiles,
             "profile_files": profiles, "recordings": recordings}
@@ -1650,54 +1652,75 @@ def _assistant_public_config_update(result: Any, message: str, side: str) -> Dic
             "changes": result.get("config_file_changes", [])}
 
 
+def _assistant_runtime_status(side: str) -> Dict[str, Any]:
+    """Whitelisted run-state summary of one side for the assistant; no paths, hosts or file names."""
+    runner = RUNNERS[side]
+    state = runner.state()
+    cfg = runner.cfg
+    engine = state.get("engine") if isinstance(state.get("engine"), dict) else {}
+    history = state.get("history") if isinstance(state.get("history"), dict) else {}
+    safe_engine = {key: engine.get(key) for key in ("samples_in", "blocks_in", "buffer_fill", "buffer_capacity",
+                                                    "data_duration_s", "ticks", "events_total", "events_active",
+                                                    "nilm_events_total", "nilm_cycles", "rate_samples_per_s") if key in engine}
+    return {"side": side, "running": bool(state.get("running")), "paused": bool(state.get("paused")),
+            "finished": bool(state.get("finished")), "source_kind": cfg.source.kind,
+            "source_configured": (cfg.source.kind not in {"csv_file", "csv_tail"} or bool(str(cfg.source.path or "").strip())),
+            "elapsed_s": state.get("elapsed_s"), "latest_quantities": state.get("latest_keys", []),
+            "latest_t_ref": state.get("latest_t_ref"), "stored_results": state.get("stored_results", 0),
+            "engine": safe_engine, "history": history,
+            "error_present": bool(state.get("error") or engine.get("errors"))}
+
+
+def _assistant_runtime_settings(side: str) -> Dict[str, Any]:
+    """Whitelisted configuration summary of one side for the assistant; no paths, hosts or file names."""
+    cfg = RUNNERS[side].cfg
+    from app.assistant_tools import EVENT_PARAMETER_KEYS
+    events = {key: getattr(cfg.events, key) for key in EVENT_PARAMETER_KEYS}
+    algorithms = {key: {"enabled": bool((cfg.nilm.algorithms.get(key) or {}).get("enabled", False))}
+                  for key in cfg.nilm.algorithms}
+    return {"side": side,
+            "sampling": {"fs": cfg.sampling.fs, "f_nom": cfg.sampling.f_nom,
+                         "f_min": cfg.sampling.f_min, "f_max": cfg.sampling.f_max},
+            "transform": {"wiring": cfg.transform.wiring, "pt_ratio": cfg.transform.pt_ratio,
+                          "ct_ratio": cfg.transform.ct_ratio, "reconstruct_3w": cfg.transform.reconstruct_3w,
+                          "invert_current": cfg.transform.invert_current, "invert_phases": cfg.transform.invert_phases},
+            "source": {"kind": cfg.source.kind, "has_path": bool(str(cfg.source.path or "").strip()),
+                       "file_speed": cfg.source.file_speed, "play_start_mode": cfg.source.play_start_mode},
+            "windows": {key: {"length_s": spec.length_s, "step_s": spec.step_s,
+                              "policy": spec.policy, "window_fn": spec.window_fn, "remove_dc": spec.remove_dc}
+                        for key, spec in cfg.windows.items()},
+            "events": {"enabled": cfg.events.enabled, "hysteresis": cfg.events.hysteresis,
+                       "thresholds": events},
+            "nilm": {"enabled": cfg.nilm.enabled, "auto_params": cfg.nilm.auto_params,
+                     "quantity": cfg.nilm.quantity, "channels": list(cfg.nilm.channels),
+                     "window_cycles": cfg.nilm.window_cycles, "min_gap_cycles": cfg.nilm.min_gap_cycles,
+                     "rel_tol_pct": cfg.nilm.rel_tol_pct, "min_delta_pct": cfg.nilm.min_delta_pct,
+                     "algorithms": algorithms},
+            "output": {"history_hours": cfg.output.history_hours,
+                       "curve_save": {key: bool(cfg.output.curve_save.get(key, True)) for key in CURVE_KEYS}}}
+
+
+# 两个只读查询的摘要只在这里生成：确认后执行（_execute_assistant_tool）与意图识别直达
+# （assistant_chat 交给 prepare_chat 的 read_tool_executor）用的是同一段代码。
+_ASSISTANT_READ_SUMMARIES = {"get_runtime_status": _assistant_runtime_status,
+                             "get_runtime_settings": _assistant_runtime_settings}
+
+
+def assistant_read_tool(name: str, side: str) -> Dict[str, Any]:
+    """Run one of the two read-only summary tools for ``side`` ("bus" / "branch")."""
+    if name not in _ASSISTANT_READ_SUMMARIES or side not in RUNNERS:
+        raise AssistantError(403, "未注册的只读查询，已拒绝执行")
+    return _ASSISTANT_READ_SUMMARIES[name](side)
+
+
 async def _execute_assistant_tool(pending: Dict[str, Any]) -> Dict[str, Any]:
     """Execute exactly one registered tool via existing in-process business API handlers."""
     name, args = pending["name"], pending.get("args", {})
     side = pending["side"]
     # 侧别以预览时存储的 pending["side"] 为准，不再与确认时的 current_side() 比较，
     # 避免用户在总线侧UI发起分路侧操作、确认时因 current_side() 为 bus 而被误判。
-    if name == "get_runtime_status":
-        runner = RUNNERS[side]
-        state = runner.state()
-        cfg = runner.cfg
-        engine = state.get("engine") if isinstance(state.get("engine"), dict) else {}
-        history = state.get("history") if isinstance(state.get("history"), dict) else {}
-        safe_engine = {key: engine.get(key) for key in ("samples_in", "blocks_in", "buffer_fill", "buffer_capacity",
-                                                        "data_duration_s", "ticks", "events_total", "events_active",
-                                                        "nilm_events_total", "nilm_cycles", "rate_samples_per_s") if key in engine}
-        return {"side": side, "running": bool(state.get("running")), "paused": bool(state.get("paused")),
-                "finished": bool(state.get("finished")), "source_kind": cfg.source.kind,
-                "source_configured": (cfg.source.kind not in {"csv_file", "csv_tail"} or bool(str(cfg.source.path or "").strip())),
-                "elapsed_s": state.get("elapsed_s"), "latest_quantities": state.get("latest_keys", []),
-                "latest_t_ref": state.get("latest_t_ref"), "stored_results": state.get("stored_results", 0),
-                "engine": safe_engine, "history": history,
-                "error_present": bool(state.get("error") or engine.get("errors"))}
-    if name == "get_runtime_settings":
-        cfg = RUNNERS[side].cfg
-        from app.assistant_tools import EVENT_PARAMETER_KEYS
-        events = {key: getattr(cfg.events, key) for key in EVENT_PARAMETER_KEYS}
-        algorithms = {key: {"enabled": bool((cfg.nilm.algorithms.get(key) or {}).get("enabled", False))}
-                      for key in cfg.nilm.algorithms}
-        return {"side": side,
-                "sampling": {"fs": cfg.sampling.fs, "f_nom": cfg.sampling.f_nom,
-                             "f_min": cfg.sampling.f_min, "f_max": cfg.sampling.f_max},
-                "transform": {"wiring": cfg.transform.wiring, "pt_ratio": cfg.transform.pt_ratio,
-                              "ct_ratio": cfg.transform.ct_ratio, "reconstruct_3w": cfg.transform.reconstruct_3w,
-                              "invert_current": cfg.transform.invert_current, "invert_phases": cfg.transform.invert_phases},
-                "source": {"kind": cfg.source.kind, "has_path": bool(str(cfg.source.path or "").strip()),
-                           "file_speed": cfg.source.file_speed, "play_start_mode": cfg.source.play_start_mode},
-                "windows": {key: {"length_s": spec.length_s, "step_s": spec.step_s,
-                                  "policy": spec.policy, "window_fn": spec.window_fn, "remove_dc": spec.remove_dc}
-                            for key, spec in cfg.windows.items()},
-                "events": {"enabled": cfg.events.enabled, "hysteresis": cfg.events.hysteresis,
-                           "thresholds": events},
-                "nilm": {"enabled": cfg.nilm.enabled, "auto_params": cfg.nilm.auto_params,
-                         "quantity": cfg.nilm.quantity, "channels": list(cfg.nilm.channels),
-                         "window_cycles": cfg.nilm.window_cycles, "min_gap_cycles": cfg.nilm.min_gap_cycles,
-                         "rel_tol_pct": cfg.nilm.rel_tol_pct, "min_delta_pct": cfg.nilm.min_delta_pct,
-                         "algorithms": algorithms},
-                "output": {"history_hours": cfg.output.history_hours,
-                           "curve_save": {key: bool(cfg.output.curve_save.get(key, True)) for key in CURVE_KEYS}}}
+    if name in {"get_runtime_status", "get_runtime_settings"}:
+        return assistant_read_tool(name, side)
     if name == "get_electrical_result":
         result = await get_result(full=False)
         _assistant_api_error(result)
@@ -2333,11 +2356,17 @@ async def assistant_chat(request: Request) -> Any:
         recording_tools = {"list_recordings", "select_recording_source", "inspect_recording", "analyze_recording_rms",
                            "tune_recording", "resample_recording", "estimate_ct_ratio", "extract_device_profile"}
         include_recordings = bool(recording_tools & set(available_tools))
-        context = _assistant_tool_context(current_side(), hide_source_names,
-                                          include_profiles=include_profiles, include_recordings=include_recordings)
+        def side_context(which: str) -> Dict[str, Any]:
+            return _assistant_tool_context(which, hide_source_names,
+                                           include_profiles=include_profiles, include_recordings=include_recordings)
+
+        # tool_context 是提问页面所在一侧的上下文；话里点名另一侧时，prepare_chat 通过 tool_context_for
+        # 读取那一侧自己的数据源状态与画像清单，前置检查和提案都以目标侧为准。
         plan = assistant_service.prepare_chat(payload, redact_source_names=hide_source_names,
                                               operator_token=operator_token if operator else "",
-                                              side=current_side(), tool_context=context)
+                                              side=current_side(), tool_context=side_context(current_side()),
+                                              tool_context_for=side_context,
+                                              read_tool_executor=assistant_read_tool)
     except AssistantError as exc:
         assistant_service.release_request()
         log.warning("assistant_chat_prepare_rejected trace_id=%s status=%d", trace_id, exc.status_code)

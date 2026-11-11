@@ -1654,11 +1654,15 @@ def test_offline_source_stop_resume_pause_regression_corpus(tmp_path, monkeypatc
         service.prepare_chat(base_payload, operator_token=operator,
                              tool_context={"source": {"kind": "csv_file", "has_path": True, "running": False}})
 
-    # 5.3 来源已运行（无法恢复）
+    # 5.3 来源在播放、没有暂停（无需恢复）；来源未运行（无法恢复）
     with pytest.raises(AssistantError, match="正在运行，无需恢复"):
         service.prepare_chat({**base_payload, "prompt": "恢复当前侧离线播放"},
                              operator_token=operator,
                              tool_context={"source": {"kind": "csv_file", "has_path": True, "running": True}})
+    with pytest.raises(AssistantError, match="未在运行，无法恢复"):
+        service.prepare_chat({**base_payload, "prompt": "恢复当前侧离线播放"},
+                             operator_token=operator,
+                             tool_context={"source": {"kind": "csv_file", "has_path": True, "running": False}})
 
     # 5.4 非离线来源（simulator/tcp）用于 stop 时的前置检查（stop 不限制种类，只检查运行状态）
     # 此处仅验证非离线来源在运行时可被 stop
@@ -1699,10 +1703,12 @@ def test_offline_source_stop_resume_pause_regression_corpus(tmp_path, monkeypatc
                                 tool_context={"source": {"kind": "csv_file", "has_path": True, "running": True}})
     assert plan["_tool_proposal"]["tool"] == "pause_current_source"
 
-    # resume 正常路径（源未运行，可恢复）
+    # resume 正常路径：数据源已暂停。暂停期间 running 仍为 True，要靠 paused 区分
+    #（2026-11-10 补-A11：此前这里用 running=False 当作“可恢复”，与实际执行的条件相反）
     plan = service.prepare_chat({**base_payload, "prompt": "恢复当前侧离线播放"},
                                 operator_token=operator,
-                                tool_context={"source": {"kind": "csv_file", "has_path": True, "running": False}})
+                                tool_context={"source": {"kind": "csv_file", "has_path": True,
+                                                         "running": True, "paused": True}})
     assert plan["_tool_proposal"]["tool"] == "resume_current_source"
 
     # 新增：带“执行”动词的启动表达（问题1：请执行当前离线数据源播放）
@@ -1876,3 +1882,447 @@ def test_intent_config_csv_missing_required_column_raises(tmp_path, monkeypatch)
 
     with pytest.raises(ValueError, match="缺少必要列"):
         load_intent_data_from_csv(str(bad_csv))
+
+
+def test_intent_config_csv_in_the_repository_has_a_utf8_bom():
+    """补-A8：入库的 configs/intent_actions.csv 带 UTF-8 BOM（中文 Excel 靠它识别编码），读入后不残留 BOM。"""
+    from pathlib import Path
+
+    from app.assistant_intents import _INTENT_DATA
+
+    raw = (Path(__file__).resolve().parents[1] / "configs" / "intent_actions.csv").read_bytes()
+    assert raw.startswith(b"\xef\xbb\xbf"), "configs/intent_actions.csv 应带 UTF-8 BOM"
+    assert not raw[3:].startswith(b"\xef\xbb\xbf")           # 只有一个
+    assert raw.count(b"\r\n") == 47 and b"\n" not in raw.replace(b"\r\n", b"")   # 表头 + 46 行，CRLF
+    assert next(iter(_INTENT_DATA)) == "get_runtime_status"
+    assert not any(key.startswith("\ufeff") for key in _INTENT_DATA)
+
+
+def test_intent_config_csv_saved_as_gbk_still_loads(tmp_path):
+    """补-A8：Excel 的“CSV（逗号分隔）”把文件存成 GBK；登记时这样的文件让服务无法启动（UnicodeDecodeError）。"""
+    from pathlib import Path
+
+    from app.assistant_intents import _INTENT_DATA, load_intent_data_from_csv
+
+    text = (Path(__file__).resolve().parents[1] / "configs" / "intent_actions.csv").read_bytes().decode("utf-8-sig")
+    for name, encoding in (("gbk.csv", "gbk"), ("gb18030.csv", "gb18030"), ("utf8_no_bom.csv", "utf-8"),
+                           ("utf8_bom.csv", "utf-8-sig")):
+        copy = tmp_path / name
+        copy.write_bytes(text.encode(encoding))
+        assert load_intent_data_from_csv(str(copy)) == _INTENT_DATA, name
+
+    # 其它编码不猜，给出明确错误（UTF-16 是 Excel “Unicode 文本”的编码）
+    utf16 = tmp_path / "utf16.csv"
+    utf16.write_bytes(text.encode("utf-16"))
+    with pytest.raises(ValueError, match="编码无法识别"):
+        load_intent_data_from_csv(str(utf16))
+
+
+# ---------------------------------------------------------------------------
+# 2026-11-10 第三项任务：补-A1～A7、补-A9～A11 的回归用例（REPORT_TEST.md T-023）
+# 跨侧用例一律让两侧处于不同的运行状态；真实接口上的同类用例在 tests/test_assistant_cross_side.py。
+# ---------------------------------------------------------------------------
+
+_ALL_SOURCE_TOOLS = ["start_current_source", "pause_current_source", "resume_current_source", "stop_current_source"]
+_ALL_SOURCE_SCOPES = ["engine.start", "engine.pause", "engine.resume", "engine.stop"]
+
+
+def _side_contexts(bus_source, branch_source, **extra):
+    """A ``tool_context_for`` provider whose two sides are in different states, and the calls it received."""
+    contexts = {"bus": {"side": "bus", "source": dict(bus_source), **extra.get("bus", {})},
+                "branch": {"side": "branch", "source": dict(branch_source), **extra.get("branch", {})}}
+    asked = []
+
+    def provider(side):
+        asked.append(side)
+        return contexts[side]
+
+    return contexts, provider, asked
+
+
+def _ask(service, operator, prompt, side, contexts, provider, **kwargs):
+    return service.prepare_chat({"prompt": prompt, "model_type": "local", "model_name": "qwen3:8b"},
+                                operator_token=operator, side=side, tool_context=contexts[side],
+                                tool_context_for=provider, **kwargs)
+
+
+def test_delay_refusal_needs_a_delay_phrase_not_a_bare_hou_character(tmp_path, monkeypatch):
+    """补-A1：单个“后”字不算延时；“后台”“最后 10 条”这类立即执行的请求不再被 400 拒绝。"""
+    from app.assistant import _has_delay_intent
+
+    immediate = (
+        "查看后台重采样任务状态", "取消后台重采样", "查询最后10条电能质量事件", "列出最后5条负荷辨识事件",
+        "以后台方式重采样", "启动后台重采样", "停止后台任务", "查询8点以后的事件", "查看10:00之后的电能质量事件",
+        "查询10:00之后发生的事件", "查看之后的事件", "对比事件前后电流", "事件前后对比", "把滞后设置为0.02",
+        "把最后查询的结果导出", "最后设置的阈值是多少", "分析最后一次事件", "提取前窗300后窗300的画像",
+        "查询持续超过5分钟的事件", "查询不超过5秒的事件", "把窗口长度设为0.2秒", "把窗口设为10s", "把步长设为5秒",
+        "导出最近2小时的历史", "加载最近 3 天的历史数据", "通过1秒窗口计算谐波", "查看经过3秒滤波的波形",
+        "查询今晚8小时内的事件", "把电压等级设置为10kV", "A、B、C等3个通道", "列出等待确认的操作",
+        "总线侧相对分路侧延迟0.5秒", "启动分路侧数据源", "重新启动数据源", "start", "stop",
+    )
+    for prompt in immediate:
+        assert not _has_delay_intent(prompt), f"不是延时指令：{prompt!r}"
+    delayed = (
+        "15秒过后启动当前侧数据源检测", "5分钟后列出当前电能质量事件", "半小时后停止数据源", "两分钟之后启动",
+        "两个小时后停止", "30 秒以后暂停", "10s后启动", "5 min后停止", "１５秒后启动", "1.5小时后停止",
+        "过10秒启动数据源", "等5分钟再启动", "等待10秒启动", "推迟10分钟启动", "晚5分钟启动",
+        "定时启动数据源", "延时启动", "稍后查看运行状态", "等一下再暂停", "待会启动数据源", "过一会再停止",
+        "一会儿再启动", "晚点停止数据源", "回头再清空事件", "片刻后启动",
+        "播放完之后停止数据源", "然后停止数据源", "加载完成之后再启动数据源",
+        "启动后暂停数据源", "启动后立即暂停", "播放完后停止数据源", "播放完成后暂停", "停止后重新启动数据源",
+        "等播放完再停止数据源", "等数据源播放结束再暂停",
+    )
+    for prompt in delayed:
+        assert _has_delay_intent(prompt), f"应识别为延时指令：{prompt!r}"
+
+    service, operator = _tool_gate_service(
+        tmp_path, monkeypatch, ["get_resample_status", "cancel_resample", "get_event_list", "start_current_source"],
+        ["recordings.resample.read", "recordings.resample.cancel", "events.read", "engine.start"])
+    monkeypatch.setattr(service, "_open_request",
+                        lambda *args, **kwargs: pytest.fail("a direct route must not call the model"))
+    context = {"source": {"kind": "simulator", "running": False}}
+    # 登记时被 400 拒绝的三句话：现在各自得到对应工具的提案
+    for prompt, tool in (("查看后台重采样任务状态", "get_resample_status"), ("取消后台重采样", "cancel_resample"),
+                         ("查询最后10条电能质量事件", "get_event_list")):
+        plan = service.prepare_chat({"prompt": prompt, "model_type": "local"}, operator_token=operator,
+                                    tool_context=context)
+        assert plan["_tool_proposal"]["tool"] == tool, prompt
+    # 真正的延时指令在两条直达路由上仍被拒绝
+    for prompt in ("15秒过后启动当前侧数据源检测", "5分钟后列出当前电能质量事件", "稍后查看后台重采样任务状态",
+                   "等5分钟再启动当前侧数据源检测"):
+        with pytest.raises(AssistantError, match="系统不支持延时执行") as refused:
+            service.prepare_chat({"prompt": prompt, "model_type": "local"}, operator_token=operator,
+                                 tool_context=context)
+        assert refused.value.status_code == 400, prompt
+
+
+def test_side_words_are_whole_words_and_two_named_sides_are_never_guessed(tmp_path, monkeypatch):
+    """补-A2：bus / branch 只认独立单词（“Modbus”不算总线侧）；两侧都点名时不取先出现的一侧。"""
+    from app.assistant import _resolve_target_side
+
+    table = (
+        # 话，提问页面 -> (目标侧, 是否两侧都点名)
+        ("查看 Modbus 运行状态", "branch", ("branch", False)),
+        ("查看 Modbus 运行状态", "bus", ("bus", False)),
+        ("busbar 电压是多少", "branch", ("branch", False)),
+        ("列出 branches", "bus", ("bus", False)),
+        ("停止bus侧数据源", "branch", ("bus", False)),
+        ("查看 BRANCH 状态", "bus", ("branch", False)),
+        ("查看 Ｂｕｓ 侧状态", "branch", ("bus", False)),
+        ("暂停分路侧离线播放", "bus", ("branch", False)),
+        ("查看总侧数据源", "branch", ("bus", False)),
+        ("区分侧别查看状态", "bus", ("bus", False)),
+        ("启动当前侧数据源", "branch", ("branch", False)),
+        ("启动数据源", "branch", ("branch", False)),
+        ("对比总线侧和分路侧", "bus", ("bus", True)),
+        ("对比分路侧和总线侧", "branch", ("branch", True)),
+        ("启动当前侧分路侧数据源", "bus", ("bus", True)),
+        ("启动当前侧分路侧数据源", "branch", ("branch", False)),
+    )
+    for prompt, page, expected in table:
+        assert _resolve_target_side(prompt, page) == expected, (prompt, page)
+
+    service, operator = _tool_gate_service(
+        tmp_path, monkeypatch, ["get_runtime_status", "set_wiring_mode", "compare_sides", *_ALL_SOURCE_TOOLS],
+        ["state.read", "config.wiring.write", "compare.read", *_ALL_SOURCE_SCOPES])
+    running = {"kind": "csv_file", "has_path": True, "running": True, "paused": False}
+    stopped = {"kind": "simulator", "has_path": False, "running": False, "paused": False}
+    contexts, provider, _asked = _side_contexts(bus_source=running, branch_source=stopped)
+    reads = []
+
+    def executor(tool, side):
+        reads.append((tool, side))
+        return {"side": side}
+
+    # 登记时的现象：在分路侧页面问“Modbus”，返回的是总线侧状态
+    plan = _ask(service, operator, "查看 Modbus 运行状态", "branch", contexts, provider, read_tool_executor=executor)
+    assert reads == [("get_runtime_status", "branch")] and plan["_side"] == "branch"
+    assert "查询分路侧运行状态" in plan["_direct_tool_response"]
+
+    # 确定性路由：两侧都点名 -> 400，不替用户选；同一句话在分路侧页面只指分路侧
+    for prompt, page in (("停止总线侧 分路侧数据源", "bus"), ("停止分路侧总线侧数据源", "bus"),
+                         ("启动当前侧分路侧数据源", "bus")):
+        with pytest.raises(AssistantError, match="同时提到了总线侧和分路侧") as refused:
+            _ask(service, operator, prompt, page, contexts, provider)
+        assert refused.value.status_code == 400, prompt
+    plan = _ask(service, operator, "启动当前侧分路侧数据源", "branch", contexts, provider)
+    assert plan["_tool_proposal"]["side"] == "branch"
+    assert not any(item["name"] == "stop_current_source" for item in service._pending_tools.values())
+
+    # 模型路径：单侧工具在两侧都点名时返回澄清，不创建提案
+    call = _tool_call("set_wiring_mode", {"wiring": "3p4w"})
+    monkeypatch.setattr(service, "_open_request", _fake_model_reply({"content": "", "tool_calls": [call]}))
+    pending_before = len(service._pending_tools)
+    plan = _ask(service, operator, "切换总线侧和分路侧接线模式到3p4w", "bus", contexts, provider)
+    answer = service.complete(plan)
+    assert "同时提到了总线侧和分路侧" in answer and plan.get("_tool_clarification")
+    assert "_tool_proposal" not in plan and len(service._pending_tools) == pending_before
+
+    # 本身就跨两侧的工具不受影响：仍绑定提问页面所在的一侧
+    call = _tool_call("compare_sides", {"quantity": "power"})
+    monkeypatch.setattr(service, "_open_request", _fake_model_reply({"content": "", "tool_calls": [call]}))
+    plan = _ask(service, operator, "对比总线侧和分路侧的有功功率", "branch", contexts, provider)
+    service.complete(plan)
+    assert plan["_tool_proposal"]["tool"] == "compare_sides" and plan["_tool_proposal"]["side"] == "branch"
+
+
+def test_exclusive_wording_adds_a_linkage_warning_and_no_unread_plan_keys(tmp_path, monkeypatch):
+    """补-A3：“只 / 仅 / 单独”不改变执行内容；总线侧的联动操作在卡片上提示“不能只作用于总线侧”。"""
+    from app.assistant import _has_exclusive_limit
+
+    for prompt in ("只启动总线侧数据源", "仅暂停总线侧", "单独停止总线侧", "仅仅停止总线侧数据源"):
+        assert _has_exclusive_limit(prompt), prompt
+    for prompt in ("启动数据源", "查看只读配置", "只要启动就行", "不只停止总线侧", "不仅如此", "只是看看状态"):
+        assert not _has_exclusive_limit(prompt), prompt
+
+    service, operator = _tool_gate_service(tmp_path, monkeypatch, [*_ALL_SOURCE_TOOLS, "load_last_history"],
+                                           [*_ALL_SOURCE_SCOPES, "history.load"])
+    stopped = {"kind": "csv_file", "has_path": True, "running": False, "paused": False}
+    running = {"kind": "csv_file", "has_path": True, "running": True, "paused": False}
+    paused = {"kind": "csv_file", "has_path": True, "running": True, "paused": True}
+    warning = "系统不支持只作用于总线侧"
+
+    def proposal(prompt, side, bus_source, branch_source):
+        contexts, provider, _asked = _side_contexts(bus_source=bus_source, branch_source=branch_source)
+        plan = _ask(service, operator, prompt, side, contexts, provider)
+        # 两个键曾经写进计划却没有代码读取；_parsed_side 与 _side 重复，已删除
+        assert "_parsed_side" not in plan and plan["_exclusive_limit"] is _has_exclusive_limit(prompt)
+        return plan["_tool_proposal"]
+
+    # 总线侧 + 限定词 + 联动操作：四个启停操作各有一句说明连带效果的提示（确定性路由与意图识别直达都有）
+    for prompt, bus_source, effect in (
+            ("只启动总线侧数据源", stopped, "分路侧已启用时会一起启动"),
+            ("只暂停总线侧离线播放", running, "分路侧正在播放的离线文件会一起暂停"),
+            ("单独恢复总线侧离线播放", paused, "分路侧暂停中的离线文件会一起恢复"),
+            ("仅停止总线侧数据源", running, "分路侧会一起停止")):
+        item = proposal(prompt, "branch", bus_source, stopped)
+        assert item["side"] == "bus" and warning in item["impact"] and effect in item["impact"], prompt
+    # 在总线侧页面不点名侧别也一样（“当前侧”就是总线侧）
+    assert warning in proposal("只暂停当前侧离线播放", "bus", running, stopped)["impact"]
+    # 没有限定词、或操作落在分路侧（不联动总线侧）：不加提示
+    assert warning not in proposal("暂停总线侧离线播放", "bus", running, stopped)["impact"]
+    assert warning not in proposal("只启动分路侧数据源", "bus", running, stopped)["impact"]
+    assert warning not in proposal("只暂停当前侧离线播放", "branch", stopped, running)["impact"]
+
+
+def test_intent_route_start_requires_a_file_source_only_for_offline_wording(tmp_path, monkeypatch):
+    """补-A4：意图识别直达与确定性路由用同一条规则——只有话里明确说到离线 / CSV / 文件时才要求文件数据源。"""
+    service, operator = _tool_gate_service(tmp_path, monkeypatch, ["start_current_source"], ["engine.start"])
+    monkeypatch.setattr(service, "_open_request",
+                        lambda *args, **kwargs: pytest.fail("a direct route must not call the model"))
+    simulator = {"kind": "simulator", "has_path": False, "running": False, "paused": False}
+    contexts, provider, _asked = _side_contexts(bus_source=simulator, branch_source=simulator)
+
+    # 同一个意思，两条路由结果一致（登记时：前一句 409，后一句生成提案）
+    for prompt, origin in (("启动分路侧数据源检测", "intent"), ("启动分路侧数据源", "deterministic")):
+        plan = _ask(service, operator, prompt, "bus", contexts, provider)
+        assert plan["_tool_call_origin"] == origin and plan["_tool_proposal"]["side"] == "branch", prompt
+    # 话里说了离线 / CSV：数据源不是文件时两条路由都拒绝
+    for prompt, origin in (("启动分路侧离线数据源检测", "intent"), ("启动分路侧CSV数据源检测", "intent"),
+                           ("播放离线数据源", "deterministic")):
+        with pytest.raises(AssistantError, match="不是离线文件数据源") as refused:
+            _ask(service, operator, prompt, "bus", contexts, provider)
+        assert refused.value.status_code == 409, prompt
+    # 文件数据源没有配置路径：意图识别直达同样拒绝
+    no_file = {"kind": "csv_file", "has_path": False, "running": False, "paused": False}
+    contexts, provider, _asked = _side_contexts(bus_source=simulator, branch_source=no_file)
+    with pytest.raises(AssistantError, match="分路侧离线数据源未配置可用文件"):
+        _ask(service, operator, "启动分路侧数据源检测", "bus", contexts, provider)
+
+
+def test_model_path_proposal_is_bound_to_the_side_named_in_the_prompt(tmp_path, monkeypatch, caplog):
+    """补-A5：模型路径的提案绑定到话里点名的一侧，用的是那一侧的资源清单。"""
+    import logging
+
+    service, operator = _tool_gate_service(
+        tmp_path, monkeypatch, ["set_wiring_mode", "load_profile_by_id", "compare_sides"],
+        ["config.wiring.write", "profile.load", "compare.read"])
+    source = {"kind": "simulator", "has_path": False, "running": False, "paused": False}
+    contexts, provider, asked = _side_contexts(
+        bus_source=source, branch_source=source,
+        bus={"profiles": [{"id": "00000000000000b1", "name": "profile_bus_device.json", "side": "bus"}]},
+        branch={"profiles": [{"id": "00000000000000c9", "name": "profile_branch_device.json", "side": "branch"}]})
+    caplog.set_level(logging.INFO, logger="elec_tool.assistant")
+    call = _tool_call("set_wiring_mode", {"wiring": "3p4w"})
+    monkeypatch.setattr(service, "_open_request", _fake_model_reply({"content": "好。", "tool_calls": [call]}))
+
+    # 登记时的现象：在总线侧页面说“把分路侧……”，得到 side=bus 的提案
+    plan = _ask(service, operator, "把分路侧接线模式切换到3p4w", "bus", contexts, provider)
+    answer = service.complete(plan)
+    proposal = plan["_tool_proposal"]
+    assert proposal["side"] == "branch" and proposal["summary"] == "将分路侧接线模式切换为 3p4w"
+    # 跨侧提案的标题不再写“当前侧”（那会被读成提问页面所在的一侧）
+    assert proposal["title"] == "切换分路侧接线模式" and "切换分路侧接线模式" in answer
+    pending = service._pending_tools[proposal["id"]]
+    assert pending["side"] == "branch" and pending["context"]["side"] == "branch"
+    assert "bound_side=branch" in caplog.text and "side=bus target_side=branch" in caplog.text
+    assert asked == ["branch"]  # 另一侧的上下文只读取一次
+
+    # 反方向，以及不点名侧别时仍绑定提问页面所在的一侧（标题保持工具原名）
+    plan = _ask(service, operator, "把总线侧接线模式切换到3p4w", "branch", contexts, provider)
+    service.complete(plan)
+    assert plan["_tool_proposal"]["side"] == "bus" and plan["_tool_proposal"]["title"] == "切换总线侧接线模式"
+    plan = _ask(service, operator, "切换接线模式到3p4w", "branch", contexts, provider)
+    service.complete(plan)
+    assert plan["_tool_proposal"]["side"] == "branch" and plan["_tool_proposal"]["title"] == "切换当前侧接线模式"
+
+    # 模型看到的、以及核对参数用的，都是目标侧的画像清单
+    plan = _ask(service, operator, "使用分路侧画像ID为 00000000000000c9", "bus", contexts, provider)
+    system_text = plan["messages"][0]["content"]
+    assert "00000000000000c9" in system_text and "00000000000000b1" not in system_text
+    call = _tool_call("load_profile_by_id", {"profile_id": "00000000000000c9"})
+    monkeypatch.setattr(service, "_open_request", _fake_model_reply({"content": "", "tool_calls": [call]}))
+    service.complete(plan)
+    proposal = plan["_tool_proposal"]
+    assert proposal["side"] == "branch" and proposal["arguments"] == {"profile_id": "00000000000000c9"}
+    assert service._pending_tools[proposal["id"]]["context"]["profiles"][0]["id"] == "00000000000000c9"
+    # 总线侧清单里的画像不属于分路侧：模型给出它时只得到澄清，不创建提案
+    pending_before = len(service._pending_tools)
+    call = _tool_call("load_profile_by_id", {"profile_id": "00000000000000b1"})
+    monkeypatch.setattr(service, "_open_request", _fake_model_reply({"content": "", "tool_calls": [call]}))
+    plan = _ask(service, operator, "使用分路侧画像ID为 00000000000000b1", "bus", contexts, provider)
+    service.complete(plan)
+    assert plan.get("_tool_clarification") and "_tool_proposal" not in plan
+    assert len(service._pending_tools) == pending_before
+
+
+def test_intent_route_leaves_unauthorized_requests_to_the_model_path(tmp_path, monkeypatch, caplog):
+    """补-A6：意图识别直达只在工具本轮可用时介入；不可用时不报 403，日志写明识别出的工具不可用。"""
+    import logging
+
+    service, operator = _tool_gate_service(tmp_path, monkeypatch, ["get_event_list", "start_current_source"],
+                                           ["recordings.read"])  # 令牌没有 events.read / engine.start
+    caplog.set_level(logging.INFO, logger="elec_tool.assistant")
+    context = {"source": {"kind": "simulator", "running": False}}
+
+    # 知识性问题也会被打成 high tier；工具不可用时必须还能得到普通回答
+    for token in (operator, ""):
+        for prompt in ("电能质量事件有哪些类型", "列出当前电能质量事件"):
+            caplog.clear()
+            plan = service.prepare_chat({"prompt": prompt, "model_type": "local", "model_name": "qwen3:8b"},
+                                        operator_token=token, tool_context=context)
+            assert plan["_tool_call_origin"] == "model" and "messages" in plan and "_tool_proposal" not in plan
+            assert "decision=model_fallback" in caplog.text and "intent_tier=high" in caplog.text
+            assert "intent_tool=get_event_list intent_tool_available=False" in caplog.text
+            assert "assistant_route_blocked" not in caplog.text
+    # 确定性路由（话与工具标题、启停短命令完全对上）在工具不可用时仍报 403
+    with pytest.raises(AssistantError, match="操作员令牌缺少精确 scope engine.start") as denied:
+        service.prepare_chat({"prompt": "启动当前侧数据源检测", "model_type": "local"}, operator_token=operator,
+                             tool_context=context)
+    assert denied.value.status_code == 403
+    assert not service._pending_tools
+
+
+def test_direct_reads_skip_the_low_tier_and_leave_an_audit_record(tmp_path, monkeypatch):
+    """补-A7：两个只读查询 low 档位不直接执行；直接执行时写一条审计记录；摘要由注入的服务端函数生成。"""
+    service, operator = _tool_gate_service(tmp_path, monkeypatch, ["get_runtime_status", "get_runtime_settings"],
+                                           ["state.read", "config.read"])
+    source = {"kind": "simulator", "has_path": False, "running": False, "paused": False}
+    contexts, provider, _asked = _side_contexts(bus_source=source, branch_source=source)
+    audit_path = tmp_path / "tool_audit.jsonl"
+    reads = []
+
+    def audit():
+        return ([json.loads(line) for line in audit_path.read_text(encoding="utf-8").splitlines()]
+                if audit_path.exists() else [])
+
+    def executor(tool, side):
+        reads.append((tool, side))
+        return {"side": side, "marker": f"{tool}@{side}"}
+
+    monkeypatch.setattr(service, "_open_request",
+                        lambda *args, **kwargs: pytest.fail("a direct read must not call the model"))
+    plan = _ask(service, operator, "查询当前运行状态", "bus", contexts, provider, read_tool_executor=executor)
+    assert reads == [("get_runtime_status", "bus")]
+    assert json.loads(plan["_direct_tool_response"].split("\n", 1)[1]) == {"side": "bus",
+                                                                         "marker": "get_runtime_status@bus"}
+    assert "_tool_proposal" not in plan and not service._pending_tools
+    plan = _ask(service, operator, "查看分路侧计算配置", "bus", contexts, provider, read_tool_executor=executor)
+    assert reads[-1] == ("get_runtime_settings", "branch") and "查询分路侧计算配置摘要" in plan["_direct_tool_response"]
+    records = audit()
+    assert [(row["tool"], row["side"], row["status"]) for row in records] == [
+        ("get_runtime_status", "bus", "direct_read"), ("get_runtime_settings", "branch", "direct_read")]
+    for row, trace_id in zip(records, (None, plan["_trace_id"])):
+        assert row["operator_id"] == "tool-gate-operator" and row["origin"] == "intent" and row["arguments"] == {}
+        assert "proposal_id" not in row and re.fullmatch(r"[0-9a-f]{16}", row["trace_id"])
+        assert trace_id is None or row["trace_id"] == trace_id
+
+    # low 档位（一句话同时问状态和配置，两个候选同分）：不直接执行，交给模型路径
+    plan = _ask(service, operator, "查看当前运行状态和计算配置", "bus", contexts, provider, read_tool_executor=executor)
+    assert plan["_tool_call_origin"] == "model" and "messages" in plan and "_direct_tool_response" not in plan
+    assert len(reads) == 2 and len(audit()) == 2
+
+    # 取摘要出错：留下 failed 记录，异常照常抛出
+    def broken(tool, side):
+        raise RuntimeError("summary unavailable")
+
+    with pytest.raises(RuntimeError):
+        _ask(service, operator, "查询当前运行状态", "bus", contexts, provider, read_tool_executor=broken)
+    assert audit()[-1]["status"] == "failed" and audit()[-1]["tool"] == "get_runtime_status"
+
+    # 调用方没有提供取摘要的函数：退回为一张待确认的提案
+    plan = _ask(service, operator, "查询当前运行状态", "bus", contexts, provider)
+    assert plan["_tool_proposal"]["tool"] == "get_runtime_status" and len(service._pending_tools) == 1
+    assert audit()[-1]["status"] == "pending_confirmation"
+
+
+def test_cross_side_source_checks_read_the_target_side_state(tmp_path, monkeypatch, caplog):
+    """补-A9 / 补-A10 / 补-A11：启动、暂停、恢复、停止的前置检查读目标侧的状态；恢复只在“已暂停”时放行。"""
+    import logging
+
+    service, operator = _tool_gate_service(tmp_path, monkeypatch, _ALL_SOURCE_TOOLS, _ALL_SOURCE_SCOPES)
+    monkeypatch.setattr(service, "_open_request",
+                        lambda *args, **kwargs: pytest.fail("a direct route must not call the model"))
+    caplog.set_level(logging.INFO, logger="elec_tool.assistant")
+    playing = {"kind": "csv_file", "has_path": True, "running": True, "paused": False}
+    paused = {"kind": "csv_file", "has_path": True, "running": True, "paused": True}
+    stopped = {"kind": "simulator", "has_path": False, "running": False, "paused": False}
+
+    def outcome(prompt, page, bus_source, branch_source):
+        """The proposal's ``(tool, side)``, or the refusal's ``(status, message)``."""
+        contexts, provider, _asked = _side_contexts(bus_source=bus_source, branch_source=branch_source)
+        try:
+            plan = _ask(service, operator, prompt, page, contexts, provider)
+        except AssistantError as exc:
+            return exc.status_code, exc.message
+        return plan["_tool_proposal"]["tool"], plan["_tool_proposal"]["side"]
+
+    # ---- 总线侧在播放、分路侧未运行；在总线侧页面操作分路侧 ----
+    # 补-A10：登记时这句话被 409“分路侧数据源已在运行或暂停”误拒（读的是总线侧的状态）
+    for prompt in ("启动分路侧数据源", "启动分路侧数据源检测"):  # 确定性路由 / 意图识别直达
+        caplog.clear()
+        assert outcome(prompt, "bus", playing, stopped) == ("start_current_source", "branch"), prompt
+        assert "side=bus target_side=branch" in caplog.text
+        assert "source_kind=simulator source_running=False" in caplog.text  # 日志里是目标侧的数据源
+    # 补-A9：登记时这三句话照样生成提案，到确认才报错（停止甚至返回成功）
+    for prompt, message in (("暂停分路侧离线播放", "分路侧数据源未在运行，无法暂停"),
+                            ("恢复分路侧离线播放", "分路侧数据源未在运行，无法恢复"),
+                            ("停止分路侧数据源", "分路侧数据源未在运行，无法停止"),
+                            ("仅停止分路侧数据源", "分路侧数据源未在运行，无法停止")):  # 最后一句走意图识别直达
+        status, text = outcome(prompt, "bus", playing, stopped)
+        assert status == 409 and message in text, prompt
+    # 同一时刻对总线侧自己的操作不受影响
+    assert outcome("暂停当前侧离线播放", "bus", playing, stopped) == ("pause_current_source", "bus")
+    assert outcome("停止当前侧数据源", "bus", playing, stopped) == ("stop_current_source", "bus")
+
+    # ---- 同样的状态，在分路侧页面操作总线侧 ----
+    # 补-A10 的另一半：目标侧已在运行时，登记时提案照样生成
+    status, text = outcome("启动总线侧数据源", "branch", playing, stopped)
+    assert status == 409 and "总线侧数据源已在运行或暂停，不会重复启动" in text
+    assert outcome("暂停总线侧离线播放", "branch", playing, stopped) == ("pause_current_source", "bus")
+    assert outcome("停止总线侧数据源", "branch", playing, stopped) == ("stop_current_source", "bus")
+    status, text = outcome("恢复总线侧离线播放", "branch", playing, stopped)
+    assert status == 409 and "总线侧数据源正在运行，无需恢复" in text
+    assert outcome("启动当前侧数据源检测", "branch", playing, stopped) == ("start_current_source", "branch")
+
+    # ---- 补-A11：总线侧已暂停（running 仍为 True）----
+    # 登记时：在总线侧页面说这句话被 409“正在运行，无需恢复”拒绝，暂停后无法从本侧恢复
+    for prompt, page in (("恢复当前侧离线播放", "bus"), ("resume", "bus"), ("恢复总线侧离线播放", "branch"),
+                         ("单独恢复总线侧离线播放", "branch")):
+        assert outcome(prompt, page, paused, stopped) == ("resume_current_source", "bus"), prompt
+    # 数据源已停止：登记时反而生成提案，确认时才报“数据源未在运行”
+    status, text = outcome("恢复当前侧离线播放", "bus", stopped, playing)
+    assert status == 409 and "总线侧数据源未在运行，无法恢复" in text
+    # 暂停中的数据源不能再“启动”，要用恢复
+    status, text = outcome("启动当前侧数据源检测", "bus", paused, stopped)
+    assert status == 409 and "请使用恢复操作" in text
