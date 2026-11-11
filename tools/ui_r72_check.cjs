@@ -1,5 +1,15 @@
 /* 第 93 轮界面检查（v0.72）：数据处理页「负荷辨识调参」基准配置独立于总线侧 / 分路侧运行配置，各配置可单独修改。
- * 用法：JSDOM_DIR=/tmp/uitest node tools/ui_r72_check.cjs http://127.0.0.1:8033   （需 data/nilm_bus_mixed.csv） */
+ * 用法：TZ=Asia/Shanghai JSDOM_DIR=/tmp/uitest node tools/ui_r72_check.cjs http://127.0.0.1:8033
+ * 前提：服务的工作目录下有 data/nilm_bus_mixed.csv（python tools/gen_nilm_sample.py --bus 生成）；服务与本脚本同一时区。
+ *       脚本会改两侧运行配置的 PT/CT 和分路侧的辨识参数，结束时还原成开始时读到的值。请对着临时服务跑。
+ * 2026-11-11（v0.99.50，补-B5）更新：
+ *   - 数据处理页自 2026-11-09 起分成 5 个子界面，进入页面后要先点「负荷辨识调参」；
+ *   - v0.99.23 起出厂变比是 PT 1 / CT 1，「启用 PT/CT」开关隐藏且恒为启用：涉及出厂值的期望由 100 / 15 改成 1 / 1，
+ *     原来「取消勾选开关 → 二次侧口径」的期望改成「恒按一次侧换算」；
+ *   - init 只调一次（原来手动调用加上 DOMContentLoaded 会跑两遍）。
+ * 当前结果：有 1 项失败——「选沿用分路侧运行配置后全部字段禁用」。这是产品问题（补-B7）而不是脚本过期：
+ *   标题写着「不可修改」，PT / CT 两个输入框在约 1 秒后又变回可编辑（v0.99.23 的 ptctSync 无条件解除禁用）。问题修掉后这一项应通过。
+ */
 const fs = require('fs'), path = require('path');
 const { JSDOM } = require(path.join(process.env.JSDOM_DIR || '/tmp/uitest', 'node_modules/jsdom'));
 const ROOT = path.join(__dirname, '..'); const BASE = (process.argv[2] || 'http://127.0.0.1:8000').replace(/\/$/, '');
@@ -8,6 +18,7 @@ async function main() {
   const J = async (u, o) => (await fetch(BASE + u, o)).json();
   const put = (u, b) => J(u, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(b) });
   await J('/api/engine/stop', { method: 'POST' }); await J('/api/branch/engine/stop', { method: 'POST' });
+  const bus0 = await J('/api/config'), br0 = await J('/api/branch/config');   // 结束时按这两份还原
   // 两侧运行配置故意不同：总线侧 PT=123，分路侧 PT=100 CT=5
   await put('/api/config', { transform: { enabled: true, pt_ratio: 123, ct_ratio: 15 } });
   await put('/api/branch/config', { transform: { enabled: true, pt_ratio: 100, ct_ratio: 5 }, nilm: { quantity: 'p', channels: ['B'] } });
@@ -22,7 +33,10 @@ async function main() {
   const { window } = dom, { document } = window;
   window.__toasts = [];
   window.eval(js + '\n;window.__S = () => S; window.__NT = NT; const __toast0 = toast; toast = function (m, k) { window.__toasts.push([String(m), k]); return __toast0(m, k); };');
-  if (typeof window.init === 'function') window.init();
+  // app.js 自己注册了 DOMContentLoaded → init，而 jsdom 在构造函数返回之后才派发这个事件：
+  // 这里再手动调一次的话 init 会跑两遍，所有匿名函数绑定的事件都多绑一次。先去掉那个监听，只调一次。
+  document.removeEventListener('DOMContentLoaded', window.init);
+  window.init();
   await sleep(1500);
   const $ = (id) => document.getElementById(id);
   const click = (el) => el.dispatchEvent(new window.Event('click', { bubbles: true }));
@@ -30,23 +44,25 @@ async function main() {
   const nav = async (v) => { click(document.querySelector(`.navitem[data-view="${v}"]`)); await sleep(1200); };
   let fail = 0; const check = (n, ok, info) => { console.log((ok ? '  ✓ ' : '  ✗ ') + n + (info ? '　' + info : '')); if (!ok) fail++; };
   const lastPost = () => calls.filter((c) => /\/api\/(branch\/)?process\/nilm_tune$/.test(c.url) && c.method === 'POST').pop();
-  await nav('process'); await sleep(1500);
+  await nav('process');
+  // 数据处理页自 2026-11-09 起分成 5 个子界面；调参子界面的文件列表和基准配置在第一次打开时才加载
+  click(document.querySelector('#sub-nav-process .sub-navitem[data-subview="nilm-tune"]')); await sleep(1500);
 
   console.log('— 独立基准配置（默认）');
   check('基准配置下拉默认＝独立基准配置', $('nt-side').value === 'custom', $('nt-side').value);
   check('独立基准配置分组可见，含 fs / f_nom / PT·CT / UTC / PT / CT（检测量不重复出现）', $('nt-base').style.display !== 'none' && ['nt-base-fs', 'nt-base-fnom', 'nt-base-ptct', 'nt-base-utc', 'nt-base-pt', 'nt-base-ct'].every((i) => !!$(i)));
   check('独立基准分组内没有第二个检测量 / 检测对象控件（只在下方各一处）', !document.getElementById('nt-base-q') && document.querySelectorAll('#nt-form select[id^="nt-quantity"]').length === 1 && document.querySelectorAll('#nt-form select[id^="nt-channel"]').length === 1 && /出厂缺省 auto/.test($('nt-quantity-follow').textContent));
-  check('初值＝出厂配置（PT=100 CT=15 fs=6400），不是总线侧运行配置的 PT=123', $('nt-base-pt').value === '100' && $('nt-base-ct').value === '15' && $('nt-base-fs').value === '6400', `${$('nt-base-pt').value}/${$('nt-base-ct').value}/${$('nt-base-fs').value}`);
-  // 单独修改：PT=77，去掉 PT/CT
-  $('nt-base-pt').value = '77'; change($('nt-base-pt')); $('nt-base-ptct').checked = false; change($('nt-base-ptct'));
+  check('初值＝出厂配置（v0.99.23 起 PT=1 CT=1；fs=6400），不是总线侧运行配置的 PT=123', $('nt-base-pt').value === '1' && $('nt-base-ct').value === '1' && $('nt-base-fs').value === '6400', `${$('nt-base-pt').value}/${$('nt-base-ct').value}/${$('nt-base-fs').value}`);
+  // 单独修改：PT=77（v0.99.23 起没有「启用 PT/CT」开关，隐藏的复选框恒为勾选；原来这里还会取消勾选它）
+  $('nt-base-pt').value = '77'; change($('nt-base-pt'));
   let saved = null; try { saved = JSON.parse(window.localStorage.getItem('elec_tool.nilm_tune.base')); } catch (e) {}
-  check('修改后自动保存到浏览器本地（PT=77、PT/CT 关闭）', saved && saved.pt_ratio === '77' && saved.pt_ct_enabled === '0', JSON.stringify(saved));
+  check('修改后自动保存到浏览器本地（PT=77；PT/CT 恒为启用）', saved && saved.pt_ratio === '77' && saved.pt_ct_enabled === '1', JSON.stringify(saved));
   $('nt-path').value = 'data/nilm_bus_mixed.csv'; $('nt-duration').value = '2';
   click($('btn-nt-run')); await sleep(4000);
   let c = lastPost(); let b = c && JSON.parse(c.body);
-  check('调参请求 base_mode=custom 且 base 为界面值（PT=77、PT/CT 关）', b && b.base_mode === 'custom' && b.base && b.base.pt_ratio === '77' && b.base.pt_ct_enabled === '0', c && c.body.slice(0, 200));
+  check('调参请求 base_mode=custom 且 base 为界面值（PT=77；PT/CT 恒为启用）', b && b.base_mode === 'custom' && b.base && b.base.pt_ratio === '77' && b.base.pt_ct_enabled === '1', c && c.body.slice(0, 200));
   let d = window.__NT.last;
-  check('结果按独立基准配置计算：scaled=false（二次侧口径），base.pt_ratio=77', d && d.scaled === false && d.base && d.base.pt_ratio === 77 && d.base_mode === 'custom', d && JSON.stringify(d.base));
+  check('结果按独立基准配置计算：scaled=true（一次侧口径，PT=77 参与换算），base.pt_ratio=77', d && d.scaled === true && d.base && d.base.pt_ratio === 77 && d.base_mode === 'custom', d && JSON.stringify(d.base));
   check('结果区显示「独立基准配置」与落盘文件 nilm_tune_base.json', /独立基准配置/.test($('nt-status').textContent) && /nilm_tune_base\.json/.test($('nt-status').textContent));
   check('等价命令 --config 指向 nilm_tune_base.json', /--config \S*nilm_tune_base\.json/.test(d.command), d.command);
   const bus = await J('/api/config'); const br = await J('/api/branch/config');
@@ -61,7 +77,7 @@ async function main() {
   const br2 = await J('/api/branch/config');
   check('改独立基准 CT=9 不影响分路侧运行配置（仍 5）', br2.transform.ct_ratio === 5);
   click($('btn-nt-base-default')); await sleep(800);
-  check('「恢复出厂」→ PT=100 CT=15', $('nt-base-pt').value === '100' && $('nt-base-ct').value === '15');
+  check('「恢复出厂」→ PT=1 CT=1', $('nt-base-pt').value === '1' && $('nt-base-ct').value === '1', `${$('nt-base-pt').value}/${$('nt-base-ct').value}`);
 
   console.log('— 检测量 / 检测对象：独立基准可单独改，沿用某侧时随该侧且不可改');
   check('独立基准下「检测量 / 检测对象」可编辑', !$('nt-quantity').disabled && !$('nt-channel').disabled);
@@ -71,13 +87,14 @@ async function main() {
   check('独立基准：请求带 quantity=i channel=C，结果按之计算', b.quantity === 'i' && b.channel === 'C' && d.quantity === 'i' && d.channel === 'C', `${d.quantity}/${d.channel}`);
   console.log('— 沿用某侧运行配置（旧行为仍可选）');
   $('nt-side').value = 'branch'; change($('nt-side')); await sleep(1000);
+  // 这一项目前失败，原因是产品问题补-B7（PT / CT 输入框在沿用模式下约 1 秒后变回可编辑），见文件头
   check('选「沿用分路侧运行配置」后分组仍显示但标题改为沿用、全部字段禁用并显示分路侧值（CT=5）、填入按钮隐藏', $('nt-base').style.display !== 'none' && /沿用分路侧/.test($('nt-base-title').textContent) && ['nt-base-fs', 'nt-base-pt', 'nt-base-ct', 'nt-base-ptct', 'nt-base-utc'].every((i) => $(i).disabled) && $('nt-base-ct').value === '5' && $('btn-nt-base-bus').style.display === 'none', $('nt-base-title').textContent + ' CT=' + $('nt-base-ct').value);
   check('检测量 / 检测对象（在基准配置分组内）被禁用并显示分路侧配置值（p / B）', $('nt-base').contains($('nt-quantity')) && $('nt-base').contains($('nt-channel')) && $('nt-quantity').disabled && $('nt-channel').disabled && $('nt-quantity').value === 'p' && $('nt-channel').value === 'B', `${$('nt-quantity').value}/${$('nt-channel').value}`);
   click($('btn-nt-run')); await sleep(4000);
   c = lastPost(); b = JSON.parse(c.body); d = window.__NT.last;
   check('请求走 /api/branch/process/nilm_tune，base_mode=running，不上送 quantity/channel，结果 base.ct_ratio=5、按分路侧 p / B 计算', /^\/api\/branch\//.test(c.url) && b.base_mode === 'running' && !b.base && b.quantity === null && b.channel === null && d.base && d.base.ct_ratio === 5 && d.quantity === 'p' && d.channel === 'B', c.url + ' ' + d.quantity + '/' + d.channel);
   $('nt-side').value = 'custom'; change($('nt-side')); await sleep(300);
-  check('切回独立基准：全部字段恢复可编辑并还原用户值（CT=15、i / C）', !$('nt-quantity').disabled && !$('nt-base-ct').disabled && $('nt-base-ct').value === '15' && $('nt-quantity').value === 'i' && $('nt-channel').value === 'C', `${$('nt-base-ct').value} ${$('nt-quantity').value}/${$('nt-channel').value}`);
+  check('切回独立基准：全部字段恢复可编辑并还原用户值（CT=1、i / C）', !$('nt-quantity').disabled && !$('nt-base-ct').disabled && $('nt-base-ct').value === '1' && $('nt-quantity').value === 'i' && $('nt-channel').value === 'C', `${$('nt-base-ct').value} ${$('nt-quantity').value}/${$('nt-channel').value}`);
   $('nt-quantity').value = ''; $('nt-channel').value = '';
 
   console.log('— 自定义时间（与波形预览同一套）');
@@ -115,9 +132,9 @@ async function main() {
   check('独立基准配置 + 套用目标＝分路侧 → 请求 /api/branch/nilm/tune/apply，分路侧 nilm 参数已更新、总线侧未变', ap && /^\/api\/branch\//.test(ap.url) && br3.nilm.quantity === d.quantity && bus3.transform.pt_ratio === 123, ap && ap.url);
   check('分路侧 PT/CT 未被套用改动（仍 CT=5）', br3.transform.ct_ratio === 5);
 
-  // 还原两侧运行配置（不留状态给其它检查脚本）
-  await put('/api/config', { transform: { enabled: true, pt_ratio: 100, ct_ratio: 15 } });
-  await put('/api/branch/config', { transform: { enabled: true, pt_ratio: 100, ct_ratio: 15 }, nilm: { quantity: 'auto', channels: ['total'] } });
+  // 还原两侧运行配置（不留状态给其它检查脚本）：按开始时读到的值还原，不再假定出厂是 PT 100 / CT 15
+  await put('/api/config', { transform: bus0.transform });
+  await put('/api/branch/config', { transform: br0.transform, nilm: br0.nilm });
   console.log(fail ? `FAIL ${fail}` : 'ALL PASS');
   window.close(); process.exit(fail ? 1 : 0);
 }

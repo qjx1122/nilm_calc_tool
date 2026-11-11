@@ -1,5 +1,8 @@
 // v0.86 实录检查：数据处理页 重采样 / 负荷辨识调参 / 波形预览 三处「离线文件列映射」块（默认不启用、启用显示 7 列号、载荷 / 查询参数带列映射）。
 // 用法：JSDOM_DIR=/tmp/uitest node tools/ui_r86_check.cjs http://127.0.0.1:8036
+// 2026-11-11（v0.99.50，补-B5）更新：数据处理页自 2026-11-09 起分成 5 个子界面，各子界面的事件在第一次打开时才绑定，
+//   所以先把重采样 / 负荷辨识调参 / 波形分析（原名波形预览）三个子界面各打开一次；
+//   退出码改为：全部通过 0，有失败 1（原来恒为 0）。
 const {JSDOM}=require(process.env.JSDOM_DIR+'/node_modules/jsdom');
 (async()=>{
  const [base]=process.argv.slice(2);
@@ -8,6 +11,9 @@ const {JSDOM}=require(process.env.JSDOM_DIR+'/node_modules/jsdom');
  const w=dom.window; w.fetch=(u,o)=>fetch(String(u).startsWith('/')?base+u:u,o); w.HTMLCanvasElement.prototype.getContext=()=>new Proxy({},{get:()=>()=>({})});
  let js=await (await fetch(base+'/static/app.js')).text(); js+='\nwindow.__$=$;window.init=init;window.__rs=rsPayload;window.__nt=ntPayload;window.__wp=wpBase;';
  w.eval(js); try{w.init();}catch(e){console.log('init err',e.message)} await new Promise(r=>setTimeout(r,1500));
+ const clk=sel=>w.document.querySelector(sel).dispatchEvent(new w.Event('click',{bubbles:true}));
+ clk('.navitem[data-view="process"]'); await new Promise(r=>setTimeout(r,600));
+ for (const sub of ['rsample','nilm-tune','wave-preview']) { clk('#sub-nav-process .sub-navitem[data-subview="'+sub+'"]'); await new Promise(r=>setTimeout(r,1000)); }
  const $=w.__$, ok=[];
  const F=['ts','ua','ia','ub','ib','uc','ic'];
  for (const pre of ['rs-cm','nt-cm','wp-cm']) {
@@ -26,5 +32,5 @@ const {JSDOM}=require(process.env.JSDOM_DIR+'/node_modules/jsdom');
  ok.push(['波形预览查询 col_map JSON', wp.col_map_enabled==='1' && JSON.parse(wp.col_map).ua==='3']);
  ok.push(['调参列映射随基准配置存本地', (()=>{try{const b=JSON.parse(w.localStorage.getItem('elec_tool.nilm_tune.base')||'null'); return b && b.col_map_enabled===true && b.col_map.ua==='3';}catch(e){return false;}})()]);
  ok.push(['波形预览列映射存本地', (()=>{try{const b=JSON.parse(w.localStorage.getItem('elec_tool.wave_preview.base')||'null'); return b && b.col_map_enabled==='1';}catch(e){return false;}})()]);
- ok.forEach(([n,v])=>console.log(v?'PASS':'FAIL',n)); console.log(ok.every(x=>x[1])?'ALL PASS':'FAIL'); process.exit(0);
+ ok.forEach(([n,v])=>console.log(v?'PASS':'FAIL',n)); console.log(ok.every(x=>x[1])?'ALL PASS':'FAIL'); process.exit(ok.every(x=>x[1])?0:1);
 })();

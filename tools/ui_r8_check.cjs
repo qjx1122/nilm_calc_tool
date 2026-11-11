@@ -13,8 +13,18 @@
  *   E7 v0.34 相对误差：时间窗输入改动即保存到配置 processing.error_window_s；重采样 POST 载荷带 err_window_s；
  *      结果含 _err.csv（真实存在、行数=窗数+表头+汇总、列名含 RMS相对误差/NRMSE）；界面显示误差表；
  *      关闭勾选 → 载荷 err_report=false、结果无 err_path；非法窗 → ok:false
+ *   E8 v0.52 负荷辨识调参面板（整文件 / 时间段 / 保存配置 / 从文件估计最小关心负荷 / 套用）
  *
- * 用法：JSDOM_DIR=/tmp/uitest node tools/ui_r8_check.cjs [baseUrl]
+ * 用法：TZ=Asia/Shanghai JSDOM_DIR=/tmp/uitest node tools/ui_r8_check.cjs [baseUrl]
+ * 前提：
+ *   - 本脚本所在的仓库目录就是服务的工作目录（脚本直接在 data/、output/nilm/ 下写入和核对文件），服务用默认输出目录；
+ *   - data/ 下有 nilm_steps.csv（python tools/gen_nilm_sample.py）和 sample_6400hz.csv（python cli.py gen-sample）；
+ *   - 请对着临时服务跑：脚本会改运行配置里的误差时间窗和辨识参数（结束时还原），并在 data/ 下生成、删除文件。
+ * 2026-11-11（v0.99.50，补-B5）更新：
+ *   - 数据处理页自 2026-11-09 起分成 5 个子界面，E8 要先点「负荷辨识调参」（文件下拉到第一次打开子界面才加载）；
+ *   - E8 里「从文件估计最小关心负荷」的期望值（300000 W）是按 PT 100 / CT 15 写的；v0.99.23 起出厂变比是 1 / 1，
+ *     所以这一段显式把调参基准配置的变比设成 100 / 15，估计完再还原；
+ *   - init 只调一次（原来手动调用加上 DOMContentLoaded 会跑两遍）。
  */
 const fs = require('fs');
 const path = require('path');
@@ -73,13 +83,18 @@ async function main() {
   });
   const { window } = dom, { document } = window;
   window.eval(js + '\n;window.__S = () => S;');
-  if (typeof window.init === 'function') window.init();
+  // app.js 自己注册了 DOMContentLoaded → init，而 jsdom 在构造函数返回之后才派发这个事件：
+  // 这里再手动调一次的话 init 会跑两遍，所有匿名函数绑定的事件都多绑一次。先去掉那个监听，只调一次。
+  document.removeEventListener('DOMContentLoaded', window.init);
+  window.init();
   await sleep(1500);
   const $ = (id) => document.getElementById(id);
   const click = (el) => el.dispatchEvent(new window.Event('click', { bubbles: true }));
   const change = (el) => el.dispatchEvent(new window.Event('change', { bubbles: true }));
   const input = (el) => el.dispatchEvent(new window.Event('input', { bubbles: true }));
   const nav = async (v) => { click(document.querySelector(`.navitem[data-view="${v}"]`)); await sleep(600); };
+  // 数据处理页自 2026-11-09 起分成 5 个子界面，文件下拉等要到第一次打开对应子界面才加载
+  const sub = async (v) => { click(document.querySelector(`#sub-nav-process .sub-navitem[data-subview="${v}"]`)); await sleep(600); };
   let lastStart = null;
   const waitDone = async (ms = 20000) => {
     const t0 = Date.now(); let st;
@@ -203,7 +218,7 @@ async function main() {
   check('界面预览提示源文件不存在', /不存在/.test($('rs-preview').textContent));
 
   console.log('\n=== E8. v0.52 负荷辨识调参面板 ===');
-  await nav('process'); await sleep(500);
+  await nav('process'); await sub('nilm-tune'); await sleep(500);
   check('面板控件齐全', ['nt-files', 'nt-path', 'nt-tstart', 'nt-tend', 'nt-duration', 'nt-side', 'nt-quantity', 'nt-channel', 'nt-minw', 'nt-mina', 'nt-save', 'nt-name', 'btn-nt-run', 'btn-nt-apply', 'nt-result'].every((id) => !!$(id)));
   check('文件下拉已从 /api/files 填充且含 nilm_steps.csv', [...$('nt-files').options].some((o) => o.value === 'data/nilm_steps.csv'));
   $('nt-files').value = 'data/nilm_steps.csv'; change($('nt-files'));
@@ -238,6 +253,10 @@ async function main() {
   check('保存时命令含 --t-start/--duration 与 --apply --out output/nilm/site_bg.json', /--t-start \S+ --duration 2 --json --apply --out output\/nilm\/site_bg\.json$/.test(cmd2) && JSON.parse(fs.readFileSync(path.join(ROOT, 'output/nilm/site_bg.json'), 'utf8'))._tuning.command === cmd2, cmd2);
   check('自定义名 → output/nilm/site_bg.json', /output\/nilm\/site_bg\.json/.test($('nt-status').textContent) && fs.existsSync(path.join(ROOT, 'output/nilm/site_bg.json')));
   // v0.55 从文件估计最小关心负荷
+  // 候选值按一次侧给出，与 PT × CT 成正比。本脚本写成时出厂变比是 PT 100 / CT 15（下面的 300000 W 由此而来），
+  // 现在出厂是 1 / 1，所以这一段显式把调参基准配置的变比设成 100 / 15，估计完再还原。
+  const ptct0 = [$('nt-base-pt').value, $('nt-base-ct').value];
+  $('nt-base-pt').value = '100'; $('nt-base-ct').value = '15';
   $('nt-tstart').value = ''; $('nt-duration').value = ''; $('nt-save').checked = false; $('nt-name').value = '';
   $('nt-minw').value = ''; $('nt-minauto').checked = true; click($('btn-nt-run')); await sleep(3000);
   nb = bodies('/api/process/nilm_tune', 'POST').pop();
@@ -247,6 +266,7 @@ async function main() {
   check('建议 min_delta_w = ceil2(候选/2) ≈ 150000', /min_delta_w=1[56]0000/.test($('nt-result').textContent));   // 候选 ≈3e5 落在 300000 两侧时 ceil2 给 150000 或 160000
   click($('btn-nt-est-fill')); await sleep(200);
   check('「填入输入框」→ 最小关心负荷(W)=300000、自动估计勾选被取消', +$('nt-minw').value === 300000 && !$('nt-minauto').checked && $('nt-mina').value === '', $('nt-minw').value);
+  $('nt-base-pt').value = ptct0[0]; $('nt-base-ct').value = ptct0[1];
   // 纯背景文件 → 不可靠，按未指定处理
   $('nt-minw').value = ''; $('nt-minauto').checked = true; $('nt-files').value = 'data/sample_6400hz.csv'; change($('nt-files')); click($('btn-nt-run')); await sleep(3000);
   check('纯背景文件：无法估计、提示未发现投切、本次未采用', /无法估计/.test($('nt-est-text').textContent) && /未发现投切/.test($('nt-est-text').textContent) && JSON.parse($('nt-json').textContent).min_load_source === 'none' && $('btn-nt-est-fill').disabled, $('nt-est-text').textContent.slice(0, 80));

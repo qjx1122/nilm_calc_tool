@@ -1,5 +1,16 @@
 #!/usr/bin/env node
-/* ui_r61_check.cjs —— v0.61 数据处理页「波形预览」检查（需服务在跑；用法 TZ=Asia/Shanghai JSDOM_DIR=/tmp/uitest node tools/ui_r61_check.cjs http://127.0.0.1:8000） */
+/* ui_r61_check.cjs —— v0.61 数据处理页「波形预览」检查（v0.99.50 起这个子界面在界面上叫「波形分析」，内部标识不变）
+ *
+ * 用法：TZ=Asia/Shanghai JSDOM_DIR=/tmp/uitest node tools/ui_r61_check.cjs http://127.0.0.1:8000
+ * 前提：
+ *   - 服务已启动，并且与本脚本在同一个时区（上面的 TZ 两边都要设）。脚本按东八区写死了期望的时刻；
+ *     服务端在别的时区时，占位提示、按时刻定位这几项会失败，并在中途抛异常；
+ *   - 服务的工作目录下有 data/nilm_bus_mixed.csv（python tools/gen_nilm_sample.py --bus 生成）。
+ * 2026-11-11（v0.99.50，补-B5）更新：
+ *   - 数据处理页自 2026-11-09 起分成 5 个子界面，进入页面后要先点「波形分析」；
+ *   - v0.99.23 起出厂变比是 PT 1 / CT 1，「启用 PT/CT」开关隐藏且恒为启用：初始值检查改成 1 / 1，随后显式填 PT 100 / CT 15
+ *     沿用原来的工况；原来「取消勾选开关」的那一段改成「把 PT 从 100 改成 1」，并增加一项改之前的峰值作对照。
+ */
 const fs = require('fs');
 const path = require('path');
 const { JSDOM } = require(path.join(process.env.JSDOM_DIR || '/tmp/uitest', 'node_modules/jsdom'));
@@ -43,12 +54,18 @@ async function main() {
   await sleep(1500);
   window.document.querySelector('.navitem[data-view="process"]').click();
   await sleep(300);
+  // 数据处理页自 2026-11-09 起分成 5 个子界面；这个子界面的默认值、文件列表、事件绑定都在第一次打开时才做
+  window.document.querySelector('#sub-nav-process .sub-navitem[data-subview="wave-preview"]').click();
+  await sleep(600);
   check('数据处理页有波形预览面板（路径 / 独立基准配置 6 项 / 重采样率 + 方式 / 起止 / 周波数 / 6 通道勾选 / 3 张画布）',
     !!$('#wp-path') && !$('#wp-side') && !!$('#wp-base-fs') && !!$('#wp-base-fnom') && !!$('#wp-base-ptct') && !!$('#wp-base-pt') && !!$('#wp-base-ct') && !!$('#wp-base-utc') && !!$('#wp-fs') && !!$('#wp-method') && !!$('#wp-tstart') && !!$('#wp-tend') && !!$('#wp-ncyc') && window.document.querySelectorAll('#wp-chans .wp-ch').length === 6 && !!$('#wp-wave') && !!$('#wp-rms') && !!$('#wp-cyc'));
   check('默认值：周波数 300、重采样率空（原始）、方式 linear、全部通道勾选、周波窗周波数 300', $('#wp-ncyc').value === '300' && $('#wp-fs').value === '' && $('#wp-method').value === 'linear' && Array.from(window.document.querySelectorAll('#wp-chans .wp-ch')).every(c => c.checked) && $('#wp-cyc-n').value === '300');
   check('重采样方式含「重采样」功能的 linear / nearest / fft', Array.from($('#wp-method').options).map(o => o.value).join() === 'linear,nearest,fft');
   await sleep(500);
-  check('基准配置初始值＝出厂配置（f_nom 50 / PT 100 / CT 15 / PT·CT 启用）；采样率框只读且获取信息前为空（v0.65）', $('#wp-base-fs').readOnly && $('#wp-base-fs').value === '' && $('#wp-base-fnom').value === '50' && $('#wp-base-pt').value === '100' && $('#wp-base-ct').value === '15' && $('#wp-base-ptct').checked, [$('#wp-base-fs').value, $('#wp-base-fnom').value, $('#wp-base-pt').value, $('#wp-base-ct').value].join('/'));
+  check('基准配置初始值＝出厂配置（f_nom 50 / PT 1 / CT 1；v0.99.23 起「启用 PT/CT」开关隐藏且恒为启用）；采样率框只读且获取信息前为空（v0.65）', $('#wp-base-fs').readOnly && $('#wp-base-fs').value === '' && $('#wp-base-fnom').value === '50' && $('#wp-base-pt').value === '1' && $('#wp-base-ct').value === '1' && $('#wp-base-ptct').checked && $('#wp-base-ptct').hidden, [$('#wp-base-fs').value, $('#wp-base-fnom').value, $('#wp-base-pt').value, $('#wp-base-ct').value].join('/'));
+  // 后面的检查沿用本脚本原来的工况：PT 100 / CT 15（一次侧 Ua 峰值≈8165 V、Ia 有效值≈75 A）。出厂变比现在是 1 / 1，所以显式填上
+  const setBase = (id, v) => { $(id).value = v; $(id).dispatchEvent(new window.Event('change', { bubbles: true })); };
+  setBase('#wp-base-pt', '100'); setBase('#wp-base-ct', '15');
   check('v0.65：三组配置分区存在且各自包含对应控件（公共：路径 / f_nom / PT·CT / 自定义时间；波形：重采样 / 周波数 / 通道 / 最多点数；有效值：时长 / 统计窗 / 周波窗周波数）',
     !!$('#wp-sec-common') && !!$('#wp-sec-wave') && !!$('#wp-sec-rms') && $('#wp-sec-common').contains($('#wp-path')) && $('#wp-sec-common').contains($('#wp-base-fnom')) && $('#wp-sec-common').contains($('#wp-base-custom')) && $('#wp-sec-common').contains($('#wp-base-fs'))
     && $('#wp-sec-wave').contains($('#wp-fs')) && $('#wp-sec-wave').contains($('#wp-ncyc')) && $('#wp-sec-wave').contains($('#wp-chans')) && $('#wp-sec-wave').contains($('#wp-maxpts')) && $('#wp-sec-wave').contains($('#btn-wp-load'))
@@ -71,18 +88,21 @@ async function main() {
   check('默认加载：波形曲线 6 条、每条 300 周波 × 128 = 38400 点、原采样率 6400', !!c && c.pts.length === 6 && c.pts.every(s => s.data.length === 38400) && /6400/.test($('#wp-wave-sub').textContent), $('#wp-wave-sub').textContent);
   const loadCall = calls.filter(x => x.url.includes('/api/process/wave/load')).pop();
   check('请求参数：n_cycles=300、method=linear、未传 fs_out、channels 全 6 个、带基准配置、max_points=20000000、custom_time=0', !!loadCall && /n_cycles=300/.test(loadCall.url) && /method=linear/.test(loadCall.url) && !/fs_out=/.test(loadCall.url) && /channels=Ua%2CUb%2CUc%2CIa%2CIb%2CIc/.test(loadCall.url) && /pt_ratio=100/.test(loadCall.url) && /max_points=20000000/.test(loadCall.url) && /custom_time=0/.test(loadCall.url), loadCall && loadCall.url);
-  // 2b) 基准配置独立：改 PT=1（关掉一次侧换算）→ 幅值变为二次侧；运行配置不变
+  // 2b) 基准配置独立：把 PT 从 100 改成 1 → 电压幅值由一次侧变为二次侧；运行配置不变
+  //     （v0.99.23 起没有「启用 PT/CT」开关：不需要换算时把变比填 1。原来这里是取消勾选那个开关）
+  const uaPeak = () => { const ch = $('#wp-wave').__chart; return ch ? Math.max(...ch.pts[0].data.map(p => Math.abs(p[1]))) : 0; };
+  check('PT 100 时：Ua 峰值≈一次侧 8165 V', uaPeak() > 7000 && uaPeak() < 9500, 'Ua max=' + uaPeak().toFixed(1));
   const cfgBefore = JSON.stringify((await (await fetch(BASE + '/api/config')).json()).transform);
-  $('#wp-base-ptct').checked = false; $('#wp-base-ptct').dispatchEvent(new window.Event('change', { bubbles: true }));
+  setBase('#wp-base-pt', '1');
   $('#wp-ncyc').value = '10';
   $('#btn-wp-load').click(); await sleep(2500);
   c = $('#wp-wave').__chart;
-  const uaMax = c ? Math.max(...c.pts[0].data.map(p => Math.abs(p[1]))) : 0;
-  check('关闭 PT/CT 后再加载：Ua 峰值≈二次侧 81.6 V（独立基准配置生效）', uaMax > 70 && uaMax < 95, 'Ua max=' + uaMax.toFixed(1));
+  const uaMax = uaPeak();
+  check('把 PT 改成 1 后再加载：Ua 峰值≈二次侧 81.6 V（独立基准配置生效）', uaMax > 70 && uaMax < 95, 'Ua max=' + uaMax.toFixed(1));
   const cfgAfter = JSON.stringify((await (await fetch(BASE + '/api/config')).json()).transform);
   check('总线侧运行配置 transform 未被改动', cfgBefore === cfgAfter);
-  check('基准配置改动保存在 localStorage', /"pt_ct_enabled":"0"/.test(window.localStorage.getItem('elec_tool.wave_preview.base') || ''));
-  $('#wp-base-ptct').checked = true; $('#wp-base-ptct').dispatchEvent(new window.Event('change', { bubbles: true }));
+  check('基准配置改动保存在 localStorage', /"pt_ratio":"1"/.test(window.localStorage.getItem('elec_tool.wave_preview.base') || ''));
+  setBase('#wp-base-pt', '100');
   // 3) 指定重采样率 + 方式 + 通道 + 时间段（时间段 0.5 s 先于周波数 300 到）
   $('#wp-ncyc').value = '300';
   $('#wp-fs').value = '1600'; $('#wp-method').value = 'fft'; $('#wp-tstart').value = '2026-10-13 16:00:02.000'; $('#wp-tend').value = '2026-10-13 16:00:02.500';
