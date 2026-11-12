@@ -1451,3 +1451,11 @@
 - 关键决策：新模式各自明确指定相别，不依赖旧自动相序或全局检测量；旧画像保持兼容并需重提才能变成新口径。撤销旧数值相序 0 的尝试修复以维持本任务旧行为。
 - 未决问题：现场样本、接线 / 变比与召回误报、目标浏览器及 Windows 待验；旧补-D1/D3 等未处理。
 - 相关文件 / 分支：`elec_tool/nilm_profile.py`、`elec_tool/nilm.py`、`app/server.py`、画像界面、`tests/test_r226_single_phase_scope.py`、`NILM_TUNING_GUIDE.md`、T-041；`arena/51b63974-nilm-calc-tool`。
+
+## [2026-11-10] 会话纪要：画像提取口径与相别联动（第 228 轮 / v0.99.64）
+- 目标：原有口径禁用分路及总线检测相，其他口径禁用设备相别。
+- 本会话角色：资深电力算法专家，模式 A。
+- 完成项：默认禁用和灰显两侧相，切换时同步另外三个控件并保留已选值；隔离 full pytest 787 passed / 1 skipped / 1 warning，文档同步后定向 46 passed，jsdom 14/14、无头 Chromium 联动检查通过，四份手册一致；`tmp/` 摘要未变。
+- 关键决策：只改变界面可编辑状态，不改后端算法或载荷；沿用现有 disabled 和 label.off 样式。
+- 未决问题：用户目标浏览器 / Windows 与此前单相画像现场结果待验。
+- 相关文件 / 分支：`app/static/index.html`、`app/static/app.js`、`tests/test_web_ui.py`、`tools/ui_r228_profile_phase_gate_check.cjs`、T-042；`arena/51b63974-nilm-calc-tool`。

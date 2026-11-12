@@ -1231,8 +1231,8 @@
               </div>
               <div class="row2">
                 <label class="f"><span class="lbl">画像特征口径</span><select id="np-single-mode"><option value="legacy">原有口径（兼容旧画像）</option><option value="current">单相纯电流</option><option value="voltage_current">单相电压＋电流</option></select><span class="note">单相模式按画像自身口径检测，与全局检测量无关；须重新提取画像。</span></label>
-                <label class="f"><span class="lbl">分路提取和检测相</span><select id="np-branch-phase"><option value="">请选择</option><option>A</option><option>B</option><option>C</option></select></label>
-                <label class="f"><span class="lbl">总线检测相</span><select id="np-bus-phase"><option value="">请选择</option><option>A</option><option>B</option><option>C</option></select><span class="note">每个画像分别指定两侧相别；不自动推断，也不依赖全局相序映射。</span></label>
+                <label class="f off"><span class="lbl">分路提取和检测相</span><select id="np-branch-phase" disabled><option value="">请选择</option><option>A</option><option>B</option><option>C</option></select></label>
+                <label class="f off"><span class="lbl">总线检测相</span><select id="np-bus-phase" disabled><option value="">请选择</option><option>A</option><option>B</option><option>C</option></select><span class="note">每个画像分别指定两侧相别；不自动推断，也不依赖全局相序映射。</span></label>
               </div>
               <label class="f" title="v0.99.30：设备接在哪几相。auto＝按各相 |ΔI| 自动判定（未接相的幅值与噪声同量级时判为不接）；单相设备（220 V 单相电机 / UPS / 充电桩）请选 A/B/C，画像会记下相别，总线侧匹配时自动跳过另外两相的 ΔI——不再被那两相的他负荷顶掉。三相设备保持 auto/ABC 即可"><span class="lbl">设备相别（仅原有口径）</span>
                 <select id="np-phases">

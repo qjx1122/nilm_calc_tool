@@ -4025,8 +4025,24 @@ function bindNilmTuneUI() {
   }
 }
 
+// 原有口径与单相口径分别使用不同的相别控件；切换时保留已选值。
+function npSyncPhaseControls() {
+  const mode = $('#np-single-mode');
+  if (!mode) return;
+  const legacy = mode.value === 'legacy';
+  [['np-branch-phase', legacy], ['np-bus-phase', legacy], ['np-phases', !legacy]].forEach(([id, disabled]) => {
+    const el = $('#' + id);
+    if (!el) return;
+    el.disabled = disabled;
+    const label = el.closest('label');
+    if (label) label.classList.toggle('off', disabled);
+  });
+}
+
 function bindProfileExtractUI() {
   if ($('#np-form')) {                                            // v0.90：设备画像提取
+    $('#np-single-mode').addEventListener('change', npSyncPhaseControls);
+    npSyncPhaseControls();
     $('#btn-np-run').addEventListener('click', npRun);
     // v0.99.5：画像提取独立公共配置（与调参 nt-* 同构，前缀 np-）
     $('#np-files').addEventListener('change', () => { if ($('#np-files').value) $('#np-path').value = $('#np-files').value; });

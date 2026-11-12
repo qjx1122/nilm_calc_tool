@@ -673,3 +673,14 @@ def test_wave_board_styles_use_theme_variables():
         assert selector in block, f"样式里缺少 {selector}"
     for var in ("var(--line)", "var(--mut)", "var(--fg)", "var(--acc)", "var(--ok)", "var(--warn)"):
         assert var in block
+
+
+def test_profile_phase_mode_controls_default_and_binding(page):
+    """原有口径默认禁用两侧相；切换口径后由 change 联动，并保留控件原值。"""
+    assert set(page.selects['np-single-mode']) == {'legacy', 'current', 'voltage_current'}
+    for control in ('np-branch-phase', 'np-bus-phase'):
+        assert re.search(rf'<select\s+id="{control}"\s+disabled\s*>', HTML)
+    assert re.search(r'<select\s+id="np-phases"\s*>', HTML)
+    assert "function npSyncPhaseControls()" in APPJS
+    assert "$('#np-single-mode').addEventListener('change', npSyncPhaseControls)" in APPJS
+    assert "npSyncPhaseControls();" in APPJS
