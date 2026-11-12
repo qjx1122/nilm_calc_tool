@@ -11,7 +11,7 @@
   },
   "transform": {
     "pt_ratio": 1,
-    "ct_ratio": 15,
+    "ct_ratio": 1,
     "voltage_input": "phase",
     "enabled": true,
     "invert_phases": "",
@@ -46,7 +46,7 @@
     "mapping": {
       "timestamp": "1",
       "ua": "",
-      "ia": "3",
+      "ia": "4",
       "ub": "",
       "ib": "",
       "uc": "",
@@ -121,7 +121,7 @@
   },
   "source": {
     "kind": "csv_file",
-    "path": "data\\化工行业-天云龙涂料厂-bus4-2分钟周期启停.csv",
+    "path": "data\\化工行业-天云龙涂料厂-dev-2号搅拌机-1-启停1.csv",
     "poll_interval_s": 0.05,
     "block_samples": 640,
     "tail_from_end": false,
@@ -212,7 +212,7 @@
     "channels": [
       "A"
     ],
-    "window_cycles": 50,
+    "window_cycles": 3000,
     "min_gap_cycles": 500,
     "rel_tol_pct": 0,
     "min_delta_pct": 0,
@@ -280,7 +280,7 @@
       }
     },
     "auto_params": true,
-    "profile_path": "output\\nilm\\profile_device_20261110_104744.json"
+    "profile_path": "output\\nilm\\profile_device_20261112_122347.json"
   },
   "branch": {
     "enabled": false,

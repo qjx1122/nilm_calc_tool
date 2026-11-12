@@ -1,0 +1,335 @@
+{
+ "schema": "nilm_profile/1",
+ "device_id": "device",
+ "version": "1.0",
+ "created": "2026-11-12 18:05:40",
+ "source_file": "D:\\Work\\testPython\\NILM_Test2026\\nilm_calc_tool\\data\\化工行业-天云龙涂料厂-dev-2号搅拌机-1-启停1.csv",
+ "label_mode": "auto",
+ "quantity": "i",
+ "unit": "A",
+ "fs": 10000.0,
+ "f_nom": 50.0,
+ "n_cycle": 200,
+ "pt_ct": {
+  "enabled": true,
+  "pt_ratio": 1.0,
+  "ct_ratio": 1.0
+ },
+ "wiring": {
+  "wiring": "3p4w",
+  "reconstruct_3w": false,
+  "invert_current": false,
+  "invert_phases": ""
+ },
+ "pre_cycles": 10,
+ "post_cycles": 50,
+ "features": [
+  "d_ia",
+  "d_ib",
+  "d_ic",
+  "d_p",
+  "d_q",
+  "peak_ratio",
+  "dur_cycles",
+  "d_ih"
+ ],
+ "feature_names": {
+  "d_ia": "ΔIa (A)",
+  "d_ib": "ΔIb (A)",
+  "d_ic": "ΔIc (A)",
+  "d_p": "ΔP (W)",
+  "d_q": "ΔQ (var)",
+  "peak_ratio": "启动峰值比",
+  "dur_cycles": "持续周波数",
+  "d_ih": "Δ谐波电流 (A)"
+ },
+ "phases": "A",
+ "phase_source": "manual",
+ "phase_stats": {
+  "A": {
+   "mu_abs_di": 3.165714,
+   "sigma": 2.81855,
+   "active": true
+  },
+  "B": {
+   "mu_abs_di": 0.0,
+   "sigma": 0.0,
+   "active": false
+  },
+  "C": {
+   "mu_abs_di": 0.0,
+   "sigma": 0.0,
+   "active": false
+  }
+ },
+ "harmonic": {
+  "orders": [
+   2,
+   3,
+   4,
+   5,
+   6,
+   7,
+   8,
+   9,
+   10,
+   11,
+   12,
+   13
+  ],
+  "unit": "A",
+  "feature": "d_ih",
+  "note": "所选分路相 2~13 次谐波电流有效值合量变化"
+ },
+ "template_points": 16,
+ "cycles": 60000,
+ "t_first": 1608784725.768,
+ "t_last": 1608785925.748,
+ "steady": {
+  "level_first_window": 7.239152446181531
+ },
+ "startup": {
+  "n": 2,
+  "mu": [
+   3.161867503747133,
+   0.0,
+   0.0,
+   0.0,
+   0.0,
+   31.932160828750785,
+   49.0,
+   0.10398151207562412
+  ],
+  "sigma": [
+   4.414790065774161,
+   0.02,
+   0.02,
+   5.0,
+   5.0,
+   25.551783198756503,
+   24.5,
+   2.0
+  ],
+  "template": [
+   7.535172358307778,
+   39.77094050520886,
+   47.64176175777767,
+   35.22278314044275,
+   14.783666973635803,
+   6.007941351078001,
+   1.6221403885550143,
+   -0.01715643804731648,
+   -0.47444902794392413,
+   -1.187924428842324,
+   -3.1555483557735586,
+   2.0397479832024437,
+   5.394564376455277,
+   9.17033949417361,
+   6.802016819423881,
+   3.6602038629777613
+  ],
+  "template_spread": 14.527568136830885,
+  "dur_cycles": {
+   "min": 49.0,
+   "max": 49.0,
+   "mean": 49.0
+  },
+  "events": [
+   {
+    "t_start": 1608785483.388,
+    "t_start_local": "2020-12-24 12:51:23.388",
+    "onset": 37881,
+    "end": 37930,
+    "vec": {
+     "d_ia": 6.283595496771047,
+     "d_ib": 0.0,
+     "d_ic": 0.0,
+     "d_p": 0.0,
+     "d_q": 0.0,
+     "peak_ratio": 13.86432165750157,
+     "dur_cycles": 49.0,
+     "d_ih": 0.21513214678339743
+    },
+    "source": "auto:two_window"
+   },
+   {
+    "t_start": 1608785505.308,
+    "t_start_local": "2020-12-24 12:51:45.308",
+    "onset": 38977,
+    "end": 39026,
+    "vec": {
+     "d_ia": 0.040139510723219196,
+     "d_ib": 0.0,
+     "d_ic": 0.0,
+     "d_p": 0.0,
+     "d_q": 0.0,
+     "peak_ratio": 50.0,
+     "dur_cycles": 49.0,
+     "d_ih": -0.007169122632149194
+    },
+    "source": "auto:two_window"
+   }
+  ]
+ },
+ "shutdown": {
+  "n": 4,
+  "mu": [
+   -3.167636831305337,
+   0.0,
+   0.0,
+   0.0,
+   0.0,
+   3.0511211504883473,
+   14.25,
+   -0.1224645890984794
+  ],
+  "sigma": [
+   2.5968389874461137,
+   0.02,
+   0.02,
+   5.0,
+   5.0,
+   3.744704570381763,
+   23.228933107943924,
+   2.0
+  ],
+  "template": [
+   2.2734665292043994,
+   2.3580221862406128,
+   0.6077790654698685,
+   1.0209951497823906,
+   0.933451118162735,
+   0.9610561416435972,
+   0.6584137511214033,
+   1.0358932516354513,
+   0.7836092692853087,
+   1.2228346317561845,
+   0.9323137864375195,
+   1.1367842164880217,
+   0.8341121731341983,
+   0.995500501892367,
+   0.7883676450407877,
+   0.9205030368035717
+  ],
+  "template_spread": 0.9228543280469149,
+  "dur_cycles": {
+   "min": 1.0,
+   "max": 49.0,
+   "mean": 14.25
+  },
+  "events": [
+   {
+    "t_start": 1608785051.528,
+    "t_start_local": "2020-12-24 12:44:11.528",
+    "onset": 16288,
+    "end": 16337,
+    "vec": {
+     "d_ia": -0.2099052229922087,
+     "d_ib": 0.0,
+     "d_ic": 0.0,
+     "d_p": 0.0,
+     "d_q": 0.0,
+     "peak_ratio": 8.657103653884384,
+     "dur_cycles": 49.0,
+     "d_ih": -0.0016626548275564534
+    },
+    "source": "auto:two_window"
+   },
+   {
+    "t_start": 1608785192.848,
+    "t_start_local": "2020-12-24 12:46:32.848",
+    "onset": 23354,
+    "end": 23359,
+    "vec": {
+     "d_ia": -1.7646311683276448,
+     "d_ib": 0.0,
+     "d_ic": 0.0,
+     "d_p": 0.0,
+     "d_q": 0.0,
+     "peak_ratio": 1.5147363694655587,
+     "dur_cycles": 5.0,
+     "d_ih": 0.024290757934629648
+    },
+    "source": "auto:two_window"
+   },
+   {
+    "t_start": 1608785382.848,
+    "t_start_local": "2020-12-24 12:49:42.848",
+    "onset": 32854,
+    "end": 32855,
+    "vec": {
+     "d_ia": -5.2927684848374135,
+     "d_ib": 0.0,
+     "d_ic": 0.0,
+     "d_p": 0.0,
+     "d_q": 0.0,
+     "peak_ratio": 1.0236066424126857,
+     "dur_cycles": 1.0,
+     "d_ih": -0.2912499434259499
+    },
+    "source": "auto:two_window"
+   },
+   {
+    "t_start": 1608785542.208,
+    "t_start_local": "2020-12-24 12:52:22.207",
+    "onset": 40822,
+    "end": 40824,
+    "vec": {
+     "d_ia": -5.403242449064081,
+     "d_ib": 0.0,
+     "d_ic": 0.0,
+     "d_p": 0.0,
+     "d_q": 0.0,
+     "peak_ratio": 1.009037936190759,
+     "dur_cycles": 2.0,
+     "d_ih": -0.22123651607504088
+    },
+    "source": "auto:steady_state"
+   }
+  ]
+ },
+ "notes": [
+  "自动定位：稳态分段漏掉的 5 个事件由双滑窗补充（source=auto:two_window）——多为过渡过程长于 max_transient 的启动；其后窗若仍在过渡中，ΔI/ΔP 会偏大，建议加大 post 或给标签",
+  "未提供启停标签：用稳态分段 + 自适应参数自动定位到 6 个事件（合并后）（幅值为正＝启动、为负＝停止），请核对事件明细",
+  "启动画像只有 2 次事件（建议每方向 ≥3 次启停）：σ 取经验下限（ΔI/ΔP/ΔIh 15 %、ΔQ 25 % 与绝对下限），容差偏紧 ⇒ 现场噪声容易判成不匹配、幅值相近的他负荷也更容易被误认成同一设备（第 167 轮实录：单样本画像把他负荷两级下跌判成 STOP 0.46）；请补录不同日期 / 工况的启停后重新提取（方案 §3.4）",
+  "单相口径 current：分路 A 相，总线 A 相；检测量不依赖全局 P/I 设置"
+ ],
+ "calibration": {
+  "bus_mapping": null,
+  "note": "无同步总线侧校准数据：总线侧只输出观测幅值，不估计设备贡献幅值（方案 §4/§7）"
+ },
+ "single_phase": {
+  "version": 1,
+  "mode": "current",
+  "branch_phase": "A",
+  "bus_phase": "A"
+ },
+ "side": "bus",
+ "base_mode": "custom",
+ "base": {
+  "fs": 10000.0,
+  "f_nom": 50.0,
+  "pt_ct_enabled": true,
+  "pt_ratio": 1.0,
+  "ct_ratio": 1.0,
+  "file_time_utc": false,
+  "quantity": "auto",
+  "channel": "total",
+  "wiring": "3p4w",
+  "reconstruct_3w": false,
+  "invert_current": false,
+  "invert_phases": ""
+ },
+ "base_config": "独立基准配置（出厂配置 + fs=10000 f_nom=50 PT=1 CT=1 UTC=否 quantity=auto 接线=3p4w 极性反转=无）",
+ "col_map_enabled": true,
+ "col_map": {
+  "timestamp": "1",
+  "ua": "",
+  "ia": "4",
+  "ub": "",
+  "ib": "",
+  "uc": "",
+  "ic": ""
+ },
+ "command": "python tools/nilm_profile.py --file data\\化工行业-天云龙涂料厂-dev-2号搅拌机-1-启停1.csv --device device --config output\\nilm\\nilm_tune_base.json --label-tol 2 --pre 10 --post 50 --merge-gap 10 --quantity i --phases A --single-phase-mode current --branch-phase A --bus-phase A --out output\\nilm\\profile_device_20261112_180540.json"
+}
