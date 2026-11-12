@@ -13,6 +13,6 @@ def test_nilm_zoom_help_is_scoped_and_display_legend_is_kept():
     assert "(compactHelp ? '' : '<span class=\"muted\">缩放：</span>')" in zoom
     assert "(compactHelp ? '' : '<span class=\"muted panlbl\">移动：</span>')" in zoom
     assert "tip.textContent = compactHelp ? ''" in zoom
-    assert "cv.closest('.wb-module') ? '' : '<span class=\"muted\">显示：</span>'" in legend
+    assert "cv.closest('.wb-module') || cv.closest('#view-overview') ? '' : '<span class=\"muted\">显示：</span>'" in legend
     assert '#view-nilm .zoomtip:empty{display:none}' in css
     assert "title=\"${tip}\"" in zoom and 'aria-label=' in zoom

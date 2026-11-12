@@ -1467,3 +1467,11 @@
 - 关键决策：只改变该界面文字和空提示布局，不改变图例逻辑与功能；方向按钮增加无障碍名称。
 - 未决问题：目标浏览器 / Windows 和真实现场数据待验；旧 r17 因隔离副本缺少示例数据未跑完。
 - 相关文件 / 分支：`app/static/app.js`、`app/static/style.css`、`tests/test_r229_nilm_chart_help.py`、`tools/ui_r229_nilm_chart_help_check.cjs`、T-043；`arena/51b63974-nilm-calc-tool`。
+
+## [2026-11-10] 会话纪要：总览面板曲线精简说明（第 230 轮）
+- 目标：移除总览面板各曲线两种操作说明和「显示：」「移动：」「缩放：」标签。
+- 本会话角色：资深电力算法专家，模式 A。
+- 完成项：总线及分路四类曲线隐藏指定文字，保留图例、按钮、悬停及交互；隔离 jsdom 123/123、负荷辨识回归 81/81、波形预览回归 47/47，无头 Chromium 8 画布通过，全量 pytest 789 passed / 1 skipped / 1 warning，定向 pytest 39 passed，详见 T-044。
+- 关键决策：只改变总览页显示，不改变图例和缩放操作或其他页面；无障碍名称和悬停提示保留。
+- 未决问题：用户目标浏览器 / Windows 和真实数据待验。
+- 相关文件 / 分支：`app/static/app.js`、`app/static/style.css`、`tests/test_r230_overview_chart_help.py`、`tools/ui_r230_overview_chart_help_check.cjs`、T-044；`arena/51b63974-nilm-calc-tool`。
