@@ -500,13 +500,14 @@ function renderZoomBar(cv) {
   // 图例行末尾的缩放按钮（每张图一个，动态插入；无图例时单独一行）
   if (!cv || !cv.id || !cv.parentNode) return;
   const board = !!cv.closest('.wb-module');
+  const compactHelp = board || !!cv.closest('#view-nilm');  // 仅波形预览模块及负荷辨识页隐藏缩放/移动文字说明
   let bar = cv.__zoombar;
   if (!bar) {
     bar = document.createElement('span'); bar.className = 'zoombar'; bar.dataset.chart = cv.id;
-    bar.innerHTML = (board ? '' : '<span class="muted">缩放：</span>') + [['x-', 'X＋', '放大 X 轴（滚轮）'], ['x+', 'X－', '缩小 X 轴'], ['y-', 'Y＋', '放大 Y 轴（Shift+滚轮）'], ['y+', 'Y－', '缩小 Y 轴'], ['reset', '复位', '恢复全图（双击图面）']]
+    bar.innerHTML = (compactHelp ? '' : '<span class="muted">缩放：</span>') + [['x-', 'X＋', '放大 X 轴（滚轮）'], ['x+', 'X－', '缩小 X 轴'], ['y-', 'Y＋', '放大 Y 轴（Shift+滚轮）'], ['y+', 'Y－', '缩小 Y 轴'], ['reset', '复位', '恢复全图（双击图面）']]
       .map(([a, t, tip]) => `<button type="button" class="zoom-btn" data-z="${a}" title="${tip}">${t}</button>`).join('') +
-      (board ? '' : '<span class="muted panlbl">移动：</span>') + [['pl', '◀', '向左移动 X 轴（放大后拖动图面 / ← 键 / Alt+滚轮）', '向左平移'], ['pr', '▶', '向右移动 X 轴（→ 键）', '向右平移'], ['pu', '▲', '向上移动 Y 轴（↑ 键 / Alt+Shift+滚轮）', '向上平移'], ['pd', '▼', '向下移动 Y 轴（↓ 键）', '向下平移']]
-      .map(([a, t, tip, label]) => `<button type="button" class="zoom-btn pan-btn" data-z="${a}" title="${tip}"${board ? ` aria-label="${label}"` : ''}>${t}</button>`).join('') +
+      (compactHelp ? '' : '<span class="muted panlbl">移动：</span>') + [['pl', '◀', '向左移动 X 轴（放大后拖动图面 / ← 键 / Alt+滚轮）', '向左平移'], ['pr', '▶', '向右移动 X 轴（→ 键）', '向右平移'], ['pu', '▲', '向上移动 Y 轴（↑ 键 / Alt+Shift+滚轮）', '向上平移'], ['pd', '▼', '向下移动 Y 轴（↓ 键）', '向下平移']]
+      .map(([a, t, tip, label]) => `<button type="button" class="zoom-btn pan-btn" data-z="${a}" title="${tip}"${compactHelp ? ` aria-label="${label}"` : ''}>${t}</button>`).join('') +
       '<span class="zoomtip muted">拖选区间＝只显示该区间</span>';
     bar.addEventListener('click', (ev) => {
       const b = ev.target.closest('button.zoom-btn'); if (!b) return;
@@ -530,7 +531,7 @@ function renderZoomBar(cv) {
   const tip = bar.querySelector('.zoomtip');
   if (tip) {
     const movingHelp = '拖动图面 / 方向键 / ◀▶▲▼ 移动坐标轴';
-    tip.textContent = board ? ''
+    tip.textContent = compactHelp ? ''
       : z ? ('已缩放' + (z.x ? ' X' : '') + (z.y ? ' Y' : '') + '：' + movingHelp + '；在 X / Y 轴刻度带上拖选或 Ctrl+拖选再放大；双击复位') : '拖选区间＝只显示该区间（在 X / Y 轴刻度带上拖选＝只缩放该轴）';
   }
 }

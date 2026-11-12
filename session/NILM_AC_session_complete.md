@@ -1459,3 +1459,11 @@
 - 关键决策：只改变界面可编辑状态，不改后端算法或载荷；沿用现有 disabled 和 label.off 样式。
 - 未决问题：用户目标浏览器 / Windows 与此前单相画像现场结果待验。
 - 相关文件 / 分支：`app/static/index.html`、`app/static/app.js`、`tests/test_web_ui.py`、`tools/ui_r228_profile_phase_gate_check.cjs`、T-042；`arena/51b63974-nilm-calc-tool`。
+
+## [2026-11-10] 会话纪要：负荷辨识事件曲线精简说明（第 229 轮）
+- 目标：移除负荷辨识各曲线右下角两种操作说明与「移动：」「缩放：」标签。
+- 本会话角色：资深电力算法专家，模式 A。
+- 完成项：按页面限定精简工具条，保留「显示：」、按钮、悬停及交互；隔离 jsdom 81/81，既有波形预览 47/47，合成曲线无头 Chromium 六画布通过，全量 pytest 788 passed / 1 skipped / 1 warning，定向 pytest 38 passed，详见 T-043。
+- 关键决策：只改变该界面文字和空提示布局，不改变图例逻辑与功能；方向按钮增加无障碍名称。
+- 未决问题：目标浏览器 / Windows 和真实现场数据待验；旧 r17 因隔离副本缺少示例数据未跑完。
+- 相关文件 / 分支：`app/static/app.js`、`app/static/style.css`、`tests/test_r229_nilm_chart_help.py`、`tools/ui_r229_nilm_chart_help_check.cjs`、T-043；`arena/51b63974-nilm-calc-tool`。

@@ -740,6 +740,7 @@ button.wb-morebtn:hover{border-color:transparent;text-decoration:underline}
 .wb-detail-head .wb-chart-title{min-width:0;margin:0}
 .wb-detail-head button{padding:1px 6px;font-size:12px;white-space:nowrap}
 .wb-module .zoomtip:empty{display:none}
+#view-nilm .zoomtip:empty{display:none}
 .wb-detail-status{overflow-wrap:anywhere;margin:6px 0}
 .wb-detail-status:empty{display:none}
 .wb-status{margin-top:10px;overflow-wrap:anywhere}
