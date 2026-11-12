@@ -742,6 +742,7 @@ button.wb-morebtn:hover{border-color:transparent;text-decoration:underline}
 .wb-module .zoomtip:empty{display:none}
 #view-nilm .zoomtip:empty{display:none}
 #view-overview .zoomtip:empty{display:none}
+.realtime-view .zoomtip:empty{display:none}
 .wb-detail-status{overflow-wrap:anywhere;margin:6px 0}
 .wb-detail-status:empty{display:none}
 .wb-status{margin-top:10px;overflow-wrap:anywhere}

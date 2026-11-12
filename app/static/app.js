@@ -500,7 +500,7 @@ function renderZoomBar(cv) {
   // 图例行末尾的缩放按钮（每张图一个，动态插入；无图例时单独一行）
   if (!cv || !cv.id || !cv.parentNode) return;
   const board = !!cv.closest('.wb-module');
-  const compactHelp = board || !!cv.closest('#view-nilm') || !!cv.closest('#view-overview');  // 隐藏指定页面的缩放/移动文字说明
+  const compactHelp = board || !!cv.closest('#view-nilm') || !!cv.closest('#view-overview') || !!cv.closest('.realtime-view');  // 隐藏指定页面的缩放/移动文字说明
   let bar = cv.__zoombar;
   if (!bar) {
     bar = document.createElement('span'); bar.className = 'zoombar'; bar.dataset.chart = cv.id;
@@ -583,7 +583,7 @@ function renderSeriesLegend(cv, series, hidden) {
     cv.insertAdjacentElement('afterend', d); cv.__legend = d;
   }
   cv.__legendKey = key;
-  cv.__legend.innerHTML = (cv.closest('.wb-module') || cv.closest('#view-overview') ? '' : '<span class="muted">显示：</span>') + series.filter(s => s && s.name).map(s =>
+  cv.__legend.innerHTML = (cv.closest('.wb-module') || cv.closest('#view-overview') || cv.closest('.realtime-view') ? '' : '<span class="muted">显示：</span>') + series.filter(s => s && s.name).map(s =>
     `<label class="${hidden.has(s.name) ? 'off' : ''}" title="勾选＝显示该曲线；取消＝隐藏（${cv.__hiddenOwn ? '保存在这个预览模块的配置里' : '已保存到配置'}）"><input type="checkbox" class="ser-vis" data-chart="${esc(cv.id)}" data-name="${esc(s.name)}" ${hidden.has(s.name) ? '' : 'checked'}><i style="background:${s.color || '#4ea1ff'}"></i>${esc(s.name)}</label>`).join('');
   if (cv.__zoombar) cv.__legend.appendChild(cv.__zoombar);
 }

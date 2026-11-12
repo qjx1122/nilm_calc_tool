@@ -465,7 +465,7 @@
     </section>
 
     <!-- 三相电压 -->
-    <section class="view" id="view-voltage">
+    <section class="view realtime-view" id="view-voltage">
       <h2>三相电压 · 有效值 / 峰值 / 不平衡度 / 趋势 / 周波窗</h2>
       <div class="cards" id="v-cards"></div>
       <div class="panel"><h3>电压波形（一次侧，抽稀显示）</h3><canvas id="v-wave" height="240"></canvas></div>
@@ -502,7 +502,7 @@
     </section>
 
     <!-- 三相电流 -->
-    <section class="view" id="view-current">
+    <section class="view realtime-view" id="view-current">
       <h2>三相电流 · 有效值 / 零线电流 / 不平衡度 / 趋势 / 周波窗</h2>
       <div class="cards" id="i-cards"></div>
       <div class="panel"><h3>电流波形（一次侧，抽稀显示）</h3><canvas id="i-wave" height="240"></canvas></div>
@@ -539,7 +539,7 @@
     </section>
 
     <!-- 功率 -->
-    <section class="view" id="view-power">
+    <section class="view realtime-view" id="view-power">
       <h2>有功 / 无功 / 视在 · P / Q / S（总量与分相）/ 趋势 / 周波窗</h2>
       <div class="cards" id="p-cards"></div>
       <!-- v0.76：瞬时功率波形 + 分相瞬时功率波形合并为一张曲线，勾选框选相别 / 量 -->
@@ -581,7 +581,7 @@
     </section>
 
     <!-- 功率因数 -->
-    <section class="view" id="view-power_factor">
+    <section class="view realtime-view" id="view-power_factor">
       <h2>功率因数 · PF / 位移因数 DPF / 象限</h2>
       <div class="cards" id="pf-cards"></div>
       <div class="grid2">
@@ -592,7 +592,7 @@
     </section>
 
     <!-- 基波 -->
-    <section class="view" id="view-fundamental">
+    <section class="view realtime-view" id="view-fundamental">
       <h2>基波 · 幅值 / 相位 / 频率 / 相序 / 对称分量</h2>
       <div class="cards" id="f-cards"></div>
       <div class="grid2">
@@ -608,7 +608,7 @@
     </section>
 
     <!-- 谐波 -->
-    <section class="view" id="view-harmonic">
+    <section class="view realtime-view" id="view-harmonic">
       <h2>谐波 · 2–50 次含有率 / 幅值 / THD</h2>
       <div class="cards" id="h-cards"></div>
       <div class="panel"><h3 class="curvehdr"><span>THD 趋势（最劣相 THD_U / THD_I + 分相 THD_Ua/Ub/Uc、THD_Ia/Ib/Ic；图例勾选）</span><label class="curvesave" title="勾选＝「保存曲线数据」时包含本曲线；不勾选＝保存时跳过本曲线"><input type="checkbox" class="curve-save" data-curve="harmonic"> 保存曲线</label><span class="curvespan" data-curve="harmonic"></span></h3><canvas id="h-trend" height="220"></canvas></div>
@@ -639,7 +639,7 @@
 
 
     <!-- 间谐波 -->
-    <section class="view" id="view-interharmonic">
+    <section class="view realtime-view" id="view-interharmonic">
       <h2>间谐波 · IEC 61000-4-7 分组（0~50 次之间的 50 个间谐波组）/ TIHD</h2>
       <div class="cards" id="ih-cards"></div>
       <div class="panel">
@@ -669,7 +669,7 @@
     </section>
 
     <!-- 直流偏置 -->
-    <section class="view" id="view-dc">
+    <section class="view realtime-view" id="view-dc">
       <h2>直流偏置 · 三相电压 / 电流 / 零线的直流分量</h2>
       <div class="cards" id="dc-cards"></div>
       <div class="grid2">
@@ -686,7 +686,7 @@
     </section>
 
     <!-- 频谱 -->
-    <section class="view" id="view-spectrum">
+    <section class="view realtime-view" id="view-spectrum">
       <h2>频谱 · 单通道幅值谱（0 ~ Nyquist）</h2>
       <div class="row pad">
         <label>通道

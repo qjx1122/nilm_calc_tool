@@ -1475,3 +1475,11 @@
 - 关键决策：只改变总览页显示，不改变图例和缩放操作或其他页面；无障碍名称和悬停提示保留。
 - 未决问题：用户目标浏览器 / Windows 和真实数据待验。
 - 相关文件 / 分支：`app/static/app.js`、`app/static/style.css`、`tests/test_r230_overview_chart_help.py`、`tools/ui_r230_overview_chart_help_check.cjs`、T-044；`arena/51b63974-nilm-calc-tool`。
+
+## [2026-11-10] 会话纪要：实时监测曲线精简说明（第 231 轮）
+- 目标：实时监测各功能界面曲线移除两种操作说明和「显示：」「移动：」「缩放：」标签。
+- 本会话角色：资深电力算法专家，模式 A。
+- 完成项：9 个实时监测页面两侧曲线隐藏指定文字，保留图例、按钮、悬停及交互；隔离 jsdom 751/751、负荷辨识 81/81、总览 123/123、波形预览 47/47，无头 Chromium 44 画布通过，全量 pytest 790 passed / 1 skipped / 1 warning，定向 pytest 40 passed，详见 T-045。
+- 关键决策：以页面根类限定范围，功能和其他页面保持不变。
+- 未决问题：用户目标浏览器 / Windows 和真实数据待验。
+- 相关文件 / 分支：`app/static/index.html`、`app/static/app.js`、`app/static/style.css`、`tests/test_r231_realtime_chart_help.py`、`tools/ui_r231_realtime_chart_help_check.cjs`、T-045；`arena/51b63974-nilm-calc-tool`。
