@@ -3370,7 +3370,7 @@ const NILM_ALGOS = {
                   params: { tol_w: '稳态容差 (W · P口径)', tol_a: '稳态容差 (A · I口径)', min_steady_cycles: '最少稳态周波', min_delta_w: '最小幅值 (W · P口径)', min_delta_a: '最小幅值 (A · I口径)', max_transient_cycles: '最长暂态 (周波)' } },
   median_diff:  { name: '中值滤波差分', desc: '先 N 点中值滤波去尖峰，再做阈值差分（对单周波尖峰/缺口不敏感）',
                   params: { median_cycles: '中值窗 (周波)', min_delta_w: '最小幅值 (W · P口径)', min_delta_a: '最小幅值 (A · I口径)', settle_cycles: '稳定周波数', settle_tol_w: '稳定容差 (W · P口径)', settle_tol_a: '稳定容差 (A · I口径)', max_rise_cycles: '最长暂态 (周波)' } },
-  // v0.90：设备画像匹配（多特征；对象固定为三相合成；画像文件由数据处理页「设备画像提取」生成）
+  // 设备画像匹配：旧口径或逐画像指定单相口径。
   profile:      { name: '设备画像匹配', desc: '稳健双滑窗找候选 → 事件前后 ΔIa/ΔIb/ΔIc/ΔP/ΔQ/峰值比/持续周波/Δ谐波电流(2~13 次合量) 与启动/停止画像的对角马氏距离 D² → 置信度 exp(−D²/2d)，低于门槛拒识；设备状态机（OFF→启动 / ON→停止）；输出设备 ID、方向、观测幅值、置信度，不估计设备贡献幅值',
                   params: { d2_max: 'D² 上限 (每维均值)', min_confidence: '最低置信度 (0~1)', k_sigma: '候选门槛 k×σ', margin: '最优/次优 D² 比下限', lambda_rel: '协方差收缩系数', state_check: '状态机 (1 启用 / 0 关闭)', phase_map: '相序映射 (1 ABC·2 ACB·3 BAC·4 BCA·5 CAB·6 CBA·0 自动)', max_scale: '候选多尺度最大倍数 (1＝单尺度；8＝前后窗 ×1/2/4/8 兼容慢斜坡)', min_scale: '候选细尺度下限 (0.25＝前后窗 ÷4/÷2 拆分 60 s 内相邻事件；1＝不用)',
                             stage_free: '档位自由匹配配置', min_stage: '候选门槛 ÷ 画像幅值 (0.5＝旧行为；档位自由建议 0.2~0.3)',
@@ -3399,10 +3399,10 @@ function buildNilmForm(side = sideOf()) {
       return `<label class="${cls}">${sp.params[k]}<input type="number" step="any" min="0" id="nilm-${a}-${k}"></label>`;
     }).join('');
     // v0.90：画像匹配额外有画像文件路径（文本，nilm.profile_path）与加载状态
-    // v0.99.3：画像匹配的检测对象 / 检测量不可指定——对象固定为三相合成 total（候选按 ΣP 或三相电流合成量搜索，事件 channel=total），检测量随画像文件口径（p/i），须与本侧 nilm.quantity 一致；此处以只读项固定展示
+    // 检测相 / 特征口径由每份画像指定；旧画像保持原有逻辑。
     const extra = a === 'profile' ? `<div class="row2"><label class="f" style="grid-column:1/-1"><span class="lbl">画像文件路径（多个设备用 ; 分隔）</span><input type="text" id="nilm-profile_path" placeholder="output/nilm/profile_设备1_时间.json;output/nilm/profile_设备2_时间.json"><span class="note">nilm.profile_path；相对仓库根；多个画像各自独立状态机/去重，最多 8 个；数据处理页「设备画像提取」生成（也可直接填 nilm.profile_paths 数组）</span></label>
-      <label class="f nilm-fixed" title="画像匹配不支持按相检测：候选按三相合成量（P 口径＝ΣP，I 口径＝三相电流合成）搜索，事件对象固定为 total；上方「检测对象」勾选对本算法不生效"><span class="lbl">检测对象（固定）</span><input type="text" value="三相总 total（固定，不可选）" disabled><span class="note">上方「检测对象」勾选只作用于其它算法</span></label>
-      <label class="f nilm-fixed" title="画像匹配的检测量由画像文件决定（提取时的 quantity：p 有功 / i 电流），且必须与本侧「检测量」实际口径一致，否则 ΔP/ΔI 不可比、画像匹配不运行"><span class="lbl">检测量（固定）</span><input type="text" id="nilm-profile-qty" value="随画像文件（加载后显示）" disabled><span class="note">须与本侧「检测量」实际口径一致，不一致时不运行并在状态行提示</span></label></div><div id="nilm-profile-state" class="mut" style="font-size:12px"></div>` : '';
+      <label class="f nilm-fixed"><span class="lbl">检测对象</span><input type="text" value="随每份画像的口径和相别" disabled><span class="note">旧画像沿用原有规则；单相画像使用画像中指定的总线/分路检测相。上方检测对象只作用于其它算法。</span></label>
+      <label class="f nilm-fixed"><span class="lbl">检测量</span><input type="text" id="nilm-profile-qty" value="随画像文件（加载后显示）" disabled><span class="note">新单相画像独立决定口径；旧画像仍须与本侧全局检测量一致。</span></label></div><div id="nilm-profile-state" class="mut" style="font-size:12px"></div>` : '';
     // v0.26.1：标题行＝色块 + 勾选框 + 算法名（紧挨），算法说明单独一行
     return `<div class="panel nilm-algo" data-algo="${a}" style="margin-top:8px"><h3 class="algohdr"><label class="check"><input type="checkbox" id="nilm-${a}-enabled"><span class="sw" style="color:${NILM_COLORS[a]}">■</span>${sp.name}</label></h3>
       <div class="algodesc mut">${sp.desc}</div>
@@ -3525,7 +3525,7 @@ function nilmProfileState(side = sideOf()) {
   const qel = E(side, 'nilm-profile-qty');   // v0.99.3：固定检测量展示＝画像文件口径
   const list = (pf && Array.isArray(pf.profiles) && pf.profiles.length) ? pf.profiles : (pf ? [pf] : []);
   const s0 = (list[0] && list[0].loaded && list[0].summary) || null;
-  if (qel) { qel.value = s0 ? (s0.quantity === 'p' ? 'p 有功功率 P（画像文件口径，固定）' : s0.quantity === 'i' ? 'i 电流有效值 I（画像文件口径，固定）' : `${s0.quantity || s0.unit || '?'}（画像文件口径，固定）`) : '随画像文件（加载后显示）'; }
+  if (qel) { qel.value = list.length > 1 ? '多个画像：口径分别见下方' : s0 ? (s0.quantity === 'p' ? 'p 有功功率 P（画像文件口径，固定）' : s0.quantity === 'i' ? 'i 电流有效值 I（画像文件口径，固定）' : `${s0.quantity || s0.unit || '?'}（画像文件口径，固定）`) : '随画像文件（加载后显示）'; }
   if (!pf) { el.textContent = ''; return; }
   const paths = pf.paths || (pf.path ? [pf.path] : []);
   if (!paths.length && !list.length) { el.textContent = '未设置画像文件路径。'; return; }
@@ -3652,17 +3652,18 @@ function nilmMag(e) { return isNum(e.magnitude) && e.unit ? e.magnitude : e.magn
 function nilmAllCurrent(events) { return events.length > 0 && events.every(e => e.unit === 'A'); }
 function nilmScales(events) {
   const cur = nilmAllCurrent(events);
-  return { cur, D: unitScale(events.map(nilmMag), cur ? 'A' : 'W', 3), P: unitScale(events.flatMap(e => [e.pre_p_w, e.post_p_w]), 'W', 3),
+  const mixed = events.some(e => e.unit === 'A') && events.some(e => e.unit !== 'A');
+  return { cur, mixed, D: unitScale(events.map(nilmMag), cur ? 'A' : 'W', 3), P: unitScale(events.flatMap(e => [e.pre_p_w, e.post_p_w]), 'W', 3),
            Q: unitScale(events.map(e => e.delta_q_var), 'var', 3), I: unitScale(events.map(e => e.delta_i_a), 'A', 3) };
 }
 function nilmHeader(sc) {
-  return ['#', '算法', '对象', '开始（数据时间）', '结束', '持续 (s)', '周波数', '方向', sc.D.hdr(sc.cur ? '幅值 |ΔI|' : '幅值 |ΔP|'), sc.Q.hdr('ΔQ'), sc.I.hdr('ΔI'), sc.P.hdr('事件前 P'), sc.P.hdr('事件后 P'), '检验量'];
+  return ['#', '算法', '对象', '开始（数据时间）', '结束', '持续 (s)', '周波数', '方向', (sc.mixed ? '幅值（各行标注 A / W）' : sc.D.hdr(sc.cur ? '幅值 |ΔI|' : '幅值 |ΔP|')), sc.Q.hdr('ΔQ'), sc.I.hdr('ΔI'), sc.P.hdr('事件前 P'), sc.P.hdr('事件后 P'), '检验量'];
 }
 function nilmRow(e, sc) {
   const dir = e.direction === 'up' ? '<span class="badge bad">↑ 投入</span>' : '<span class="badge">↓ 切除</span>';
   return [e.id, `<span style="color:${NILM_COLORS[e.algorithm] || '#fff'}">■</span> ${esc(e.algorithm_name || e.algorithm)}`, esc(e.channel),
           ts(e.t_start), ts(e.t_end), num(e.duration_s || 0, 2), e.cycles, dir,
-          sc.D.f(nilmMag(e)), sc.Q.f(e.delta_q_var), sc.I.f(e.delta_i_a), sc.P.f(e.pre_p_w), sc.P.f(e.post_p_w),
+          (sc.mixed ? si(nilmMag(e), e.unit || 'W', 3) : sc.D.f(nilmMag(e))), sc.Q.f(e.delta_q_var), sc.I.f(e.delta_i_a), sc.P.f(e.pre_p_w), sc.P.f(e.post_p_w),
           e.algorithm === 'profile' ? nilmProfileCell(e) : (isNum(e.score) ? num(e.score, 3) : '')];
 }
 /* v0.90：画像匹配事件的「检验量」列＝设备 ID · 置信度（D²，状态，质量标记） */
@@ -5751,6 +5752,7 @@ function npPayload() {
            custom_time_start: t.custom_time_start, custom_time_end: t.custom_time_end, base_mode: t.base_mode, base: t.base,
            col_map_enabled: t.col_map_enabled, col_map: t.col_map,
            device_id: v('np-device'), phases: ($('#np-phases') ? $('#np-phases').value : 'auto'),
+           single_phase_mode: v('np-single-mode'), branch_phase: v('np-branch-phase'), bus_phase: v('np-bus-phase'),
            labels: $('#np-labels').value, label_tol_s: v('np-tol') || null,
            pre_cycles: v('np-pre') || null, post_cycles: v('np-post') || null, merge_gap_s: ($('#np-merge') && $('#np-merge').value !== '') ? parseFloat($('#np-merge').value) : null, name: v('np-name') };
 }
@@ -5763,7 +5765,9 @@ function npRender(d) {
   const nTxt = `<span class="${few ? 'warn' : ''}">${nS} / ${nD}</span>` + (few ? `<span class="mut">（建议各 ≥${MIN_N}）</span>` : '');
   const ph = (p.phases || 'ABC').toUpperCase();
   const phTxt = ph === 'ABC' ? '三相 ABC' : `<span class="warn">${ph}</span>` + `<span class="mut">（跳过 ${(p.phase_skip || []).join('、') || '—'}）</span>`;
-  const cards = [['设备', esc(p.device_id || '—')], ['口径', esc(p.unit || '—')], ['设备相别', phTxt],
+  const sp = p.single_phase;
+  const cards = [['设备', esc(p.device_id || '—')], ['口径', esc(sp ? (sp.mode === 'current' ? '单相纯电流' : '单相电压＋电流') : (p.unit || '—'))], ['设备相别', phTxt],
+                 ...(sp ? [['分路 / 总线检测相', esc(sp.branch_phase + ' / ' + sp.bus_phase)]] : []),
                  ['标签方式', p.label_mode === 'labels' ? '人工标签' : '自动定位'],
                  ['前 / 后窗 (周波)', `${p.pre_cycles} / ${p.post_cycles}`], ['启动 / 停止样本', nTxt]];
   $('#np-summary').innerHTML = cards.map(([k, v]) => `<div class="card"><div class="k">${k}</div><div class="v">${v}</div></div>`).join('');
@@ -5798,6 +5802,7 @@ function npRender(d) {
 async function npRun() {
   const p = npPayload();
   if (!p.path) { toast('请先在上方负荷辨识调参区填写设备侧波形文件路径', 'err'); return; }
+  if (p.single_phase_mode !== 'legacy' && (!p.branch_phase || !p.bus_phase)) { toast('单相画像请分别指定分路相和总线相', 'err'); return; }
   const mode = ntBaseMode('np'); const side = mode === 'custom' ? 'bus' : mode;
   const btn = $('#btn-np-run'); btn.disabled = true; $('#np-status').textContent = '正在回放设备侧文件并提取画像…';
   try {

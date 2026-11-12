@@ -89,6 +89,25 @@ def normalize_phases(v: Any) -> str:
     return uniq
 
 
+def single_phase_scope(doc: Dict[str, Any]) -> Optional[Dict[str, str]]:
+    """Versioned per-profile scope; absence deliberately preserves legacy behaviour."""
+    return doc.get("single_phase") if isinstance(doc.get("single_phase"), dict) else None
+
+
+def _single_phase_arrays(p4, q4, i4, ih4, source_phase: str, device_phase: str, current_only: bool):
+    """Project one actual phase into the profile's device-phase coordinates and total row."""
+    src, dst = PHASE_ROWS[source_phase], PHASE_ROWS[device_phase]
+    def project(arr, zero=False):
+        if arr is None:
+            return None
+        out = np.zeros_like(arr)
+        if not zero:
+            out[0] = arr[src]
+            out[dst] = arr[src]
+        return out
+    return (project(p4, current_only), project(q4, current_only), project(i4), project(ih4))
+
+
 def profile_phases(doc: Dict[str, Any]) -> str:
     """画像声明的相别（"A"/"AB"/"ABC"）；旧画像没有该字段 ⇒ "ABC"（不跳过任何相）。"""
     try:
@@ -303,6 +322,16 @@ def validate_profile(doc: Dict[str, Any]) -> Dict[str, Any]:
                 or list(feats) != FEATURES[:len(feats)] or not (len(LEGACY_FEATURES) <= len(feats) <= len(FEATURES)):
             raise ProfileError(f"画像特征定义与本版本不一致：{feats}（本版本为 {FEATURES}；仅接受它的前缀，"
                                f"即 {len(LEGACY_FEATURES)} 维旧画像或 {len(FEATURES)} 维新画像）")
+    if "single_phase" in doc:
+        scope = single_phase_scope(doc)
+        if scope is None or scope.get("version") != 1 or scope.get("mode") not in ("current", "voltage_current"):
+            raise ProfileError("单相画像 single_phase 版本或口径无效")
+        if any(scope.get(k) not in ("A", "B", "C") for k in ("branch_phase", "bus_phase")):
+            raise ProfileError("单相画像必须明确指定分路相和总线相 A/B/C")
+        if doc.get("phases") != scope["branch_phase"]:
+            raise ProfileError("画像 phases 必须与分路提取相一致")
+        if doc.get("quantity") != ("i" if scope["mode"] == "current" else "p"):
+            raise ProfileError("单相画像量与特征口径不一致")
     # v0.99.30：相别（可选；旧画像没有该字段 ⇒ ABC，行为与旧版完全一致）
     ph_raw = doc.get("phases")
     if ph_raw is not None:                     # 字段缺省＝旧画像（不跳过任何相）；显式给了就必须是合法相别
@@ -353,14 +382,16 @@ def _load_profile_raw(p: str) -> Dict[str, Any]:
 
 # ------------------------------------------------------------------ 匹配
 def mahalanobis_diag(vec: Dict[str, float], mu: Sequence[float], sigma: Sequence[float], lam_rel: float = 0.02,
-                     skip: Sequence[str] = (), feats: Optional[Sequence[str]] = None) -> Tuple[float, List[float]]:
+                     skip: Sequence[str] = (), feats: Optional[Sequence[str]] = None,
+                     active_regularization: bool = False) -> Tuple[float, List[float]]:
     """对角马氏距离 D² 与各维贡献；Σ_λ = diag(σ²) + λ·median(σ²)·I（§5.5 收缩）。``skip``：不参与的特征名（v0.93：三相三线无 B 相电流时跳过 d_ib）。
     ``feats``：μ/σ 对应的特征名（v0.99.26：旧画像 7 维没有 d_ih，按下标与 FEATURES 前缀对齐）。"""
     names = list(feats) if feats else list(FEATURES)
     x = np.array([float(vec[k]) for k in names], dtype=np.float64)
     m = np.asarray(mu, dtype=np.float64); s = np.asarray(sigma, dtype=np.float64)
     var = s * s
-    var = var + float(lam_rel) * float(np.median(var))
+    active = [var[j] for j, name in enumerate(names) if name not in skip] if active_regularization else var
+    var = var + float(lam_rel) * float(np.median(active if len(active) else var))
     contrib = (x - m) ** 2 / var
     for k in skip:
         if k in names:
@@ -439,7 +470,7 @@ def _stage_scaled_stats(mu: Sequence[float], sigma: Sequence[float], names: Sequ
 
 
 def _fit_stage(x: np.ndarray, mu: Sequence[float], sigma: Sequence[float], names: Sequence[str], lam_rel: float,
-               skip: Sequence[str], stage_range: Tuple[float, float]) -> Tuple[float, float, np.ndarray]:
+               skip: Sequence[str], stage_range: Tuple[float, float], active_regularization: bool = False) -> Tuple[float, float, np.ndarray]:
     """解单一档位缩放 s（加权最小二乘）并返回该 s 下的残差 D² 与各维贡献。
 
     ``s* = Σ(xᵢμᵢ/varᵢ) / Σ(μᵢ²/varᵢ)``（对角方差下的闭式解），再夹到 ``stage_range``；
@@ -451,7 +482,8 @@ def _fit_stage(x: np.ndarray, mu: Sequence[float], sigma: Sequence[float], names
     只按 P/I 标定 ⇒ s≈0.95、ΔIh 单维贡献 12，被否决拦下）。档位本来就是"出力"的概念，P/I 才是出力的度量。
     """
     var = np.asarray(sigma, dtype=np.float64) ** 2
-    var = var + float(lam_rel) * float(np.median(var))
+    active = [var[j] for j, name in enumerate(names) if name not in skip] if active_regularization else var
+    var = var + float(lam_rel) * float(np.median(active if len(active) else var))
     mu_a = np.asarray(mu, dtype=np.float64)
     idx = [i for i, f in enumerate(names) if f in STAGE_REF_FEATURES and f not in skip]
     if not idx:
@@ -462,7 +494,8 @@ def _fit_stage(x: np.ndarray, mu: Sequence[float], sigma: Sequence[float], names
     s = float(min(max(s, float(stage_range[0])), float(stage_range[1])))
     mu2, sg2 = _stage_scaled_stats(mu_a, np.asarray(sigma, dtype=np.float64), names, s)
     var2 = sg2 ** 2
-    var2 = var2 + float(lam_rel) * float(np.median(var2))
+    active2 = [var2[j] for j, name in enumerate(names) if name not in skip] if active_regularization else var2
+    var2 = var2 + float(lam_rel) * float(np.median(active2 if len(active2) else var2))
     contrib = (x - mu2) ** 2 / var2
     for k in skip:
         if k in names:
@@ -483,6 +516,9 @@ def match_event(profile: Dict[str, Any], feat: Dict[str, Any], lam_rel: float = 
                 best = r
         best["phase_map_auto"] = True
         return best
+    scope = single_phase_scope(profile)
+    if scope:
+        skip = tuple(set(skip) | set(profile_skip_dims(profile)) | ({"d_p", "d_q"} if scope["mode"] == "current" else set()))
     mapping = PHASE_MAPS[int(phase_map)]
     vec = remap_phases(feat["vec"], mapping)
     feats = profile_feature_names(profile)          # v0.99.26：旧画像 7 维、新画像 8 维（含 d_ih）
@@ -495,9 +531,9 @@ def match_event(profile: Dict[str, Any], feat: Dict[str, Any], lam_rel: float = 
         if not g:
             continue
         if stage_free:                                   # v0.99.29：档位自由——先解 s 再算形状残差
-            st, d2, contrib = _fit_stage(x_arr, g["mu"], g["sigma"], feats, lam_rel, skip, stage_range)
+            st, d2, contrib = _fit_stage(x_arr, g["mu"], g["sigma"], feats, lam_rel, skip, stage_range, active_regularization=bool(scope))
         else:
-            d2, contrib = mahalanobis_diag(vec, g["mu"], g["sigma"], lam_rel, skip, feats)
+            d2, contrib = mahalanobis_diag(vec, g["mu"], g["sigma"], lam_rel, skip, feats, active_regularization=bool(scope))
             st = 1.0
         td = template_distance(feat["template"], g["template"])
         res[name] = {"d2": d2, "contrib": contrib, "template_dist": td, "template_spread": float(g.get("template_spread", 0.3)),
@@ -645,7 +681,7 @@ def window_bounds(cps: Sequence[Tuple[int, float]], onset: int, end: int, pre_n:
 
 def detect_profile(p4: np.ndarray, q4: np.ndarray, i4: np.ndarray, profile: Dict[str, Any], prm: Dict[str, Any],
                    use_p: bool, device_state: str = "unknown", skip: Sequence[str] = (),
-                   ih4: Optional[np.ndarray] = None) -> List[Dict[str, Any]]:
+                   ih4: Optional[np.ndarray] = None, detection_phase: Optional[str] = None) -> List[Dict[str, Any]]:
     """窗上运行一次画像匹配检测。返回按 onset 排序的候选结果列表（每项含 onset/end/pre/post/match/flags/accepted）。
 
     ``skip``：不参与匹配的特征名；三相三线两表法（transform.wiring=3p3w）本侧无 B 相电流，引擎传 ("d_ib",)，
@@ -668,6 +704,20 @@ def detect_profile(p4: np.ndarray, q4: np.ndarray, i4: np.ndarray, profile: Dict
     慢停机在设备侧提取时 post=50 只量到快降段的部分幅值、σ 又只有 10 % 下限，总线侧按 ×8 窗量到接近全幅反而 D² 爆掉被拒）。
     返回项附 ``scale``（取几何的尺度；1＝原单尺度行为）、``scales_hit``。
     """
+    scope = single_phase_scope(profile)
+    if scope:
+        phase = detection_phase or scope["bus_phase"]
+        if phase not in PHASE_ROWS:
+            raise ProfileError("单相检测相必须为 A/B/C")
+        pure_i = scope["mode"] == "current"
+        if use_p == pure_i:
+            raise ProfileError("单相画像与检测量不一致")
+        p4, q4, i4, ih4 = _single_phase_arrays(p4, q4, i4, ih4, phase, scope["branch_phase"], pure_i)
+        # Explicit per-profile mapping overrides the legacy global phase_map.
+        prm = {**prm, "phase_map": 1}
+        skip = tuple(k for k in skip if k not in PHASE_DIMS.values())
+        if pure_i:
+            skip = tuple(set(skip) | {"d_p", "d_q"})
     # v0.99.30：画像声明了单相 / 分相（phases="A" …）时，未接相的 ΔI 一律跳过（与 3p3w 缺 B 相的 skip 合并）
     skip = tuple(list(skip) + [k for k in profile_skip_dims(profile) if k not in skip])
     pre_n = int(profile.get("pre_cycles", 10)); post_n = int(profile.get("post_cycles", 50))
@@ -1201,7 +1251,7 @@ def load_cycles(cfg, file: str, *, max_cycles: int = 400000, t_start: str = "", 
         c.validate()
     feat = CycleFeatures(c.sampling.fs, c.sampling.f_nom)
     ts, ps, qs, is_, hs = [], [], [], [], []          # v0.99.26：hs＝逐周波谐波电流
-    u_nonzero = False; n = 0
+    u_nonzero = False; u_phases = np.zeros(3, dtype=bool); n = 0
     with create_source(c) as src:
         while True:
             blk = src.read()
@@ -1209,9 +1259,11 @@ def load_cycles(cfg, file: str, *, max_cycles: int = 400000, t_start: str = "", 
                 if src.exhausted:
                     break
                 continue
-            if not u_nonzero and np.any(np.abs(blk.u) > 0):
+            scaled = scale_block(blk, c.transform)
+            u_phases |= np.any(np.abs(scaled.u) > 0, axis=1)
+            if not u_nonzero and np.any(np.abs(scaled.u) > 0):
                 u_nonzero = True
-            f = feat.push(scale_block(blk, c.transform))
+            f = feat.push(scaled)
             if f["t"].size:
                 ts.append(f["t"]); ps.append(f["p"]); qs.append(f["q"]); is_.append(f["i"])
                 hs.append(f["ih"] if f.get("ih") is not None else np.zeros((4, f["t"].size))); n += int(f["t"].size)
@@ -1222,13 +1274,15 @@ def load_cycles(cfg, file: str, *, max_cycles: int = 400000, t_start: str = "", 
     t = np.concatenate(ts)[:max_cycles]; p4 = np.concatenate(ps, axis=1)[:, :max_cycles]
     q4 = np.concatenate(qs, axis=1)[:, :max_cycles]; i4 = np.concatenate(is_, axis=1)[:, :max_cycles]
     ih4 = np.concatenate(hs, axis=1)[:, :max_cycles]          # v0.99.26：逐周波谐波电流（画像第 8 维 d_ih 的来源）
+    feat.u_phases_present = u_phases
     return c, feat, t, p4, q4, i4, ih4, u_nonzero
 
 
 def build_profile(cfg, file: str, *, device_id: str = "device", labels: Optional[str] = None, label_tol_s: float = 2.0,
                   pre_cycles: int = 10, post_cycles: int = 50, max_cycles: int = 400000, quantity: Optional[str] = None,
                   t_start: str = "", t_end: str = "", custom_time: bool = False, custom_time_start: str = "",
-                  custom_time_end: str = "", merge_gap_s: float = 10.0, phases: str = "auto") -> Dict[str, Any]:
+                  custom_time_end: str = "", merge_gap_s: float = 10.0, phases: str = "auto",
+                  single_phase_mode: str = "legacy", branch_phase: str = "", bus_phase: str = "") -> Dict[str, Any]:
     """从设备侧文件构建画像。``merge_gap_s``（v0.92，仅自动定位模式）：同方向、中间没有反向事件、起点间隔 ≤ 该秒数的
     相邻事件视为同一次动作被稳态分段切碎（或启动后的分级带载 / 反复重启），只保留 |ΔI| 最大的一个；0＝不合并。``cfg``＝基准配置（PT/CT、fs、列映射，不被修改）。``labels``＝标签文本（空＝自动用稳态分段 +
     自适应参数找启停事件：幅值为正＝启动、为负＝停止）。返回画像文档（含 ``events`` 明细与 ``notes``）。
@@ -1240,6 +1294,24 @@ def build_profile(cfg, file: str, *, device_id: str = "device", labels: Optional
                                                    custom_time_start=custom_time_start, custom_time_end=custom_time_end)
     from .nilm import HARM_ORDERS
     from .timefmt import fmt_local
+    if single_phase_mode not in ("legacy", "current", "voltage_current"):
+        raise ProfileError("单相口径必须是 legacy / current / voltage_current")
+    scope = None
+    if single_phase_mode != "legacy":
+        if branch_phase not in PHASE_ROWS or bus_phase not in PHASE_ROWS:
+            raise ProfileError("请明确指定分路检测相和总线检测相 A/B/C")
+        if bool(getattr(c.transform, "b_phase_missing", False)) and branch_phase == "B":
+            raise ProfileError("分路 B 相电流不可用，请检查接线或重构设置")
+        if not np.any(np.abs(i4[PHASE_ROWS[branch_phase]]) > 0):
+            raise ProfileError(f"分路 {branch_phase} 相电流全为零或未映射")
+        if single_phase_mode == "voltage_current" and (c.transform.b_phase_missing or c.transform.voltage_is_line):
+            raise ProfileError("单相电压＋电流需要相电压；三相三线两表法请先重构，线电压不可直接作为相电压")
+        if single_phase_mode == "voltage_current" and not feat.u_phases_present[PHASE_ROWS[branch_phase] - 1]:
+            raise ProfileError(f"分路 {branch_phase} 相电压全为零或未映射")
+        scope = {"version": 1, "mode": single_phase_mode, "branch_phase": branch_phase, "bus_phase": bus_phase}
+        p4, q4, i4, ih4 = _single_phase_arrays(p4, q4, i4, ih4, branch_phase, branch_phase, single_phase_mode == "current")
+        phases = branch_phase
+        quantity = "i" if single_phase_mode == "current" else "p"
     q_req = quantity or str(getattr(c.nilm, "quantity", "auto") or "auto")
     use_p = (q_req == "p") or (q_req == "auto" and u_nonzero)
     if use_p and not u_nonzero:
@@ -1324,7 +1396,7 @@ def build_profile(cfg, file: str, *, device_id: str = "device", labels: Optional
         ph_req = ph_used
     # v0.99.31：各相 |ΔI| 均值随结果一起给出（判相靠它复核；《NILM_TUNING_GUIDE.md》H.32.3 让现场"看各相 |ΔI| 均值"）
     _ph_txt = "、".join("%s=%.3g A" % (ph, ph_stats[ph]["mu"]) for ph in PHASES_ALL)
-    if ph_used != PHASES_ALL:
+    if ph_used != PHASES_ALL and not scope:
         skipped = [PROFILE_PHASE_NAMES[p] for p in PHASES_ALL if p not in ph_used]
         notes.append(f"单相 / 分相画像（v0.99.30）：设备只接在 {'+'.join(ph_used)} 相，匹配时跳过 "
                      f"{'、'.join(skipped)}（{'、'.join(PHASE_DIMS[p] for p in PHASES_ALL if p not in ph_used)}）；"
@@ -1367,6 +1439,10 @@ def build_profile(cfg, file: str, *, device_id: str = "device", labels: Optional
            "template_points": TEMPLATE_POINTS, "cycles": int(t.size), "t_first": float(t[0]), "t_last": float(t[-1]),
            "steady": {"level_first_window": lv_off}, "startup": startup, "shutdown": shutdown, "notes": notes,
            "calibration": {"bus_mapping": None, "note": "无同步总线侧校准数据：总线侧只输出观测幅值，不估计设备贡献幅值（方案 §4/§7）"}}
+    if scope:
+        doc["single_phase"] = scope
+        doc["harmonic"]["note"] = "所选分路相 2~13 次谐波电流有效值合量变化"
+        notes.append(f"单相口径 {single_phase_mode}：分路 {branch_phase} 相，总线 {bus_phase} 相；检测量不依赖全局 P/I 设置")
     return validate_profile(doc)
 
 
@@ -1393,7 +1469,7 @@ def profile_summary(doc: Dict[str, Any]) -> Dict[str, Any]:
             # v0.99.30：相别（旧画像无字段 ⇒ ABC）与"匹配时要跳过哪些维"
             "phases": profile_phases(doc), "phase_source": str(doc.get("phase_source") or ""),
             "phase_skip": list(profile_skip_dims(doc)),
-            "phase_stats": dict(doc.get("phase_stats") or {}),
+            "phase_stats": dict(doc.get("phase_stats") or {}), "single_phase": single_phase_scope(doc),
             # v0.99.27：每方向 <3 个样本时给出界面提示（提取结果 与 画像匹配状态行都用这一份）
             "min_events": MIN_EVENTS_PER_DIR, "sample_notes": sample_size_notes(doc),
             "harmonic": dict(doc.get("harmonic") or {}) if "d_ih" in names else {},

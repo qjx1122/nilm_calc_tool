@@ -811,7 +811,7 @@
         <h3>检测参数（保存后立即热生效；算法说明与参数含义见 README §负荷辨识）</h3>
         <!-- 大模块①（v0.99.33）：7 个算法公共配置——以下 7 个算法全部生效 -->
         <div class="wp-group" id="nilm-common7">
-          <div class="wp-group-title">① 7 个算法公共配置 <small class="note">（启用 / 落盘 / 检测量 / 周波窗长 / 最小事件间隔——下方 7 个算法全部生效）</small></div>
+          <div class="wp-group-title">① 7 个算法公共配置 <small class="note">（启用 / 落盘 / 检测量 / 周波窗长 / 最小事件间隔；新单相画像的检测量由画像指定，其余项仍生效）</small></div>
           <div class="row2" id="nilm-form">
             <label class="check"><input type="checkbox" id="nilm-enabled"> 启用负荷辨识事件检测</label>
             <label class="check"><input type="checkbox" id="nilm-save"> 事件落盘 CSV（output/nilm/nilm_events_&lt;日期&gt;.csv）</label>
@@ -1229,7 +1229,12 @@
                 <label class="f" title="写进画像与事件表的设备标识"><span class="lbl">设备 ID</span><input id="np-device" placeholder="pumpA"></label>
                 <label class="f" title="写到 output/nilm/；留空＝profile_{设备}_{时间}.json"><span class="lbl">画像文件名</span><input id="np-name" placeholder="空＝profile_{设备}_{时间}.json"></label>
               </div>
-              <label class="f" title="v0.99.30：设备接在哪几相。auto＝按各相 |ΔI| 自动判定（未接相的幅值与噪声同量级时判为不接）；单相设备（220 V 单相电机 / UPS / 充电桩）请选 A/B/C，画像会记下相别，总线侧匹配时自动跳过另外两相的 ΔI——不再被那两相的他负荷顶掉。三相设备保持 auto/ABC 即可"><span class="lbl">设备相别</span>
+              <div class="row2">
+                <label class="f"><span class="lbl">画像特征口径</span><select id="np-single-mode"><option value="legacy">原有口径（兼容旧画像）</option><option value="current">单相纯电流</option><option value="voltage_current">单相电压＋电流</option></select><span class="note">单相模式按画像自身口径检测，与全局检测量无关；须重新提取画像。</span></label>
+                <label class="f"><span class="lbl">分路提取和检测相</span><select id="np-branch-phase"><option value="">请选择</option><option>A</option><option>B</option><option>C</option></select></label>
+                <label class="f"><span class="lbl">总线检测相</span><select id="np-bus-phase"><option value="">请选择</option><option>A</option><option>B</option><option>C</option></select><span class="note">每个画像分别指定两侧相别；不自动推断，也不依赖全局相序映射。</span></label>
+              </div>
+              <label class="f" title="v0.99.30：设备接在哪几相。auto＝按各相 |ΔI| 自动判定（未接相的幅值与噪声同量级时判为不接）；单相设备（220 V 单相电机 / UPS / 充电桩）请选 A/B/C，画像会记下相别，总线侧匹配时自动跳过另外两相的 ΔI——不再被那两相的他负荷顶掉。三相设备保持 auto/ABC 即可"><span class="lbl">设备相别（仅原有口径）</span>
                 <select id="np-phases">
                   <option value="auto" selected>自动判定（推荐）</option>
                   <option value="ABC">三相 ABC（全接）</option>
@@ -1240,7 +1245,7 @@
                   <option value="AC">两相 AC</option>
                   <option value="BC">两相 BC</option>
                 </select>
-                <span class="note">单相设备选定后：未接相的 ΔI 在总线上自动跳过，候选台阶也按本相取（ΔP/ΔQ 是三相求和，单相设备的增量即其自身；ΔIh 是三相平均）</span>
+                <span class="note">仅原有口径使用此项；新的单相口径使用上方分路/总线检测相。原有口径下 ΔP/ΔQ 仍为三相求和，ΔIh 为三相平均。</span>
               </label>
             </div>
             <div class="wp-group">

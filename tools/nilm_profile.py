@@ -28,7 +28,7 @@ from elec_tool.nilm_profile import (ProfileError, STAGE_GRID_RATIO, build_profil
 
 
 def build_cli_command(file: str, *, device: str, config=None, labels=None, label_tol=None, pre=None, post=None, quantity=None,
-                      phases=None,
+                      phases=None, single_phase_mode="legacy", branch_phase="", bus_phase="",
                       t_start="", t_end="", custom_time=False, custom_time_start="", custom_time_end="", out=None, merge_gap=None,
                       derive_stages=None, derive_grid=None, derive_center=None, derive_ratio=None, stage_q_mode=None,
                       stage_ih_exp=None, stage_dur_exp=None, stage_out_dir=None) -> str:
@@ -50,6 +50,8 @@ def build_cli_command(file: str, *, device: str, config=None, labels=None, label
         parts += ["--quantity", str(quantity)]
     if phases and str(phases).lower() not in ("", "auto", "abc"):      # v0.99.30：非三相才写进命令（旧命令不受影响）
         parts += ["--phases", str(phases)]
+    if single_phase_mode != "legacy":
+        parts += ["--single-phase-mode", str(single_phase_mode), "--branch-phase", str(branch_phase), "--bus-phase", str(bus_phase)]
     if t_start:
         parts += ["--t-start", q(t_start)]
     if t_end:
@@ -177,6 +179,9 @@ def main() -> int:
     ap.add_argument("--phases", default="auto", metavar="{auto,ABC,A,B,C,AB,AC,BC}",
                     help="v0.99.30：设备接在哪几相。auto＝按事件幅值自动判（默认）；单相设备写 A/B/C（或 AB/AC/BC）后，"
                          "画像记下相别，总线侧匹配时自动跳过未接相的 ΔI（不再被那两相的他负荷顶掉）")
+    ap.add_argument("--single-phase-mode", default="legacy", choices=("legacy", "current", "voltage_current"), help="画像口径：旧版 / 单相纯电流 / 单相电压加电流")
+    ap.add_argument("--branch-phase", default="", choices=("", "A", "B", "C"), help="设备侧提取及分路检测相")
+    ap.add_argument("--bus-phase", default="", choices=("", "A", "B", "C"), help="总线侧检测相")
     ap.add_argument("--t-start", default=""); ap.add_argument("--t-end", default="")
     ap.add_argument("--custom-time", action="store_true"); ap.add_argument("--custom-time-start", default=""); ap.add_argument("--custom-time-end", default="")
     ap.add_argument("--out", default=None, help="输出画像 JSON 路径（默认 <nilm_dir>/profile_<device>_<时间戳>.json）")
@@ -244,7 +249,8 @@ def main() -> int:
                 labels_txt = a.labels.replace(";", "\n")
         doc = build_profile(cfg, a.file, device_id=a.device, labels=labels_txt, label_tol_s=a.label_tol, pre_cycles=a.pre,
                             post_cycles=a.post, quantity=a.quantity, merge_gap_s=a.merge_gap, t_start=a.t_start, t_end=a.t_end, custom_time=a.custom_time,
-                            custom_time_start=a.custom_time_start, custom_time_end=a.custom_time_end, phases=a.phases)
+                            custom_time_start=a.custom_time_start, custom_time_end=a.custom_time_end, phases=a.phases,
+                            single_phase_mode=a.single_phase_mode, branch_phase=a.branch_phase, bus_phase=a.bus_phase)
     except (ProfileError, ConfigError, OSError, ValueError) as exc:
         print(f"错误：{exc}", file=sys.stderr)
         return 2
@@ -253,6 +259,7 @@ def main() -> int:
         out = os.path.join(ROOT, out) if not os.path.exists(os.path.dirname(out) or ".") else out
     doc["command"] = build_cli_command(a.file, device=a.device, config=(a.config or cfg_path), labels=a.labels, label_tol=a.label_tol, pre=a.pre, post=a.post,
                                        quantity=a.quantity, phases=(doc.get("phases") if str(doc.get("phases") or "ABC") != "ABC" else None),
+                                       single_phase_mode=a.single_phase_mode, branch_phase=a.branch_phase, bus_phase=a.bus_phase,
                                        t_start=a.t_start, t_end=a.t_end, custom_time=a.custom_time,
                                        custom_time_start=a.custom_time_start, custom_time_end=a.custom_time_end, out=a.out,
                                        derive_stages=a.derive_stages, derive_grid=a.derive_grid, derive_center=(a.derive_center if (a.derive_stages or a.derive_grid) else None),

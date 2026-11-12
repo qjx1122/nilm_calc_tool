@@ -4013,7 +4013,9 @@ async def process_nilm_profile(payload: Dict[str, Any]) -> Any:
                   t_start=str(payload.get("t_start") or ""), t_end=str(payload.get("t_end") or ""),
                   custom_time=bool(payload.get("custom_time", False)),
                   custom_time_start=str(payload.get("custom_time_start") or ""), custom_time_end=str(payload.get("custom_time_end") or ""),
-                  phases=phases)
+                  phases=phases, single_phase_mode=str(payload.get("single_phase_mode") or "legacy"),
+                  branch_phase=str(payload.get("branch_phase") or "").upper(),
+                  bus_phase=str(payload.get("bus_phase") or "").upper())
         doc = await asyncio.to_thread(build_profile, base, src_abs, **kw)
         nl_dir = os.environ.get("ELEC_TOOL_NILM_DIR") or base.nilm.nilm_dir
         d_abs = nl_dir if os.path.isabs(nl_dir) else os.path.join(ROOT, nl_dir)
@@ -4043,6 +4045,7 @@ async def process_nilm_profile(payload: Dict[str, Any]) -> Any:
         doc["command"] = _profile_cmd(_display_path(src_abs), device=device_id, config=cfg_arg, labels=("<标签文本>" if labels else None),
                                       label_tol=kw["label_tol_s"], pre=kw["pre_cycles"], post=kw["post_cycles"], quantity=quantity,
                                       phases=(doc.get("phases") if str(doc.get("phases") or "ABC") != "ABC" else None), merge_gap=kw["merge_gap_s"],
+                                      single_phase_mode=kw["single_phase_mode"], branch_phase=kw["branch_phase"], bus_phase=kw["bus_phase"],
                                       t_start=kw["t_start"], t_end=kw["t_end"], custom_time=kw["custom_time"],
                                       custom_time_start=kw["custom_time_start"], custom_time_end=kw["custom_time_end"], out=_display_path(fp))
         save_profile(doc, fp)

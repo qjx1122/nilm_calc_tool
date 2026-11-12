@@ -39,7 +39,7 @@ from .config import AppConfig, NILM_ALGO_DEFAULTS, NILM_ALGO_NAMES, NILM_CHANNEL
 from .nilm_auto import AUTO_MIN_CYCLES, auto_algo_params, window_stats
 from .config import NILM_SCALAR_ALGOS
 from .nilm_profile import (ProfileError, detect_profile, load_profile, profile_phase_rows, profile_phases,
-                            profile_skip_dims, profile_summary, sample_size_notes)
+                            profile_skip_dims, profile_summary, sample_size_notes, single_phase_scope)
 
 __all__ = ["NilmEvent", "NilmDetector", "CycleFeatures", "detect_steps", "NILM_ALGO_NAMES", "HARM_ORDERS"]
 
@@ -576,6 +576,8 @@ class NilmDetector:
         # v0.36：电压存在性（数据源只有电流时 u 全 0）；quantity=auto 据此选检测量
         self._u_blocks = 0
         self._u_nonzero_blocks = 0
+        self._u_phase_seen = np.zeros(3, dtype=bool)
+        self._i_phase_seen = np.zeros(3, dtype=bool)
         # v0.99.17：性能——评估节流 / 自适应统计缓存 / 尾部切片
         self._since_eval = 0                                     # 上次评估以来新进的周波数
         self._pending_eval = 0                                   # 本次评估覆盖的新周波数（切片长度依据）
@@ -639,11 +641,14 @@ class NilmDetector:
                     _miss_b = bool(getattr(self.cfg.transform, "b_phase_missing", False))
                     if _miss_b and "d_ib" not in _skip:
                         _skip.append("d_ib")                          # 3p3w 无 B 相 CT：本侧天然缺 B
-                    if _skip:
+                    if single_phase_scope(slot["profile"]):
+                        spec = single_phase_scope(slot["profile"])
+                        slot["notes"].append(f"单相 {spec['mode']}：分路 {spec['branch_phase']} 相，总线 {spec['bus_phase']} 相")
+                    elif _skip:
                         slot["notes"].append(f"画像相别 {_ph}：匹配时跳过 {'、'.join(_skip)}"
                                              + ("（本侧 3P3W 无 B 相 CT）" if _miss_b and "d_ib" in _skip else "")
                                              + "；候选台阶按本相取，ΔP/ΔQ 仍是三相求和口径（单相设备即其自身）")
-                    if _miss_b and "B" in _ph and set(_ph) == {"B"}:
+                    if not single_phase_scope(slot["profile"]) and _miss_b and "B" in _ph and set(_ph) == {"B"}:
                         slot["notes"].append("⚠ 画像声明为 **B 相单相**设备，而本侧接线为三相三线两表法且未开「3P3W 虚拟中性点重构」"
                                              "（无 B 相 CT，Ib≡0、Pb 不可测）⇒ 候选序列恒为 0，该画像**永远匹配不上**；"
                                              "请改 A/C 相采集，或在运行配置里开启重构后重提画像")
@@ -707,6 +712,8 @@ class NilmDetector:
         if not self.ncfg.enabled or block.n == 0:
             return []
         with self._lock:
+            self._u_phase_seen |= np.any(np.abs(block.u) > 0, axis=1)
+            self._i_phase_seen |= np.any(np.abs(block.i) > 0, axis=1)
             self._u_blocks += 1
             if np.any(np.abs(block.u) > 0):
                 self._u_nonzero_blocks += 1
@@ -765,7 +772,7 @@ class NilmDetector:
                    "请把 nilm.quantity 设为 i（电流有效值）或 auto")
             if msg not in self.errors:
                 self.errors.append(msg)
-            return out
+            return self._evaluate_profile(qty, gap, g_last)
         rel_tol = float(self.ncfg.rel_tol_pct)
         min_pct = float(self.ncfg.min_delta_pct)
         auto = self.auto_params_effective
@@ -912,7 +919,8 @@ class NilmDetector:
         prm = self.ncfg.params("profile")
         if not prm.get("enabled", False) or not self._profiles:
             return []
-        self._profile_health_check()
+        if any(sl.get("profile") and not single_phase_scope(sl["profile"]) for sl in self._profiles):
+            self._profile_health_check()
         out: List[NilmEvent] = []
         for slot in self._profiles:
             if not slot.get("profile"):
@@ -932,7 +940,30 @@ class NilmDetector:
         prof = slot["profile"]
         dev = str(prof.get("device_id") or os.path.basename(slot.get("path") or ""))
         tag = f"[{dev}] " if len(self._profiles) > 1 else ""
+        scope = single_phase_scope(prof)
+        det_phase = None
+        if scope:
+            det_phase = scope["branch_phase"] if int(getattr(self.cfg.output, "source_id", 0) or 0) == 1 else scope["bus_phase"]
+            idx = "ABC".index(det_phase)
+            if (det_phase == "B" and bool(getattr(self.cfg.transform, "b_phase_missing", False))) or not self._i_phase_seen[idx]:
+                msg = f"{tag}单相画像检测相 {det_phase} 的电流不可用或全为零，未运行匹配；请检查接线、列映射或重构"
+                if msg not in self.errors:
+                    self.errors.append(msg)
+                return []
+            if scope["mode"] == "voltage_current" and (self.cfg.transform.b_phase_missing or self.cfg.transform.voltage_is_line):
+                msg = f"{tag}单相电压＋电流需要相电压；三相三线两表法请先重构，线电压不可直接作为相电压"
+                if msg not in self.errors:
+                    self.errors.append(msg)
+                return []
+            if scope["mode"] == "voltage_current" and not self._u_phase_seen[idx]:
+                msg = f"{tag}单相画像检测相 {det_phase} 的电压不可用或全为零，未运行匹配"
+                if msg not in self.errors:
+                    self.errors.append(msg)
+                return []
+            qty = "i" if scope["mode"] == "current" else "p"
         use_p = (qty == "p")
+        if not scope and use_p and self.voltage_missing:
+            return []
         if prof.get("quantity") != ("p" if use_p else "i"):
             msg = (f"{tag}画像按 {prof.get('unit')} 口径构建，本侧检测量为 {'P' if use_p else 'I'}：ΔP/ΔI 特征不可比，"
                    f"该画像匹配未运行（请统一 nilm.quantity）")
@@ -978,7 +1009,7 @@ class NilmDetector:
                 self.errors.append(msg)
         try:
             skip = ("d_ib",) if bool(getattr(self.cfg.transform, "b_phase_missing", False)) else ()   # v0.93：三相三线无 B 相电流；v0.94 重构后不再跳过
-            res = detect_profile(self._p, self._q, self._i, prof, prm, use_p, slot.get("state", "unknown"), skip, self._ih)
+            res = detect_profile(self._p, self._q, self._i, prof, prm, use_p, slot.get("state", "unknown"), skip, self._ih, detection_phase=det_phase)
         except Exception as exc:
             msg = f"{tag}profile 检测异常：{type(exc).__name__}: {exc}"
             if msg not in self.errors:
@@ -1040,7 +1071,7 @@ class NilmDetector:
             else:
                 d_i_obs = float(f["d_it"])               # 三相画像 / 旧画像：三相合成（旧行为）
             d_main = dp if use_p else d_i_obs
-            ev = NilmEvent(id=self._next_id, algorithm="profile", channel="total",
+            ev = NilmEvent(id=self._next_id, algorithm="profile", channel=(det_phase or "total"),
                            t_start=float(self._t[onset]), t_end=float(self._t[end]),
                            direction="up" if m["direction"] == "START" else "down", magnitude_w=abs(dp), delta_p_w=dp,
                            delta_q_var=float(v["d_q"]), delta_i_a=float(d_i_obs),
@@ -1115,7 +1146,7 @@ class NilmDetector:
             qty = self.quantity_effective
             if qty == "i":
                 notes.append("检测量：电流有效值 I（" + ("数据源无电压，auto 自动切换" if self.ncfg.quantity == "auto" else "nilm.quantity=i")
-                             + "）；各算法使用 A 口径阈值（min_delta_a / settle_tol_a / tol_a / drift_a / noise_a / threshold_a），"
+                             + "）；标量算法使用 A 口径阈值（min_delta_a / settle_tol_a / tol_a / drift_a / noise_a / threshold_a），"
                              "W 口径阈值不参与；rel_tol_pct / min_delta_pct 按窗内 |I| 中位数折算后与 A 阈值取较大者；"
                              "事件幅值 magnitude 为 |ΔI|（A），ΔP/ΔQ 在无电压时恒为 0")
                 if "total" in self.ncfg.channels:
@@ -1165,7 +1196,13 @@ class NilmDetector:
                 if len(slots) > 1:
                     pre_txt = f"第 {i_sl + 1}/{len(slots)} 个画像·" + pre_txt
                 _ph_s = profile_phases(pf)
-                _obj = "三相合成" if _ph_s == "ABC" else f"{_ph_s} 相（候选台阶按本相序列取，ΔP/ΔQ 仍为三相求和）"
+                _scope = single_phase_scope(pf)
+                if _scope:
+                    actual = _scope["branch_phase"] if int(getattr(self.cfg.output, "source_id", 0) or 0) == 1 else _scope["bus_phase"]
+                    label = "纯电流，P/Q 不参与" if _scope["mode"] == "current" else "电压＋电流"
+                    _obj = f"{actual} 相（单相{label}）"
+                else:
+                    _obj = "三相合成" if _ph_s == "ABC" else f"{_ph_s} 相（候选台阶按本相序列取，ΔP/ΔQ 仍为三相求和）"
                 notes.append(f"设备画像匹配：{pre_txt}；对象＝{_obj}，输出观测幅值与置信度，不估计设备贡献幅值；"
                              f"当前设备状态 {d_['device_state']}"
                              + ("" if d_["has_harmonic"] else "；该画像无谐波维度 d_ih（v0.99.25 及更早生成），谐波特征不参与匹配，建议重新提取"))
