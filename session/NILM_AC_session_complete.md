@@ -1483,3 +1483,11 @@
 - 关键决策：以页面根类限定范围，功能和其他页面保持不变。
 - 未决问题：用户目标浏览器 / Windows 和真实数据待验。
 - 相关文件 / 分支：`app/static/index.html`、`app/static/app.js`、`app/static/style.css`、`tests/test_r231_realtime_chart_help.py`、`tools/ui_r231_realtime_chart_help_check.cjs`、T-045；`arena/51b63974-nilm-calc-tool`。
+
+## [2026-11-10] 会话纪要：设备侧启停画像误识别初查（第 232 轮）
+- 目标：同步正式分支最新版本，分析设备侧启停画像误识别。
+- 本会话角色：资深电力算法专家，模式 A。
+- 完成项：从 d8fb3f3 快进到 1466933，旧 tmp 备份 `/home/user/nilm_tmp_before_1466933`；只读对照新画像与实时 A 电流输出、分析定位代码。识别三处小幅 / 非持续变化强烈可疑、三处持续电平变化，以及播放实际使用了另一设备的旧画像；详见 T-046。
+- 关键决策：原始 10 kHz CSV 不在仓库，实时输出仅约 1 秒 RMS，不能以聚合结果冒充逐周波波形或把猜测当真值，不修改算法或画像。
+- 未决问题：等待原始 CSV、提取配置、人工启停标签及判定标准；逐周波重现后再设计修复和回归。
+- 相关文件 / 分支：`tmp/profile_device_20261112_180540.json`、`tmp/realtime/current_20261112.csv`、`tmp/run_info.json`、`elec_tool/nilm_profile.py`、`elec_tool/nilm.py`、T-046；`arena/51b63974-nilm-calc-tool`。
