@@ -1171,12 +1171,73 @@ def _alternation_check(x: np.ndarray, evs: Sequence[Tuple[int, int]], pre_n: int
     return sorted(found), sorted(unresolved)
 
 
-def auto_locate_events(x: np.ndarray, cps: float, pre_n: int, post_n: int) -> Tuple[List[Tuple[int, int, str]], Dict[str, Any]]:
+def _filter_small_transients(x: np.ndarray, events: Sequence[Tuple[int, int, str]], pre_n: int, post_n: int
+                             ) -> Tuple[List[Tuple[int, int, str]], List[Dict[str, Any]]]:
+    """单相纯电流自动画像：保守排除明显小于典型启停且未留下显著电平的双滑窗候选。
+
+    至少有三个幅值接近、方向覆盖启停的主要事件才建立参考；只检查双滑窗补入的孤立候选。
+    后续电平、邻近事件和持续的大幅摆动都要检查，数据不足则保留。规则不能区分所有短时启停、
+    小档位及漂移；剔除项必须报给用户，可通过人工标签恢复，不用于标签、旧口径或在线匹配。
+    """
+    n = len(x)
+    ordered = sorted(events, key=lambda e: e[0])
+    if pre_n < 1 or post_n < 1:
+        return list(ordered), []
+    changes = []
+    for on, end, _ in ordered:
+        if on < pre_n or end < on or end + post_n > n:
+            changes.append(0.0)
+            continue
+        before = float(np.median(x[on - pre_n:on]))
+        after = float(np.median(x[end:end + post_n]))
+        changes.append(after - before)
+    mags = sorted((abs(d) for d in changes if math.isfinite(d) and abs(d) > 1e-12), reverse=True)
+    if len(mags) < 3:
+        return list(ordered), []
+    ref = mags[1]  # 避免单个启动冲击支配参考
+    major = [d for d in changes if math.isfinite(d) and abs(d) >= 0.5 * ref]
+    if len(major) < 3 or not any(d > 0 for d in major) or not any(d < 0 for d in major):
+        return list(ordered), []
+    typical = float(np.median(np.abs(major)))
+    if not math.isfinite(typical) or typical <= 1e-12:
+        return list(ordered), []
+    # 检查延续电平所用窗口随 post 同步；相邻候选/文件边界阻断判断，避免把短启停对吞掉。
+    horizon = 5 * post_n
+    kept: List[Tuple[int, int, str]] = []
+    removed: List[Dict[str, Any]] = []
+    for j, (on, end, src) in enumerate(ordered):
+        if (src != "auto:two_window" or on < pre_n or end < on or end + horizon > n
+                or (j and on - ordered[j - 1][1] <= horizon)
+                or (j + 1 < len(ordered) and ordered[j + 1][0] <= end + horizon)):
+            kept.append((on, end, src)); continue
+        before = float(np.median(x[on - pre_n:on]))
+        later = x[end + post_n:end + horizon]
+        seg = x[on:end + horizon]
+        if not np.isfinite(before) or not np.isfinite(later).all() or not np.isfinite(seg).all():
+            kept.append((on, end, src)); continue
+        late_delta = float(np.median(later)) - before
+        # 排除仍出现过完整级别的新状态的情况：它可能是短时启停 / 大幅脉冲，不单凭后窗已恢复删掉。
+        w = min(25, max(3, post_n // 2))
+        if w % 2 == 0:
+            w -= 1
+        from numpy.lib.stride_tricks import sliding_window_view
+        smooth = np.median(sliding_window_view(seg, w), axis=1)
+        excursion = float(np.max(np.abs(smooth - before)))
+        if abs(late_delta) < 0.25 * typical and excursion < 0.65 * typical:
+            removed.append({"onset": int(on), "end": int(end), "delta": float(changes[j]),
+                            "late_delta": late_delta, "reference": typical})
+        else:
+            kept.append((on, end, src))
+    return kept, removed
+
+
+def auto_locate_events(x: np.ndarray, cps: float, pre_n: int, post_n: int, *, filter_small_transients: bool = False) -> Tuple[List[Tuple[int, int, str]], Dict[str, Any]]:
     """不给标签时的自动定位（v0.99.52 从 ``build_profile`` 里抽出，逐周波序列进、事件表出，便于单独测试）。
 
-    四步：① 稳态分段 + 自适应参数（``auto:steady_state``）；② 双滑窗补充稳态分段漏掉的长过渡事件（``auto:two_window``，
-    v0.92.1）；③ 起点精修（``_refine_onset``，v0.99.52）；④ 启停交替校验补出两种方法都漏掉的动作
-    （``auto:alternation``，v0.99.52）。返回 ``([(onset, end, source)], info)``，按 onset 排序；``info`` 供 notes 用。"""
+    五步：① 稳态分段 + 自适应参数（``auto:steady_state``）；② 双滑窗补充稳态分段漏掉的长过渡事件（``auto:two_window``，
+    v0.92.1）；③ 起点精修（``_refine_onset``，v0.99.52）；④ 可选的小幅 / 恢复候选核验；⑤ 启停交替校验
+    补出两种方法都漏掉的动作（``auto:alternation``，v0.99.52）。返回 ``([(onset, end, source)], info)``，
+    按 onset 排序；``info`` 供 notes 用。核验默认关闭，单相纯电流自动画像提取显式启用。"""
     from .nilm import detect_steps
     from .nilm_auto import auto_params
     x = np.asarray(x, dtype=np.float64)
@@ -1213,13 +1274,16 @@ def auto_locate_events(x: np.ndarray, cps: float, pre_n: int, post_n: int) -> Tu
     #   只有过渡长度贴近 guard、双滑窗又在事件后稳态段开头报了同一次动作时，精修后的起点会与它重合或晚几个周波
     #   （同一次动作的两个事件，交给 build_profile 的同方向合并）。交替校验要求事件表按起点排好
     out.sort(key=lambda s0: s0[0])
+    removed = []
+    if filter_small_transients:
+        out, removed = _filter_small_transients(x, out, pre_n, post_n)
     n_tw = sum(1 for _o, _e, s_ in out if s_ == "auto:two_window")
     found, unresolved = _alternation_check(x, [(o, e) for o, e, _s in out], pre_n, post_n)
     out.extend((o, e, SRC_ALTERNATION) for o, e, _d in found)
     out.sort(key=lambda s0: s0[0])
     info = {"n_two_window": int(n_tw), "n_refined": int(n_ref), "refine_max_shift": int(max_shift),
             "n_alternation": len(found), "alternation_unresolved": unresolved, "stats": ap["stats"], "steady_state": dict(prm),
-            "guard": int(guard)}
+            "guard": int(guard), "filtered_transients": removed}
     return out, info
 
 
@@ -1341,7 +1405,8 @@ def build_profile(cfg, file: str, *, device_id: str = "device", labels: Optional
         mode = "labels"
     else:
         # v0.99.52：定位的四步（稳态分段 → 双滑窗补充 → 起点精修 → 启停交替校验）集中到 auto_locate_events()
-        steps, loc = auto_locate_events(x, cps, pre_n, post_n)
+        steps, loc = auto_locate_events(x, cps, pre_n, post_n,
+                                        filter_small_transients=bool(scope and scope["mode"] == "current"))
         for onset, end, src in steps:
             ef = event_features(p4, q4, i4, int(onset), int(end), pre_n, post_n, ih4=ih4)
             # v0.91.2：方向按合成电流有效值的变化判（RMS 恒正，启动必升、停止必降），不再按 P 判——P 的符号受 CT 极性 / 相别配对影响
@@ -1350,6 +1415,12 @@ def build_profile(cfg, file: str, *, device_id: str = "device", labels: Optional
         n_tw = int(loc["n_two_window"])
         if n_tw:
             notes.append(f"自动定位：稳态分段漏掉的 {n_tw} 个事件由双滑窗补充（source=auto:two_window）——多为过渡过程长于 max_transient 的启动；其后窗若仍在过渡中，ΔI/ΔP 会偏大，建议加大 post 或给标签")
+        if loc["filtered_transients"]:
+            for item in loc["filtered_transients"]:
+                at = fmt_local(float(t[item["onset"]]))
+                notes.append(f"自动定位：双滑窗候选 {at} 经核验未直接纳入画像（后续电平变化 {item['late_delta']:.4g} A，"
+                             f"参考启停幅值 {item['reference']:.4g} A；短窗 Δ {item['delta']:.4g} A）。"
+                             "交替校验仍可能另行补检；小档位或短时动作可能被排除，请核对原始曲线；若是真实动作请用人工启停标签重新提取")
         if loc["n_refined"]:
             notes.append(f"自动定位：{loc['n_refined']} 个事件的起点做了精修（v0.99.52）——事件前的电平在波动，稳态分段给的起点早于电平真正突变的周波，"
                          f"已挪到突变处（最多挪了 {loc['refine_max_shift']} 个周波）；不挪的话持续周波数和轨迹模板会把突变前的波动算进去")
