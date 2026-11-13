@@ -1,10 +1,10 @@
 {
-  "created_local": "2026-11-12 19:28:08.967",
+  "created_local": "2026-11-13 10:48:51.448",
   "started_side": "branch",
   "starts": [
     {
       "side": "branch",
-      "at_local": "2026-11-12 19:28:08.967"
+      "at_local": "2026-11-13 10:48:51.448"
     }
   ],
   "sides": {
@@ -31,13 +31,13 @@
       "config_file": "config_branch.json",
       "config_copied_from": "configs\\branch_runtime.json",
       "config_mode": "verbatim_copy",
-      "profile_file": "nilm/profile_branch_profile_device_20261112_122347.json",
+      "profile_file": "nilm/profile_branch_profile_device_20261113_103508.json",
       "profile_files": [
-        "nilm/profile_branch_profile_device_20261112_122347.json"
+        "nilm/profile_branch_profile_device_20261113_103508.json"
       ],
-      "profile_copied_from": "output\\nilm\\profile_device_20261112_122347.json",
+      "profile_copied_from": "output\\nilm\\profile_device_20261113_103508.json",
       "profile_copied_from_all": [
-        "output\\nilm\\profile_device_20261112_122347.json"
+        "output\\nilm\\profile_device_20261113_103508.json"
       ]
     }
   }
