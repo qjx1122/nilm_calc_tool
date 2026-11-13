@@ -599,6 +599,48 @@ def transition_end(x: np.ndarray, onset: int, post_n: int, tgt: float, dlt: floa
     return max(onset + 1, min(end, L - 1))
 
 
+def _aligned_short_post_template(profile: Dict[str, Any], feat: Dict[str, Any], onset: int, end: int,
+                                 post_hi: Optional[int], pre_lo: Optional[int], length: int,
+                                 pre_n: int, post_n: int) -> Optional[float]:
+    """仅单样本、强冲击单相电流 START 的截短后窗，按相同时间几何比较模板。
+
+    不改变后窗边界或数值特征；模板仅有 16 点，前缀和其后窗中位数属于插值估计，
+    因此调用方必须标记低置信。数据不足、前窗被截、参考持续时间不一致、
+    过短或不可信的参考电平都维持原比较。不能借此断定相邻变点的来源。
+    """
+    group = profile.get("startup") or {}
+    if int(group.get("n", 0)) != 1 or post_hi is None or post_n < 2:
+        return None
+    if end + post_n >= length or (pre_lo is not None and pre_lo > onset - pre_n):
+        return None
+    post_len = min(end + post_n, int(post_hi)) - end
+    if post_len < max(10, (post_n + 1) // 2) or post_len >= post_n:
+        return None
+    dur = end - onset
+    ref_dur = float((group.get("dur_cycles") or {}).get("mean", -1))
+    if dur < 1 or not math.isfinite(ref_dur) or abs(ref_dur - dur) > max(2.0, 0.1 * ref_dur):
+        return None
+    if float(group["mu"][FEATURES.index("peak_ratio")]) < 3.0:
+        return None
+    ref = np.asarray(group.get("template") or [], dtype=np.float64)
+    candidate = np.asarray(feat.get("template") or [], dtype=np.float64)
+    if len(ref) != TEMPLATE_POINTS or len(candidate) != TEMPLATE_POINTS or not np.isfinite(ref).all() or not np.isfinite(candidate).all():
+        return None
+    ref_dur_n = int(round(ref_dur))
+    ref_len = ref_dur_n + post_n
+    if ref_len < 2:
+        return None
+    # 画像轨迹原先在 [onset, end+post) 上归一化；重建后截成同样的持续段＋后窗。
+    grid = np.linspace(0, ref_len - 1, len(ref))
+    ref_series = np.interp(np.arange(ref_len), grid, ref)
+    ref_post_median = float(np.median(ref_series[ref_dur_n:ref_dur_n + post_len]))
+    if not math.isfinite(ref_post_median) or not 0.5 <= ref_post_median <= 2.0:
+        return None
+    crop_len = ref_dur_n + post_len
+    aligned = np.interp(np.linspace(0, crop_len - 1, TEMPLATE_POINTS), grid, ref) / ref_post_median
+    return template_distance(candidate, aligned)
+
+
 # ------------------------------------------------------------------ 总线侧检测
 def _two_window_candidates(x: np.ndarray, pre_n: int, post_n: int, min_d: float, k_sig: float) -> List[Tuple[int, int, float]]:
     """稳健双滑窗候选：|median(后) − median(前)| 局部极大值 ≥ max(min_d, k·MAD 尺度)。返回 (onset, end, delta)。"""
@@ -852,7 +894,21 @@ def detect_profile(p4: np.ndarray, q4: np.ndarray, i4: np.ndarray, profile: Dict
         crowded = post_hi is not None and gap_post < floor_post                       # 干净后窗偏短：记标志并改用 post_hi 前 floor_post 周波（v0.99.25）
         feat = event_features(p4, q4, i4, onset, end, pre_n, post_n, pre_lo, post_hi, ih4)   # v0.99.19：特征窗口与画像提取一致；v0.99.24：相邻变点截断；v0.99.26：谐波电流
         m = match_event(profile, feat, lam, skip, pmap, stage_free, (s_lo, s_hi))   # v0.99.29：档位自由
+        # 只改变轨迹比较的时间几何，不撤销对相邻变点的截窗，不修改 D² 或门槛。
+        aligned_td = None
+        if scope and scope["mode"] == "current" and not stage_free and m["direction"] == "START" and not from_q:
+            aligned_td = _aligned_short_post_template(profile, feat, onset, end, post_hi, pre_lo, len(x), pre_n, post_n)
+        if aligned_td is not None:
+            sp = max(float(profile["startup"].get("template_spread", 0.3)), 0.25)
+            penalty = 1.0 if aligned_td <= 3.0 * sp else max(0.3, 3.0 * sp / aligned_td)
+            n_dims = max(1, len(profile_feature_names(profile)) - len(set(skip) & set(profile_feature_names(profile))))
+            m["template_dist"] = aligned_td
+            m["traj_penalty"] = penalty
+            m["confidence"] = math.exp(-m["d2"] / (2.0 * n_dims)) * penalty
         flags: List[str] = []
+        if aligned_td is not None:
+            # 不能知道相邻变化是否他负荷；插值参考不是原始波形，必须保留复核标记。
+            flags.append("post_window_truncated")
         if m.get("phase_map_auto") and m.get("phase_map") != "ABC":
             flags.append("phase_map_" + str(m.get("phase_map")))       # 自动相序：记录实际采用的映射（非 ABC 时提示）
         conf = m["confidence"]
