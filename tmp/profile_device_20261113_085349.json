@@ -2,7 +2,7 @@
  "schema": "nilm_profile/1",
  "device_id": "device",
  "version": "1.0",
- "created": "2026-11-12 18:05:40",
+ "created": "2026-11-13 08:53:49",
  "source_file": "D:\\Work\\testPython\\NILM_Test2026\\nilm_calc_tool\\data\\化工行业-天云龙涂料厂-dev-2号搅拌机-1-启停1.csv",
  "label_mode": "auto",
  "quantity": "i",
@@ -331,5 +331,5 @@
   "uc": "",
   "ic": ""
  },
- "command": "python tools/nilm_profile.py --file data\\化工行业-天云龙涂料厂-dev-2号搅拌机-1-启停1.csv --device device --config output\\nilm\\nilm_tune_base.json --label-tol 2 --pre 10 --post 50 --merge-gap 10 --quantity i --phases A --single-phase-mode current --branch-phase A --bus-phase A --out output\\nilm\\profile_device_20261112_180540.json"
+ "command": "python tools/nilm_profile.py --file data\\化工行业-天云龙涂料厂-dev-2号搅拌机-1-启停1.csv --device device --config output\\nilm\\nilm_tune_base.json --label-tol 2 --pre 10 --post 50 --merge-gap 10 --quantity i --phases A --single-phase-mode current --branch-phase A --bus-phase A --out output\\nilm\\profile_device_20261113_085349.json"
 }
