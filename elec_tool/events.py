@@ -86,28 +86,28 @@ _CSV_FIELDS_V32 = tuple(_CSV_FIELDS) + ("run_id",)      # v0.32：末列 run_id�
 
 
 def _rotate_if_header_differs(path: str, fields) -> bool:
-    """文件不存在 / 为空 → True（需写表头）；已有文件表头与 fields 一致 → False（续写）；
-    表头不同（旧版本列集）→ 改名为 <名>.pre-v032.csv 保留后 True（新建完整表头）。"""
+    """旧表头先备份再创建新表；读取或备份失败时拒绝追加，避免列错位。调用方须持共享文件锁。"""
     if not os.path.exists(path) or os.path.getsize(path) == 0:
         return True
     try:
         with open(path, "r", encoding="utf-8-sig", newline="") as fh:
             head = next(csv.reader(fh), None)
-    except Exception:
-        return False
+    except Exception as exc:
+        raise OSError(f"读取 CSV 表头失败：{path}: {exc}") from exc
     if head == list(fields):
         return False
-    # v0.36：v0.32~v0.35 的文件（已有 run_id 列、尚无 quantity 列）改名 .pre-v036；更早的改名 .pre-v032
-    # v0.90：已有 unit/run_id、尚无 device_id（画像匹配附加列）的 nilm_events 文件改名 .pre-v090
     tag = "v090" if (head and "unit" in head and "run_id" in head) else ("v036" if (head and "run_id" in head) else "v032")
-    bak = path[:-4] + f".pre-{tag}.csv"
+    stem = path[:-4] + f".pre-{tag}"
+    bak = stem + ".csv"
+    k = 1
+    while os.path.exists(bak):
+        bak = f"{stem}-{k}.csv"
+        k += 1
     try:
-        if not os.path.exists(bak):
-            os.replace(path, bak)
-            return True
-    except OSError:
-        pass
-    return False
+        os.replace(path, bak)
+    except OSError as exc:
+        raise OSError(f"旧表头 CSV 备份失败：{path}: {exc}") from exc
+    return True
 
 
 class EventWriter:

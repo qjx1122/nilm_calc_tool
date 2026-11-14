@@ -23,6 +23,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import math
 import os
@@ -32,6 +33,8 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 import numpy as np
 
 PROFILE_SCHEMA = "nilm_profile/1"
+BUNDLE_SCHEMA = "nilm_profile_bundle/1"
+BUNDLE_MAX_MEMBERS = 8
 # v0.99.26：新增第 8 维 d_ih＝**谐波电流增量**（2~13 次谐波电流有效值的合量，事件后窗中位数 − 前窗中位数，A）。
 #   动机（第 171/172 轮实测）：整流/变频类设备在总线上贡献约 +15 A 谐波电流（THD_I×I 从 16~18 A 升到 31~33 A），
 #   而同功率的线性负荷（电阻/电机）几乎为 0——这是把"本设备"与"幅值相近的他负荷"分开的最强维度
@@ -355,9 +358,114 @@ def validate_profile(doc: Dict[str, Any]) -> Dict[str, Any]:
     return doc
 
 
+
+def _bundle_member(doc: Dict[str, Any]) -> Dict[str, Any]:
+    """校验集合成员，且不改变传入的旧画像。集合不允许嵌套或无标识成员。"""
+    if not isinstance(doc, dict) or doc.get("schema") != PROFILE_SCHEMA:
+        raise ProfileError("融合集合的成员必须是单设备画像，不允许嵌套")
+    d = copy.deepcopy({k: v for k, v in doc.items() if not k.startswith("_")})
+    device = d.get("device_id")
+    if not isinstance(device, str) or not device.strip() or device != device.strip() or any(ord(c) < 32 for c in device):
+        raise ProfileError("每个设备需要非空且没有首尾空格的 device_id")
+    try:
+        for key in ("startup", "shutdown"):
+            group = d.get(key)
+            if group is not None and not isinstance(group, dict):
+                raise ProfileError(f"设备 {device} 的 {key} 格式无效")
+        validate_profile(d)
+        if d.get("quantity") not in ("i", "p"):
+            raise ProfileError(f"设备 {device} 的检测量无效")
+        for field in ("pre_cycles", "post_cycles"):
+            v = d.get(field)
+            if isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v) or int(v) != v or not 1 <= v <= 400000:
+                raise ProfileError(f"设备 {device} 的 {field} 无效")
+        for key in ("startup", "shutdown"):
+            group = d.get(key)
+            if not group:
+                continue
+            if not isinstance(group.get("n"), int) or isinstance(group["n"], bool) or group["n"] < 1:
+                raise ProfileError(f"设备 {device} 的 {key}.n 无效")
+            if any(not isinstance(x, (int, float)) or isinstance(x, bool) or not math.isfinite(x) for x in group["mu"] + group["sigma"]):
+                raise ProfileError(f"设备 {device} 的 {key}.mu/sigma 无效")
+            spread = group.get("template_spread", 0.3)
+            if not isinstance(spread, (int, float)) or isinstance(spread, bool) or not math.isfinite(spread) or spread < 0:
+                raise ProfileError(f"设备 {device} 的 {key}.template_spread 无效")
+            duration = group.get("dur_cycles")
+            if duration is not None and (not isinstance(duration, dict) or any(
+                    not isinstance(v, (int, float)) or isinstance(v, bool) or not math.isfinite(v) or not 0 <= v <= 400000
+                    for v in duration.values())):
+                raise ProfileError(f"设备 {device} 的 {key}.dur_cycles 无效")
+            template = group.get("template")
+            if not isinstance(template, list) or len(template) != TEMPLATE_POINTS or any(not isinstance(x, (int, float)) or isinstance(x, bool) or not math.isfinite(x) for x in template):
+                raise ProfileError(f"设备 {device} 的 {key}.template 无效")
+        clean = {k: v for k, v in d.items() if not k.startswith("_")}
+        json.dumps(clean, allow_nan=False, ensure_ascii=False)
+        return clean
+    except (ValueError, TypeError, KeyError, OverflowError, AttributeError) as exc:
+        raise ProfileError(f"设备 {device} 的画像无效：{exc}") from exc
+
+
+def _bundle_digest(profile: Dict[str, Any]) -> str:
+    payload = json.dumps(profile, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def build_profile_bundle(profiles: Sequence[Dict[str, Any]], bundle_id: str = "bundle") -> Dict[str, Any]:
+    """自包含集合，只保存各成员自身的完整画像，不平均设备特征。"""
+    if not isinstance(profiles, (list, tuple)) or not 1 <= len(profiles) <= BUNDLE_MAX_MEMBERS:
+        raise ProfileError(f"融合集合需要 1～{BUNDLE_MAX_MEMBERS} 个单设备画像")
+    if not isinstance(bundle_id, str) or not bundle_id.strip() or len(bundle_id) > 128:
+        raise ProfileError("融合集合 ID 不能为空或超过 128 字符")
+    members = []; seen = set()
+    for profile in profiles:
+        d = _bundle_member(profile); device = d["device_id"]
+        if device in seen:
+            raise ProfileError(f"融合集合中 device_id 重复：{device}")
+        seen.add(device)
+        members.append({"device_id": device, "sha256": _bundle_digest(d), "profile": d})
+    return {"schema": BUNDLE_SCHEMA, "version": "1.0", "bundle_id": bundle_id.strip(),
+            "created": time.strftime("%Y-%m-%d %H:%M:%S"), "members": members}
+
+
+def validate_profile_bundle(bundle: Dict[str, Any]) -> Dict[str, Any]:
+    if not isinstance(bundle, dict) or bundle.get("schema") != BUNDLE_SCHEMA or bundle.get("version") != "1.0":
+        raise ProfileError("融合集合 schema 或版本不受支持")
+    bid = bundle.get("bundle_id")
+    if not isinstance(bid, str) or not bid.strip() or len(bid) > 128:
+        raise ProfileError("融合集合 ID 无效")
+    members = bundle.get("members")
+    if not isinstance(members, list) or not 1 <= len(members) <= BUNDLE_MAX_MEMBERS:
+        raise ProfileError(f"融合集合需要 1～{BUNDLE_MAX_MEMBERS} 个成员")
+    seen = set()
+    for member in members:
+        if not isinstance(member, dict):
+            raise ProfileError("融合集合成员格式无效")
+        p = _bundle_member(member.get("profile")); did = p["device_id"]
+        if did in seen:
+            raise ProfileError(f"融合集合中 device_id 重复：{did}")
+        if member.get("device_id") != did or member.get("sha256") != _bundle_digest(p):
+            raise ProfileError(f"设备 {did} 的身份或内容校验失败")
+        seen.add(did)
+    return bundle
+
+
+def load_profile_bundle(path: str) -> Dict[str, Any]:
+    if not os.path.isfile(path):
+        raise ProfileError(f"融合文件不存在：{path}")
+    if os.path.getsize(path) > 20 * 1024 * 1024:
+        raise ProfileError("融合文件超过 20 MiB 上限")
+    with open(path, encoding="utf-8") as fh:
+        return validate_profile_bundle(json.load(fh))
+
+
 def load_profile(path: str, root: Optional[str] = None) -> Dict[str, Any]:
     p = path if os.path.isabs(path) else os.path.join(root or os.getcwd(), path)
-    doc = _load_profile_raw(p)
+    return normalize_loaded_profile(_load_profile_raw(p))
+
+
+def normalize_loaded_profile(doc: Dict[str, Any]) -> Dict[str, Any]:
+    """旧画像 / 集合成员共用的运行时兼容归一化。"""
+    doc = validate_profile(copy.deepcopy(doc))
     names = doc.get("_features") or profile_feature_names(doc)
     jd = names.index("dur_cycles") if "dur_cycles" in names else None
     for k in ("startup", "shutdown"):          # v0.92.5：旧画像的 σ 按当前绝对下限抬升
@@ -1344,7 +1452,7 @@ def auto_locate_events(x: np.ndarray, cps: float, pre_n: int, post_n: int, *, fi
 
 
 def load_cycles(cfg, file: str, *, max_cycles: int = 400000, t_start: str = "", t_end: str = "", custom_time: bool = False,
-                custom_time_start: str = "", custom_time_end: str = ""):
+                custom_time_start: str = "", custom_time_end: str = "", _check_continuity: bool = False):
     """读取设备侧文件为逐周波序列。返回 (c, feat, t, p4, q4, i4, ih4, u_nonzero)；``cfg`` 不被修改。
     v0.99.26：新增 ih4（4, N）＝逐周波谐波电流（2~13 次合量，A）。旧调用方按 7 元组解包需同步（tools 里已改）。"""
     from .config import AppConfig, parse_play_start
@@ -1372,6 +1480,10 @@ def load_cycles(cfg, file: str, *, max_cycles: int = 400000, t_start: str = "", 
     feat = CycleFeatures(c.sampling.fs, c.sampling.f_nom)
     ts, ps, qs, is_, hs = [], [], [], [], []          # v0.99.26：hs＝逐周波谐波电流
     u_nonzero = False; u_phases = np.zeros(3, dtype=bool); n = 0
+    # 只在多源严格提取中核验时标；不改变旧单源调用行为。
+    quality = {"interpolated_blocks": 0, "synthetic_time_blocks": 0, "fs_mismatch_blocks": 0, "timestamp_modes": [],
+               "continuity_check": "obvious_gaps_only", "gap_threshold_s": max(3.0 / float(c.sampling.f_nom), 4.0 / float(c.sampling.fs))}
+    last_t = None
     with create_source(c) as src:
         while True:
             blk = src.read()
@@ -1379,6 +1491,27 @@ def load_cycles(cfg, file: str, *, max_cycles: int = 400000, t_start: str = "", 
                 if src.exhausted:
                     break
                 continue
+            if _check_continuity and blk.n:
+                source_info = src.info()
+                source_notes = source_info.get("notes") or []
+                mode = str(source_info.get("ts_mode") or "")
+                if mode and mode not in quality["timestamp_modes"]:
+                    quality["timestamp_modes"].append(mode)
+                if any("空值/非法采样单元" in str(note) for note in source_notes):
+                    quality["interpolated_blocks"] += 1
+                if any("时间戳推算采样率" in str(note) and "偏差" in str(note) for note in source_notes):
+                    quality["fs_mismatch_blocks"] += 1
+                synthetic = bool(source_info.get("custom_time")) or mode == "empty" or any("时间戳不可用" in str(note) for note in source_notes)
+                if synthetic:
+                    quality["synthetic_time_blocks"] += 1
+                    last_t = None  # 合成时间轴不能证明文件时标连续。
+                else:
+                    dt = np.diff(blk.t)
+                    if last_t is not None:
+                        dt = np.concatenate(([float(blk.t[0]) - last_t], dt))
+                    if dt.size and (not np.all(np.isfinite(dt)) or np.any(np.abs(dt) > quality["gap_threshold_s"])):
+                        raise ProfileError("文件时标存在明显不连续或回退，无法安全跨缺口提取；请拆分连续片段并核对采样率与时标")
+                    last_t = float(blk.t[-1])
             scaled = scale_block(blk, c.transform)
             u_phases |= np.any(np.abs(scaled.u) > 0, axis=1)
             if not u_nonzero and np.any(np.abs(scaled.u) > 0):
@@ -1395,6 +1528,8 @@ def load_cycles(cfg, file: str, *, max_cycles: int = 400000, t_start: str = "", 
     q4 = np.concatenate(qs, axis=1)[:, :max_cycles]; i4 = np.concatenate(is_, axis=1)[:, :max_cycles]
     ih4 = np.concatenate(hs, axis=1)[:, :max_cycles]          # v0.99.26：逐周波谐波电流（画像第 8 维 d_ih 的来源）
     feat.u_phases_present = u_phases
+    if _check_continuity:
+        feat.source_quality = quality
     return c, feat, t, p4, q4, i4, ih4, u_nonzero
 
 
@@ -1402,7 +1537,8 @@ def build_profile(cfg, file: str, *, device_id: str = "device", labels: Optional
                   pre_cycles: int = 10, post_cycles: int = 50, max_cycles: int = 400000, quantity: Optional[str] = None,
                   t_start: str = "", t_end: str = "", custom_time: bool = False, custom_time_start: str = "",
                   custom_time_end: str = "", merge_gap_s: float = 10.0, phases: str = "auto",
-                  single_phase_mode: str = "legacy", branch_phase: str = "", bus_phase: str = "") -> Dict[str, Any]:
+                  single_phase_mode: str = "legacy", branch_phase: str = "", bus_phase: str = "",
+                  _sample_sink: Optional[List[Dict[str, Any]]] = None, _strict_bounds: bool = False) -> Dict[str, Any]:
     """从设备侧文件构建画像。``merge_gap_s``（v0.92，仅自动定位模式）：同方向、中间没有反向事件、起点间隔 ≤ 该秒数的
     相邻事件视为同一次动作被稳态分段切碎（或启动后的分级带载 / 反复重启），只保留 |ΔI| 最大的一个；0＝不合并。``cfg``＝基准配置（PT/CT、fs、列映射，不被修改）。``labels``＝标签文本（空＝自动用稳态分段 +
     自适应参数找启停事件：幅值为正＝启动、为负＝停止）。返回画像文档（含 ``events`` 明细与 ``notes``）。
@@ -1411,7 +1547,8 @@ def build_profile(cfg, file: str, *, device_id: str = "device", labels: Optional
     ``"A"`` / ``"B"`` / ``"C"``（或 ``"AB"`` / ``"AC"`` / ``"BC"``）。单相设备写成单相后，画像里记
     ``phases``，总线侧匹配时自动跳过另外两相的 ΔI（见 ``profile_skip_dims``），不会再被那两相的他负荷顶掉。"""
     c, feat, t, p4, q4, i4, ih4, u_nonzero = load_cycles(cfg, file, max_cycles=max_cycles, t_start=t_start, t_end=t_end, custom_time=custom_time,
-                                                   custom_time_start=custom_time_start, custom_time_end=custom_time_end)
+                                                   custom_time_start=custom_time_start, custom_time_end=custom_time_end,
+                                                   _check_continuity=_strict_bounds)
     from .nilm import HARM_ORDERS
     from .timefmt import fmt_local
     if single_phase_mode not in ("legacy", "current", "voltage_current"):
@@ -1438,6 +1575,14 @@ def build_profile(cfg, file: str, *, device_id: str = "device", labels: Optional
         raise ProfileError("数据源没有电压：有功恒为 0，请用 quantity=i（或 auto）")
     x = p4[0] if use_p else i4[0]
     notes: List[str] = []
+    if _strict_bounds:
+        quality = feat.source_quality
+        if quality["interpolated_blocks"]:
+            notes.append(f"{quality['interpolated_blocks']} 个数据块含缺失或非法采样，读取时进行了插值或置零；请复核原始波形及事件窗口")
+        if quality["synthetic_time_blocks"]:
+            notes.append("使用了合成或自定义时间轴，不能据此核验原始文件时标缺口；请人工核对录波连续性")
+        if quality["fs_mismatch_blocks"]:
+            notes.append(f"{quality['fs_mismatch_blocks']} 个数据块的时间戳推算采样率与配置存在偏差；请核对采样率、列映射和缺样")
     samples: List[Dict[str, Any]] = []
     pre_n, post_n = int(pre_cycles), int(post_cycles)
     cps = float(c.sampling.f_nom)
@@ -1510,8 +1655,20 @@ def build_profile(cfg, file: str, *, device_id: str = "device", labels: Optional
                 samples = kept
                 notes.append(f"自动定位：有 {merged} 个事件与前一事件同方向、间隔 ≤{float(merge_gap_s):g} s 且中间无反向事件，判为同一次动作被切碎 / 分级带载 / 反复重启，只保留 |ΔI| 最大的一个，已合并（merge_gap_s=0 可关闭）")
         notes.append(f"未提供启停标签：用稳态分段 + 自适应参数自动定位到 {len(samples)} 个事件（合并后）（幅值为正＝启动、为负＝停止），请核对事件明细")
+    if _strict_bounds:
+        valid = []
+        for s_ in samples:
+            complete = (s_["onset"] >= pre_n and s_["end"] >= s_["onset"] and s_["end"] + post_n <= t.size)
+            finite = all(math.isfinite(float(v)) for v in s_["vec"].values()) and all(math.isfinite(float(v)) for v in s_["template"])
+            if complete and finite:
+                valid.append(s_)
+            else:
+                notes.append(f"事件 {s_['t_start_local']} 前后窗不完整或特征非有限，未纳入；请补齐录波")
+        samples = valid
     if not samples:
-        raise ProfileError("没有定位到任何启停事件：请检查标签时刻 / 文件内容")
+        raise ProfileError("没有定位到任何启停事件：请检查标签时刻 / 文件内容或事件前后窗")
+    if _sample_sink is not None:
+        _sample_sink.extend(copy.deepcopy(samples))
     # v0.99.30：先定"设备接在哪几相"——单相设备必须把另外两相的 ΔI 从匹配里摘掉（否则总线侧那两相的
     #   他负荷会让 D² 爆掉），三相设备保持原样（phases="ABC" 与旧画像完全等价）。
     ph_req = normalize_phases(phases)
@@ -1566,10 +1723,140 @@ def build_profile(cfg, file: str, *, device_id: str = "device", labels: Optional
            "template_points": TEMPLATE_POINTS, "cycles": int(t.size), "t_first": float(t[0]), "t_last": float(t[-1]),
            "steady": {"level_first_window": lv_off}, "startup": startup, "shutdown": shutdown, "notes": notes,
            "calibration": {"bus_mapping": None, "note": "无同步总线侧校准数据：总线侧只输出观测幅值，不估计设备贡献幅值（方案 §4/§7）"}}
+    if _strict_bounds:
+        doc["source_quality"] = copy.deepcopy(feat.source_quality)
     if scope:
         doc["single_phase"] = scope
         doc["harmonic"]["note"] = "所选分路相 2~13 次谐波电流有效值合量变化"
         notes.append(f"单相口径 {single_phase_mode}：分路 {branch_phase} 相，总线 {bus_phase} 相；检测量不依赖全局 P/I 设置")
+    return validate_profile(doc)
+
+
+
+def profile_source_sha256(path: str) -> str:
+    digest = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def build_multi_profile(cfg, sources: Sequence[Dict[str, Any]], *, device_id: str = "device",
+                        selected: Optional[Sequence[str]] = None, allow_single_direction: bool = False,
+                        **options: Any) -> Dict[str, Any]:
+    """独立读取各文件的逐事件向量/模板，再按方向统一拟合；绝不跨文件拼接波形。
+
+    ``sources`` 每项包括 path、可选 labels / 时间和可选 cfg；``selected`` 是预览所得事件 ID。
+    失败不生成部分画像。单方向画像必须由调用方显式确认。
+    """
+    if not isinstance(sources, (list, tuple)) or not sources or len(sources) > 32 or any(not isinstance(src, dict) for src in sources):
+        raise ProfileError("每个设备需要 1～32 个波形文件")
+    if selected is not None and (not isinstance(selected, (list, tuple)) or any(not isinstance(x, str) for x in selected)):
+        raise ProfileError("事件选择必须是事件 ID 列表")
+    if options.get("quantity") not in (None, "auto", "p", "i"):
+        raise ProfileError("quantity 必须是 auto / p / i")
+    pre = int(options.get("pre_cycles", 10)); post = int(options.get("post_cycles", 50))
+    if not (1 <= pre <= 400000 and 1 <= post <= 400000):
+        raise ProfileError("前后窗必须为 1～400000 周波")
+    for key, default in (("label_tol_s", 2.0), ("merge_gap_s", 10.0)):
+        value = float(options.get(key, default))
+        if not math.isfinite(value) or value < 0 or value > 86400:
+            raise ProfileError(f"{key} 必须是 0～86400 的有限数")
+    limit = int(options.get("max_cycles", 400000))
+    if limit < 1 or limit > 400000:
+        raise ProfileError("每个文件的周波上限须为 1～400000")
+    total_cycles = 0
+    seen_paths = set(); seen_hashes = set(); total_bytes = 0
+    samples: List[Dict[str, Any]] = []; docs = []; metadata = []
+    for index, src in enumerate(sources):
+        path = str(src.get("path") or "").strip()
+        if not path or not os.path.isfile(path):
+            raise ProfileError(f"源文件 {index + 1} 不存在：{path}")
+        real = os.path.realpath(path)
+        if real in seen_paths:
+            raise ProfileError(f"源文件重复：{path}；请在同一文件中选择多个事件")
+        seen_paths.add(real)
+        before = os.stat(path)
+        total_bytes += before.st_size
+        if before.st_size > 4 * 1024 ** 3 or total_bytes > 8 * 1024 ** 3:
+            raise ProfileError("源文件超过单文件 4 GiB 或任务合计 8 GiB 上限")
+        digest = profile_source_sha256(path)
+        if digest in seen_hashes:
+            raise ProfileError(f"源文件内容重复：{path}；同一录波不能重复计数")
+        seen_hashes.add(digest)
+        file_cfg = src.get("cfg") or cfg
+        sink: List[Dict[str, Any]] = []
+        args = dict(options)
+        for key in ("labels", "t_start", "t_end", "custom_time", "custom_time_start", "custom_time_end"):
+            args.pop(key, None)
+            if key in src:
+                args[key] = src[key]
+        try:
+            doc = build_profile(file_cfg, path, device_id=device_id, _sample_sink=sink, _strict_bounds=True, **args)
+        except (ProfileError, ValueError, OSError) as exc:
+            raise ProfileError(f"源文件 {index + 1}（{path}）：{exc}") from exc
+        after = os.stat(path)
+        if (before.st_size, before.st_mtime_ns) != (after.st_size, after.st_mtime_ns) or profile_source_sha256(path) != digest:
+            raise ProfileError(f"源文件读取期间发生变化：{path}")
+        if int(doc["cycles"]) >= limit:
+            raise ProfileError(f"源文件 {index + 1} 达到 {limit} 周波上限，可能截断；请缩小时间段或调整上限")
+        total_cycles += int(doc["cycles"])
+        if total_cycles > 800000:
+            raise ProfileError("所有源文件合计超过 800000 周波，请减少文件或时间范围")
+        if docs:
+            for key in ("fs", "f_nom", "pre_cycles", "post_cycles", "quantity", "single_phase", "wiring", "pt_ct"):
+                if doc.get(key) != docs[0].get(key):
+                    raise ProfileError(f"源文件 {index + 1} 的 {key} 与其他文件不一致，请统一口径")
+        sid = str(src.get("source_id") or f"source-{index + 1}")
+        if any(m["source_id"] == sid for m in metadata):
+            raise ProfileError(f"重复的源文件 ID：{sid}")
+        for item in sink:
+            item["source_id"] = sid
+            item["event_id"] = f"{sid}:{item['onset']}:{item['direction']}"
+        if len({item["onset"] for item in sink}) != len(sink):
+            raise ProfileError(f"源文件 {index + 1} 有多个标签定位到同一事件，请去重或调整标签")
+        samples.extend(sink); docs.append(doc)
+        metadata.append({"source_id": sid, "path": path, "size": after.st_size, "mtime_ns": after.st_mtime_ns, "sha256": digest,
+                         "cycles": doc["cycles"], "t_first": doc["t_first"], "t_last": doc["t_last"],
+                         "labels": str(src.get("labels") or ""), "notes": list(doc["notes"]),
+                         "t_start_requested": str(src.get("t_start") or ""), "t_end_requested": str(src.get("t_end") or ""),
+                         "custom_time": bool(src.get("custom_time", False)),
+                         "custom_time_start": str(src.get("custom_time_start") or ""),
+                         "custom_time_end": str(src.get("custom_time_end") or ""),
+                         "columns": file_cfg.columns.to_dict() if hasattr(file_cfg.columns, "to_dict") else file_cfg.to_dict().get("columns", {}),
+                         "quality": copy.deepcopy(doc.get("source_quality") or {})})
+    if selected is not None:
+        ids = set(selected); available = {s["event_id"] for s in samples}
+        if not ids or not ids <= available:
+            raise ProfileError("事件选择为空或与当前文件结果不一致，请重新预览")
+        samples = [s for s in samples if s["event_id"] in ids]
+    startup = fit_group([s for s in samples if s["direction"] == "START"])
+    shutdown = fit_group([s for s in samples if s["direction"] == "STOP"])
+    if not startup and not shutdown:
+        raise ProfileError("没有可用事件")
+    if (not startup or not shutdown) and not allow_single_direction:
+        raise ProfileError("缺少启动或停止样本：请明确确认后保存单方向画像")
+    for direction, group in (("START", startup), ("STOP", shutdown)):
+        if group:
+            chosen = [s for s in samples if s["direction"] == direction]
+            for event, sample in zip(group["events"], chosen):
+                event.update(source_id=sample["source_id"], event_id=sample["event_id"], template=sample["template"])
+    doc = copy.deepcopy(docs[0])
+    doc["startup"] = startup; doc["shutdown"] = shutdown
+    doc["source_file"] = ""; doc["source_files"] = metadata
+    doc.pop("source_quality", None)
+    doc["cycles"] = sum(d["cycles"] for d in docs)
+    doc["t_first"] = min(d["t_first"] for d in docs); doc["t_last"] = max(d["t_last"] for d in docs)
+    doc["steady"] = {"level_first_window": None, "note": "各文件独立读取，不表示连续录波或停机电平"}
+    doc["label_mode"] = "multi_source"
+    ph, stats = detect_phases(samples)
+    if options.get("single_phase_mode", "legacy") == "legacy" and not normalize_phases(options.get("phases", "auto")):
+        doc["phases"] = ph; doc["phase_source"] = "auto"
+    doc["phase_stats"] = {p: {"mu_abs_di": round(float(v["mu"]), 6), "sigma": round(float(v["sigma"]), 6),
+                               "active": bool(v["active"])} for p, v in stats.items()}
+    doc["notes"] = [f"多源联合提取：{len(docs)} 个独立文件，启动 {startup['n'] if startup else 0} / 停止 {shutdown['n'] if shutdown else 0}；请逐条核对来源与动作。"]
+    doc["notes"].extend(f"{m['source_id']}: {note}" for m in metadata for note in m["notes"])
+    doc["notes"].extend(sample_size_notes(doc))
     return validate_profile(doc)
 
 

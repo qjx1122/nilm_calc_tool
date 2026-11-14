@@ -224,7 +224,7 @@ def test_stage_change_keeps_device_state():
 
 # ---------------------------------------------------------------- 落盘字段
 def test_event_csv_has_stage_columns():
-    assert _CSV_FIELDS[-2:] == ["stage_scale", "event_kind"]
+    assert _CSV_FIELDS[-3:] == ["stage_scale", "event_kind", "candidate_devices"]
     ev = NilmEvent(id=1, algorithm="profile", channel="total", t_start=1.0, t_end=2.0, direction="up",
                    magnitude_w=0.0, delta_p_w=-100.0, delta_q_var=10.0, delta_i_a=5.0, pre_p_w=0.0, post_p_w=0.0,
                    cycles=100, score=0.0, device_id="pumpA", stage_scale=0.4, event_kind="stage_up")

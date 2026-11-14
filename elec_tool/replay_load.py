@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import csv
 import glob
+import json
 import math
 import os
 import re
@@ -173,6 +174,14 @@ def load_events(dir_: str, source_id: int, t_from: Optional[float] = None, limit
     return evs[-limit:]
 
 
+def _candidate_devices(text: str) -> List[Dict[str, Any]]:
+    try:
+        value = json.loads(text or "[]")
+    except (ValueError, TypeError):
+        return []
+    return [x for x in value if isinstance(x, dict)] if isinstance(value, list) else []
+
+
 def load_nilm_events(dir_: str, source_id: int, t_from: Optional[float] = None, limit: int = 5000,
                      t_to: Optional[float] = None, run_id: Optional[int] = None) -> List[Dict[str, Any]]:
     out: List[Dict[str, Any]] = []
@@ -201,6 +210,7 @@ def load_nilm_events(dir_: str, source_id: int, t_from: Optional[float] = None, 
                 "profile_direction": g(row, "profile_direction") or "", "status": g(row, "status") or "", "quality_flags": g(row, "quality_flags") or "",
                 # v0.99.29：档位自由匹配（旧文件没有这两列 → 1.0 / 空）
                 "stage_scale": _num(g(row, "stage_scale")), "event_kind": g(row, "event_kind") or "",
+                "candidate_devices": _candidate_devices(g(row, "candidate_devices")),
             })
         if len(out) >= limit:
             break
@@ -209,6 +219,8 @@ def load_nilm_events(dir_: str, source_id: int, t_from: Optional[float] = None, 
     seen = set(); uniq: List[Dict[str, Any]] = []
     for d in out:
         k = (d["algorithm"], d["channel"], round(d["t_start"], 4))
+        if d["algorithm"] == "profile":
+            k += (d.get("device_id", ""), json.dumps(d.get("candidate_devices") or [], ensure_ascii=False, sort_keys=True))
         if k in seen:
             continue
         seen.add(k); uniq.append(d)

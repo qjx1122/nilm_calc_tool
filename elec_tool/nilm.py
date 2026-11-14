@@ -22,13 +22,15 @@ median_diff  中值滤波后再做阈值差分（抗尖峰）
 from __future__ import annotations
 
 import csv
+import hashlib
+import json
 import math
 import os
 
 from .filelock import SHARED_FILE_LOCK
 import threading
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
@@ -38,8 +40,9 @@ from .timefmt import fmt_local, wall_day
 from .config import AppConfig, NILM_ALGO_DEFAULTS, NILM_ALGO_NAMES, NILM_CHANNELS, NILM_W_TO_A, NilmConfig
 from .nilm_auto import AUTO_MIN_CYCLES, auto_algo_params, window_stats
 from .config import NILM_SCALAR_ALGOS
-from .nilm_profile import (ProfileError, detect_profile, load_profile, profile_phase_rows, profile_phases,
-                            profile_skip_dims, profile_summary, sample_size_notes, single_phase_scope)
+from .nilm_profile import (BUNDLE_SCHEMA, PROFILE_SCHEMA, ProfileError, build_profile_bundle, detect_profile, load_profile, normalize_loaded_profile,
+                            profile_phase_rows, profile_phases, profile_skip_dims, profile_summary, sample_size_notes,
+                            single_phase_scope, validate_profile_bundle)
 
 __all__ = ["NilmEvent", "NilmDetector", "CycleFeatures", "detect_steps", "NILM_ALGO_NAMES", "HARM_ORDERS"]
 
@@ -50,7 +53,7 @@ _CSV_FIELDS = ["source_id", "id", "algorithm", "algorithm_name", "channel", "t_s
                "duration_s", "cycles", "direction", "magnitude_w", "delta_p_w", "delta_q_var", "delta_i_a",
                "pre_p_w", "post_p_w", "score", "quantity", "magnitude", "unit", "run_id",
                "device_id", "confidence", "d2", "profile_direction", "status", "quality_flags", "delta_ih_a",
-               "stage_scale", "event_kind"]   # v0.90：画像匹配事件附加列；v0.99.26：delta_ih_a；v0.99.29：档位倍数 / 事件类型
+               "stage_scale", "event_kind", "candidate_devices"]   # v0.90：画像匹配事件附加列；v0.99.26：delta_ih_a；v0.99.29：档位倍数 / 事件类型
 # v0.32：run_id（本次运行标识）；v0.36：quantity（p/i 检测量）、magnitude（检测量口径的 |Δ|）、unit（W/A）
 
 
@@ -93,6 +96,7 @@ class NilmEvent:
     # v0.99.29：档位自由匹配（stage_free=1）——解出的档位倍数（1.0＝按画像本身档位；固定档位时恒为 1.0）
     stage_scale: float = 1.0
     event_kind: str = ""              # start / stop（启停）· stage_up / stage_down（已在运行时的升降档）；非画像算法为空
+    candidate_devices: List[Dict[str, Any]] = field(default_factory=list)  # 模糊归因的设备和各自证据，不是概率排序
 
     def to_dict(self) -> Dict[str, Any]:
         d = asdict(self)
@@ -471,7 +475,8 @@ class NilmWriter:
                    d.get("quantity", "p"), f"{d.get('magnitude', d['magnitude_w']):.4f}", d.get("unit", "W"), self.run_id,
                    d.get("device_id", ""), f"{d.get('confidence', 0.0):.4f}", f"{d.get('d2', 0.0):.4g}", d.get("profile_direction", ""),
                    d.get("status", ""), d.get("quality_flags", ""), f"{d.get('delta_ih_a', 0.0):.4f}",
-                   f"{float(d.get('stage_scale', 1.0) or 1.0):.4f}", d.get("event_kind", "")]
+                   f"{float(d.get('stage_scale', 1.0) or 1.0):.4f}", d.get("event_kind", ""),
+                   json.dumps(d.get("candidate_devices") or [], ensure_ascii=False, separators=(",", ":"))]
             with SHARED_FILE_LOCK:
                 csv.writer(self._fh).writerow(row)
                 self._fh.flush()
@@ -548,6 +553,12 @@ def _stage_kind(m: Dict[str, Any], s: float, level: float) -> Tuple[str, float]:
     return ("stop" if after <= STAGE_LEVEL_EPS else "stage_down"), after
 
 
+def _joint_config_signature(cfg: AppConfig) -> Tuple[Any, ...]:
+    p = cfg.nilm.params("profile")
+    return (float(cfg.sampling.fs), float(cfg.sampling.f_nom), asdict(cfg.transform), str(cfg.nilm.quantity),
+            int(cfg.output.source_id), p.get("phase_map"), p.get("stage_free"))
+
+
 # ---------------------------------------------------------------- 检测器
 class NilmDetector:
     """引擎每摄入一块数据调用 ``ingest(scaled_block)``；返回本次新产生的事件（dict 列表）。线程安全。"""
@@ -590,6 +601,15 @@ class NilmDetector:
         #   下面的 _profile / _profile_err / device_state / profile_last / profile_hist 仍指向**第一个**画像，
         #   保持旧接口（界面旧字段、CLI 工具、旧测试）可用；多画像一律走 _profiles / summary()["profiles"]。
         self._profiles: List[Dict[str, Any]] = []
+        self._joint_active = False
+        self._joint_blocked = False
+        self._joint_runtime_error = ""
+        self._joint_fingerprint = ""
+        self._joint_source_bytes: Dict[str, bytes] = {}
+        self._joint_bundle_paths: set = set()
+        self._joint_observations: Dict[Tuple[Tuple[str, ...], int], bool] = {}
+        self._joint_unknown_intervals: List[Dict[str, Any]] = []
+        self._joint_semantic_signature = _joint_config_signature(cfg)
         self._profile: Optional[Dict[str, Any]] = None
         self._profile_err: str = ""
         self._profile_key: Tuple[str, float] = ("", 0.0)
@@ -597,6 +617,16 @@ class NilmDetector:
         self.profile_last: List[Dict[str, Any]] = []        # 最近一次评估的候选（含被拒的，供界面诊断）
         self.profile_hist: Dict[int, Dict[str, Any]] = {}   # v0.92.2：全程候选（按全局 onset 去重，≤400 条）
         self._load_profiles()
+        # 构造时即冻结本次引擎初始画像；运行线程启动与服务器写快照之间可能发生热更新。
+        self._startup_profile_snapshot = {
+            "enabled": bool(self.ncfg.params("profile").get("enabled", False)),
+            "paths": list(self.ncfg.profile_path_list()),
+            "joint": self._joint_active, "blocked": self._joint_blocked,
+            "error": self._profile_err, "source_bytes": dict(self._joint_source_bytes),
+            "members": [{"device_id": sl["profile"].get("device_id"), "bundle_id": sl.get("bundle_id"),
+                         "member_sha256": sl.get("member_sha256"), "source": sl["path"]}
+                        for sl in self._profiles if sl.get("profile")],
+        }
 
     def _load_profiles(self) -> None:
         """v0.99.26：按 nilm.profile_path（``;`` 分隔）/ nilm.profile_paths 加载**全部**画像。
@@ -609,7 +639,16 @@ class NilmDetector:
         paths = self.ncfg.profile_path_list() if hasattr(self.ncfg, "profile_path_list") else (
             [str(getattr(self.ncfg, "profile_path", "") or "").strip()] if str(getattr(self.ncfg, "profile_path", "") or "").strip() else [])
         root = self._root or os.getcwd()
-        old = {str(p.get("path")): p for p in self._profiles}
+        was_joint = self._joint_active
+        if self._load_bundle_collection(paths, root):
+            return
+        self._joint_active = False
+        self._joint_blocked = False
+        self._joint_runtime_error = ""
+        self._joint_fingerprint = ""
+        self._joint_source_bytes = {}
+        self._joint_observations = {}; self._joint_unknown_intervals = []
+        old = {} if was_joint else {str(p.get("path")): p for p in self._profiles}
         out: List[Dict[str, Any]] = []
         for path in paths:
             ap = path if os.path.isabs(path) else os.path.join(root, path)
@@ -672,6 +711,125 @@ class NilmDetector:
         self._profile_err = "; ".join(f"{os.path.basename(sl['path'])}: {sl['err']}" for sl in out if sl.get("err"))
         self.device_state = (out[0]["state"] if out else "unknown")
 
+    def _load_bundle_collection(self, paths: List[str], root: str) -> bool:
+        """集合及混挂的单画像一致加载、验证，任何错误都不运行部分联合归因。"""
+        records = []
+        bundle_seen = False
+        prior_paths = set(self._joint_bundle_paths)
+        known_paths = set()
+        for raw_path in paths:
+            path = os.path.abspath(raw_path if os.path.isabs(raw_path) else os.path.join(root, raw_path))
+            raw = b""
+            try:
+                with open(path, "rb") as fh:
+                    raw = fh.read(20 * 1024 * 1024 + 1)
+                if len(raw) > 20 * 1024 * 1024:
+                    if b'nilm_profile_bundle/' in raw[:4096] or path in prior_paths:
+                        known_paths.add(path)
+                        bundle_seen = True
+                    raise ProfileError("画像文件超过 20 MiB 联合加载上限")
+                data = json.loads(raw.decode("utf-8-sig"))
+                schema = data.get("schema") if isinstance(data, dict) else None
+                is_bundle = isinstance(schema, str) and schema.startswith("nilm_profile_bundle/")
+                looks_bundle = is_bundle or (isinstance(data, dict) and "bundle_id" in data and "members" in data)
+                if looks_bundle or (path in prior_paths and schema != PROFILE_SCHEMA):
+                    known_paths.add(path)
+                    bundle_seen = True
+                records.append((path, raw, data, None))
+            except (OSError, ValueError, UnicodeError, ProfileError) as exc:
+                if path in prior_paths or b'nilm_profile_bundle/' in raw[:4096]:
+                    known_paths.add(path)
+                    bundle_seen = True
+                records.append((path, b"", None, exc))
+        self._joint_bundle_paths = known_paths
+        if not bundle_seen:
+            return False
+        self._joint_active = True
+        self._joint_source_bytes = {path: raw for path, raw, _, error in records if error is None}
+        errors = []
+        if sum(len(raw) for _, raw, _, error in records if error is None) > 20 * 1024 * 1024:
+            errors.append("展开前所有画像文件合计超过 20 MiB 上限")
+        entries = []
+        realpaths = set(); bundle_ids = set()
+        for path, raw, data, error in records:
+            try:
+                real = os.path.realpath(path)
+                if real in realpaths:
+                    raise ProfileError(f"重复的画像文件：{path}")
+                realpaths.add(real)
+                if error:
+                    raise ProfileError(str(error))
+                digest = hashlib.sha256(raw).hexdigest()
+                if isinstance(data, dict) and data.get("schema") == BUNDLE_SCHEMA:
+                    if len(raw) > 20 * 1024 * 1024:
+                        raise ProfileError("融合文件超过 20 MiB 上限")
+                    bundle = validate_profile_bundle(data)
+                    if bundle["bundle_id"] in bundle_ids:
+                        raise ProfileError(f"重复的 bundle_id：{bundle['bundle_id']}")
+                    bundle_ids.add(bundle["bundle_id"])
+                    for member in bundle["members"]:
+                        prof = normalize_loaded_profile(member["profile"])
+                        prof["_path"] = path
+                        entries.append((path, digest, prof, bundle["bundle_id"], member["sha256"]))
+                else:
+                    validated = build_profile_bundle([data])["members"][0]["profile"]
+                    prof = normalize_loaded_profile(validated)
+                    prof["_path"] = path
+                    device = prof.get("device_id")
+                    if not isinstance(device, str) or not device.strip() or device != device.strip():
+                        raise ProfileError("融合匹配混挂的单画像必须有非空、无首尾空格的 device_id")
+                    entries.append((path, digest, prof, "", digest))
+            except (ProfileError, ValueError, TypeError, KeyError, AttributeError) as exc:
+                errors.append(f"{os.path.basename(path)}：{exc}")
+        if len(entries) > self.ncfg.MAX_PROFILES:
+            errors.append(f"展开后最多支持 {self.ncfg.MAX_PROFILES} 个设备，当前 {len(entries)} 个")
+        if entries:
+            try:
+                scale = max(1, int(float(self.ncfg.params("profile").get("max_scale", 8))))
+                need = max(self._profile_need_one(p, scale) for _, _, p, _, _ in entries)
+                cache_cycles = max(int(self.ncfg.window_cycles), 2 * need + 2 * max(1, int(self.ncfg.eval_every_cycles)) + 10)
+                if cache_cycles > 400000:
+                    errors.append(f"联合归因所需缓存 {cache_cycles} 周波超过 400000 上限，请缩小画像窗口或 max_scale")
+            except (TypeError, ValueError, OverflowError) as exc:
+                errors.append(f"融合画像窗口参数无效：{exc}")
+        ids = [str(p.get("device_id")) for _, _, p, _, _ in entries]
+        if len(ids) != len(set(ids)):
+            errors.append("展开后的 device_id 重复，不能执行联合归因")
+        fingerprint = hashlib.sha256(json.dumps([(p, digest) for p, digest, _, _, _ in entries], ensure_ascii=False).encode()).hexdigest()
+        if errors:
+            self._joint_blocked = True
+            self._joint_fingerprint = ""
+            self._joint_observations = {}; self._joint_unknown_intervals = []
+            message = "融合集合加载失败：" + "；".join(errors)
+            self._profiles = [{"path": records[0][0] if records else "", "key": ("", 0.0), "profile": None,
+                               "err": message, "state": "unknown", "last": [], "hist": {}, "notes": []}]
+            self._profile = None; self._profile_key = ("", 0.0); self._profile_err = message
+            self.device_state = "unknown"; self.profile_last = []; self.profile_hist = {}
+            return True
+        if fingerprint == self._joint_fingerprint and self._profiles and not self._joint_blocked:
+            return True
+        out = []
+        for path, digest, prof, bundle_id, member_hash in entries:
+            try:
+                mt = os.path.getmtime(path)
+            except OSError:
+                mt = 0.0
+            notes = sample_size_notes(prof)
+            scope = single_phase_scope(prof)
+            if scope:
+                notes.append(f"单相 {scope['mode']}：分路 {scope['branch_phase']} 相，总线 {scope['bus_phase']} 相")
+            if bundle_id:
+                notes.append(f"融合集合 {bundle_id}，成员 {prof['device_id']}，内容 SHA-256 {member_hash}")
+            out.append({"path": path, "key": (path, mt), "profile": prof, "err": "", "state": "unknown",
+                        "last": [], "hist": {}, "last_end": -10 ** 9, "notes": notes,
+                        "bundle_id": bundle_id, "member_sha256": member_hash})
+        self._profiles = out; self._joint_fingerprint = fingerprint; self._joint_blocked = False
+        self._joint_observations = {}; self._joint_unknown_intervals = []
+        self._profile = out[0]["profile"] if out else None
+        self._profile_key = out[0]["key"] if out else ("", 0.0)
+        self._profile_err = ""; self.device_state = "unknown"; self.profile_last = []; self.profile_hist = {}
+        return True
+
     # v0.99.26：旧名保留（tools / 测试 / 外部脚本可能直接调）
     def _load_profile(self) -> None:
         self._load_profiles()
@@ -693,19 +851,41 @@ class NilmDetector:
             return "i" if self.voltage_missing else "p"
         return q
 
+    def _reset_joint_window(self, cfg: AppConfig) -> None:
+        """集合或观测语义发生变化时不把旧周波重新解释成新模型的事件。"""
+        self._g0 += len(self._t)
+        self._t = np.zeros(0); self._p = np.zeros((4, 0)); self._q = np.zeros((4, 0)); self._i = np.zeros((4, 0))
+        self._ih = np.zeros((4, 0)); self._joint_observations = {}; self._joint_unknown_intervals = []
+        self.feat = CycleFeatures(cfg.sampling.fs, cfg.sampling.f_nom); self._since_eval = 0; self._pending_eval = 0
+        self._u_blocks = 0; self._u_nonzero_blocks = 0
+        self._u_phase_seen = np.zeros(3, dtype=bool); self._i_phase_seen = np.zeros(3, dtype=bool)
+        self._profile_health_done = False
+        self._auto_cache = {}
+
     # ---- 配置热更新：换阈值不清历史；fs/f_nom 变化重建周波切分
     def update_config(self, cfg: AppConfig) -> None:
         with self._lock:
+            old_joint = (self._joint_active, self._joint_blocked, self._joint_fingerprint)
+            signature = _joint_config_signature(cfg)
+            reset_joint = self._joint_active and signature != self._joint_semantic_signature
+            self._joint_semantic_signature = signature
             self.cfg = cfg
             self.ncfg = cfg.nilm
+            if reset_joint:
+                self._reset_joint_window(cfg)
+                self._joint_fingerprint = ""
             if (cfg.sampling.fs, cfg.sampling.f_nom) != (self.feat.fs, self.feat.f_nom):
                 self.feat = CycleFeatures(cfg.sampling.fs, cfg.sampling.f_nom)
-                self._t = np.zeros(0); self._p = np.zeros((4, 0)); self._q = np.zeros((4, 0)); self._i = np.zeros((4, 0))
-                self._ih = np.zeros((4, 0))
-                self._g0 += 0
+                if not reset_joint:
+                    self._g0 += len(self._t)
+                    self._t = np.zeros(0); self._p = np.zeros((4, 0)); self._q = np.zeros((4, 0)); self._i = np.zeros((4, 0))
+                    self._ih = np.zeros((4, 0))
             self.writer.close()
             self.writer = NilmWriter(self.ncfg, root=self._root, source_id=int(getattr(self.cfg.output, "source_id", 0) or 0), run_id=self.run_id, dir_override=self.run_dir)
             self._load_profiles()
+            new_joint = (self._joint_active, self._joint_blocked, self._joint_fingerprint)
+            if not reset_joint and old_joint != new_joint and (old_joint[0] or new_joint[0]):
+                self._reset_joint_window(cfg)
 
     # ---- 主入口
     def ingest(self, block: SampleBlock) -> List[Dict[str, Any]]:
@@ -879,6 +1059,9 @@ class NilmDetector:
             prof = slot.get("profile")
             if prof:
                 need = max(need, self._profile_need_one(prof, sc))
+        if self._joint_active and need:
+            # 给所有成员足够的共同等待时间，同时保留最早候选的完整前窗。
+            need = 2 * need + 2 * max(1, int(getattr(self.ncfg, "eval_every_cycles", 10))) + 10
         return need
 
     def _profile_health_check(self) -> None:
@@ -919,6 +1102,8 @@ class NilmDetector:
         prm = self.ncfg.params("profile")
         if not prm.get("enabled", False) or not self._profiles:
             return []
+        if self._joint_active:
+            return self._evaluate_joint_profiles(prm, qty, gap, g_last) if not self._joint_blocked else []
         if any(sl.get("profile") and not single_phase_scope(sl["profile"]) for sl in self._profiles):
             self._profile_health_check()
         out: List[NilmEvent] = []
@@ -934,8 +1119,180 @@ class NilmDetector:
             self.profile_hist = dict(sl0.get("hist") or {})
         return out
 
+    def _evaluate_joint_profiles(self, prm: Dict[str, Any], qty: str, gap: int, g_last: int) -> List[NilmEvent]:
+        """先独立生成所有候选、按共同观测冲突分组，之后才提交确定事件的状态。"""
+        self._joint_runtime_error = ""
+        slots = [s for s in self._profiles if s.get("profile")]
+        if not slots:
+            return []
+        if any(not single_phase_scope(s["profile"]) for s in slots):
+            self._profile_health_check()
+        sc = max(1, int(float(prm.get("max_scale", 8))))
+        hold = max(self._profile_need_one(s["profile"], sc) for s in slots)
+        candidates = []; rejected = []
+        scanned_total = 0
+        # 先按缓存边界回收，再检查预算；即便超限也能随着窗口滑动恢复。
+        self._joint_observations = {key: value for key, value in self._joint_observations.items() if key[1] >= self._g0}
+        self._joint_unknown_intervals = [v for v in self._joint_unknown_intervals if v["end"] >= self._g0]
+        phase_sets = []
+        for slot in slots:
+            prof = slot["profile"]
+            fnom = prof.get("f_nom")
+            if fnom is not None:
+                try:
+                    frequency_ok = math.isfinite(float(fnom)) and abs(float(fnom) - float(self.cfg.sampling.f_nom)) < 1e-6
+                except (TypeError, ValueError):
+                    frequency_ok = False
+                if not frequency_ok:
+                    self._joint_runtime_error = f"设备 {prof.get('device_id')} 的额定频率与本侧不一致，已停止联合归因"
+                    if self._joint_runtime_error not in self.errors: self.errors.append(self._joint_runtime_error)
+                    return []
+            scope = single_phase_scope(prof)
+            if scope:
+                phase = scope["branch_phase"] if int(getattr(self.cfg.output, "source_id", 0) or 0) == 1 else scope["bus_phase"]
+                phase_sets.append({phase})
+            else:
+                phase_sets.append(set(profile_phases(prof)))
+        for i, left in enumerate(phase_sets):
+            if any(left & right and left != right for right in phase_sets[i + 1:]):
+                msg = "融合集合存在部分重叠但不相同的检测相集合；暂不支持安全归因，请拆分运行"
+                self._joint_runtime_error = msg
+                if msg not in self.errors: self.errors.append(msg)
+                return []
+        for index, slot in enumerate(slots):
+            prof = slot["profile"]; phases = phase_sets[index]
+            scanned = self._evaluate_one_profile(slot, prm, qty, gap, g_last, _scan_only=True)
+            # 不可用的相 / 电压 / 量纲或检测错误均不应被误解为该设备不可能。
+            if scanned is None:
+                msg = "融合画像中有成员无法评估；为避免错误确认，本轮停止联合归因"
+                self._joint_runtime_error = msg
+                if msg not in self.errors: self.errors.append(msg)
+                return []
+            scanned_total += len(scanned)  # 包括被拒与 sign_flip，不能因过滤而绕过上限。
+            if scanned_total > 1000:
+                msg = "融合候选超过本轮 1000 个上限；已停止归因，请缩短窗口并检查噪声"
+                self._joint_runtime_error = msg
+                if msg not in self.errors: self.errors.append(msg)
+                return []
+            for r in scanned:
+                gon = self._g0 + int(r["onset"]); gend = self._g0 + int(r["end"])
+                # 已提交/去重的候选仍是竞争证据；只能禁止重复提交，不能从归因组中剔除。
+                if not r["accepted"]:
+                    if g_last >= gon + hold and gon not in (slot.get("hist") or {}):
+                        rejected.append((slot, r))
+                    if "sign_flip" in r["flags"]:
+                        continue
+                candidates.append({"slot": slot, "index": index, "result": r, "g_on": gon, "g_end": gend,
+                                   "phases": phases, "post": int(prof.get("post_cycles", 50))})
+        # 一轮可能把每个候选都写入账本；预留最坏情况空间，避免部分提交后触顶。
+        ledger_limit = 5000
+        if (len(self._joint_observations) + len(candidates) > ledger_limit
+                or len(self._joint_unknown_intervals) + len(candidates) > ledger_limit):
+            msg = "联合观测去重账本超过 5000 条上限；本轮停止归因，请检查噪声或缩短检测窗"
+            self._joint_runtime_error = msg
+            if msg not in self.errors: self.errors.append(msg)
+            return []
+        candidates.sort(key=lambda x: (x["g_on"], x["index"]))
+        groups: List[List[Dict[str, Any]]] = []
+        def same_observation(candidate: Dict[str, Any], other: Dict[str, Any]) -> bool:
+            tolerance = max(2, min(10, min(candidate["post"], other["post"]) // 10))
+            # 同相、不同成员的过渡区间重叠（或起点只相差少量周波）不能安全当成独立动作。
+            # 即使起点偏差超出 tolerance，也可能是同一缓慢动作的不同定位。
+            return (candidate["phases"] == other["phases"] and candidate["index"] != other["index"]
+                    and candidate["g_on"] <= other["g_end"] + tolerance
+                    and other["g_on"] <= candidate["g_end"] + tolerance)
+        for candidate in candidates:
+            matches = [g for g in groups if any(same_observation(candidate, other) for other in g)]
+            if not matches:
+                groups.append([candidate])
+            else:
+                matches[0].append(candidate)
+                for extra in matches[1:]:
+                    matches[0].extend(extra); groups.remove(extra)
+        groups.sort(key=lambda g: min(c["g_on"] for c in g))
+        out = []
+        cache_limit = max(int(self.ncfg.window_cycles), self._profile_window_need())
+        pre_guard = max(int(s["profile"].get("pre_cycles", 10)) * sc for s in slots)
+        eval_guard = max(1, int(getattr(self.ncfg, "eval_every_cycles", 10))) + 2
+        for group in groups:
+            # 从每个过渡终点起再等待所有成员的候选生成预算，覆盖较晚进入该过渡的竞争者。
+            # 若候选太长而先滑出缓存，宁可漏报也不提前确认；文件尾也可能不足。
+            if any(g_last < c["g_end"] + hold or g_last < c["g_end"] + c["post"] for c in group):
+                if any(c["g_end"] - c["g_on"] + hold + pre_guard + eval_guard > cache_limit for c in group):
+                    msg = "部分候选过渡过长，当前缓存无法保留完整前窗直到共同成熟，可能漏报；请增大检测窗或复核画像"
+                    self._joint_runtime_error = msg
+                    if msg not in self.errors: self.errors.append(msg)
+                continue
+            accepted = [c for c in group if c["result"]["accepted"]]
+            active = [c for c in accepted if c["g_on"] > int(c["slot"].get("last_end", -10 ** 9)) + gap]
+            observation_keys = [(tuple(sorted(c["phases"])), c["g_on"]) for c in group]
+            if not accepted:
+                # 显著变化但所有画像均未接受：只报告未知观测，不把被拒设备当候选。
+                # 同一未知过渡的窗口定位可能偏移；保留其整个观测区间用于去重。
+                phase_key = tuple(sorted(group[0]["phases"]))
+                lo = min(c["g_on"] for c in group); hi = max(c["g_end"] for c in group)
+                same_unknown = [v for v in self._joint_unknown_intervals
+                                if v["phases"] == phase_key and lo <= v["end"] and v["start"] <= hi]
+                if any(k in self._joint_observations for k in observation_keys) and not same_unknown:
+                    continue
+                c = group[0]
+                generated = self._evaluate_one_profile(c["slot"], prm, qty, gap, g_last, _precomputed=[c["result"]],
+                                                       _joint=True, _unknown=True)
+            elif not active or all((tuple(sorted(c["phases"])), c["g_on"]) in self._joint_observations for c in accepted):
+                continue
+            else:
+                evidence = [{"device_id": str(c["slot"]["profile"]["device_id"]), "direction": c["result"]["match"]["direction"],
+                             "confidence": float(c["result"]["confidence"]), "d2": float(c["result"]["match"]["d2"]),
+                             "g_start": c["g_on"], "g_end": c["g_end"],
+                             "t_start": float(self._t[c["result"]["onset"]]), "t_end": float(self._t[c["result"]["end"]])} for c in accepted] if len(accepted) > 1 else None
+                generated = []
+                for j, c in enumerate(active):
+                    generated.extend(self._evaluate_one_profile(c["slot"], prm, qty, gap, g_last, _precomputed=[c["result"]],
+                                                                _joint=True, _ambiguity=evidence, _emit_ambiguity=(j == 0)))
+                # 唯一候选在提交阶段因已确认状态冲突而被拒时，不能让显著观测静默消失。
+                if not generated and len(accepted) == 1 and len(active) == 1 and not int(float(prm.get("stage_free", 0) or 0)) and int(float(prm.get("state_check", 1))):
+                    c = active[0]; r = c["result"]; state = c["slot"].get("state", "unknown")
+                    direction = r["match"]["direction"]
+                    mismatch = (direction == "START" and state == "on") or (direction == "STOP" and state == "off")
+                    if mismatch and float(r["confidence"]) * 0.5 < float(prm.get("min_confidence", 0.3)):
+                        rejected_by_state = {**r, "confidence": float(r["confidence"]) * 0.5, "accepted": False,
+                                             "status": "rejected", "flags": list(r["flags"]) + ["state_mismatch"]}
+                        generated = self._evaluate_one_profile(c["slot"], prm, qty, gap, g_last,
+                                                               _precomputed=[rejected_by_state], _joint=True, _unknown=True)
+            if generated and generated[0].status == "unknown":
+                phase_key = tuple(sorted(group[0]["phases"]))
+                lo = min(c["g_on"] for c in group); hi = max(c["g_end"] for c in group)
+                same_unknown = [v for v in self._joint_unknown_intervals
+                                if v["phases"] == phase_key and lo <= v["end"] and v["start"] <= hi]
+                if same_unknown:
+                    # 不用这个账本抑制已知事件；连续重叠的未知观测只报告一次。
+                    for interval in same_unknown:
+                        interval["start"] = min(interval["start"], lo)
+                        interval["end"] = max(interval["end"], hi)
+                    generated = []
+                else:
+                    self._joint_unknown_intervals.append({"phases": phase_key, "start": lo, "end": hi})
+            out.extend(generated)
+            if generated:
+                for key in observation_keys:
+                    self._joint_observations[key] = True
+        # 周波窗滑出后释放去重账本；防止无限增长。
+        self._joint_observations = {key: value for key, value in self._joint_observations.items() if key[1] >= self._g0}
+        self._joint_unknown_intervals = [v for v in self._joint_unknown_intervals if v["end"] >= self._g0]
+        for slot, result in rejected:
+            if self._g0 + int(result["onset"]) not in (slot.get("hist") or {}):
+                self._evaluate_one_profile(slot, prm, qty, gap, g_last, _precomputed=[result], _joint=True)
+        out.sort(key=lambda e: (e.t_start, e.device_id))
+        if self._profiles:
+            first = self._profiles[0]
+            self.device_state = first.get("state", "unknown"); self.profile_last = list(first.get("last") or [])
+            self.profile_hist = dict(first.get("hist") or {})
+        return out
+
     def _evaluate_one_profile(self, slot: Dict[str, Any], prm: Dict[str, Any], qty: str, gap: int,
-                              g_last: int) -> List[NilmEvent]:
+                              g_last: int, *, _scan_only: bool = False, _precomputed: Optional[List[Dict[str, Any]]] = None,
+                              _joint: bool = False, _ambiguity: Optional[List[Dict[str, Any]]] = None,
+                              _emit_ambiguity: bool = False, _unknown: bool = False) -> Any:
         """单个画像的匹配（v0.99.26 从 _evaluate_profile 拆出，逻辑与单画像版本一致）。"""
         prof = slot["profile"]
         dev = str(prof.get("device_id") or os.path.basename(slot.get("path") or ""))
@@ -949,27 +1306,27 @@ class NilmDetector:
                 msg = f"{tag}单相画像检测相 {det_phase} 的电流不可用或全为零，未运行匹配；请检查接线、列映射或重构"
                 if msg not in self.errors:
                     self.errors.append(msg)
-                return []
+                return None if _scan_only else []
             if scope["mode"] == "voltage_current" and (self.cfg.transform.b_phase_missing or self.cfg.transform.voltage_is_line):
                 msg = f"{tag}单相电压＋电流需要相电压；三相三线两表法请先重构，线电压不可直接作为相电压"
                 if msg not in self.errors:
                     self.errors.append(msg)
-                return []
+                return None if _scan_only else []
             if scope["mode"] == "voltage_current" and not self._u_phase_seen[idx]:
                 msg = f"{tag}单相画像检测相 {det_phase} 的电压不可用或全为零，未运行匹配"
                 if msg not in self.errors:
                     self.errors.append(msg)
-                return []
+                return None if _scan_only else []
             qty = "i" if scope["mode"] == "current" else "p"
         use_p = (qty == "p")
         if not scope and use_p and self.voltage_missing:
-            return []
+            return None if _scan_only else []
         if prof.get("quantity") != ("p" if use_p else "i"):
             msg = (f"{tag}画像按 {prof.get('unit')} 口径构建，本侧检测量为 {'P' if use_p else 'I'}：ΔP/ΔI 特征不可比，"
                    f"该画像匹配未运行（请统一 nilm.quantity）")
             if msg not in self.errors:
                 self.errors.append(msg)
-            return []
+            return None if _scan_only else []
         # v0.99.23：PT/CT 始终参与换算（界面已无「启用」开关，旧配置 / 旧画像的「关闭」已折算为 PT=CT=1），两侧都是换算后的量、直接可比。
         #   只在两侧变比不同时提示一次（变比不同本身不影响匹配：总线 CT=250、分路 CT=1 正是常态）
         pc = prof.get("pt_ct") or {}
@@ -1009,12 +1366,19 @@ class NilmDetector:
                 self.errors.append(msg)
         try:
             skip = ("d_ib",) if bool(getattr(self.cfg.transform, "b_phase_missing", False)) else ()   # v0.93：三相三线无 B 相电流；v0.94 重构后不再跳过
-            res = detect_profile(self._p, self._q, self._i, prof, prm, use_p, slot.get("state", "unknown"), skip, self._ih, detection_phase=det_phase)
+            if _precomputed is not None:
+                res = _precomputed
+            else:
+                scan_prm = {**prm, "state_check": 0} if _scan_only else prm
+                res = detect_profile(self._p, self._q, self._i, prof, scan_prm, use_p,
+                                     "unknown" if _scan_only else slot.get("state", "unknown"), skip, self._ih, detection_phase=det_phase)
+            if _scan_only:
+                return res
         except Exception as exc:
             msg = f"{tag}profile 检测异常：{type(exc).__name__}: {exc}"
             if msg not in self.errors:
                 self.errors.append(msg)
-            return []
+            return None if _scan_only else []
         post_n = int(prof.get("post_cycles", 50))
         # v0.99.29：档位自由模式下的"运行档位"（画像档位的倍数，0＝停机）——事件类型与状态机都按它算
         sf = bool(int(float(prm.get("stage_free", 0) or 0)))
@@ -1027,27 +1391,46 @@ class NilmDetector:
         last_end = int(slot.get("last_end", -10 ** 9)) if slot.get("last_end") is not None else -10 ** 9
         out: List[NilmEvent] = []
         diag: List[Dict[str, Any]] = []
-        for r in res:
+        for original in res:
+            r = dict(original); r["flags"] = list(original["flags"])
             onset, end = r["onset"], r["end"]
             g_on, g_end = self._g0 + onset, self._g0 + end
             if g_end + int(r.get("post_wait", post_n)) > g_last:   # 事件后窗（按命中尺度）数据不够：等下一块
                 continue
             m = r["match"]; f = r["feat"]
             kind, lvl2 = _stage_kind(m, float(r.get("stage_scale", 1.0) or 1.0), lvl) if sf else (_event_kind(m), lvl)
+            if _joint and not _ambiguity and not _unknown and not sf and int(float(prm.get("state_check", 1))) and slot.get("state", "unknown") != "unknown":
+                if (m["direction"] == "START" and slot["state"] == "on") or (m["direction"] == "STOP" and slot["state"] == "off"):
+                    r["flags"].append("state_mismatch")
+                    r["confidence"] *= 0.5
+                    r["accepted"] = r["accepted"] and r["confidence"] >= float(prm.get("min_confidence", 0.3))
+                    r["status"] = "low_confidence" if r["accepted"] else "rejected"
+            if _unknown:
+                r["status"] = "unknown"; r["flags"].append("unknown_device")
+            if _ambiguity:
+                r["status"] = "ambiguous"
+                r["flags"].extend(["ambiguous_device", "possible_multiple_actions"])
             kind = kinds.get(int(g_on), kind) if sf else kind     # 已报过的候选：档位账本已翻过，按当时记录回填
             diag.append({"t_start": float(self._t[onset]), "t_start_local": _ts(float(self._t[onset])), "g_on": int(g_on), "direction": m["direction"],
                          "device_id": dev, "d2": round(m["d2"], 3), "d2_per_dim": round(m["d2_per_dim"], 3), "confidence": round(r["confidence"], 4),
                          "margin": (round(m["margin"], 2) if math.isfinite(m["margin"]) else None), "status": r["status"],
                          "flags": list(r["flags"]), "scale": float(r.get("scale", 1)), "scales_hit": [float(x) for x in (r.get("scales_hit") or [])], "contrib": {k: round(v, 2) for k, v in m["contrib"].items()},
-                         "vec": {k: round(float(v), 4) for k, v in f["vec"].items()}, "seen": g_on <= last_end + gap,
+                         "vec": {k: round(float(v), 4) for k, v in f["vec"].items()}, "seen": g_on <= last_end + gap and not _unknown,
                          "source": str(r.get("source", "x")), "stage_scale": round(float(r.get("stage_scale", 1.0)), 4),
                          "event_kind": kind})
-            if g_on <= last_end + gap:
+            if g_on <= last_end + gap and not _unknown:
                 continue
-            if not r["accepted"]:
+            if not r["accepted"] and not _unknown:
                 continue
+            if _unknown:
+                pass  # 未知观测不推进设备状态，也不使用设备去重间隔压制后续动作。
+            elif _ambiguity:
+                # 只记录观测已报告；不确认任何设备，也不翻转任何成员的状态/档位。
+                last_end = g_end
+                if not _emit_ambiguity:
+                    continue
             # v0.99.29：档位变化（运行中换档）不改 on/off 状态——按走完这一步的运行档位落状态
-            if sf:
+            elif sf:
                 lvl = lvl2
                 slot["level"] = lvl
                 slot["state"] = "on" if lvl > STAGE_LEVEL_EPS else "off"
@@ -1057,7 +1440,7 @@ class NilmDetector:
                         kinds.pop(k_, None)
             else:
                 slot["state"] = "on" if m["direction"] == "START" else "off"
-            if slot is self._profiles[0]:
+            if slot is self._profiles[0] and not _ambiguity and not _unknown:
                 self.device_state = slot["state"]
             v = f["vec"]; dp = float(v["d_p"])
             # v0.99.31：单相 / 分相画像——事件幅值与 CSV 的 ΔI 取**设备所接相的电流合成量**（与本相候选序列、
@@ -1080,10 +1463,19 @@ class NilmDetector:
                            unit="W" if use_p else "A", device_id=str(prof.get("device_id", "")), confidence=float(r["confidence"]),
                            d2=float(m["d2"]), profile_direction=m["direction"], status=r["status"], quality_flags=",".join(r["flags"]),
                            delta_ih_a=float(f["vec"].get("d_ih", 0.0)), stage_scale=float(r.get("stage_scale", 1.0)),
-                           event_kind=kind)
+                           event_kind=kind, candidate_devices=list(_ambiguity or []))
+            if _unknown:
+                ev.device_id = ""; ev.status = "unknown"; ev.confidence = 0.0; ev.d2 = 0.0; ev.score = 0.0
+                ev.event_kind = ""; ev.stage_scale = 1.0; ev.profile_direction = ""; ev.direction = ""
+            if _ambiguity:
+                ev.device_id = ""; ev.status = "ambiguous"; ev.confidence = 0.0; ev.d2 = 0.0; ev.score = 0.0
+                ev.event_kind = ""; ev.stage_scale = 1.0
+                if len({item["direction"] for item in _ambiguity}) != 1:
+                    ev.profile_direction = ""; ev.direction = ""
             self._next_id += 1
             out.append(ev)
-            last_end = g_end
+            if not _unknown:
+                last_end = g_end
         slot["last_end"] = last_end
         self._last_end[key] = last_end          # (algo, device_id) 去重键：多画像各占一个键，互不压制
         if diag:
@@ -1136,7 +1528,8 @@ class NilmDetector:
             counts = dict(self.counts)
             by_ch = {ch: sum(1 for e in self._log if e.channel == ch) for ch in NILM_CHANNELS}
             by_dir = {"up": sum(1 for e in self._log if e.direction == "up"),
-                      "down": sum(1 for e in self._log if e.direction == "down")}
+                      "down": sum(1 for e in self._log if e.direction == "down"),
+                      "unknown": sum(1 for e in self._log if e.direction not in ("up", "down"))}
             notes: List[str] = []
             if not self.feat.exact:
                 notes.append(f"fs/f_nom={self.feat.fs / self.feat.f_nom:.3f} 非整数：周波按 {self.feat.n_cycle} 点切分，"
@@ -1169,6 +1562,7 @@ class NilmDetector:
                                   "summary": (profile_summary(pf) if pf else None), "last": list(sl.get("last") or []),
                                   "level": round(float(sl.get("level") or 0.0), 3),
                                   "candidates": len(sl.get("hist") or {}),
+                                  "bundle_id": sl.get("bundle_id") or None, "member_sha256": sl.get("member_sha256") or None,
                                   "notes": list(sl.get("notes") or [])})
             prof_info: Dict[str, Any] = {"enabled": prof_on, "path": str(getattr(self.ncfg, "profile_path", "") or ""),
                                          "paths": list(getattr(self.ncfg, "profile_path_list", lambda: [])() or []),
@@ -1176,6 +1570,8 @@ class NilmDetector:
                                          "error": self._profile_err, "device_state": self.device_state,
                                          "summary": (profile_summary(self._profile) if self._profile else None), "last": list(self.profile_last),
                                          "count": len(slots), "loaded_count": sum(1 for d_ in prof_list if d_["loaded"]),
+                                         "joint_attribution": bool(self._joint_active), "joint_blocked": bool(self._joint_blocked),
+                                         "joint_runtime_error": self._joint_runtime_error,
                                          "stage_free": bool(int(float(self.ncfg.params("profile").get("stage_free", 0) or 0))),
                                          "min_stage": float(self.ncfg.params("profile").get("min_stage", 0.5) or 0.5),
                                          "lambda_rel": float(self.ncfg.params("profile").get("lambda_rel", 0.02) or 0.02),
@@ -1206,7 +1602,13 @@ class NilmDetector:
                 notes.append(f"设备画像匹配：{pre_txt}；对象＝{_obj}，输出观测幅值与置信度，不估计设备贡献幅值；"
                              f"当前设备状态 {d_['device_state']}"
                              + ("" if d_["has_harmonic"] else "；该画像无谐波维度 d_ih（v0.99.25 及更早生成），谐波特征不参与匹配，建议重新提取"))
-            if len(slots) > 1:
+            if self._joint_active:
+                if self._joint_runtime_error:
+                    notes.append(self._joint_runtime_error)
+                notes.append("融合集合联合归因：各成员先独立评分，候选重叠时输出归因不确定与候选，未知设备状态不推进；"
+                             "不同评分不可跨设备比较。部分重叠而不相同的相集合暂不评估，可能并发/邻近动作无法可靠分离。"
+                             "必须等待共同检测窗；文件尾部没有足够后续数据的动作可能不出结果。")
+            elif len(slots) > 1:
                 notes.append(f"多画像匹配：已加载 {prof_info['loaded_count']}/{len(slots)} 个画像，各自独立状态机 / 去重 / 设备判定；"
                              f"同一事件可能同时命中多个设备（输出里以 device_id 区分），候选诊断 CSV 也带 device_id 列")
             auto_cfg = bool(getattr(self.ncfg, "auto_params", False))
@@ -1248,7 +1650,8 @@ class NilmDetector:
                                confidence=float(d.get("confidence") or 0.0), d2=float(d.get("d2") or 0.0),
                                profile_direction=str(d.get("profile_direction") or ""), status=str(d.get("status") or ""),
                                quality_flags=str(d.get("quality_flags") or ""), delta_ih_a=float(d.get("delta_ih_a") or 0.0),
-                               stage_scale=float(d.get("stage_scale") or 1.0), event_kind=str(d.get("event_kind") or ""))
+                               stage_scale=float(d.get("stage_scale") or 1.0), event_kind=str(d.get("event_kind") or ""),
+                               candidate_devices=(list(d["candidate_devices"]) if isinstance(d.get("candidate_devices"), list) else []))
                 self._next_id += 1
                 self._log.append(ev)
                 self.counts[algo] = self.counts.get(algo, 0) + 1

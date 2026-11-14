@@ -26,6 +26,7 @@ import platform
 import queue
 import secrets
 import sys
+import tempfile
 import time
 from collections import deque
 from typing import Any, Deque, Dict, List, Optional, Set, Tuple
@@ -74,6 +75,7 @@ SIDE_SOURCE_ID = {"bus": 0, "branch": 1}      # v0.17：落盘/导出 CSV 的 so
 # 总线侧与分路侧共用同一目录：一侧启动时若另一侧正在运行（含联动启动）就沿用它的目录，否则新建。
 # 环境变量 ELEC_TOOL_RUN_DIRS=0 关闭（回到 output/realtime 等固定目录；测试隔离用），ELEC_TOOL_OUTPUT_DIR 改根目录。
 _RUN_DIR_LOCK = threading.Lock()
+_RUN_SNAPSHOT_LOCK = threading.Lock()
 
 
 def _run_dirs_enabled() -> bool:
@@ -106,6 +108,12 @@ def _alloc_run_dir(side: str) -> str:
 
 
 def _dump_run_configs(run_dir: str, started_side: str) -> List[str]:
+    # 双侧并发启动时不能相互覆盖 run_info 的 starts / 快照清单。
+    with _RUN_SNAPSHOT_LOCK:
+        return _dump_run_configs_locked(run_dir, started_side)
+
+
+def _dump_run_configs_locked(run_dir: str, started_side: str) -> List[str]:
     """把两侧**当前的配置文件原封不动复制**进运行目录（v0.60）：config_bus.json / config_branch.json＝本侧持久化文件
     （configs/runtime.json / branch_runtime.json；尚不存在时取启动加载的文件，如 default.json / branch.json）的逐字节副本，
     不重新序列化、不补默认键；两个文件都不存在时才退回写运行配置的 to_dict() 并在 run_info 标明。
@@ -122,6 +130,7 @@ def _dump_run_configs(run_dir: str, started_side: str) -> List[str]:
     info.setdefault("created_local", fmt_local(time.time()))
     info.setdefault("started_side", started_side)
     info.setdefault("starts", []).append({"side": started_side, "at_local": fmt_local(time.time())})
+    previous_sides = info.get("sides") if isinstance(info.get("sides"), dict) else {}
     info["sides"] = {}
     for s in ("bus", "branch"):
         r = RUNNERS.get(s) if "RUNNERS" in globals() else None
@@ -142,6 +151,11 @@ def _dump_run_configs(run_dir: str, started_side: str) -> List[str]:
             info["sides"][s] = {"source_kind": c.source.kind, "source_path": c.source.path, "source_id": SIDE_SOURCE_ID[s],
                                 "config_file": os.path.basename(p), "config_copied_from": _display_path(src_file) if src_file else None,
                                 "config_mode": how}
+            # 另一侧的集合快照属于它自己的启动时刻，不能在本侧启动时用其当前热更新版本覆写。
+            previous = previous_sides.get(s) or {}
+            if s != started_side and previous.get("profile_snapshot_mode") in ("detector_loaded_bytes", "detector_load_failed", "snapshot_write_failed"):
+                info["sides"][s].update({k: v for k, v in previous.items() if k.startswith("profile_")})
+                continue
             # v0.99.20：本侧启用「设备画像匹配」且 profile_path 指向存在的文件 ⇒ 原封不动复制到运行目录 nilm/ 下
             #   （文件名 profile_{side}_{原文件名}），run_info 记录来源；复盘时画像与事件 / 配置在同一目录
             try:
@@ -149,22 +163,62 @@ def _dump_run_configs(run_dir: str, started_side: str) -> List[str]:
                 #   run_info 记 profile_file（第一个，兼容旧字段）/ profile_files（全部）；复制时按序号前缀避免同名覆盖
                 prof_on = bool((c.nilm.algorithms.get("profile") or {}).get("enabled", False))
                 paths = list(c.nilm.profile_path_list()) if hasattr(c.nilm, "profile_path_list") else ([str(c.nilm.profile_path)] if c.nilm.profile_path else [])
+                live_side = (s == started_side or bool(getattr(r, "thread", None) and r.thread.is_alive()))
+                detector = getattr(getattr(r, "engine", None), "nilm", None) if live_side else None
+                startup = getattr(detector, "_startup_profile_snapshot", None)
+                if startup is not None:
+                    prof_on = startup["enabled"]
+                    paths = list(startup["paths"])
                 if prof_on and paths:
                     nd = os.path.join(run_dir, "nilm"); os.makedirs(nd, exist_ok=True)
                     files: List[str] = []; srcs: List[str] = []; errs: List[str] = []
+                    frozen: Dict[str, bytes] = {}; manifest: List[Dict[str, Any]] = []
+                    joint_error = ""
+                    if startup and startup["joint"]:
+                        if startup["blocked"]:
+                            joint_error = startup["error"] or "融合集合加载失败"
+                        else:
+                            frozen = dict(startup["source_bytes"])
+                        manifest = [{**m, "source": _display_path(m["source"])} for m in startup["members"]]
+                    if joint_error:
+                        info["sides"][s].update(profile_file=None, profile_files=[], profile_copied_from=None,
+                                                profile_copied_from_all=[], profile_snapshot_mode="detector_load_failed",
+                                                profile_error=joint_error)
+                        continue
                     for i_p, raw in enumerate(paths):
-                        pp = _abs_path(str(raw))
-                        if not os.path.isfile(pp):
+                        pp = os.path.abspath(_abs_path(str(raw)))
+                        if pp not in frozen and not os.path.isfile(pp):
                             errs.append(f"画像文件不存在：{raw}")
                             continue
                         pre = f"profile_{s}_" if len(paths) == 1 else f"profile_{s}{i_p + 1}_"
-                        dst = os.path.join(nd, f"{pre}{os.path.basename(pp)}")
-                        shutil.copyfile(pp, dst); written.append(dst)
+                        if pp in frozen:
+                            digest = hashlib.sha256(frozen[pp]).hexdigest()
+                            dst = os.path.join(nd, f"profile_{s}{i_p + 1}_{digest}.json")
+                            actual_digest = ""
+                            if os.path.exists(dst):
+                                with open(dst, "rb") as fh:
+                                    actual_digest = hashlib.sha256(fh.read()).hexdigest()
+                            if actual_digest != digest:
+                                fd, temporary = tempfile.mkstemp(prefix=".profile-snapshot-", dir=nd)
+                                try:
+                                    with os.fdopen(fd, "wb") as fh: fh.write(frozen[pp])
+                                    os.replace(temporary, dst)
+                                finally:
+                                    if os.path.exists(temporary): os.unlink(temporary)
+                        else:
+                            dst = os.path.join(nd, f"{pre}{os.path.basename(pp)}")
+                            shutil.copyfile(pp, dst)
+                        written.append(dst)
                         files.append(os.path.relpath(dst, run_dir).replace(os.sep, "/")); srcs.append(_display_path(pp))
                     info["sides"][s]["profile_file"] = files[0] if files else None
                     info["sides"][s]["profile_files"] = files
                     info["sides"][s]["profile_copied_from"] = srcs[0] if srcs else None
                     info["sides"][s]["profile_copied_from_all"] = srcs
+                    if frozen:
+                        info["sides"][s]["profile_snapshot_mode"] = "detector_loaded_bytes"
+                        info["sides"][s]["profile_snapshot_sha256"] = [hashlib.sha256(frozen[os.path.abspath(_abs_path(str(raw)))]).hexdigest()
+                                                                        for raw in paths if os.path.abspath(_abs_path(str(raw))) in frozen]
+                        info["sides"][s]["profile_members"] = manifest
                     if errs:
                         info["sides"][s]["profile_error"] = "；".join(errs)
                 elif prof_on:
@@ -172,14 +226,23 @@ def _dump_run_configs(run_dir: str, started_side: str) -> List[str]:
                     info["sides"][s]["profile_files"] = []
                     info["sides"][s]["profile_error"] = "画像匹配已启用但未填画像路径（nilm.profile_path / nilm.profile_paths）"
             except Exception as exc:
+                info["sides"][s]["profile_error"] = f"画像快照写入失败：{type(exc).__name__}: {exc}"
+                info["sides"][s]["profile_snapshot_mode"] = "snapshot_write_failed"
                 log.warning("运行目录复制画像失败（%s）：%s", s, exc)
         except Exception as exc:
             log.warning("运行目录写配置失败（%s）：%s", s, exc)
+    start_profile = info.get("sides", {}).get(started_side, {})
+    info["starts"][-1].update({k: v for k, v in start_profile.items() if k.startswith("profile_")})
+    temporary = None
     try:
-        with open(info_path, "w", encoding="utf-8") as fh:
+        fd, temporary = tempfile.mkstemp(prefix=".run-info-", dir=run_dir)
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
             json.dump(info, fh, ensure_ascii=False, indent=2)
+        os.replace(temporary, info_path)
     except Exception as exc:
         log.warning("运行目录写 run_info.json 失败：%s", exc)
+    finally:
+        if temporary and os.path.exists(temporary): os.unlink(temporary)
     return written
 
 
@@ -4064,6 +4127,163 @@ async def process_nilm_profile(payload: Dict[str, Any]) -> Any:
         return JSONResponse(status_code=400, content={"ok": False, "error": str(exc)})
     except Exception as exc:
         return JSONResponse(status_code=400, content={"ok": False, "error": f"{type(exc).__name__}: {exc}"})
+
+
+
+def _save_json_exclusive(path: str, doc: Dict[str, Any]) -> None:
+    """同目录临时文件写完后原子链接，拒绝覆盖；异常时不留下半成品。"""
+    data = (json.dumps(doc, ensure_ascii=False, indent=1, allow_nan=False) + "\n").encode("utf-8")
+    directory = os.path.dirname(os.path.abspath(path)); os.makedirs(directory, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(prefix=".nilm-profile-", suffix=".tmp", dir=directory)
+    try:
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(data); fh.flush(); os.fsync(fh.fileno())
+        os.link(temporary, path)
+    finally:
+        os.unlink(temporary)
+
+
+_MULTI_PROFILE_BUILD_SLOTS = threading.BoundedSemaphore(2)
+
+
+@app.post("/api/process/nilm_profile_multi")
+async def process_nilm_profile_multi(payload: Dict[str, Any]) -> Any:
+    """多源任务整体在工作线程执行；断开连接也不能提前释放仍在运行的并发名额。"""
+    return await asyncio.to_thread(_limited_multi_profile_request, payload)
+
+
+def _limited_multi_profile_request(payload: Dict[str, Any]) -> Any:
+    if not _MULTI_PROFILE_BUILD_SLOTS.acquire(blocking=False):
+        return JSONResponse(status_code=400, content={"ok": False, "error": "多源提取任务已达并发上限 2，请稍后重试"})
+    try:
+        return _process_multi_profile_request(payload)
+    finally:
+        _MULTI_PROFILE_BUILD_SLOTS.release()
+
+
+def _process_multi_profile_request(payload: Dict[str, Any]) -> Any:
+    """独立读取多个文件预览样本；确认样本并验证快照后保存单设备画像。"""
+    from elec_tool.nilm_profile import ProfileError, build_multi_profile, profile_source_sha256, profile_summary
+    from elec_tool.wave_preview import apply_col_map
+    try:
+        action = str(payload.get("action") or "preview")
+        if action not in ("preview", "save"):
+            raise ProfileError("操作必须为 preview 或 save")
+        inputs = payload.get("sources")
+        if not isinstance(inputs, list) or not 1 <= len(inputs) <= 32:
+            raise ProfileError("请指定 1～32 个源文件")
+        base, base_mode, base_label = _nt_make_base(payload)
+        def number(key: str, default: Any) -> Any:
+            value = payload.get(key)
+            return default if value in (None, "") else value
+        opts = dict(pre_cycles=int(number("pre_cycles", 10)), post_cycles=int(number("post_cycles", 50)),
+                    max_cycles=int(number("max_cycles", 400000)), label_tol_s=float(number("label_tol_s", 2)),
+                    merge_gap_s=float(payload.get("merge_gap_s") if payload.get("merge_gap_s") not in (None, "") else 10),
+                    quantity=payload.get("quantity") or None, phases=payload.get("phases") or "auto",
+                    single_phase_mode=payload.get("single_phase_mode") or "legacy",
+                    branch_phase=str(payload.get("branch_phase") or "").upper(), bus_phase=str(payload.get("bus_phase") or "").upper())
+        sources = []; stats = []; total_bytes = 0
+        for i, raw in enumerate(inputs):
+            if not isinstance(raw, dict):
+                raise ProfileError(f"源文件 {i + 1} 格式错误")
+            path = _abs_path(str(raw.get("path") or "").strip()) if raw.get("path") else ""
+            if not path or not os.path.isfile(path):
+                raise ProfileError(f"源文件 {i + 1} 不存在：{raw.get('path', '')}")
+            cfg = AppConfig.from_dict(base.to_dict())
+            enabled = raw.get("col_map_enabled", payload.get("col_map_enabled", False))
+            mapping = raw.get("col_map", payload.get("col_map"))
+            apply_col_map(cfg, enabled, mapping, err=ProfileError); cfg.columns.validate()
+            src = {k: raw[k] for k in ("source_id", "labels", "t_start", "t_end", "custom_time", "custom_time_start", "custom_time_end") if k in raw}
+            src.update(path=path, cfg=cfg); sources.append(src)
+            st = os.stat(path); total_bytes += st.st_size
+            if st.st_size > 4 * 1024 ** 3 or total_bytes > 8 * 1024 ** 3:
+                raise ProfileError("源文件超过单文件 4 GiB 或任务合计 8 GiB 上限")
+            digest = profile_source_sha256(path)
+            stats.append([path, st.st_size, st.st_mtime_ns, digest])
+        revision_body = {k: v for k, v in payload.items() if k not in ("action", "revision", "selected", "allow_single_direction", "name")}
+        revision = hashlib.sha256(json.dumps([current_side(), revision_body, stats, base.to_dict()], ensure_ascii=False, sort_keys=True, default=str).encode()).hexdigest()
+        if action == "save" and (payload.get("revision") != revision or not isinstance(payload.get("selected"), list)):
+            raise ProfileError("文件或配置已变化，请重新预览并选择事件")
+        doc = build_multi_profile(base, sources, device_id=str(payload.get("device_id") or "device"),
+                                      selected=payload.get("selected") if action == "save" else None,
+                                      allow_single_direction=(True if action == "preview" else payload.get("allow_single_direction") is True), **opts)
+        doc["side"] = current_side()
+        doc["base_mode"] = "running" if base_mode == "legacy" else base_mode
+        doc["base"] = _nt_base_fields(base)
+        doc["base_config"] = base_label
+        for (path, size, mtime_ns, digest), meta in zip(stats, doc["source_files"]):
+            st = os.stat(path)
+            if (st.st_size, st.st_mtime_ns) != (size, mtime_ns) or meta["sha256"] != digest:
+                raise ProfileError("源文件已发生变化，请重新预览")
+        events = [{**ev, "direction": direction} for key, direction in (("startup", "START"), ("shutdown", "STOP"))
+                  for ev in ((doc.get(key) or {}).get("events") or [])]
+        saved = None
+        if action == "save":
+            name = os.path.basename(str(payload.get("name") or "").strip())
+            if not name:
+                safe_id = re.sub(r"[^\w\-.]+", "_", doc["device_id"])
+                name = f"profile_{safe_id}_{time.strftime('%Y%m%d_%H%M%S')}.json"
+            if not name.lower().endswith(".json"): name += ".json"
+            directory = os.environ.get("ELEC_TOOL_NILM_DIR") or base.nilm.nilm_dir
+            directory = directory if os.path.isabs(directory) else os.path.join(ROOT, directory)
+            os.makedirs(directory, exist_ok=True); path = os.path.join(directory, name)
+            _save_json_exclusive(path, {k: v for k, v in doc.items() if not k.startswith("_")})
+            saved = _display_path(path)
+        return {"ok": True, "revision": revision, "profile": profile_summary(doc), "events": events,
+                "startup": doc.get("startup"), "shutdown": doc.get("shutdown"), "notes": doc["notes"], "saved_to": saved}
+    except (ProfileError, ConfigError, ValueError, TypeError, OSError, WaveError, TuneError) as exc:
+        return JSONResponse(status_code=400, content={"ok": False, "error": str(exc)})
+
+
+@app.post("/api/process/nilm_profile_bundle")
+async def process_nilm_profile_bundle(payload: Dict[str, Any]) -> Any:
+    """预览或无覆盖保存自包含集合；修订哈希绑定成员文件的内容。"""
+    from elec_tool.nilm_profile import ProfileError, build_profile_bundle, profile_summary
+    try:
+        action = payload.get("action") or "preview"
+        if action not in ("preview", "save"):
+            raise ProfileError("操作必须为 preview 或 save")
+        paths = payload.get("paths")
+        if not isinstance(paths, list) or not 1 <= len(paths) <= 8 or any(not isinstance(p, str) or not p.strip() for p in paths):
+            raise ProfileError("请选择 1～8 个画像文件")
+        documents = []; files = []; seen = set(); size_total = 0
+        for raw in paths:
+            path = os.path.realpath(_abs_path(raw.strip()))
+            if path in seen:
+                raise ProfileError(f"画像文件重复：{raw}")
+            seen.add(path)
+            if not os.path.isfile(path):
+                raise ProfileError(f"画像文件不存在：{raw}")
+            size = os.path.getsize(path); size_total += size
+            if size_total > 20 * 1024 * 1024:
+                raise ProfileError("画像文件合计超过 20 MiB 上限")
+            with open(path, "rb") as fh:
+                raw_bytes = fh.read(20 * 1024 * 1024 + 1)
+            if len(raw_bytes) != size:
+                raise ProfileError(f"读取时文件大小变化：{raw}")
+            digest = hashlib.sha256(raw_bytes).hexdigest()
+            documents.append(json.loads(raw_bytes.decode("utf-8-sig")))
+            files.append([path, digest])
+        bundle_id = str(payload.get("bundle_id") or "bundle").strip()
+        bundle = build_profile_bundle(documents, bundle_id)
+        revision = hashlib.sha256(json.dumps([files, bundle_id], ensure_ascii=False, separators=(",", ":")).encode()).hexdigest()
+        saved = None
+        if action == "save":
+            if revision != payload.get("revision"):
+                raise ProfileError("画像或配置已变化，请重新预览")
+            base, _, _ = _nt_make_base(payload)
+            safe_id = re.sub(r"[^\w\-.]+", "_", bundle_id) or "bundle"
+            name = os.path.basename(str(payload.get("name") or "").strip()) or f"bundle_{safe_id}_{time.strftime('%Y%m%d_%H%M%S')}.json"
+            if not name.lower().endswith(".json"): name += ".json"
+            directory = os.environ.get("ELEC_TOOL_NILM_DIR") or base.nilm.nilm_dir
+            directory = directory if os.path.isabs(directory) else os.path.join(ROOT, directory)
+            path = os.path.join(directory, name)
+            _save_json_exclusive(path, bundle); saved = _display_path(path)
+        return {"ok": True, "revision": revision, "bundle_id": bundle_id, "saved_to": saved,
+                "members": [{"device_id": m["device_id"], "sha256": m["sha256"],
+                             "summary": profile_summary(m["profile"])} for m in bundle["members"]]}
+    except (ProfileError, ConfigError, TuneError, ValueError, TypeError, OSError, UnicodeError) as exc:
+        return JSONResponse(status_code=400, content={"ok": False, "error": str(exc)})
 
 
 @app.get("/api/process/resample/preview")

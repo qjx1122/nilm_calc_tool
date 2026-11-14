@@ -1722,7 +1722,7 @@ function ewTrendSeries(key, h, t0) {
 function ewEventMarks(side, t0, tEnd) {
   const evs = (NLs(side).events || []).filter(e => isNum(e.t_start) && e.t_start >= t0 && e.t_start <= tEnd);
   return evs.map(e => ({ x: e.t_start - t0, color: NILM_COLORS[e.algorithm], row: Object.keys(NILM_ALGOS).indexOf(e.algorithm),
-                         label: `${e.direction === 'up' ? '↑' : '↓'}${si(nilmMag(e), e.unit || 'W', 3)} ${e.channel}` }));
+                         label: `${e.direction === 'up' ? '↑' : e.direction === 'down' ? '↓' : '?'}${si(nilmMag(e), e.unit || 'W', 3)} ${e.channel}` }));
 }
 async function ewLoadCycles(side, key, tEpoch, nCycles) {
   const d0 = EW_DEF[key], st = EWs(side, key);
@@ -3661,7 +3661,7 @@ function nilmHeader(sc) {
   return ['#', '算法', '对象', '开始（数据时间）', '结束', '持续 (s)', '周波数', '方向', (sc.mixed ? '幅值（各行标注 A / W）' : sc.D.hdr(sc.cur ? '幅值 |ΔI|' : '幅值 |ΔP|')), sc.Q.hdr('ΔQ'), sc.I.hdr('ΔI'), sc.P.hdr('事件前 P'), sc.P.hdr('事件后 P'), '检验量'];
 }
 function nilmRow(e, sc) {
-  const dir = e.direction === 'up' ? '<span class="badge bad">↑ 投入</span>' : '<span class="badge">↓ 切除</span>';
+  const dir = e.direction === 'up' ? '<span class="badge bad">↑ 投入</span>' : (e.direction === 'down' ? '<span class="badge">↓ 切除</span>' : '<span class="badge">方向不确定</span>');
   return [e.id, `<span style="color:${NILM_COLORS[e.algorithm] || '#fff'}">■</span> ${esc(e.algorithm_name || e.algorithm)}`, esc(e.channel),
           ts(e.t_start), ts(e.t_end), num(e.duration_s || 0, 2), e.cycles, dir,
           (sc.mixed ? si(nilmMag(e), e.unit || 'W', 3) : sc.D.f(nilmMag(e))), sc.Q.f(e.delta_q_var), sc.I.f(e.delta_i_a), sc.P.f(e.pre_p_w), sc.P.f(e.post_p_w),
@@ -3669,6 +3669,11 @@ function nilmRow(e, sc) {
 }
 /* v0.90：画像匹配事件的「检验量」列＝设备 ID · 置信度（D²，状态，质量标记） */
 function nilmProfileCell(e) {
+  if (e.status === 'unknown') return '<span class="badge">未知负荷</span> 显著变化未匹配已加载画像，请复核';
+  if (e.status === 'ambiguous') {
+    const candidates = (Array.isArray(e.candidate_devices) ? e.candidate_devices : []).map(c => `${c.device_id || '?'}${c.direction ? ' (' + c.direction + ')' : ''}`).join('、');
+    return `<span class="badge">归因不确定</span> 候选：${esc(candidates || '—')} <span class="mut" title="可能为多个同时或邻近动作；不会更新候选设备状态，置信度不可跨设备比较">请复核</span>`;
+  }
   const fl = e.quality_flags ? `，${esc(e.quality_flags)}` : '';
   const st = e.status === 'low_confidence' ? '<span class="badge">低置信</span>' : '';
   // v0.99.29：档位自由匹配（nilm.algorithms.profile.stage_free=1）解出的档位倍数与事件类型
@@ -3841,7 +3846,7 @@ function renderNilmPqs(nl) {
   const tEnd = hp.length ? hp[hp.length - 1].t : 0;
   const evs = nilmMarkPool(nl).filter(e => chosen.includes(e.algorithm) && (!ch || e.channel === ch) && isNum(e.t_start) && e.t_start >= t0 && e.t_start <= tEnd);
   const marks = evs.map(e => ({ x: e.t_start - t0, color: NILM_COLORS[e.algorithm], row: Object.keys(NILM_ALGOS).indexOf(e.algorithm),
-                                label: `${e.direction === 'up' ? '↑' : '↓'}${si(nilmMag(e), e.unit || 'W', 3)}${ch ? '' : ' ' + e.channel}` }));
+                                label: `${e.direction === 'up' ? '↑' : e.direction === 'down' ? '↓' : '?'}${si(nilmMag(e), e.unit || 'W', 3)}${ch ? '' : ' ' + e.channel}` }));
   const nEl = $('#nilm-pqs-n'); if (nEl) nEl.textContent = String(marks.length);
   const pEl = $('#nilm-pqs-pool'); if (pEl) pEl.textContent = nilmMarkAll() ? `全部 ${(nl.events || []).length} 条` : `最近 ${NILM_MARK_LIMIT} 条`;
   drawLine(cv, isI ? nilmCurrentSeries(hp, t0) : pqsSeries(hp, t0),
@@ -3875,7 +3880,7 @@ function renderNilm() {
   const sm = NL.summary || {};
   const counts = sm.counts || {};
   const names = sm.algorithm_names || {};
-  const cards = [card('负荷辨识', sm.enabled === false ? '已禁用' : (sm.auto_params_effective ? '启用 · 自适应参数' : '启用'), '', `累计 ${sm.total || 0} 条 · ↑${(sm.by_direction || {}).up || 0} / ↓${(sm.by_direction || {}).down || 0}`)];
+  const cards = [card('负荷辨识', sm.enabled === false ? '已禁用' : (sm.auto_params_effective ? '启用 · 自适应参数' : '启用'), '', `累计 ${sm.total || 0} 条 · ↑${(sm.by_direction || {}).up || 0} / ↓${(sm.by_direction || {}).down || 0} / ?${(sm.by_direction || {}).unknown || 0}`)];
   Object.keys(NILM_ALGOS).forEach(a => cards.push(card(names[a] || NILM_ALGOS[a].name, String(counts[a] || 0), '次',
     (sm.algorithms_enabled || []).includes(a) ? '启用' : '<span class="bad">已停用</span>')));
   cards.push(card('周波窗', `${sm.window_fill || 0} / ${sm.window_cycles || 0}`, '周波', `每周波 ${sm.n_cycle_samples || 0} 点 · 累计 ${sm.cycles_total || 0} 周波 · 对象 ${(sm.channels_effective || sm.channels || []).join('/')}`));
@@ -3898,7 +3903,7 @@ function renderNilm() {
   const unit = qty === 'p' ? 'W' : qty === 'q' ? 'var' : 'A';
   const marks = nilmMarkPool(NL).filter(e => e.channel === chn && (!mk || e.algorithm === mk) && e.t_start >= t0 && tt.length && e.t_start <= tt[tt.length - 1])
     .map((e, i) => ({ x: e.t_start - t0, color: NILM_COLORS[e.algorithm], row: Object.keys(NILM_ALGOS).indexOf(e.algorithm),
-                     label: `${e.direction === 'up' ? '↑' : '↓'}${si(nilmMag(e), e.unit || 'W', 3)}` }));
+                     label: `${e.direction === 'up' ? '↑' : e.direction === 'down' ? '↓' : '?'}${si(nilmMag(e), e.unit || 'W', 3)}` }));
   drawLine($('#nilm-chart'), [{ name: `${chn === 'total' ? '三相总' : chn + ' 相'} ${qty.toUpperCase()}（逐周波${useFile ? '，离线装载' : ''}）`, color: useFile ? '#f2b84b' : '#4ea1ff', data: tt.map((x, i) => [x - t0, chd[i]]) }],
            { ylabel: unit, fmtX: x => ts(x + t0), fmtTip: x => ts(x + t0), height: 240, marks,
              empty: (curState().loaded_last && !tt.length) ? '周波窗是内存数据，软件重启后不恢复（上次播放的事件已加载：见事件表与上方 P/Q/S 趋势的事件竖线）；可用上方「装载周波窗」从离线文件读取任意时刻的周波数据' : '暂无周波数据（启动数据源后显示，或非运行状态下用「装载周波窗」从离线文件读取）' });
@@ -4041,6 +4046,7 @@ function npSyncPhaseControls() {
 }
 
 function bindProfileExtractUI() {
+  npmBind();
   if ($('#np-form')) {                                            // v0.90：设备画像提取
     $('#np-single-mode').addEventListener('change', npSyncPhaseControls);
     npSyncPhaseControls();
@@ -5833,6 +5839,10 @@ async function npRun() {
 }
 function npFill(side) {
   if (!NP.last) return;
+  npFillPath(side, NP.last.saved_to);
+}
+function npFillPath(side, path) {
+  if (!path) return;
   if (!NLs(side).formBuilt) buildNilmForm(side);
   // 表单可能尚未按该侧配置回填（未进过负荷辨识页）：先回填再改，避免之后保存时其它算法参数为空
   const st = side === 'branch' ? BRD.state : S.state;
@@ -5840,8 +5850,8 @@ function npFill(side) {
   const el = E(side, 'nilm-profile_path'); if (!el) { toast('负荷辨识表单尚未建立', 'err'); return; }
   // v0.99.26：多画像——已有别的画像路径时追加（; 分隔），不覆盖已挂的其它设备
   const cur = (el.value || '').split(';').map(x => x.trim()).filter(Boolean);
-  const added = !cur.includes(NP.last.saved_to);
-  if (added) cur.push(NP.last.saved_to);
+  const added = !cur.includes(path);
+  if (added) cur.push(path);
   if (cur.length > 8) { toast('画像最多同时挂 8 个，请先删掉一个再填', 'err'); return; }
   el.value = cur.join(';'); NLs(side).dirty = true;
   const en = E(side, 'nilm-profile-enabled'); if (en && !en.checked) en.checked = true;
@@ -7383,3 +7393,164 @@ async function init() {
 }
 
 document.addEventListener('DOMContentLoaded', init);
+
+/* 多源设备提取：状态和异步任务归属于模块，不共享旧 NP.last。 */
+const NPM = { next: 1 };
+const npmGet = (root, name) => root.querySelector(`[data-field="${name}"]`);
+function npmAddSource(module) {
+  const list = module.querySelector('.npm-sources');
+  if (list.children.length >= 32) { toast('每台设备最多 32 个文件', 'err'); return; }
+  const id = 'source-' + (++module._sourceNo);
+  const source = document.createElement('fieldset'); source.className = 'npm-source'; source.dataset.source = id;
+  source.innerHTML = `<legend>${id} <button type="button" data-action="remove-source">删除文件</button></legend>
+    <label class="f"><span class="lbl">波形文件路径</span><input data-field="path" placeholder="data/device.csv 或绝对路径"></label>
+    <div class="row2"><label class="f">起始时间<input data-field="t_start" placeholder="空＝开头"></label><label class="f">结束时间<input data-field="t_end" placeholder="空＝结尾"></label></div>
+    <label class="check"><input type="checkbox" data-field="custom_time">自定义时间（起点＋采样率推算）</label>
+    <div class="row2"><label class="f">自定义起点<input data-field="custom_time_start"></label><label class="f">自定义终点<input data-field="custom_time_end"></label></div>
+    <label class="f">标签：每行时间,开/关；留空自动定位<textarea data-field="labels" rows="2" placeholder="08:00:02,开"></textarea></label>
+    <label class="check"><input type="checkbox" data-field="map_on">启用本文件独立列映射（列号从 1 起，空＝不映射）</label>
+    <div class="row2">${['timestamp','ua','ia','ub','ib','uc','ic'].map((k,i) => `<label>${({timestamp:'时间',ua:'Ua',ia:'Ia',ub:'Ub',ib:'Ib',uc:'Uc',ic:'Ic'})[k]} <input data-field="map_${k}" type="number" min="1" value="${i+1}" style="width:4.5em"></label>`).join('')}</div>`;
+  list.appendChild(source); npmInvalidate(module);
+}
+function npmInvalidate(module) {
+  module._version = (module._version || 0) + 1; module._preview = null;
+  const save = module.querySelector('[data-action="save"]'); if (save) save.disabled = true;
+  const result = module.querySelector('.npm-results'); if (result) result.textContent = '';
+  const status = module.querySelector('.npm-status'); if (status && !module._busy) status.textContent = '配置已修改，请重新预览。';
+}
+function npmAddModule() {
+  const list = document.getElementById('npm-modules'); if (!list) return;
+  if (list.children.length >= 8) { toast('最多 8 个设备模块', 'err'); return; }
+  const module = document.createElement('div'); module.className = 'wp-group npm-module'; module._version = 0; module._sourceNo = 0;
+  const n = NPM.next++;
+  module.innerHTML = `<div class="wp-group-title">设备模块 ${n} <button type="button" data-action="remove-module">删除模块</button></div>
+    <div class="row2"><label class="f">设备 ID<input data-field="device_id" placeholder="唯一设备标识"></label><label class="f">保存文件名<input data-field="name" placeholder="留空自动生成"></label></div>
+    <div class="row2"><label class="f">画像口径<select data-field="single_phase_mode"><option value="legacy">原有三相 / 分相口径</option><option value="current">单相纯电流</option><option value="voltage_current">单相电压＋电流</option></select></label>
+      <label class="f">原口径设备相别<select data-field="phases">${['auto','ABC','A','B','C','AB','AC','BC'].map(x=>`<option>${x}</option>`).join('')}</select></label>
+      <label class="f">分路相<select data-field="branch_phase"><option value="">请选择</option><option>A</option><option>B</option><option>C</option></select></label>
+      <label class="f">总线相<select data-field="bus_phase"><option value="">请选择</option><option>A</option><option>B</option><option>C</option></select></label></div>
+    <details><summary>本设备独立采样、校准与接线参数</summary>
+      <div class="row2"><label class="f">fs (Hz)<input data-field="fs" type="number" min="1" value="6400"></label><label class="f">f_nom (Hz)<input data-field="f_nom" type="number" min="1" value="50"></label>
+        <label class="f">PT<input data-field="pt_ratio" type="number" min="0.000001" value="1"></label><label class="f">CT<input data-field="ct_ratio" type="number" min="0.000001" value="1"></label></div>
+      <div class="row2"><label class="f">检测量<select data-field="quantity"><option value="auto">auto</option><option value="i">i 电流</option><option value="p">p 有功</option></select></label>
+        <label class="f">接线<select data-field="wiring"><option value="3p4w">3p4w</option><option value="3p3w">3p3w</option></select></label>
+        <label class="check"><input type="checkbox" data-field="file_time_utc">时标 UTC</label><label class="check"><input type="checkbox" data-field="reconstruct_3w">3P3W 重构</label><label class="check"><input type="checkbox" data-field="invert_current">反转全部电流</label>
+        <label class="f">反转相别<input data-field="invert_phases" placeholder="如 AC"></label></div>
+    </details>
+    <div class="row2"><label class="f">前窗（周波）<input data-field="pre_cycles" type="number" min="1" value="10"></label><label class="f">后窗（周波）<input data-field="post_cycles" type="number" min="1" value="50"></label>
+      <label class="f">标签容差（秒）<input data-field="label_tol_s" type="number" min="0" value="2" step="any"></label><label class="f">自动合并间隔（秒）<input data-field="merge_gap_s" type="number" min="0" value="10" step="any"></label>
+      <label class="f">每文件周波上限<input data-field="max_cycles" type="number" min="1" max="400000" value="400000"></label></div>
+    <div class="npm-sources"></div><div class="btnrow"><button type="button" data-action="add-source">添加文件</button><button type="button" data-action="preview">预览事件</button>
+    <label class="check"><input type="checkbox" data-field="allow_single_direction">明确确认：允许只保存单方向画像</label><button type="button" data-action="save" disabled>保存所选事件</button></div>
+    <div class="npm-status notes"></div><div class="npm-results"></div>`;
+  list.appendChild(module); npmAddSource(module); npmSyncPhases(module);
+  module.addEventListener('input', e => { if (!e.target.matches('[data-event], [data-field="allow_single_direction"]')) npmInvalidate(module); });
+  module.addEventListener('change', e => { if (e.target.matches('[data-field="single_phase_mode"]')) npmSyncPhases(module); });
+  module.addEventListener('click', e => npmAction(module, e));
+}
+function npmSyncPhases(module) {
+  const single = npmGet(module, 'single_phase_mode').value !== 'legacy';
+  npmGet(module, 'phases').disabled = single;
+  npmGet(module, 'branch_phase').disabled = !single; npmGet(module, 'bus_phase').disabled = !single;
+}
+function npmPayload(module) {
+  const v = (r,k) => npmGet(r,k).value.trim(); const on = (r,k) => npmGet(r,k).checked;
+  const names = ['fs','f_nom','pt_ratio','ct_ratio','wiring','invert_phases'];
+  const base = Object.fromEntries(names.map(k => [k, v(module,k)]));
+  ['file_time_utc','reconstruct_3w','invert_current'].forEach(k => base[k] = on(module,k) ? '1' : '0');
+  base.pt_ct_enabled = '1';
+  const opts = ['device_id','name','quantity','phases','single_phase_mode','branch_phase','bus_phase','pre_cycles','post_cycles','label_tol_s','merge_gap_s','max_cycles'];
+  const p = Object.fromEntries(opts.map(k => [k,v(module,k)]));
+  p.base_mode = 'custom'; p.base = base;
+  p.sources = Array.from(module.querySelectorAll('.npm-source')).map(src => {
+    const d = {source_id:src.dataset.source};
+    ['path','t_start','t_end','custom_time_start','custom_time_end','labels'].forEach(k => d[k] = v(src,k));
+    d.custom_time = on(src,'custom_time'); d.col_map_enabled = on(src,'map_on');
+    if (d.col_map_enabled) d.col_map = Object.fromEntries(['timestamp','ua','ia','ub','ib','uc','ic'].map(k => [k,v(src,'map_'+k)]));
+    return d;
+  });
+  return p;
+}
+async function npmAction(module, event) {
+  const button = event.target.closest('button[data-action]'); if (!button || module._busy) return;
+  const action = button.dataset.action;
+  if (action === 'add-source') { npmAddSource(module); return; }
+  if (action === 'remove-source') { if (module.querySelectorAll('.npm-source').length <= 1) { toast('至少保留一个文件', 'err'); return; } button.closest('.npm-source').remove(); npmInvalidate(module); return; }
+  if (action === 'remove-module') { if (confirm('删除此设备模块及其未保存的预览？')) module.remove(); return; }
+  if (!['preview','save'].includes(action)) return;
+  const status = module.querySelector('.npm-status'), results = module.querySelector('.npm-results');
+  let p;
+  if (action === 'preview') {
+    p = npmPayload(module);
+    if (!p.device_id || p.sources.some(s => !s.path)) { status.textContent = '请填写设备 ID 和每个文件路径。'; return; }
+    if (p.single_phase_mode !== 'legacy' && (!p.branch_phase || !p.bus_phase)) { status.textContent = '单相口径须明确两侧检测相。'; return; }
+    npmInvalidate(module); results.textContent = '';
+  } else {
+    if (!module._preview) return;
+    const selected = Array.from(module.querySelectorAll('[data-event]:checked')).map(el => el.dataset.event);
+    if (!selected.length) { status.textContent = '请至少选择一个事件。'; return; }
+    p = {...module._preview.payload, action:'save', revision:module._preview.revision, selected, allow_single_direction:npmGet(module,'allow_single_direction').checked, name:npmGet(module,'name').value.trim()};
+  }
+  const version = module._version; module._busy = true;
+  const controls = Array.from(module.querySelectorAll('input, select, textarea')).map(el => [el, el.disabled]);
+  controls.forEach(([el]) => el.disabled = true);
+  module.querySelectorAll('button').forEach(b => b.disabled = true); status.textContent = action === 'preview' ? '正在逐文件读取并提取…' : '正在重新核验并保存…';
+  try {
+    const data = await api('/api/process/nilm_profile_multi', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(p)}, 'bus');
+    if (!module.isConnected || module._version !== version) return;
+    if (action === 'preview') {
+      module._preview = {payload:p, revision:data.revision};
+      status.textContent = `预览：启动 ${(data.startup || {}).n || 0} / 停止 ${(data.shutdown || {}).n || 0}；请逐条审核并勾选。`;
+      results.innerHTML = `<div>${(data.notes || []).map(n=>`<div class="warn">${esc(n)}</div>`).join('')}</div>`
+        + `<div class="tablewrap"><table><thead><tr><th>纳入</th><th>来源</th><th>方向</th><th>时间</th><th>局部周波</th><th>特征向量</th></tr></thead><tbody>${data.events.map(ev =>
+          `<tr><td><input type="checkbox" data-event="${esc(ev.event_id)}" checked></td><td title="${esc(ev.source || '')}">${esc(ev.source_id)}</td><td>${esc(ev.direction)}</td><td>${esc(ev.t_start_local || '')}</td><td>${ev.onset}–${ev.end}</td><td>${esc(JSON.stringify(ev.vec))}</td></tr>`).join('')}</tbody></table></div>`;
+    } else {
+      status.textContent = '已保存：' + data.saved_to +  '。可单独使用，也可作为融合集合的成员。';
+      module._preview = null;
+    }
+  } catch (e) { if (module.isConnected && module._version === version) status.textContent = '失败：' + e.message; }
+  finally {
+    module._busy = false;
+    controls.forEach(([el, disabled]) => el.disabled = disabled);
+    if (module.isConnected) {
+      module.querySelectorAll('button').forEach(b => b.disabled = false);
+      module.querySelector('[data-action="save"]').disabled = !module._preview;
+      if (module._version !== version) status.textContent = '配置已修改，请重新预览。';
+    }
+  }
+}
+function npmBind() {
+  const add = document.getElementById('btn-npm-add'); if (!add || add.dataset.bound) return;
+  add.dataset.bound = '1'; add.addEventListener('click', npmAddModule);
+  npbBind();
+}
+
+
+function npbBind() {
+  const box = document.getElementById('npm-bundle'); if (!box || box.dataset.bound) return;
+  box.dataset.bound = '1'; box._version = 0; box._preview = null; box._saved = '';
+  const get = k => box.querySelector(`[data-bundle="${k}"]`);
+  const save = box.querySelector('[data-bundle-action="save"]');
+  box.addEventListener('input', () => { box._version++; box._preview = null; box._saved = ''; save.disabled = true; box.querySelectorAll('[data-bundle-action^="fill-"]').forEach(el=>el.disabled=true); get('members').textContent = ''; get('status').textContent = '已修改，请重新预览。'; });
+  box.addEventListener('click', async event => {
+    const b = event.target.closest('button[data-bundle-action]'); if (!b || box._busy) return;
+    const action = b.dataset.bundleAction;
+    if (action === 'fill-bus' || action === 'fill-branch') { if (box._saved) npFillPath(action === 'fill-bus' ? 'bus' : 'branch', box._saved); return; }
+    let p = {bundle_id:get('id').value.trim(), paths:get('paths').value.split(/\r?\n/).map(x=>x.trim()).filter(Boolean), name:get('name').value.trim()};
+    if (!p.bundle_id || !p.paths.length) { get('status').textContent = '请填写集合 ID 和画像路径。'; return; }
+    if (action === 'save') { if (!box._preview) return; p = {...p,action:'save',revision:box._preview}; }
+    const version = box._version; box._busy = true;
+    const controls = Array.from(box.querySelectorAll('input, textarea, button')).map(el=>[el,el.disabled]); controls.forEach(([el])=>el.disabled=true);
+    get('status').textContent = action === 'preview' ? '正在校验成员…' : '正在核验并保存…';
+    try {
+      const d = await api('/api/process/nilm_profile_bundle', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(p)}, 'bus');
+      if (version !== box._version) return;
+      if (action === 'preview') {
+        box._preview = d.revision;
+        get('status').textContent = `预览 ${d.members.length} 个设备；确认无误后保存。融合归因需独立录波验收。`;
+        get('members').innerHTML = '<ul>' + d.members.map(m=>`<li>${esc(m.device_id)} · ${esc(m.summary.phases || 'ABC')} 相 · ${esc(m.sha256)}</li>`).join('') + '</ul>';
+      } else { box._preview = null; box._saved = d.saved_to; get('status').textContent = '已保存：' + d.saved_to + '。可填入画像路径，联合归因试运行须验收。'; }
+    } catch (e) { if (version === box._version) get('status').textContent = '失败：' + e.message; }
+    finally { box._busy = false; controls.forEach(([el,was])=>el.disabled=was); save.disabled = !box._preview; box.querySelectorAll('[data-bundle-action^="fill-"]').forEach(el=>el.disabled=!box._saved); if (version !== box._version) get('status').textContent = '已修改，请重新预览。'; }
+  });
+}
