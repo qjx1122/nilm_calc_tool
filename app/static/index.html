@@ -1163,7 +1163,7 @@
 
       <div class="panel" id="npm-panel">
         <h3>多设备 / 多文件联合提取 <span class="navhint">逐设备、逐文件独立提取；预览核对后保存单设备画像</span></h3>
-        <div class="notes">每个模块独立配置与运行，点击设备模块标题可折叠或展开；文件不拼接。核对来源、方向、时间与特征；每方向建议至少 3 次独立且工况可比的样本；复核时间缺口及缺测提示。画像只含一个方向时必须明确确认。旧单文件提取区仍在下方。</div>
+        <div class="notes">每个模块独立配置与运行，点击模块及各功能分组标题可独立折叠或展开；文件不拼接。核对来源、方向、时间与特征；每方向建议至少 3 次独立且工况可比的样本；复核时间缺口及缺测提示。画像只含一个方向时必须明确确认。旧单文件提取区仍在下方。</div>
         <div class="btnrow"><button id="btn-npm-add" type="button">添加设备模块</button></div>
         <div id="npm-modules"></div>
         <details id="npm-bundle"><summary>生成自包含多设备融合画像</summary>
@@ -1180,6 +1180,7 @@
           <h3>画像参数（与 <code>tools/nilm_profile.py</code> 同一实现）<span class="navhint">文件 / 时间段 / 自定义时间 / 基准配置 / 列映射均为本区独立配置（v0.99.5，与负荷辨识调参剥离）</span></h3>
           <div class="form" id="np-form">
             <div class="notes p" id="np-common-note">画像提取使用<b>本区独立的</b>波形文件、起止时间、自定义时间、基准配置（fs / f_nom / PT·CT / 接线 / 极性 / 时标 / 检测量）与列映射，与上方「负荷辨识调参」互不影响；请选设备侧（分路侧）含完整启停过程的录波文件。</div>
+            <details class="wp-group np-source-group" id="np-source-group" open><summary class="wp-group-title">波形文件与时间范围</summary>
             <label class="f"><span class="lbl">波形文件（data 目录下拉或手填路径）</span><select id="np-files"><option value="">— 选择 data/ 下的 CSV —</option></select></label>
             <label class="f"><span class="lbl">波形文件路径</span><input id="np-path" placeholder="data/bus_bg.csv 或绝对路径"></label>
             <div class="row2">
@@ -1194,11 +1195,12 @@
               <label class="f" title="空＝文件数据起始时间（文件第 1 条数据的时标）；写法 2026-10-13 08:00:00[.fff] / epoch 秒"><span class="lbl">自定义起始时间（空＝文件数据起始时间）</span><input id="np-cstart" placeholder="空＝文件数据起始时间"></label>
               <label class="f" title="空＝起始时间 + 点数 / 采样率（按采样率计算的文件数据结束时间）；填写则作为结束时间为空时的缺省终点"><span class="lbl">自定义结束时间（空＝按采样率计算）</span><input id="np-cend" placeholder="空＝起始 + 点数/fs"></label>
             </div>
+            </details>
+            <details class="wp-group" id="np-base" open title="基准配置：独立时只影响本页画像提取、可单独修改；沿用某侧运行配置时只显示该侧值、不可修改；都不改动两侧运行配置">
+              <summary class="wp-group-title"><span id="np-base-title">独立基准配置（与两侧运行配置互不关联，可单独修改）</span></summary>
             <div class="row2">
               <label class="f" title="v0.72：默认「独立基准配置」——出厂配置 + 下方各项（fs / f_nom / PT·CT / 时标 UTC），与总线侧、分路侧运行配置互不关联，可单独修改（保存在浏览器本地，并随每次提取写到画像 JSON 供等价命令复现）；也可改选沿用某一侧当前运行配置（旧行为）"><span class="lbl">基准配置</span><select id="np-side"><option value="custom">独立基准配置（本页，默认）</option><option value="bus">沿用总线侧运行配置</option><option value="branch">沿用分路侧运行配置</option></select></label>
             </div>
-            <div class="wp-group" id="np-base" title="基准配置：独立时只影响本页画像提取、可单独修改；沿用某侧运行配置时只显示该侧值、不可修改；都不改动两侧运行配置">
-              <div class="wp-group-title" id="np-base-title">独立基准配置（与两侧运行配置互不关联，可单独修改）</div>
               <div class="row2">
                 <label class="f" title="采样率：每周波点数 = fs / f_nom；文件有时标时源层仍按时标校核"><span class="lbl">采样率 fs (Hz)</span><input id="np-base-fs" type="number" min="1" step="any"></label>
                 <label class="f" title="额定频率"><span class="lbl">额定频率 f_nom (Hz)</span><input id="np-base-fnom" type="number" min="1" step="any"></label>
@@ -1219,10 +1221,11 @@
                 <label class="check"><input id="np-base-inv" type="checkbox"> 电流极性反转（三相同时取反）</label>
                 <label class="f"><span class="lbl">分相电流极性反转</span><span class="chk"><input id="np-base-inv-a" type="checkbox"> A <input id="np-base-inv-b" type="checkbox"> B <input id="np-base-inv-c" type="checkbox"> C</span></label>
               </div>
+            <details class="np-map-group" id="np-cm-group" open><summary>离线文件列映射</summary>
             <div class="colmap-blk" id="np-cm-blk" title="离线文件列映射：不启用＝各列依次为 时间, A相电压, A相电流, B相电压, B相电流, C相电压, C相电流（表头可识别时按表头）；启用＝只按下面填写的列号取列">
               <label class="chk"><input id="np-cm-on" type="checkbox"><span>启用离线文件列映射<small class="note">默认不启用：各列依次为 时间, A相电压, A相电流, B相电压, B相电流, C相电压, C相电流（表头可识别时按表头）；启用后只按下面的列号取列（从 1 起）</small></span></label>
               <div class="colmap-row" id="np-cm-row" style="display:none"><label title="时间所在列号（从 1 起；空＝不映射）">时间 <input id="np-cm-ts" type="number" min="1" step="1" value="1"></label><label title="A相电压所在列号（从 1 起；空＝不映射）">A相电压 <input id="np-cm-ua" type="number" min="1" step="1" value="2"></label><label title="A相电流所在列号（从 1 起；空＝不映射）">A相电流 <input id="np-cm-ia" type="number" min="1" step="1" value="3"></label><label title="B相电压所在列号（从 1 起；空＝不映射）">B相电压 <input id="np-cm-ub" type="number" min="1" step="1" value="4"></label><label title="B相电流所在列号（从 1 起；空＝不映射）">B相电流 <input id="np-cm-ib" type="number" min="1" step="1" value="5"></label><label title="C相电压所在列号（从 1 起；空＝不映射）">C相电压 <input id="np-cm-uc" type="number" min="1" step="1" value="6"></label><label title="C相电流所在列号（从 1 起；空＝不映射）">C相电流 <input id="np-cm-ic" type="number" min="1" step="1" value="7"></label></div>
-            </div>
+            </div></details>
               <div class="row2">
                 <label class="f" title="独立基准配置：可单独选择；沿用总线侧 / 分路侧运行配置：随该侧 nilm.quantity，不可修改；写入画像文件，匹配侧口径须与之一致"><span class="lbl">检测量</span><select id="np-quantity"><option value="" id="np-quantity-follow">默认（出厂缺省 auto：无电压→I）</option><option value="auto">auto（无电压→I）</option><option value="p">p 有功</option><option value="i">i 电流有效值</option></select></label>
                 <label class="f nilm-fixed" title="画像特征＝ΔIa/ΔIb/ΔIc/ΔP/ΔQ 三相联合向量，候选按三相合成量（P 口径＝ΣP，I 口径＝三相电流合成）定位，匹配时事件对象固定为 total"><span class="lbl">检测对象（固定）</span><input type="text" value="三相总 total（固定，不可选）" disabled></label>
@@ -1236,9 +1239,9 @@
                 </span>
               </div>
               <div id="np-base-note" class="mut"></div>
-            </div>
-            <div class="wp-group">
-              <div class="wp-group-title">① 设备与输出</div>
+            </details>
+            <details class="wp-group" id="np-device-group" open>
+              <summary class="wp-group-title">① 设备与输出</summary>
               <div class="row2">
                 <label class="f" title="写进画像与事件表的设备标识"><span class="lbl">设备 ID</span><input id="np-device" placeholder="pumpA"></label>
                 <label class="f" title="写到 output/nilm/；留空＝profile_{设备}_{时间}.json"><span class="lbl">画像文件名</span><input id="np-name" placeholder="空＝profile_{设备}_{时间}.json"></label>
@@ -1261,24 +1264,24 @@
                 </select>
                 <span class="note">仅原有口径使用此项；新的单相口径使用上方分路/总线检测相。原有口径下 ΔP/ΔQ 仍为三相求和，ΔIh 为三相平均。</span>
               </label>
-            </div>
-            <div class="wp-group">
-              <div class="wp-group-title">② 启停定位 <small class="note">（有标签＝按标签 ± 容差找变化点；标签留空＝自动定位：稳态分段 + 自适应参数，幅值为正＝启动、为负＝停止）</small></div>
+            </details>
+            <details class="wp-group" id="np-locate-group" open>
+              <summary class="wp-group-title">② 启停定位 <small class="note">（有标签＝按标签 ± 容差找变化点；标签留空＝自动定位：稳态分段 + 自适应参数，幅值为正＝启动、为负＝停止）</small></summary>
               <label class="f np-ta" title="每行「时间,动作」；时间写法同真值表：2026-10-13 08:00:02.5 / 08:00:02.5（与文件时标当天比较）/ epoch 秒；动作：开/关、启动/停止、on/off、start/stop、投入/切除"><span class="lbl">启停标签<span class="note">每行「时间,动作」</span></span><textarea id="np-labels" rows="5" placeholder="08:00:02,开&#10;08:00:32,关&#10;08:01:10,on&#10;08:01:40,off"></textarea></label>
               <div class="row2">
                 <label class="f" title="标签时刻与真实变化点的容差（秒）：在标签 ± 容差范围内找双滑窗差最大的周波为事件起点"><span class="lbl">标签时刻容差 (s)</span><input id="np-tol" type="number" min="0.02" step="0.1" value="2"></label>
                 <label class="f" title="自动定位模式：同方向连续、起点间隔 ≤ 该秒数的相邻事件视为同一次动作被切碎 / 分级带载 / 反复重启，只保留 |ΔI| 最大的一个；0＝不合并"><span class="lbl">合并间隔 (s · 自动定位)</span><input id="np-merge" type="number" min="0" step="1" value="10"></label>
               </div>
-            </div>
-            <div class="wp-group">
-              <div class="wp-group-title">③ 事件前后窗 <small class="note">（建议每方向 ≥3 次启停：启动 / 停止各录 3 次以上，σ 才由实际重复性给出）</small></div>
+            </details>
+            <details class="wp-group" id="np-window-group" open>
+              <summary class="wp-group-title">③ 事件前后窗 <small class="note">（建议每方向 ≥3 次启停：启动 / 停止各录 3 次以上，σ 才由实际重复性给出）</small></summary>
               <div class="row2">
                 <label class="f" title="事件前窗周波数（取稳态前值）"><span class="lbl">前窗 (周波)</span><input id="np-pre" type="number" min="3" step="1" value="10"></label>
                 <label class="f" title="事件后窗周波数：应 ≥ 设备启动过程（冲击 / 爬升）时长；总线侧确认事件也要等这么多周波"><span class="lbl">后窗 (周波)</span><input id="np-post" type="number" min="3" step="1" value="50"></label>
               </div>
-            </div>
-            <div class="wp-group" id="np-stage-group">
-              <div class="wp-group-title">④ 派生档位画像 <small class="note">（多档位 / 变频设备只录到部分档位时：把上面提取到的画像按倍数缩放，生成"假设档位"画像一起挂到负荷辨识。派生是外推、不是实录；一份画像只认录到的那一档 ±30 %，见下方结果表的"可接受区间"）</small></div>
+            </details>
+            <details class="wp-group" id="np-stage-group" open>
+              <summary class="wp-group-title">④ 派生档位画像 <small class="note">（多档位 / 变频设备只录到部分档位时：把上面提取到的画像按倍数缩放，生成"假设档位"画像一起挂到负荷辨识。派生是外推、不是实录；一份画像只认录到的那一档 ±30 %，见下方结果表的"可接受区间"）</small></summary>
               <div class="row2">
                 <label class="f" title="相对**本次提取到的画像档位**的倍数，逗号分隔，如 0.4,0.7,1.2；建议间距 ≥1.3~1.8 倍（间距太小同一事件会被两份画像重复报出，太大则留缝）"><span class="lbl">档位倍数（相对本次画像）</span><input id="np-stage-scales" placeholder="例：0.4,0.7,1.2"></label>
                 <label class="f" title="派生画像输出目录；留空＝与本次画像同目录（默认 output/nilm/）"><span class="lbl">输出目录</span><input id="np-stage-dir" placeholder="空＝画像同目录"></label>
@@ -1291,7 +1294,7 @@
                 <button id="btn-np-stage" disabled title="先点下面的「提取设备画像」得到画像，再派生">派生档位画像</button>
                 <button id="btn-np-stage-copy" disabled title="把全部派生画像路径（; 分隔）复制到剪贴板，粘贴到负荷辨识页「画像文件路径」">复制派生路径串</button>
               </div>
-            </div>
+            </details>
             <div class="btnrow">
               <button id="btn-np-run" class="primary">提取设备画像</button>
               <button id="btn-np-refresh">刷新文件列表</button>
@@ -1307,11 +1310,12 @@
         </div>
         <div class="panel">
           <h3>结果</h3>
+          <div id="np-status" class="notes" aria-live="polite"></div>
+          <div id="np-stage-status" class="notes" aria-live="polite"></div>
+          <details class="np-result-group" id="np-result-group" open><summary class="wp-group-title">画像结果与派生档位结果</summary>
           <div id="np-summary" class="np-cards"></div>
-          <div id="np-status" class="notes"></div>
           <div id="np-cmdrow" class="notes" style="display:none">等价命令 <code id="np-cmd"></code> <button id="btn-np-copy" type="button" style="padding:1px 8px;font-size:12px">复制</button></div>
           <div id="np-result" class="tablewrap"></div>
-          <div id="np-stage-status" class="notes"></div>
           <div id="np-stage-result" class="tablewrap"></div>
           <div id="np-stage-paths" class="notes" style="display:none">
             <div>派生画像路径（<code>;</code> 分隔）——可直接粘贴到负荷辨识页「画像文件路径」，或写 <code>nilm.profile_path</code>：</div>
@@ -1319,6 +1323,7 @@
             <div id="np-stage-cmdrow" class="mut" style="display:none">等价命令 <code id="np-stage-cmd"></code></div>
           </div>
           <details><summary>原始画像 JSON</summary><pre id="np-json" class="pre"></pre></details>
+          </details>
         </div>
       </div>
       <!-- v0.61：波形预览（v0.99.50 起界面上叫「波形分析」；id、接口路径、模块名仍是 wave-preview / wp-*） -->

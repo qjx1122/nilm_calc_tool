@@ -7395,8 +7395,34 @@ async function init() {
 document.addEventListener('DOMContentLoaded', init);
 
 /* 多源设备提取：状态和异步任务归属于模块，不共享旧 NP.last。 */
-const NPM = { next: 1 };
+const NPM = { next: 1, files: null, fileRequest: null };
 const npmGet = (root, name) => root.querySelector(`[data-field="${name}"]`);
+function npmRenderFileOptions(source, files) {
+  const select = npmGet(source, 'files'), current = select.value;
+  // 用 DOM 文本节点插入文件名；刷新列表绝不修改手填路径或预览状态。
+  select.replaceChildren(new Option('— 选择 data/ 下的 CSV —', ''));
+  files.forEach(f => select.add(new Option(`${f.name} (${f.size_mb} MB)`, f.name)));
+  if (current && files.some(f => f.name === current)) select.value = current;
+}
+function npmRefreshFiles() {
+  if (NPM.fileRequest) return NPM.fileRequest;
+  const sources = () => document.querySelectorAll('#npm-modules .npm-source');
+  sources().forEach(src => { src.querySelector('.npm-files-status').textContent = '正在读取文件列表…'; });
+  NPM.fileRequest = (async () => {
+    try {
+      const r = await api('/api/files?sub=data', undefined, 'bus');
+      if (r.ok === false || !Array.isArray(r.files)) throw new Error(r.error || '文件列表格式无效');
+      NPM.files = r.files.filter(f => f && !f.dir && typeof f.name === 'string' && f.name.toLowerCase().endsWith('.csv'));
+      sources().forEach(src => {
+        npmRenderFileOptions(src, NPM.files);
+        src.querySelector('.npm-files-status').textContent = NPM.files.length ? '' : 'data/ 下没有 CSV 文件，可手动输入路径。';
+      });
+    } catch (e) {
+      sources().forEach(src => { src.querySelector('.npm-files-status').textContent = '读取文件列表失败，可手动输入路径或刷新重试：' + e.message; });
+    } finally { NPM.fileRequest = null; }
+  })();
+  return NPM.fileRequest;
+}
 function npmUpdateHeading(module) {
   const id = npmGet(module, 'device_id').value.trim();
   module.querySelector('.npm-device-name').textContent = id || '未填写设备 ID';
@@ -7406,16 +7432,27 @@ function npmAddSource(module) {
   const list = module.querySelector('.npm-sources');
   if (list.children.length >= 32) { toast('每台设备最多 32 个文件', 'err'); return; }
   const id = 'source-' + (++module._sourceNo);
-  const source = document.createElement('div'); source.className = 'wp-group npm-source'; source.dataset.source = id;
-  source.innerHTML = `<div class="wp-group-title npm-source-title"><span><span class="wp-tag">文件</span>${id}</span><button type="button" data-action="remove-source">删除文件</button></div>
+  const source = document.createElement('details'); source.className = 'wp-group npm-source'; source.open = true; source.dataset.source = id;
+  source.innerHTML = `<summary class="wp-group-title"><span class="wp-tag">文件</span>${id}</summary>
+    <label class="f"><span class="lbl">波形文件（data 目录下拉或手填路径）</span><select data-field="files"><option value="">— 选择 data/ 下的 CSV —</option></select></label>
     <label class="f"><span class="lbl">波形文件路径</span><input data-field="path" placeholder="data/device.csv 或绝对路径"></label>
+    <div class="btnrow"><button type="button" data-action="refresh-files">刷新文件列表</button><span class="npm-files-status mut" aria-live="polite"></span></div>
     <div class="row2"><label class="f"><span class="lbl">起始时间</span><input data-field="t_start" placeholder="空＝开头"></label><label class="f"><span class="lbl">结束时间</span><input data-field="t_end" placeholder="空＝结尾"></label></div>
     <label class="check"><input type="checkbox" data-field="custom_time">启用自定义时间（起点＋采样率推算）</label>
     <div class="row2"><label class="f"><span class="lbl">自定义起点</span><input data-field="custom_time_start" placeholder="空＝文件起点"></label><label class="f"><span class="lbl">自定义终点</span><input data-field="custom_time_end" placeholder="空＝按采样率计算"></label></div>
     <label class="f"><span class="lbl">启停标签</span><textarea data-field="labels" rows="2" placeholder="每行 时间,开/关；留空自动定位"></textarea></label>
-    <div class="colmap-blk"><label class="chk"><input type="checkbox" data-field="map_on"><span>启用本文件独立列映射<small class="note">列号从 1 起，空＝不映射</small></span></label>
-    <div class="colmap-row">${['timestamp','ua','ia','ub','ib','uc','ic'].map((k,i) => `<label>${({timestamp:'时间',ua:'A相电压',ia:'A相电流',ub:'B相电压',ib:'B相电流',uc:'C相电压',ic:'C相电流'})[k]}<input data-field="map_${k}" type="number" min="1" value="${i+1}"></label>`).join('')}</div></div>`;
+    <details class="npm-map-group" open><summary>本文件列映射</summary><div class="colmap-blk"><label class="chk"><input type="checkbox" data-field="map_on"><span>启用本文件独立列映射<small class="note">列号从 1 起，空＝不映射</small></span></label>
+    <div class="colmap-row">${['timestamp','ua','ia','ub','ib','uc','ic'].map((k,i) => `<label>${({timestamp:'时间',ua:'A相电压',ia:'A相电流',ub:'B相电压',ib:'B相电流',uc:'C相电压',ic:'C相电流'})[k]}<input data-field="map_${k}" type="number" min="1" value="${i+1}"></label>`).join('')}</div></div></details>
+    <div class="btnrow"><button type="button" data-action="remove-source">删除文件</button></div>`;
   list.appendChild(source); npmUpdateHeading(module); npmInvalidate(module);
+  if (NPM.files !== null) {
+    npmRenderFileOptions(source, NPM.files);
+    if (!NPM.files.length) source.querySelector('.npm-files-status').textContent = 'data/ 下没有 CSV 文件，可手动输入路径。';
+  }
+  if (NPM.files === null || NPM.fileRequest) {
+    source.querySelector('.npm-files-status').textContent = '正在读取文件列表…';
+    npmRefreshFiles();
+  }
 }
 function npmInvalidate(module) {
   module._version = (module._version || 0) + 1; module._preview = null;
@@ -7430,12 +7467,12 @@ function npmAddModule() {
   const n = NPM.next++;
   module.innerHTML = `<summary class="npm-module-summary"><span class="npm-module-title">设备模块 ${n}</span><span class="npm-device-name">未填写设备 ID</span><span class="npm-source-count">0 个文件</span><span class="npm-toggle-hint"><span class="npm-expand-hint">展开</span><span class="npm-collapse-hint">折叠</span></span></summary>
     <div class="npm-module-body"><div class="grid2 npm-module-grid"><div class="panel npm-params"><h3>画像参数 <span class="navhint">本设备独立配置</span></h3><div class="form">
-    <div class="wp-group"><div class="wp-group-title"><span class="wp-tag">设备</span>设备标识与画像口径</div>
+    <details class="wp-group npm-device-group" open><summary class="wp-group-title"><span class="wp-tag">设备</span>设备标识与画像口径</summary>
     <div class="row2"><label class="f"><span class="lbl">设备 ID</span><input data-field="device_id" placeholder="唯一设备标识"></label><label class="f"><span class="lbl">保存文件名</span><input data-field="name" placeholder="留空自动生成"></label></div>
     <div class="row2"><label class="f"><span class="lbl">画像口径</span><select data-field="single_phase_mode"><option value="legacy">原有三相 / 分相口径</option><option value="current">单相纯电流</option><option value="voltage_current">单相电压＋电流</option></select></label>
       <label class="f"><span class="lbl">原口径设备相别</span><select data-field="phases">${['auto','ABC','A','B','C','AB','AC','BC'].map(x=>`<option>${x}</option>`).join('')}</select></label>
       <label class="f"><span class="lbl">分路相</span><select data-field="branch_phase"><option value="">请选择</option><option>A</option><option>B</option><option>C</option></select></label>
-      <label class="f"><span class="lbl">总线相</span><select data-field="bus_phase"><option value="">请选择</option><option>A</option><option>B</option><option>C</option></select></label></div></div>
+      <label class="f"><span class="lbl">总线相</span><select data-field="bus_phase"><option value="">请选择</option><option>A</option><option>B</option><option>C</option></select></label></div></details>
     <details class="wp-group npm-base"><summary class="wp-group-title"><span class="wp-tag">基准</span>本设备独立采样、校准与接线参数</summary>
       <div class="row2"><label class="f"><span class="lbl">采样率 fs (Hz)</span><input data-field="fs" type="number" min="1" value="6400"></label><label class="f"><span class="lbl">额定频率 f_nom (Hz)</span><input data-field="f_nom" type="number" min="1" value="50"></label>
         <label class="f"><span class="lbl">PT 变比</span><input data-field="pt_ratio" type="number" min="0.000001" value="1"></label><label class="f"><span class="lbl">CT 变比</span><input data-field="ct_ratio" type="number" min="0.000001" value="1"></label></div>
@@ -7444,21 +7481,31 @@ function npmAddModule() {
         <label class="check"><input type="checkbox" data-field="file_time_utc">文件时标为 UTC</label><label class="check"><input type="checkbox" data-field="reconstruct_3w">3P3W 虚拟中性点重构</label><label class="check"><input type="checkbox" data-field="invert_current">电流极性反转（三相）</label>
         <label class="f"><span class="lbl">分相电流极性反转</span><input data-field="invert_phases" placeholder="如 AC"></label></div>
     </details>
-    <div class="wp-group"><div class="wp-group-title"><span class="wp-tag">窗口</span>事件定位与提取参数</div>
+    <details class="wp-group npm-window-group" open><summary class="wp-group-title"><span class="wp-tag">窗口</span>事件定位与提取参数</summary>
     <div class="row2"><label class="f"><span class="lbl">前窗（周波）</span><input data-field="pre_cycles" type="number" min="1" value="10"></label><label class="f"><span class="lbl">后窗（周波）</span><input data-field="post_cycles" type="number" min="1" value="50"></label>
       <label class="f"><span class="lbl">标签容差（秒）</span><input data-field="label_tol_s" type="number" min="0" value="2" step="any"></label><label class="f"><span class="lbl">自动合并间隔（秒）</span><input data-field="merge_gap_s" type="number" min="0" value="10" step="any"></label>
-      <label class="f"><span class="lbl">每文件周波上限</span><input data-field="max_cycles" type="number" min="1" max="400000" value="400000"></label></div></div>
+      <label class="f"><span class="lbl">每文件周波上限</span><input data-field="max_cycles" type="number" min="1" max="400000" value="400000"></label></div></details>
     <div class="npm-sources"></div><div class="btnrow"><button type="button" data-action="add-source">添加文件</button><button type="button" data-action="remove-module">删除设备模块</button></div>
-    </div></div><div class="panel npm-result-panel"><h3>结果 <span class="navhint">预览并核对本设备事件</span></h3>
+    </div></div><div class="panel npm-result-panel"><details class="npm-result-group" open><summary class="wp-group-title">结果 · 预览并核对本设备事件</summary>
     <div class="form"><div class="btnrow"><button type="button" class="primary" data-action="preview">预览事件</button><button type="button" data-action="save" disabled>保存所选事件</button></div>
     <label class="check"><input type="checkbox" data-field="allow_single_direction">明确确认：允许只保存单方向画像</label>
-    <div class="npm-status notes" aria-live="polite"></div><div class="npm-results"></div></div></div></div></div>`;
+    <div class="npm-results"></div></div></details><div class="npm-status notes" aria-live="polite"></div></div></div></div>`;
   list.appendChild(module); npmAddSource(module); npmSyncPhases(module);
   module.addEventListener('input', e => {
     if (e.target.matches('[data-field="device_id"]')) npmUpdateHeading(module);
-    if (!e.target.matches('[data-event], [data-field="allow_single_direction"]')) npmInvalidate(module);
+    if (e.target.matches('[data-field="path"]')) {
+      const select = npmGet(e.target.closest('.npm-source'), 'files');
+      if (select.value !== e.target.value.trim()) select.value = '';
+    }
+    if (!e.target.matches('[data-event], [data-field="allow_single_direction"], [data-field="files"]')) npmInvalidate(module);
   });
-  module.addEventListener('change', e => { if (e.target.matches('[data-field="single_phase_mode"]')) npmSyncPhases(module); });
+  module.addEventListener('change', e => {
+    if (e.target.matches('[data-field="single_phase_mode"]')) npmSyncPhases(module);
+    if (e.target.matches('[data-field="files"]') && e.target.value) {
+      const path = npmGet(e.target.closest('.npm-source'), 'path');
+      if (path.value !== e.target.value) { path.value = e.target.value; npmInvalidate(module); }
+    }
+  });
   module.addEventListener('click', e => npmAction(module, e));
 }
 function npmSyncPhases(module) {
@@ -7488,6 +7535,7 @@ async function npmAction(module, event) {
   const button = event.target.closest('button[data-action]'); if (!button || module._busy) return;
   const action = button.dataset.action;
   if (action === 'add-source') { npmAddSource(module); return; }
+  if (action === 'refresh-files') { npmRefreshFiles(); return; }
   if (action === 'remove-source') { if (module.querySelectorAll('.npm-source').length <= 1) { toast('至少保留一个文件', 'err'); return; } button.closest('.npm-source').remove(); npmUpdateHeading(module); npmInvalidate(module); return; }
   if (action === 'remove-module') { if (confirm('删除此设备模块及其未保存的预览？')) module.remove(); return; }
   if (!['preview','save'].includes(action)) return;

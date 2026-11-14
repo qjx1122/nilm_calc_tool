@@ -772,7 +772,6 @@ button.wb-morebtn:hover{border-color:transparent;text-decoration:underline}
 #npm-panel .npm-module-grid>.panel{margin:0;min-width:0}
 #npm-panel .npm-source{border-left-color:var(--acc)}
 #npm-panel .npm-source .wp-tag{background:var(--acc)}
-#npm-panel .npm-source-title{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap}
 #npm-panel .npm-base>summary,#npm-bundle>summary{cursor:pointer}
 #npm-panel .npm-result-panel .btnrow{flex-wrap:wrap}
 #npm-panel .npm-results:empty{display:none}
@@ -781,3 +780,13 @@ button.wb-morebtn:hover{border-color:transparent;text-decoration:underline}
 #npm-bundle[open]>summary{margin-bottom:10px}
 #npm-bundle .row2,#npm-bundle .btnrow,#npm-bundle>label{margin-top:10px}
 @media(max-width:760px){#npm-panel .npm-module-body{padding:10px}#npm-panel .npm-module-summary{padding:10px}#npm-panel .npm-module-grid .row2{grid-template-columns:1fr}}
+
+/* 画像提取的各功能分组可独立折叠；默认保持原先可见的内容展开。 */
+#view-process-profile-extract details.wp-group>summary,
+#view-process-profile-extract .npm-map-group>summary,
+#view-process-profile-extract .np-map-group>summary,
+#view-process-profile-extract .npm-result-group>summary,
+#view-process-profile-extract .np-result-group>summary{cursor:pointer;color:var(--fg)}
+#view-process-profile-extract details>summary:focus-visible{outline:2px solid var(--acc);outline-offset:2px;border-radius:3px}
+#view-process-profile-extract .npm-map-group,#view-process-profile-extract .np-map-group{margin:6px 0}
+#view-process-profile-extract .npm-result-group>summary,#view-process-profile-extract .np-result-group>summary{font-weight:600}

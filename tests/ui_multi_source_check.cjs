@@ -5,7 +5,10 @@ const js = fs.readFileSync('app/static/app.js','utf8');
 const dom = new JSDOM(html, {url:'http://localhost/',runScripts:'outside-only'});
 const w = dom.window, doc = w.document;
 let pending = [], calls = [];
-w.fetch = (url, opt) => new Promise(resolve => { calls.push(JSON.parse(opt.body)); pending.push(resolve); });
+w.fetch = (url, opt) => {
+  if (!opt || !opt.method || opt.method === 'GET') return Promise.resolve({ok:true,json:async()=>({ok:true,files:[]})});
+  return new Promise(resolve => { calls.push(JSON.parse(opt.body)); pending.push(resolve); });
+};
 w.confirm = () => true;
 w.eval(js + '\n;window._npmTest = {npmBind, npmPayload, nilmProfileCell};');
 doc.removeEventListener('DOMContentLoaded',w.init);
@@ -29,16 +32,35 @@ const tick = () => new Promise(r=>setTimeout(r,0));
   click(a.querySelector('.npm-module-summary')); assert(!a.open && b.open);
   assert.equal(field(a,'device_id').value,'A');
   click(a.querySelector('.npm-module-summary')); assert(a.open && b.open);
+  for (const id of ['np-source-group','np-base','np-cm-group','np-device-group','np-locate-group','np-window-group','np-stage-group','np-result-group']) {
+    const group=doc.getElementById(id); assert(group && group.tagName==='DETAILS' && group.open, id);
+    click(group.querySelector(':scope > summary')); assert(!group.open, id); click(group.querySelector(':scope > summary')); assert(group.open, id);
+  }
+  for (const cls of ['npm-device-group','npm-window-group','npm-source','npm-map-group','npm-result-group']) {
+    const group=a.querySelector('.'+cls); assert(group && group.open, cls);
+    click(group.querySelector(':scope > summary')); assert(!group.open, cls); click(group.querySelector(':scope > summary')); assert(group.open, cls);
+  }
+  assert(!a.querySelector('.npm-base').open); click(a.querySelector('.npm-base > summary')); assert(a.querySelector('.npm-base').open);
+  click(a.querySelector('.npm-base > summary')); assert(!a.querySelector('.npm-base').open);
   input(field(a.querySelector('.npm-source'),'path'),'a.csv'); input(field(b.querySelector('.npm-source'),'path'),'b.csv');
   click(action(a,'add-source')); const sa=a.querySelectorAll('.npm-source'); assert.equal(sa.length,2); assert.match(a.querySelector('.npm-source-count').textContent,/2 个文件/); input(field(sa[1],'path'),'a2.csv');
   field(a,'single_phase_mode').value='current'; field(a,'single_phase_mode').dispatchEvent(new w.Event('change',{bubbles:true}));
   assert(field(a,'phases').disabled && !field(a,'branch_phase').disabled);
   input(field(a,'branch_phase'),'A'); input(field(a,'bus_phase'),'B');
-  click(action(a,'preview')); click(a.querySelector('.npm-module-summary')); assert(!a.open); click(action(b,'preview')); assert.equal(calls.length,2);
+  click(action(a,'preview'));
+  click(a.querySelector('.npm-source > summary')); assert(!a.querySelector('.npm-source').open);
+  click(a.querySelector('.npm-result-group > summary')); assert(!a.querySelector('.npm-result-group').open);
+  click(a.querySelector('.npm-module-summary')); assert(!a.open); click(action(b,'preview')); assert.equal(calls.length,2);
   assert.deepEqual(calls.map(c=>c.device_id),['A','B']); assert.equal(calls[0].sources.length,2);
   resolveNext(); resolveNext(); await tick(); await tick();
   assert(!a.open && b.open); click(a.querySelector('.npm-module-summary')); assert(a.open);
+  assert(!a.querySelector('.npm-source').open && !a.querySelector('.npm-result-group').open);
+  click(a.querySelector('.npm-source > summary')); click(a.querySelector('.npm-result-group > summary'));
   assert(!action(a,'save').disabled && !action(b,'save').disabled); assert(a.querySelector('[data-event]'));
+  for (const cls of ['npm-device-group','npm-window-group','npm-source','npm-result-group']) {
+    const group=a.querySelector('.'+cls); click(group.querySelector(':scope > summary')); assert(!group.open,cls);
+    assert(!action(a,'save').disabled && a.querySelector('[data-event]').checked); click(group.querySelector(':scope > summary'));
+  }
   field(a,'allow_single_direction').checked=true; click(action(a,'save'));
   assert(calls[2].allow_single_direction && calls[2].selected.length===1);
   input(field(a,'device_id'),'new'); resolveNext(); await tick(); await tick();
