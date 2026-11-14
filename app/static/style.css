@@ -753,3 +753,31 @@ button.wb-morebtn:hover{border-color:transparent;text-decoration:underline}
 /* 波形预览的模块列映射关闭时不占空间。 */
 .wb-colmap-row{grid-template-columns:repeat(auto-fit,minmax(65px,1fr))}
 .wb-colmap-row[hidden]{display:none}
+
+/* 多设备画像：沿用单文件画像的 panel / form / wp-group，设备卡片独立折叠。 */
+#npm-panel .npm-module{margin:14px 0;border:1px solid var(--line);border-left:4px solid var(--acc);border-radius:10px;background:var(--panel2);overflow:hidden}
+#npm-panel .npm-module-summary{display:flex;align-items:center;gap:8px 12px;flex-wrap:wrap;cursor:pointer;padding:11px 14px;list-style:none;background:var(--panel);color:var(--fg)}
+#npm-panel .npm-module-summary::-webkit-details-marker{display:none}
+#npm-panel .npm-module-summary::before{content:'▸';color:var(--acc);font-size:14px}
+#npm-panel .npm-module[open]>.npm-module-summary::before{content:'▾'}
+#npm-panel .npm-module-summary:focus-visible{outline:2px solid var(--acc);outline-offset:-3px}
+#npm-panel .npm-module-title{font-weight:600}
+#npm-panel .npm-device-name{color:var(--mut);overflow-wrap:anywhere}
+#npm-panel .npm-source-count,#npm-panel .npm-toggle-hint{font-size:12px;color:var(--mut)}
+#npm-panel .npm-toggle-hint{margin-left:auto}
+#npm-panel .npm-collapse-hint,#npm-panel .npm-module[open] .npm-expand-hint{display:none}
+#npm-panel .npm-module[open] .npm-collapse-hint{display:inline}
+#npm-panel .npm-module-body{padding:14px;border-top:1px solid var(--line)}
+#npm-panel .npm-module-grid{align-items:start}
+#npm-panel .npm-module-grid>.panel{margin:0;min-width:0}
+#npm-panel .npm-source{border-left-color:var(--acc)}
+#npm-panel .npm-source .wp-tag{background:var(--acc)}
+#npm-panel .npm-source-title{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap}
+#npm-panel .npm-base>summary,#npm-bundle>summary{cursor:pointer}
+#npm-panel .npm-result-panel .btnrow{flex-wrap:wrap}
+#npm-panel .npm-results:empty{display:none}
+#npm-bundle{margin-top:16px;padding:10px 12px;border:1px solid var(--line);border-left:4px solid var(--p);border-radius:8px;background:var(--panel2)}
+#npm-bundle>summary{color:var(--fg);font-weight:600}
+#npm-bundle[open]>summary{margin-bottom:10px}
+#npm-bundle .row2,#npm-bundle .btnrow,#npm-bundle>label{margin-top:10px}
+@media(max-width:760px){#npm-panel .npm-module-body{padding:10px}#npm-panel .npm-module-summary{padding:10px}#npm-panel .npm-module-grid .row2{grid-template-columns:1fr}}

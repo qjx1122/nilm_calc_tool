@@ -1163,13 +1163,13 @@
 
       <div class="panel" id="npm-panel">
         <h3>多设备 / 多文件联合提取 <span class="navhint">逐设备、逐文件独立提取；预览核对后保存单设备画像</span></h3>
-        <div class="notes">每个模块独立配置与运行，文件不拼接。核对来源、方向、时间与特征；每方向建议至少 3 次独立且工况可比的样本；复核时间缺口及缺测提示。画像只含一个方向时必须明确确认。旧单文件提取区仍在下方。</div>
+        <div class="notes">每个模块独立配置与运行，点击设备模块标题可折叠或展开；文件不拼接。核对来源、方向、时间与特征；每方向建议至少 3 次独立且工况可比的样本；复核时间缺口及缺测提示。画像只含一个方向时必须明确确认。旧单文件提取区仍在下方。</div>
         <div class="btnrow"><button id="btn-npm-add" type="button">添加设备模块</button></div>
         <div id="npm-modules"></div>
         <details id="npm-bundle"><summary>生成自包含多设备融合画像</summary>
           <div class="notes warn"><b>试运行：</b>加载集合后才启用联合归因。同相候选起点相近或过渡重叠时保守联判，冲突输出「归因不确定」且不推进设备状态；等待时间可能增加，重叠未知动作可能合并。不同但部分重叠的相集合暂不支持，成员无法评估时停止归因。相近 / 并发动作不保证可分离，须用独立录波验收。运行中不建议热更新：要保留准确快照请停止后重启。启动前核查所有文件及联合模式状态；缺失或完全损坏且无集合标识的文件可能无法识别为集合。普通多路径仍是旧版独立匹配。</div>
-          <div class="row2"><label class="f">集合 ID<input data-bundle="id" value="bundle"></label><label class="f">文件名<input data-bundle="name" placeholder="留空自动生成"></label></div>
-          <label class="f">单设备画像路径（每行一个，最多 8 个）<textarea data-bundle="paths" rows="4" placeholder="output/nilm/profile_device1.json"></textarea></label>
+          <div class="row2"><label class="f"><span class="lbl">集合 ID</span><input data-bundle="id" value="bundle"></label><label class="f"><span class="lbl">文件名</span><input data-bundle="name" placeholder="留空自动生成"></label></div>
+          <label class="f"><span class="lbl">单设备画像路径（每行一个，最多 8 个）</span><textarea data-bundle="paths" rows="4" placeholder="output/nilm/profile_device1.json"></textarea></label>
           <div class="btnrow"><button type="button" data-bundle-action="preview">预览集合</button><button type="button" data-bundle-action="save" disabled>保存集合</button><button type="button" data-bundle-action="fill-bus" disabled>填入总线侧路径</button><button type="button" data-bundle-action="fill-branch" disabled>填入分路侧路径</button></div>
           <div data-bundle="status" class="notes"></div><div data-bundle="members"></div>
         </details>
