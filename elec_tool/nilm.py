@@ -559,6 +559,39 @@ def _joint_config_signature(cfg: AppConfig) -> Tuple[Any, ...]:
             int(cfg.output.source_id), p.get("phase_map"), p.get("stage_free"))
 
 
+def _joint_stop_recovery_flag(x: np.ndarray, onset: int, end: int, pre: int, post: int,
+                              f_nom: float, post_hi: Optional[int] = None) -> str:
+    """仅作保守核验：返回空串、恢复可疑或无法可靠核验；不宣称物理动作类型。
+
+    使用候选短前窗之前的一段电平和结束后的干净后窗。小档位、短运行和
+    同相近邻都可能与局部回落难以区分，因此非空结果只能降为未知，不能删除观测。
+    """
+    n = len(x)
+    pre, post = int(pre), int(post)
+    base_n = max(10, min(post, max(10, int(round(2 * float(f_nom))))))
+    begin = int(onset) - pre - base_n
+    post_end = int(end) + base_n
+    if (pre < 1 or post < 1 or begin < 0 or onset > n or end < onset or post_end > n
+            or (post_hi is not None and int(post_hi) < post_end)):
+        return "stop_recovery_window_unavailable"
+    early = np.asarray(x[begin:onset-pre], dtype=float)
+    short = np.asarray(x[onset-pre:onset], dtype=float)
+    after = np.asarray(x[end:post_end], dtype=float)
+    if not (early.size == base_n and short.size == pre and after.size == base_n
+            and np.isfinite(early).all() and np.isfinite(short).all() and np.isfinite(after).all()):
+        return "stop_recovery_window_unavailable"
+    e, b, a = (float(np.median(z)) for z in (early, short, after))
+    drop = b - a
+    if drop <= 1e-12:
+        return "stop_recovery_window_unavailable"
+    # 百分位极差控制两端窗口的可靠性；经验比例按本次用户样本提出，非普适阈值。
+    if any(float(np.percentile(z, 90) - np.percentile(z, 10)) > 0.65 * drop for z in (early, after)):
+        return "stop_recovery_baseline_unstable"
+    if abs(a - e) <= 0.25 * drop and b - e >= 0.5 * drop:
+        return "stop_recovery_suspected"
+    return ""
+
+
 # ---------------------------------------------------------------- 检测器
 class NilmDetector:
     """引擎每摄入一块数据调用 ``ingest(scaled_block)``；返回本次新产生的事件（dict 列表）。线程安全。"""
@@ -1246,9 +1279,36 @@ class NilmDetector:
                              "g_start": c["g_on"], "g_end": c["g_end"],
                              "t_start": float(self._t[c["result"]["onset"]]), "t_end": float(self._t[c["result"]["end"]])} for c in accepted] if len(accepted) > 1 else None
                 generated = []
-                for j, c in enumerate(active):
-                    generated.extend(self._evaluate_one_profile(c["slot"], prm, qty, gap, g_last, _precomputed=[c["result"]],
-                                                                _joint=True, _ambiguity=evidence, _emit_ambiguity=(j == 0)))
+                # 仅在集合联判的单相纯电流 / 固定档位 STOP 上作保守核验。
+                # 有一个可疑或不可核验的匹配候选即不确认任何设备；候选仍可审计。
+                recovery_flags = []
+                if not int(float(prm.get("stage_free", 0) or 0)):
+                    for item in accepted:
+                        prof = item["slot"]["profile"]; scope = single_phase_scope(prof)
+                        if not scope or scope.get("mode") != "current" or item["result"]["match"]["direction"] != "STOP":
+                            continue
+                        phase = scope["branch_phase"] if int(getattr(self.cfg.output, "source_id", 0) or 0) == 1 else scope["bus_phase"]
+                        row = "ABC".index(phase) + 1
+                        r = item["result"]
+                        flag = _joint_stop_recovery_flag(self._i[row], int(r["onset"]), int(r["end"]),
+                                                         int(prof.get("pre_cycles", 10)), int(prof.get("post_cycles", 50)),
+                                                         float(self.cfg.sampling.f_nom), r.get("post_hi"))
+                        if flag and flag not in recovery_flags:
+                            recovery_flags.append(flag)
+                if recovery_flags:
+                    c = active[0]; r = c["result"]
+                    uncertain = {**r, "flags": list(r["flags"]) + recovery_flags}
+                    generated = self._evaluate_one_profile(c["slot"], prm, qty, gap, g_last,
+                                                           _precomputed=[uncertain], _joint=True, _unknown=True)
+                    if generated:
+                        generated[0].candidate_devices = [{"device_id": str(v["slot"]["profile"]["device_id"]),
+                            "direction": v["result"]["match"]["direction"], "confidence": float(v["result"]["confidence"]),
+                            "d2": float(v["result"]["match"]["d2"]), "g_start": v["g_on"], "g_end": v["g_end"],
+                            "t_start": float(self._t[v["result"]["onset"]]), "t_end": float(self._t[v["result"]["end"]])} for v in accepted]
+                else:
+                    for j, c in enumerate(active):
+                        generated.extend(self._evaluate_one_profile(c["slot"], prm, qty, gap, g_last, _precomputed=[c["result"]],
+                                                                    _joint=True, _ambiguity=evidence, _emit_ambiguity=(j == 0)))
                 # 唯一候选在提交阶段因已确认状态冲突而被拒时，不能让显著观测静默消失。
                 if not generated and len(accepted) == 1 and len(active) == 1 and not int(float(prm.get("stage_free", 0) or 0)) and int(float(prm.get("state_check", 1))):
                     c = active[0]; r = c["result"]; state = c["slot"].get("state", "unknown")
