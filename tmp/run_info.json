@@ -1,10 +1,10 @@
 {
-  "created_local": "2026-11-16 12:01:34.169",
+  "created_local": "2026-11-16 14:25:44.599",
   "started_side": "branch",
   "starts": [
     {
       "side": "branch",
-      "at_local": "2026-11-16 12:01:34.169",
+      "at_local": "2026-11-16 14:25:44.599",
       "profile_file": "nilm/profile_branch1_0d2ee61abc4bcf770e47b5e0f594d1f2790191e44a9381e06fc650339ff95870.json",
       "profile_files": [
         "nilm/profile_branch1_0d2ee61abc4bcf770e47b5e0f594d1f2790191e44a9381e06fc650339ff95870.json"
@@ -44,7 +44,7 @@
     },
     "branch": {
       "source_kind": "csv_file",
-      "source_path": "D:\\Work\\testPython\\NILM_Test2026\\nilm_calc_tool_261114\\data\\化工行业-天云龙涂料厂-dev-4号研磨机-1-启停2.csv",
+      "source_path": "D:\\Work\\testPython\\NILM_Test2026\\nilm_calc_tool_261114\\data\\化工行业-天云龙涂料厂-dev-1号搅拌机-1-启动1.csv",
       "source_id": 1,
       "config_file": "config_branch.json",
       "config_copied_from": "configs\\branch_runtime.json",

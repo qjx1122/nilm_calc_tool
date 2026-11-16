@@ -118,7 +118,7 @@
   },
   "source": {
     "kind": "csv_file",
-    "path": "data\\化工行业-天云龙涂料厂-dev-4号研磨机-1-启停2.csv",
+    "path": "data\\化工行业-天云龙涂料厂-dev-1号搅拌机-1-启动1.csv",
     "poll_interval_s": 0.2,
     "block_samples": 640,
     "tail_from_end": false,

@@ -137,7 +137,8 @@
     "spectrum_max_points": 1200,
     "series_hidden": {
       "nilm-pqs-br": [
-        "Ic"
+        "Ic",
+        "Ib"
       ]
     }
   },
@@ -201,5 +202,8 @@
   },
   "branch": {
     "enabled": true
+  },
+  "events": {
+    "enabled": false
   }
 }
