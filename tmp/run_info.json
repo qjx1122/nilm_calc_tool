@@ -1,10 +1,10 @@
 {
-  "created_local": "2026-11-16 10:05:30.258",
+  "created_local": "2026-11-16 12:01:34.169",
   "started_side": "branch",
   "starts": [
     {
       "side": "branch",
-      "at_local": "2026-11-16 10:05:30.258",
+      "at_local": "2026-11-16 12:01:34.169",
       "profile_file": "nilm/profile_branch1_0d2ee61abc4bcf770e47b5e0f594d1f2790191e44a9381e06fc650339ff95870.json",
       "profile_files": [
         "nilm/profile_branch1_0d2ee61abc4bcf770e47b5e0f594d1f2790191e44a9381e06fc650339ff95870.json"

@@ -137,7 +137,6 @@
     "spectrum_max_points": 1200,
     "series_hidden": {
       "nilm-pqs-br": [
-        "Ib",
         "Ic"
       ]
     }
