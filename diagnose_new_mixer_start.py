@@ -34,6 +34,12 @@ def sha256(path):
     return digest.hexdigest()
 
 
+def sha256_lf(path):
+    # Only for small Git-tracked text snapshots, not the source recording.
+    # Preserve all bytes except CRLF -> LF; do not decode or rewrite the file.
+    return hashlib.sha256(path.read_bytes().replace(b'\r\n', b'\n')).hexdigest()
+
+
 def stop(message):
     raise SystemExit('STOP: ' + message)
 
@@ -44,8 +50,10 @@ def main():
     if not cfg_path.is_file() or not run_path.is_file():
         stop('run from the project root with the supplied tmp snapshots')
     cfg_hash = sha256(cfg_path)
-    if cfg_hash != EXPECTED_CONFIG:
-        stop('config snapshot differs; report its SHA256: ' + cfg_hash)
+    cfg_lf_hash = sha256_lf(cfg_path)
+    print('Config SHA256 raw:', cfg_hash, 'LF-normalized:', cfg_lf_hash, flush=True)
+    if cfg_lf_hash != EXPECTED_CONFIG:
+        stop('config snapshot differs beyond CRLF/LF; report both hashes')
     with run_path.open(encoding='utf-8-sig') as f:
         run = json.load(f)
     branch = run.get('sides', {}).get('branch', {})
@@ -53,8 +61,13 @@ def main():
     if len(files) != 1:
         stop('expected one bundle snapshot in run_info')
     bundle = Path('tmp') / files[0].replace('\\', '/')
-    if not bundle.is_file() or sha256(bundle) != EXPECTED_BUNDLE:
-        stop('bundle snapshot missing or changed')
+    if not bundle.is_file():
+        stop('bundle snapshot missing')
+    bundle_hash = sha256(bundle)
+    bundle_lf_hash = sha256_lf(bundle)
+    print('Bundle SHA256 raw:', bundle_hash, 'LF-normalized:', bundle_lf_hash, flush=True)
+    if bundle_lf_hash != EXPECTED_BUNDLE:
+        stop('bundle snapshot differs beyond CRLF/LF; report both hashes')
     if branch.get('profile_snapshot_sha256') != [EXPECTED_BUNDLE]:
         stop('run_info bundle hash does not match')
     events_path = Path('tmp/nilm/nilm_events_20261116.csv')
@@ -89,7 +102,6 @@ def main():
     print('Source bytes:', before.st_size, 'SHA256:', digest, flush=True)
     if digest != EXPECTED_SOURCE:
         stop('source differs from user-reported new file; no export')
-    print('Config SHA256:', cfg_hash, 'bundle SHA256:', EXPECTED_BUNDLE, flush=True)
     print('Reference run_id:', EXPECTED_RUN, '(run_info does not record input content SHA or code SHA)', flush=True)
     print('Extracting cycles, please wait...', flush=True)
     _, feat, t, _, _, i4, ih4, _ = load_cycles(
@@ -116,8 +128,10 @@ def main():
         if vals.size:
             print('Interval', a, b, 'cycles:', vals.size, 'Ia median:', round(float(np.median(vals)), 4),
                   'Ia max:', round(float(np.max(vals)), 4), flush=True)
-    meta = {'source_sha256': digest, 'source_bytes': before.st_size, 'config_sha256': cfg_hash,
-            'bundle_sha256': EXPECTED_BUNDLE, 'reference_run_id': EXPECTED_RUN,
+    meta = {'source_sha256': digest, 'source_bytes': before.st_size,
+            'config_sha256_raw': cfg_hash, 'config_sha256_lf': cfg_lf_hash,
+            'bundle_sha256_raw': bundle_hash, 'bundle_sha256_lf': bundle_lf_hash,
+            'bundle_sha256_recorded_at_runtime': EXPECTED_BUNDLE, 'reference_run_id': EXPECTED_RUN,
             'analysis_head': head, 'event_epoch_reference': EVENT_EPOCH, 'quality': quality,
             'note': 'offline cycle extraction, not end-to-end replay; runtime source/code SHA not recorded'}
     # New directory + exclusive file: never overwrite previous results.
