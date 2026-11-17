@@ -21,6 +21,7 @@ median_diff  中值滤波后再做阈值差分（抗尖峰）
 """
 from __future__ import annotations
 
+import copy
 import csv
 import hashlib
 import json
@@ -592,6 +593,53 @@ def _joint_stop_recovery_flag(x: np.ndarray, onset: int, end: int, pre: int, pos
     return ""
 
 
+def _composite_start_metrics(t: np.ndarray, x: np.ndarray, ih: np.ndarray,
+                             onset: int, f_nom: float) -> Tuple[str, Dict[str, float]]:
+    """保守的四秒启动观测：只给诊断证据，不能证明设备身份或推进状态。
+
+    前 1 s 与起点后 3~4 s 为相对固定窗口。阈值是试验性的可靠性检查，
+    不能区分相邻设备造成的台阶，故即使通过也必须保持 unknown。
+    """
+    n = max(10, int(round(float(f_nom))))
+    start, stop = int(onset) - n, int(onset) + 4 * n
+    if start < 0 or stop > len(x) or stop > len(ih) or stop > len(t):
+        return "composite_start_window_unavailable", {}
+    ts = np.asarray(t[start:stop], dtype=float)
+    a = np.asarray(x[start:stop], dtype=float)
+    h = np.asarray(ih[start:stop], dtype=float)
+    if not (np.isfinite(ts).all() and np.isfinite(a).all() and np.isfinite(h).all()
+            and np.all(np.diff(ts) > 0) and np.all(np.diff(ts) <= 1.5 / float(f_nom))):
+        return "composite_start_window_unavailable", {}
+    before, after = a[:n], a[-n:]
+    base, settled = float(np.median(before)), float(np.median(after))
+    delta = settled - base
+    if delta <= 1e-12:
+        return "composite_start_no_sustained_rise", {}
+    if any(float(np.percentile(z, 90) - np.percentile(z, 10)) > 0.25 * delta
+           for z in (before, after)):
+        return "composite_start_window_unstable", {}
+    return "composite_start_settled_unattributed", {
+        "baseline_ia": base, "settled_ia": settled, "steady_delta_ia": delta,
+        "steady_delta_ih": float(np.median(h[-n:]) - np.median(h[:n])),
+        "settle_window_start_s": 3.0, "settle_window_end_s": 4.0,
+    }
+
+
+def _composite_start_trigger(c: Dict[str, Any], stage_free: bool) -> bool:
+    r = c["result"]
+    prof = c["slot"]["profile"]
+    scope = single_phase_scope(prof)
+    return bool(not stage_free and scope and scope.get("mode") == "current"
+                and not r.get("accepted") and r.get("source", "x") == "x"
+                and r.get("match", {}).get("direction") == "START"
+                and "trajectory_deviates" in r.get("flags", ())
+                and not ({"d2_exceeds", "sign_flip", "dim_exceeds"} & set(r.get("flags", ())))
+                and float(r.get("feat", {}).get("vec", {}).get("d_ia", 0.0)
+                          if scope["branch_phase"] == "A" else
+                          r.get("feat", {}).get("vec", {}).get("d_i" + scope["branch_phase"].lower(), 0.0)) > 0
+                and float(r.get("feat", {}).get("vec", {}).get("peak_ratio", 0.0)) >= 3.0)
+
+
 # ---------------------------------------------------------------- 检测器
 class NilmDetector:
     """引擎每摄入一块数据调用 ``ingest(scaled_block)``；返回本次新产生的事件（dict 列表）。线程安全。"""
@@ -642,6 +690,8 @@ class NilmDetector:
         self._joint_bundle_paths: set = set()
         self._joint_observations: Dict[Tuple[Tuple[str, ...], int], bool] = {}
         self._joint_unknown_intervals: List[Dict[str, Any]] = []
+        self._joint_pending_starts: Dict[Tuple[Tuple[str, ...], int, int], Dict[str, Any]] = {}
+        self._joint_composite_intervals: List[Dict[str, Any]] = []
         self._joint_semantic_signature = _joint_config_signature(cfg)
         self._profile: Optional[Dict[str, Any]] = None
         self._profile_err: str = ""
@@ -680,7 +730,7 @@ class NilmDetector:
         self._joint_runtime_error = ""
         self._joint_fingerprint = ""
         self._joint_source_bytes = {}
-        self._joint_observations = {}; self._joint_unknown_intervals = []
+        self._joint_observations = {}; self._joint_unknown_intervals = []; self._joint_pending_starts = {}; self._joint_composite_intervals = []
         old = {} if was_joint else {str(p.get("path")): p for p in self._profiles}
         out: List[Dict[str, Any]] = []
         for path in paths:
@@ -832,7 +882,7 @@ class NilmDetector:
         if errors:
             self._joint_blocked = True
             self._joint_fingerprint = ""
-            self._joint_observations = {}; self._joint_unknown_intervals = []
+            self._joint_observations = {}; self._joint_unknown_intervals = []; self._joint_pending_starts = {}; self._joint_composite_intervals = []
             message = "融合集合加载失败：" + "；".join(errors)
             self._profiles = [{"path": records[0][0] if records else "", "key": ("", 0.0), "profile": None,
                                "err": message, "state": "unknown", "last": [], "hist": {}, "notes": []}]
@@ -857,7 +907,7 @@ class NilmDetector:
                         "last": [], "hist": {}, "last_end": -10 ** 9, "notes": notes,
                         "bundle_id": bundle_id, "member_sha256": member_hash})
         self._profiles = out; self._joint_fingerprint = fingerprint; self._joint_blocked = False
-        self._joint_observations = {}; self._joint_unknown_intervals = []
+        self._joint_observations = {}; self._joint_unknown_intervals = []; self._joint_pending_starts = {}; self._joint_composite_intervals = []
         self._profile = out[0]["profile"] if out else None
         self._profile_key = out[0]["key"] if out else ("", 0.0)
         self._profile_err = ""; self.device_state = "unknown"; self.profile_last = []; self.profile_hist = {}
@@ -888,7 +938,7 @@ class NilmDetector:
         """集合或观测语义发生变化时不把旧周波重新解释成新模型的事件。"""
         self._g0 += len(self._t)
         self._t = np.zeros(0); self._p = np.zeros((4, 0)); self._q = np.zeros((4, 0)); self._i = np.zeros((4, 0))
-        self._ih = np.zeros((4, 0)); self._joint_observations = {}; self._joint_unknown_intervals = []
+        self._ih = np.zeros((4, 0)); self._joint_observations = {}; self._joint_unknown_intervals = []; self._joint_pending_starts = {}; self._joint_composite_intervals = []
         self.feat = CycleFeatures(cfg.sampling.fs, cfg.sampling.f_nom); self._since_eval = 0; self._pending_eval = 0
         self._u_blocks = 0; self._u_nonzero_blocks = 0
         self._u_phase_seen = np.zeros(3, dtype=bool); self._i_phase_seen = np.zeros(3, dtype=bool)
@@ -1152,6 +1202,43 @@ class NilmDetector:
             self.profile_hist = dict(sl0.get("hist") or {})
         return out
 
+    def _pending_start_unknown(self, group: List[Dict[str, Any]], flag: str) -> NilmEvent:
+        """仅用保存的观测制作未知事件；不需要旧周波仍在缓存中。"""
+        c = group[0]; feat = c["result"]["feat"]; vec = feat["vec"]
+        evidence = []
+        for item in group:
+            r = item["result"]; m = r["match"]
+            evidence.append({"device_id": str(item["slot"]["profile"]["device_id"]),
+                "direction": m["direction"], "confidence": float(r["confidence"]), "d2": float(m["d2"]),
+                "g_start": item["g_on"], "g_end": item["g_end"],
+                "t_start": item["t_start"], "t_end": item["t_end"],
+                "status": str(r["status"]), "evidence_type": "original_profile_candidate", "composite_metrics": {}})
+        phase = next(iter(c["phases"]))
+        branch_phase = c["slot"]["profile"]["single_phase"]["branch_phase"]
+        di = float(vec.get("d_i" + branch_phase.lower(), 0.0))
+        ev = NilmEvent(id=self._next_id, algorithm="profile", channel=phase,
+            t_start=c["t_start"], t_end=c["t_end"], direction="", magnitude_w=0.,
+            delta_p_w=0., delta_q_var=0., delta_i_a=di, pre_p_w=0., post_p_w=0.,
+            cycles=c["g_end"] - c["g_on"], score=0., g_start=c["g_on"], g_end=c["g_end"],
+            quantity="i", magnitude=abs(di), unit="A", status="unknown",
+            quality_flags=flag + ",unknown_device", candidate_devices=evidence,
+            delta_ih_a=float(vec.get("d_ih", 0.)))
+        self._next_id += 1
+        return ev
+
+    @staticmethod
+    def _group_pending_starts(pending: List[Dict[str, Any]]) -> List[List[Dict[str, Any]]]:
+        groups: List[List[Dict[str, Any]]] = []
+        for item in sorted(pending, key=lambda v: v["g_on"]):
+            matches = [g for g in groups if any(item["phases"] == x["phases"]
+                and item["g_on"] <= x["g_end"] + 2 and x["g_on"] <= item["g_end"] + 2 for x in g)]
+            if not matches:
+                groups.append([item])
+            else:
+                matches[0].append(item)
+                for extra in matches[1:]: matches[0].extend(extra); groups.remove(extra)
+        return groups
+
     def _evaluate_joint_profiles(self, prm: Dict[str, Any], qty: str, gap: int, g_last: int) -> List[NilmEvent]:
         """先独立生成所有候选、按共同观测冲突分组，之后才提交确定事件的状态。"""
         self._joint_runtime_error = ""
@@ -1217,14 +1304,68 @@ class NilmDetector:
                         continue
                 candidates.append({"slot": slot, "index": index, "result": r, "g_on": gon, "g_end": gend,
                                    "phases": phases, "post": int(prof.get("post_cycles", 50))})
-        # 一轮可能把每个候选都写入账本；预留最坏情况空间，避免部分提交后触顶。
+        # 复合启动的初次轨迹拒绝可能在后续重扫时消失或变成其他候选。
+        # 保存全局索引和原始拒绝证据；只对同相同成员重叠的重扫结果复用。
+        stage_free = bool(int(float(prm.get("stage_free", 0) or 0)))
+        self._joint_composite_intervals = [v for v in self._joint_composite_intervals if v["end"] >= self._g0]
+        expired = []
+        for key, saved in list(self._joint_pending_starts.items()):
+            if saved["g_on"] < self._g0 or saved["g_end"] >= self._g0 + len(self._t):
+                msg = "复合启动待决已滑出缓存；仅保留原候选作为未知观测"
+                self._joint_runtime_error = msg
+                if msg not in self.errors: self.errors.append(msg)
+                expired.append(saved)
+                del self._joint_pending_starts[key]
+        expired_events = [self._pending_start_unknown(g, "composite_start_cache_expired")
+                          for g in self._group_pending_starts(expired)]
         ledger_limit = 5000
+        for c in candidates:
+            phase_key = tuple(sorted(c["phases"]))
+            already_unknown = any(v["phases"] == phase_key and c["g_on"] <= v["end"]
+                                  and v["start"] <= c["g_end"] for v in self._joint_unknown_intervals)
+            if (_composite_start_trigger(c, stage_free) and not already_unknown
+                    and (phase_key, c["g_on"]) not in self._joint_observations):
+                key = (phase_key, c["g_on"], c["index"])
+                overlapping_pending = any(v["index"] == c["index"] and v["phases"] == c["phases"]
+                    and c["g_on"] <= v["g_end"] + 2 and v["g_on"] <= c["g_end"] + 2
+                    for v in self._joint_pending_starts.values())
+                if not overlapping_pending:
+                    interval_exists = any(v["phases"] == phase_key and v["start"] == c["g_on"]
+                                          for v in self._joint_composite_intervals)
+                    if (len(self._joint_pending_starts) >= ledger_limit or
+                            (not interval_exists and len(self._joint_composite_intervals) >= ledger_limit)):
+                        msg = "复合启动待决达到 5000 条上限；停止联合归因，请检查噪声"
+                        self._joint_runtime_error = msg
+                        if msg not in self.errors: self.errors.append(msg)
+                        return expired_events
+                    r = copy.deepcopy(c["result"])
+                    for bound in ("pre_lo", "post_hi"):
+                        if r.get(bound) is not None:
+                            r[bound] = self._g0 + int(r[bound])
+                    self._joint_pending_starts[key] = {**c, "result": r,
+                        "t_start": float(self._t[c["g_on"] - self._g0]),
+                        "t_end": float(self._t[c["g_end"] - self._g0])}
+                    if not interval_exists:
+                        self._joint_composite_intervals.append({"phases": phase_key, "start": c["g_on"],
+                            "end": c["g_on"] + 4 * max(10, int(round(float(self.cfg.sampling.f_nom)))) - 1})
+        for key, saved in list(self._joint_pending_starts.items()):
+            if any(c["index"] == saved["index"] and c["phases"] == saved["phases"]
+                   and c["g_on"] <= saved["g_end"] + 2 and saved["g_on"] <= c["g_end"] + 2
+                   for c in candidates):
+                continue
+            r = copy.deepcopy(saved["result"])
+            r["onset"] = saved["g_on"] - self._g0; r["end"] = saved["g_end"] - self._g0
+            for bound in ("pre_lo", "post_hi"):
+                if r.get(bound) is not None:
+                    r[bound] -= self._g0
+            candidates.append({**saved, "result": r})
+        # 一轮可能把每个候选都写入账本；预留最坏情况空间，避免部分提交后触顶。
         if (len(self._joint_observations) + len(candidates) > ledger_limit
                 or len(self._joint_unknown_intervals) + len(candidates) > ledger_limit):
             msg = "联合观测去重账本超过 5000 条上限；本轮停止归因，请检查噪声或缩短检测窗"
             self._joint_runtime_error = msg
             if msg not in self.errors: self.errors.append(msg)
-            return []
+            return expired_events
         candidates.sort(key=lambda x: (x["g_on"], x["index"]))
         groups: List[List[Dict[str, Any]]] = []
         def same_observation(candidate: Dict[str, Any], other: Dict[str, Any]) -> bool:
@@ -1243,7 +1384,7 @@ class NilmDetector:
                 for extra in matches[1:]:
                     matches[0].extend(extra); groups.remove(extra)
         groups.sort(key=lambda g: min(c["g_on"] for c in g))
-        out = []
+        out = expired_events
         cache_limit = max(int(self.ncfg.window_cycles), self._profile_window_need())
         pre_guard = max(int(s["profile"].get("pre_cycles", 10)) * sc for s in slots)
         eval_guard = max(1, int(getattr(self.ncfg, "eval_every_cycles", 10))) + 2
@@ -1259,7 +1400,73 @@ class NilmDetector:
             accepted = [c for c in group if c["result"]["accepted"]]
             active = [c for c in accepted if c["g_on"] > int(c["slot"].get("last_end", -10 ** 9)) + gap]
             observation_keys = [(tuple(sorted(c["phases"])), c["g_on"]) for c in group]
-            if not accepted:
+            pending_keys = [key for key, saved in self._joint_pending_starts.items()
+                            if any(c["index"] == saved["index"] and c["phases"] == saved["phases"]
+                                   and c["g_on"] <= saved["g_end"] + 2
+                                   and saved["g_on"] <= c["g_end"] + 2 for c in group)]
+            if pending_keys:
+                saved = min((self._joint_pending_starts[k] for k in pending_keys), key=lambda c: c["g_on"])
+                onset = saved["g_on"] - self._g0
+                n = max(10, int(round(float(self.cfg.sampling.f_nom))))
+                required = 4 * n
+                # 缓存放不下则降为未知，而非无限等待；已有联判成熟等待可能更长。
+                fits = required + n + pre_guard + eval_guard < cache_limit
+                if fits and g_last < saved["g_on"] + required - 1:
+                    continue
+                phase = next(iter(saved["phases"]))
+                row = "ABC".index(phase) + 1
+                flag, metrics = (_composite_start_metrics(self._t, self._i[row], self._ih[row], onset,
+                                                          float(self.cfg.sampling.f_nom))
+                                 if fits else ("composite_start_window_unavailable", {}))
+                # 原候选或竞争者都不足以排除相邻 / 并发设备；本试验功能只输出
+                # 未知并附审计证据，不将近似稳态比较升级为确认或改变任何设备状态。
+                c = group[0]; r = c["result"]
+                uncertain = {**r, "flags": list(r["flags"]) + [flag]}
+                generated = self._evaluate_one_profile(c["slot"], prm, qty, gap, g_last,
+                                                       _precomputed=[uncertain], _joint=True, _unknown=True)
+                if generated:
+                    evidence = []
+                    for item in group:
+                        v = item["result"]; m = v["match"]
+                        evidence.append({"device_id": str(item["slot"]["profile"]["device_id"]),
+                            "direction": m["direction"], "confidence": float(v["confidence"]),
+                            "d2": float(m["d2"]), "g_start": item["g_on"], "g_end": item["g_end"],
+                            "t_start": float(self._t[v["onset"]]), "t_end": float(self._t[v["end"]]),
+                            "status": str(v["status"]), "evidence_type": "profile_candidate_at_resolution",
+                            "composite_metrics": dict(metrics)})
+                    # 重扫候选可能由 rejected 变 accepted 或改变定位：保留首次
+                    # 触发待决的证据，不能让后来候选覆盖其来源。
+                    for key in pending_keys:
+                        item = self._joint_pending_starts[key]; v = item["result"]; m = v["match"]
+                        device = str(item["slot"]["profile"]["device_id"])
+                        if not any(e["device_id"] == device and e["g_start"] == item["g_on"]
+                                   and e["g_end"] == item["g_end"] and e["direction"] == m["direction"]
+                                   and e["status"] == str(v["status"]) and abs(e["d2"] - float(m["d2"])) < 1e-12
+                                   and abs(e["confidence"] - float(v["confidence"])) < 1e-12 for e in evidence):
+                            evidence.append({"device_id": device, "direction": m["direction"],
+                                "confidence": float(v["confidence"]), "d2": float(m["d2"]),
+                                "g_start": item["g_on"], "g_end": item["g_end"],
+                                "t_start": item["t_start"], "t_end": item["t_end"],
+                                "status": str(v["status"]), "evidence_type": "initial_rejected_candidate",
+                                "composite_metrics": dict(metrics)})
+                    generated[0].candidate_devices = evidence
+                    for key in pending_keys:
+                        del self._joint_pending_starts[key]
+            elif (active and any(v["phases"] == tuple(sorted(c["phases"]))
+                                 and v["start"] <= c["g_on"] <= v["end"]
+                                 for v in self._joint_composite_intervals for c in group)):
+                # 邻近真动作也不能静默丢弃；只能保留为未知，避免误翻状态。
+                c = active[0]; r = c["result"]
+                uncertain = {**r, "flags": list(r["flags"]) + ["composite_start_nearby_action_uncertain"]}
+                generated = self._evaluate_one_profile(c["slot"], prm, qty, gap, g_last,
+                                                       _precomputed=[uncertain], _joint=True, _unknown=True)
+                if generated:
+                    generated[0].candidate_devices = [{"device_id": str(v["slot"]["profile"]["device_id"]),
+                        "direction": v["result"]["match"]["direction"], "confidence": float(v["result"]["confidence"]),
+                        "d2": float(v["result"]["match"]["d2"]), "g_start": v["g_on"], "g_end": v["g_end"],
+                        "t_start": float(self._t[v["result"]["onset"]]), "t_end": float(self._t[v["result"]["end"]])}
+                        for v in accepted]
+            elif not accepted:
                 # 显著变化但所有画像均未接受：只报告未知观测，不把被拒设备当候选。
                 # 同一未知过渡的窗口定位可能偏移；保留其整个观测区间用于去重。
                 phase_key = tuple(sorted(group[0]["phases"]))
@@ -1668,6 +1875,9 @@ class NilmDetector:
                 notes.append("融合集合联合归因：各成员先独立评分，候选重叠时输出归因不确定与候选，未知设备状态不推进；"
                              "不同评分不可跨设备比较。部分重叠而不相同的相集合暂不评估，可能并发/邻近动作无法可靠分离。"
                              "必须等待共同检测窗；文件尾部没有足够后续数据的动作可能不出结果。")
+                if self._joint_pending_starts:
+                    notes.append(f"复合启动试运行：{len(self._joint_pending_starts)} 个成员候选待决；"
+                                 "稳定电平仅作证据，不能自动确认设备或推进状态。")
             elif len(slots) > 1:
                 notes.append(f"多画像匹配：已加载 {prof_info['loaded_count']}/{len(slots)} 个画像，各自独立状态机 / 去重 / 设备判定；"
                              f"同一事件可能同时命中多个设备（输出里以 device_id 区分），候选诊断 CSV 也带 device_id 列")
@@ -1726,7 +1936,24 @@ class NilmDetector:
             return n
 
     def close(self) -> None:
-        self.writer.close()
+        # 文件结束 / 手动停止时，已捕获但尚未成熟的复合启动不能被当成已确认。
+        # 落盘为 unknown；最后不足一次评估节流的新候选仍可能未被发现。
+        with self._lock:
+            pending = list(self._joint_pending_starts.values())
+            self._joint_pending_starts = {}
+            for group in self._group_pending_starts(pending):
+                first = group[0]
+                need = 4 * max(10, int(round(float(self.cfg.sampling.f_nom))))
+                flag = ("composite_start_window_unavailable"
+                        if first["g_on"] + need > self._g0 + len(self._t)
+                        else "composite_start_finalized_unprocessed")
+                ev = self._pending_start_unknown(group, flag)
+                self._log.append(ev)
+                self.counts["profile"] = self.counts.get("profile", 0) + 1
+                self.writer.write(ev)
+            if len(self._log) > int(self.ncfg.max_log):
+                self._log = self._log[-int(self.ncfg.max_log):]
+            self.writer.close()
 
 
 # ------------------------------------------------------------------ v0.46：离线文件按时刻装载周波窗（非运行状态下手动查看）
